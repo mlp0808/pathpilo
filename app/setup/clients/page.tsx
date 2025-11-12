@@ -15,6 +15,7 @@ interface Client {
   personal_phone: string
   billing_address: string
   billing_zip_code: string
+  billing_city: string
   billing_email: string
   billing_phone: string
 }
@@ -32,6 +33,7 @@ export default function ClientsSetupPage() {
     personal_phone: '',
     billing_address: '',
     billing_zip_code: '',
+    billing_city: '',
     billing_email: '',
     billing_phone: ''
   })
@@ -103,6 +105,7 @@ export default function ClientsSetupPage() {
           personal_phone: '',
           billing_address: '',
           billing_zip_code: '',
+          billing_city: '',
           billing_email: '',
           billing_phone: ''
         })
@@ -136,6 +139,7 @@ export default function ClientsSetupPage() {
       personal_phone: '',
       billing_address: '',
       billing_zip_code: '',
+      billing_city: '',
       billing_email: '',
       billing_phone: ''
     })
