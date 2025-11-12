@@ -1,0 +1,57 @@
+{
+  "name": "vevago",
+  "version": "1.0.0",
+  "description": "Client management system for service companies",
+  "main": "server.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "dev:server": "node server.js",
+    "dev:fullstack": "concurrently \"npm run dev:server\" \"npm run dev\""
+  },
+  "dependencies": {
+    "@heroicons/react": "^2.2.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "autoprefixer": "^10.4.21",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "next": "^15.5.5",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.7",
+    "pg": "^8.16.3",
+    "postcss": "^8.5.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.19.21",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.14",
+    "@types/pg": "^8.10.7",
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "saas",
+    "client-management",
+    "service-companies"
+  ],
+  "author": "Vevago Team",
+  "license": "MIT"
+}
