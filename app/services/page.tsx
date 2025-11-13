@@ -29,7 +29,7 @@ export default function ServicesPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('http://localhost:3003/api/services', {
+      const response = await fetch('/api/api/services', {
         headers: {
           'Authorization': `Bearer ${token}`
         }

@@ -73,7 +73,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
       
       console.log('Updating service:', { serviceId: service.id, serviceData })
       
-      const response = await fetch(`http://localhost:3003/api/services/${service.id}`, {
+      const response = await fetch(`/api/api/services/${service.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

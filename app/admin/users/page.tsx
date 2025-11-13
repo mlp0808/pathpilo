@@ -61,7 +61,7 @@ export default function AdminUsersPage() {
         return
       }
 
-      const response = await fetch('http://localhost:3003/api/admin/users', {
+      const response = await fetch('/api/api/admin/users', {
         headers: {
           'Authorization': `Bearer ${token}`
         }

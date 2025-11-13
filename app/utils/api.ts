@@ -14,15 +14,8 @@ const getApiBaseUrl = (): string => {
     return process.env.NEXT_PUBLIC_API_URL
   }
   
-  // In browser, check if we're in development
-  if (typeof window !== 'undefined') {
-    // Development: use localhost
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return 'http://localhost:3003'
-    }
-  }
-  
   // Production: use relative path (works with reverse proxy)
+  // This will use /api which goes through nginx to the backend
   return ''
 }
 

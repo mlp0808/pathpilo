@@ -56,7 +56,7 @@ export default function ServicesSetupPage() {
         duration_minutes: totalMinutes
       }
       
-      const response = await fetch('http://localhost:3003/api/services', {
+      const response = await fetch('/api/api/services', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

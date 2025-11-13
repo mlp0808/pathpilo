@@ -68,7 +68,7 @@ export default function BusinessSettingsPage() {
     const fetchCompanyProfile = async () => {
       try {
         const token = localStorage.getItem('token')
-        const response = await fetch('http://localhost:3003/api/company/profile', {
+        const response = await fetch('/api/api/company/profile', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -101,7 +101,7 @@ export default function BusinessSettingsPage() {
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3003/api/users', {
+      const response = await fetch('/api/api/users', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -135,7 +135,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:3003/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -181,7 +181,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3003/api/company/profile', {
+      const response = await fetch('/api/api/company/profile', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -231,7 +231,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:3003/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

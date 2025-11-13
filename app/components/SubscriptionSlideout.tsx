@@ -123,7 +123,7 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
   const fetchServices = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3003/api/services', {
+      const response = await fetch('/api/api/services', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -138,7 +138,7 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3003/api/users', {
+      const response = await fetch('/api/api/users', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -227,8 +227,8 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
       }
 
       const url = subscription 
-        ? `http://localhost:3003/api/subscriptions/${subscription.id}`
-        : 'http://localhost:3003/api/subscriptions'
+        ? `/api/api/subscriptions/${subscription.id}`
+        : '/api/api/subscriptions'
       
       const method = subscription ? 'PUT' : 'POST'
 

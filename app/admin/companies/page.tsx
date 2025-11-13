@@ -67,7 +67,7 @@ export default function AdminCompaniesPage() {
         return
       }
 
-      const response = await fetch('http://localhost:3003/api/admin/companies', {
+      const response = await fetch('/api/api/admin/companies', {
         headers: {
           'Authorization': `Bearer ${token}`
         }

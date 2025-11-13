@@ -54,7 +54,7 @@ export default function UserSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3003/api/user/profile', {
+      const response = await fetch('/api/api/user/profile', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

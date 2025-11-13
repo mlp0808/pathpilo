@@ -100,7 +100,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       setLoadingServices(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('http://localhost:3003/api/services', {
+      const response = await fetch('/api/api/services', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -125,7 +125,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       setLoadingUsers(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('http://localhost:3003/api/users', {
+      const response = await fetch('/api/api/users', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -230,7 +230,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       
       console.log('Creating job with data:', jobData)
       
-      const response = await fetch('http://localhost:3003/api/jobs', {
+      const response = await fetch('/api/api/jobs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -79,7 +79,7 @@ export default function ClientsSetupPage() {
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch('http://localhost:3003/api/clients', {
+      const response = await fetch('/api/api/clients', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
