@@ -7,6 +7,7 @@ import EditClientModal from '../../components/EditClientModal'
 import CreateJobSlideout from '../../components/CreateJobSlideout'
 import JobViewSlideout from '../../components/JobViewSlideout'
 import SubscriptionSlideout from '../../components/SubscriptionSlideout'
+import { apiUrl } from '../../utils/api'
 
 interface Client {
   id: number
@@ -59,7 +60,7 @@ export default function ClientDetailPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`/api/api/clients/${clientId}`, {
+      const response = await fetch(`apiUrl('/clients/${clientId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -91,7 +92,7 @@ export default function ClientDetailPage() {
       setJobsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`/api/api/clients/${clientId}/jobs`, {
+      const response = await fetch(`apiUrl('/clients/${clientId}/jobs`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -128,7 +129,7 @@ export default function ClientDetailPage() {
       setSubscriptionsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`/api/api/clients/${clientId}/subscriptions`, {
+      const response = await fetch(`apiUrl('/clients/${clientId}/subscriptions`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -162,7 +163,7 @@ export default function ClientDetailPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/subscriptions/${subscriptionId}`, {
+      const response = await fetch(`apiUrl('/subscriptions/${subscriptionId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

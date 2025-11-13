@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import AppLayout from '../components/AppLayout'
 import TeamTable from '../components/TeamTable'
 import { useUser } from '../hooks/useUser'
+import { apiUrl } from '../utils/api'
 
 interface User {
   id: number
@@ -30,7 +31,7 @@ export default function TeamPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

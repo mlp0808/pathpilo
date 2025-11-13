@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import EditServiceModal from './EditServiceModal'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -93,7 +94,7 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
     try {
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`/api/api/services/${serviceId}`, {
+      const response = await fetch(`apiUrl('/services/${serviceId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

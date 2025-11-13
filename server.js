@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
@@ -47,11 +48,11 @@ const requireAdmin = (req, res, next) => {
 
 // Database connection
 const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  database: 'vevago_',
-  user: 'vevago.app',
-  password: 'E9n!GdczqusW@43i' // Update this with your PostgreSQL password
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'vevago_',
+  user: process.env.DB_USER || 'vevago.app',
+  password: process.env.DB_PASSWORD || 'E9n!GdczqusW@43i'
 });
 
 // Test database connection

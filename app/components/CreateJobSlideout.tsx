@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon, PlusIcon, CalendarIcon, ClockIcon, UserIcon } from '@heroicons/react/24/outline'
 import { useUser } from '../hooks/useUser'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -100,7 +101,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       setLoadingServices(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -125,7 +126,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       setLoadingUsers(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -230,7 +231,7 @@ export default function CreateJobSlideout({ isOpen, onClose, onJobCreated, clien
       
       console.log('Creating job with data:', jobData)
       
-      const response = await fetch('/api/api/jobs', {
+      const response = await fetch(apiUrl('/jobs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { PlusIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../../utils/api'
 
 interface Client {
   id?: number
@@ -79,7 +80,7 @@ export default function ClientsSetupPage() {
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch('/api/api/clients', {
+      const response = await fetch(apiUrl('/clients'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline'
 import { useUser } from '../hooks/useUser'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -61,7 +62,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
       setLoadingServices(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -181,7 +182,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
       
       console.log('Creating job with data:', jobData)
       
-      const response = await fetch('/api/api/jobs', {
+      const response = await fetch(apiUrl('/jobs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

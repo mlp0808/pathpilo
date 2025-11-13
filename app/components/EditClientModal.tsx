@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface Client {
   id: number
@@ -107,7 +108,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch(`/api/api/clients/${client.id}`, {
+      const response = await fetch(`apiUrl('/clients/${client.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

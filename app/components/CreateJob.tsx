@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useUser } from '../hooks/useUser'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, CalendarIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -40,7 +41,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -61,7 +62,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
       const startDate = new Date(year, month, 1).toISOString().split('T')[0]
       const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0]
       
-      const response = await fetch(`/api/api/jobs?start_date=${startDate}&end_date=${endDate}`, {
+      const response = await fetch(`apiUrl('/jobs?start_date=${startDate}&end_date=${endDate}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -517,7 +518,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
   const fetchServices = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -532,7 +533,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
   const fetchClients = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/clients', {
+      const response = await fetch(apiUrl('/clients'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -547,7 +548,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -568,7 +569,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
   const fetchPastJobs = async (clientId: number) => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/clients/${clientId}/jobs`, {
+      const response = await fetch(`apiUrl('/clients/${clientId}/jobs`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -709,7 +710,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
         expectedFormat: 'YYYY-MM-DDTHH:MM:SS.sssZ'
       })
 
-      const response = await fetch('/api/api/jobs', {
+      const response = await fetch(apiUrl('/jobs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

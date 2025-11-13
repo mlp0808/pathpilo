@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { apiUrl } from '../../utils/api'
 
 interface User {
   id: number
@@ -61,7 +62,7 @@ export default function AdminUsersPage() {
         return
       }
 
-      const response = await fetch('/api/api/admin/users', {
+      const response = await fetch(apiUrl('/admin/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

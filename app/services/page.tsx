@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import AppLayout from '../components/AppLayout'
 import ServicesTable from '../components/ServicesTable'
 import AddServiceModal from '../components/AddServiceModal'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -29,7 +30,7 @@ export default function ServicesPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

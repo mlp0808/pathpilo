@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon, CheckIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 export default function RegisterPage() {
   const router = useRouter()
@@ -32,7 +33,7 @@ export default function RegisterPage() {
     setIsLoading(true)
     
     try {
-      const response = await fetch('/api/api/auth/register', {
+      const response = await fetch(apiUrl('/auth/register'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

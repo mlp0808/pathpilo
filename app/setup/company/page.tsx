@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { apiUrl } from '../../utils/api'
 
 export default function CompanySetupPage() {
   const [formData, setFormData] = useState({
@@ -31,7 +32,7 @@ export default function CompanySetupPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/companies', {
+      const response = await fetch(apiUrl('/companies'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

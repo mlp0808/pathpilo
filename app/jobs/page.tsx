@@ -6,6 +6,7 @@ import AppLayout from '@/app/components/AppLayout'
 import CreateJob from '@/app/components/CreateJob'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
 import AddClientModal from '@/app/components/AddClientModal'
+import { apiUrl } from '@/app/utils/api'
 
 interface User {
   id: number
@@ -101,7 +102,7 @@ export default function JobsPage() {
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -126,7 +127,7 @@ export default function JobsPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -174,7 +175,7 @@ export default function JobsPage() {
       const startDate = weekDays[0].toISOString().split('T')[0]
       const endDate = weekDays[6].toISOString().split('T')[0]
       
-      const response = await fetch(`/api/api/jobs?start_date=${startDate}&end_date=${endDate}`, {
+      const response = await fetch(`apiUrl('/jobs?start_date=${startDate}&end_date=${endDate}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

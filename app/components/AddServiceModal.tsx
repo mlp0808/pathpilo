@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   title: string
@@ -51,7 +52,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
         duration_minutes: totalMinutes
       }
       
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

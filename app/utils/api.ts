@@ -50,12 +50,23 @@ export const apiUrl = (endpoint: string): string => {
       ? `/api${endpoint}` 
       : `/api/${endpoint}`
   
-  // If API_BASE_URL is empty, return relative path
-  if (!API_BASE_URL) {
-    return cleanEndpoint
+  // If accessing via IP:port, use full backend URL
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    const port = window.location.port
+    
+    // If IP address or explicit port 3002, use full backend URL
+    if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
+      return `http://${hostname}:3003${cleanEndpoint}`
+    }
+    
+    // If localhost, use localhost backend
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return `http://localhost:3003${cleanEndpoint}`
+    }
   }
   
-  // Otherwise, prepend the base URL
-  return `${API_BASE_URL}${cleanEndpoint}`
+  // Production domain: use relative path (works with reverse proxy)
+  return cleanEndpoint
 }
 

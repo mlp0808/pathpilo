@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface Client {
   first_name: string
@@ -74,7 +75,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch('/api/api/clients', {
+      const response = await fetch(apiUrl('/clients'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

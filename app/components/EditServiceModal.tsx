@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -73,7 +74,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
       
       console.log('Updating service:', { serviceId: service.id, serviceData })
       
-      const response = await fetch(`/api/api/services/${service.id}`, {
+      const response = await fetch(`apiUrl('/services/${service.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

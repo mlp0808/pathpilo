@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useUser } from '../../hooks/useUser'
 import { UserIcon, PencilIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../../utils/api'
 
 interface UserProfile {
   firstName: string
@@ -54,7 +55,7 @@ export default function UserSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/user/profile', {
+      const response = await fetch(apiUrl('/user/profile'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

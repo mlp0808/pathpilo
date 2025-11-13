@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 export default function AdminLoginPage() {
   const router = useRouter()
@@ -48,7 +49,7 @@ export default function AdminLoginPage() {
     setError('')
     
     try {
-      const response = await fetch('/api/api/auth/login', {
+      const response = await fetch(apiUrl('/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

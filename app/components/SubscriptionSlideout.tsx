@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, CalendarIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface Service {
   id: number
@@ -123,7 +124,7 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
   const fetchServices = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/services', {
+      const response = await fetch(apiUrl('/services'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -138,7 +139,7 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -227,8 +228,8 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
       }
 
       const url = subscription 
-        ? `/api/api/subscriptions/${subscription.id}`
-        : '/api/api/subscriptions'
+        ? apiUrl(`/subscriptions/${subscription.id}`)
+        : apiUrl('/subscriptions')
       
       const method = subscription ? 'PUT' : 'POST'
 

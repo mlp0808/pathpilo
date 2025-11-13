@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import AppLayout from '../components/AppLayout'
 import ClientsTable from '../components/ClientsTable'
 import AddClientModal from '../components/AddClientModal'
+import { apiUrl } from '../utils/api'
 
 interface Client {
   id: number
@@ -32,7 +33,7 @@ export default function ClientsPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('/api/api/clients', {
+      const response = await fetch(apiUrl('/clients'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

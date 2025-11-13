@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface JobViewSlideoutProps {
   isOpen: boolean
@@ -25,7 +26,7 @@ export default function JobViewSlideout({ isOpen, onClose, job }: JobViewSlideou
       const token = localStorage.getItem('token')
       
       // Fetch subscription with services
-      const subscriptionResponse = await fetch(`/api/api/clients/${jobData.client_id}/subscriptions`, {
+      const subscriptionResponse = await fetch(`apiUrl('/clients/${jobData.client_id}/subscriptions`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -43,7 +44,7 @@ export default function JobViewSlideout({ isOpen, onClose, job }: JobViewSlideou
           
           if (jobData.assigned_user_id) {
             try {
-              const usersResponse = await fetch('/api/api/users', {
+              const usersResponse = await fetch(apiUrl('/users'), {
                 headers: {
                   'Authorization': `Bearer ${token}`
                 }
@@ -97,7 +98,7 @@ export default function JobViewSlideout({ isOpen, onClose, job }: JobViewSlideou
       const token = localStorage.getItem('token')
       
       // Fetch the full job details with services
-      const response = await fetch(`/api/api/clients/${jobData.client_id}/jobs`, {
+      const response = await fetch(`apiUrl('/clients/${jobData.client_id}/jobs`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

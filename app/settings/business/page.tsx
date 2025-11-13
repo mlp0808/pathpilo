@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { BuildingOffice2Icon, PencilIcon, ClockIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../../utils/api'
 
 interface CompanyProfile {
   id: number
@@ -68,7 +69,7 @@ export default function BusinessSettingsPage() {
     const fetchCompanyProfile = async () => {
       try {
         const token = localStorage.getItem('token')
-        const response = await fetch('/api/api/company/profile', {
+        const response = await fetch(apiUrl('/company/profile'), {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -101,7 +102,7 @@ export default function BusinessSettingsPage() {
   const fetchUsers = async () => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/users', {
+      const response = await fetch(apiUrl('/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -135,7 +136,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -181,7 +182,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/api/company/profile', {
+      const response = await fetch(apiUrl('/company/profile'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -231,7 +232,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`/api/api/work-hours/${selectedUserId}`, {
+      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
