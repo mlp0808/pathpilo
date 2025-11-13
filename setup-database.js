@@ -4,9 +4,9 @@ const { Pool } = require('pg');
 const pool = new Pool({
   host: 'localhost',
   port: 5432,
-  database: 'vevago_dev',
-  user: 'postgres',
-  password: '!Pvy29fxg' // Update this if your password is different
+  database: 'vevago_',
+  user: 'vevago.app',
+  password: 'E9n!GdczqusW@43i' // Update this if your password is different
 });
 
 async function setupDatabase() {
