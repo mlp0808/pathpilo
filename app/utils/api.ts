@@ -14,7 +14,23 @@ const getApiBaseUrl = (): string => {
     return process.env.NEXT_PUBLIC_API_URL
   }
   
-  // Production: use relative path (works with reverse proxy)
+  // If accessing via IP address (direct port access), use full URL with port 3003
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname
+    const port = window.location.port
+    
+    // If accessing via IP or with explicit port, use full backend URL
+    if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
+      return `http://${hostname}:3003`
+    }
+    
+    // If localhost with port, use localhost backend
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:3003'
+    }
+  }
+  
+  // Production domain: use relative path (works with reverse proxy)
   // This will use /api which goes through nginx to the backend
   return ''
 }

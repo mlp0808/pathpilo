@@ -30,8 +30,21 @@ export default function LoginPage() {
     setIsLoading(true)
     setError('')
     
+    // Detect if accessing via IP:port and use full backend URL
+    const getApiUrl = (endpoint: string) => {
+      if (typeof window !== 'undefined') {
+        const hostname = window.location.hostname
+        const port = window.location.port
+        // If IP address or explicit port, use full URL with backend port
+        if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
+          return `http://${hostname}:3003${endpoint}`
+        }
+      }
+      return endpoint // Use relative path for domain access
+    }
+    
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch(getApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
