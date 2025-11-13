@@ -41,7 +41,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
+      const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -62,7 +62,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
       const startDate = new Date(year, month, 1).toISOString().split('T')[0]
       const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0]
       
-      const response = await fetch(`apiUrl('/jobs?start_date=${startDate}&end_date=${endDate}`, {
+      const response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
@@ -569,7 +569,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated }: CreateJobPr
   const fetchPastJobs = async (clientId: number) => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/clients/${clientId}/jobs`, {
+      const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()

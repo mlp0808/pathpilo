@@ -136,7 +136,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
+      const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -232,7 +232,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
+      const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

@@ -127,7 +127,7 @@ export default function JobsPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/work-hours/${selectedUserId}`, {
+      const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -175,7 +175,7 @@ export default function JobsPage() {
       const startDate = weekDays[0].toISOString().split('T')[0]
       const endDate = weekDays[6].toISOString().split('T')[0]
       
-      const response = await fetch(`apiUrl('/jobs?start_date=${startDate}&end_date=${endDate}`, {
+      const response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

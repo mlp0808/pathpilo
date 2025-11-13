@@ -60,7 +60,7 @@ export default function ClientDetailPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`apiUrl('/clients/${clientId}`, {
+      const response = await fetch(apiUrl(`/clients/${clientId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -92,7 +92,7 @@ export default function ClientDetailPage() {
       setJobsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`apiUrl('/clients/${clientId}/jobs`, {
+      const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -129,7 +129,7 @@ export default function ClientDetailPage() {
       setSubscriptionsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`apiUrl('/clients/${clientId}/subscriptions`, {
+      const response = await fetch(apiUrl(`/clients/${clientId}/subscriptions`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -163,7 +163,7 @@ export default function ClientDetailPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`apiUrl('/subscriptions/${subscriptionId}`, {
+      const response = await fetch(apiUrl(`/subscriptions/${subscriptionId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

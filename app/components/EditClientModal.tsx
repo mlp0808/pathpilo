@@ -108,7 +108,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch(`apiUrl('/clients/${client.id}`, {
+      const response = await fetch(apiUrl(`/clients/${client.id}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
