@@ -51,7 +51,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
         duration_minutes: totalMinutes
       }
       
-      const response = await fetch('http://localhost:3002/api/services', {
+      const response = await fetch('http://localhost:3003/api/services', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

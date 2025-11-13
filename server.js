@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 
 const app = express();
-const port = 3002;
+const port = 3003;
 
 // Middleware
 app.use(cors());

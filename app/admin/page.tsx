@@ -48,7 +48,7 @@ export default function AdminLoginPage() {
     setError('')
     
     try {
-      const response = await fetch('http://localhost:3002/api/auth/login', {
+      const response = await fetch('http://localhost:3003/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

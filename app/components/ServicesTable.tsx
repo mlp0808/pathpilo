@@ -93,7 +93,7 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
     try {
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`http://localhost:3002/api/services/${serviceId}`, {
+      const response = await fetch(`http://localhost:3003/api/services/${serviceId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

@@ -74,7 +74,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
       
-      const response = await fetch('http://localhost:3002/api/clients', {
+      const response = await fetch('http://localhost:3003/api/clients', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

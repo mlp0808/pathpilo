@@ -32,7 +32,7 @@ export default function ClientsPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('http://localhost:3002/api/clients', {
+      const response = await fetch('http://localhost:3003/api/clients', {
         headers: {
           'Authorization': `Bearer ${token}`
         }

@@ -30,7 +30,7 @@ export default function TeamPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch('http://localhost:3002/api/users', {
+      const response = await fetch('http://localhost:3003/api/users', {
         headers: {
           'Authorization': `Bearer ${token}`
         }

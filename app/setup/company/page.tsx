@@ -31,7 +31,7 @@ export default function CompanySetupPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:3002/api/companies', {
+      const response = await fetch('http://localhost:3003/api/companies', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

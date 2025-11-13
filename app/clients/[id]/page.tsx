@@ -59,7 +59,7 @@ export default function ClientDetailPage() {
       setLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`http://localhost:3002/api/clients/${clientId}`, {
+      const response = await fetch(`http://localhost:3003/api/clients/${clientId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -91,7 +91,7 @@ export default function ClientDetailPage() {
       setJobsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`http://localhost:3002/api/clients/${clientId}/jobs`, {
+      const response = await fetch(`http://localhost:3003/api/clients/${clientId}/jobs`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -128,7 +128,7 @@ export default function ClientDetailPage() {
       setSubscriptionsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(`http://localhost:3002/api/clients/${clientId}/subscriptions`, {
+      const response = await fetch(`http://localhost:3003/api/clients/${clientId}/subscriptions`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -162,7 +162,7 @@ export default function ClientDetailPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:3002/api/subscriptions/${subscriptionId}`, {
+      const response = await fetch(`http://localhost:3003/api/subscriptions/${subscriptionId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
