@@ -49,9 +49,9 @@ const requireAdmin = (req, res, next) => {
 const pool = new Pool({
   host: 'localhost',
   port: 5432,
-  database: 'vevago_dev',
-  user: 'postgres',
-  password: '!Pvy29fxg' // Update this with your PostgreSQL password
+  database: 'vevago_',
+  user: 'vevago.app',
+  password: 'E9n!GdczqusW@43i' // Update this with your PostgreSQL password
 });
 
 // Test database connection
