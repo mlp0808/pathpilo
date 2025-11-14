@@ -1,7 +1,15 @@
+'use client'
+
+import { useEffect } from 'react'
 import Link from 'next/link'
 import { ArrowRightIcon, CheckIcon, StarIcon } from '@heroicons/react/24/outline'
 
 export default function HomePage() {
+  useEffect(() => {
+    // Test alert to verify deployment
+    alert('🧪 TEST: This is a test alert! If you see this, the deployment is working!')
+  }, [])
+
   return (
     <div className="min-h-screen gradient-bg">
       {/* Navigation */}

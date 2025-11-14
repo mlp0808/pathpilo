@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // JWT Secret (in production, use environment variable)
-const JWT_SECRET = 'your-super-secret-jwt-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
 // Authentication middleware
 const authenticateToken = (req, res, next) => {
