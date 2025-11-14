@@ -47,11 +47,13 @@ export default function DashboardPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-500">Company</label>
-              <p className="mt-1 text-sm text-gray-900">{user.companyName}</p>
+              <p className="mt-1 text-sm text-gray-900">{user.companyName || user.activeCompany?.name || 'No company'}</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-500">Role</label>
-              <p className="mt-1 text-sm text-gray-900 capitalize">{user.role.replace('-', ' ')}</p>
+              <p className="mt-1 text-sm text-gray-900 capitalize">
+                {user.role ? user.role.replace('-', ' ') : user.activeCompany?.role || 'employee'}
+              </p>
             </div>
           </div>
         </div>

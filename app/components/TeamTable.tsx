@@ -11,13 +11,22 @@ interface User {
   created_at: string
 }
 
+interface PendingInvitation {
+  id: number
+  email: string
+  role: string
+  invitationUrl: string
+  status: 'pending'
+}
+
 interface TeamTableProps {
   users: User[]
   role: 'management' | 'employees'
   currentUserId?: number
+  pendingInvitations?: PendingInvitation[]
 }
 
-export default function TeamTable({ users, role, currentUserId }: TeamTableProps) {
+export default function TeamTable({ users, role, currentUserId, pendingInvitations = [] }: TeamTableProps) {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -54,7 +63,7 @@ export default function TeamTable({ users, role, currentUserId }: TeamTableProps
     }
   }
 
-  if (users.length === 0) {
+  if (users.length === 0 && (!pendingInvitations || pendingInvitations.length === 0)) {
     return (
       <div className="text-center py-12">
         <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
@@ -96,12 +105,79 @@ export default function TeamTable({ users, role, currentUserId }: TeamTableProps
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Joined
             </th>
+            {pendingInvitations && pendingInvitations.length > 0 && (
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Invitation Link
+              </th>
+            )}
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Actions
             </th>
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
+          {/* Pending Invitations */}
+          {pendingInvitations && pendingInvitations.length > 0 && pendingInvitations.map((invitation) => (
+            <tr key={`pending-${invitation.id}`} className="hover:bg-gray-50 bg-yellow-50">
+              <td className="px-6 py-4 whitespace-nowrap">
+                <div className="flex items-center">
+                  <div className="flex-shrink-0 h-8 w-8">
+                    <div className="h-8 w-8 rounded-full bg-yellow-200 flex items-center justify-center">
+                      <svg className="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="ml-4">
+                    <div className="text-sm font-medium text-gray-900">
+                      Pending
+                    </div>
+                  </div>
+                </div>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap">
+                <div className="text-sm text-gray-900">{invitation.email}</div>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap">
+                <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                  Pending
+                </span>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                -
+              </td>
+              {pendingInvitations && pendingInvitations.length > 0 && (
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={invitation.invitationUrl}
+                      className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-700 font-mono"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(invitation.invitationUrl)
+                        // You could add a toast notification here
+                      }}
+                      className="text-blue-600 hover:text-blue-900 transition-colors"
+                      title="Copy link"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              )}
+              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                <span className="text-gray-400">-</span>
+              </td>
+            </tr>
+          ))}
+          
+          {/* Active Users */}
           {users.map((user) => (
             <tr key={user.id} className="hover:bg-gray-50">
               <td className="px-6 py-4 whitespace-nowrap">
@@ -131,6 +207,11 @@ export default function TeamTable({ users, role, currentUserId }: TeamTableProps
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {formatDate(user.created_at)}
               </td>
+              {pendingInvitations && pendingInvitations.length > 0 && (
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className="text-gray-400 text-sm">-</span>
+                </td>
+              )}
               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                 <div className="flex space-x-2">
                   <button className="text-blue-600 hover:text-blue-900 transition-colors">

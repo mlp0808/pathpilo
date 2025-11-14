@@ -1,13 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon, CheckIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const inviteToken = searchParams.get('invite')
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -19,6 +21,26 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
+
+  // Load invitation details if token exists
+  useEffect(() => {
+    if (inviteToken) {
+      fetch(apiUrl(`/invitations/${inviteToken}`))
+        .then(res => res.json())
+        .then(data => {
+          if (data.invitation) {
+            setInvitationEmail(data.invitation.email)
+            // Pre-fill email if available
+            setFormData(prev => ({
+              ...prev,
+              email: data.invitation.email
+            }))
+          }
+        })
+        .catch(err => console.error('Error loading invitation:', err))
+    }
+  }, [inviteToken])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target
@@ -42,7 +64,8 @@ export default function RegisterPage() {
           firstName: formData.firstName,
           lastName: formData.lastName,
           email: formData.email,
-          password: formData.password
+          password: formData.password,
+          ...(inviteToken && { invitationToken: inviteToken })
         }),
       })
 
@@ -50,16 +73,37 @@ export default function RegisterPage() {
 
       if (response.ok) {
         // Store the token in localStorage (auto-login)
+        let userData = null
         if (data.token) {
           localStorage.setItem('token', data.token)
-          localStorage.setItem('user', JSON.stringify(data.user))
+          // Transform user data to match expected structure
+          userData = {
+            id: data.user.id,
+            firstName: data.user.firstName,
+            lastName: data.user.lastName,
+            email: data.user.email,
+            role: data.user.role || data.user.activeCompany?.role || 'employee',
+            companyId: data.user.companyId || data.user.activeCompany?.id || null,
+            companyName: data.user.companyName || data.user.activeCompany?.name || null,
+            companies: data.user.companies || [],
+            activeCompany: data.user.activeCompany || null
+          }
+          localStorage.setItem('user', JSON.stringify(userData))
         }
         
         alert('Registration successful! Welcome to Vevago!')
         console.log('User created and logged in:', data.user)
         
-        // Redirect to company setup
-        router.push('/setup/company')
+        // If registered via invitation, invitation was auto-accepted, go to dashboard
+        if (inviteToken && userData && userData.companyId) {
+          router.push('/dashboard')
+        } else if (!inviteToken) {
+          // Normal registration: always go to setup wizard to configure company
+          router.push('/setup/company')
+        } else {
+          // No company, go to setup
+          router.push('/setup/company')
+        }
       } else {
         alert('Registration failed: ' + data.error)
       }
@@ -138,7 +182,8 @@ export default function RegisterPage() {
                 name="email"
                 value={formData.email}
                 onChange={handleInputChange}
-                className="input-field"
+                readOnly={!!inviteToken}
+                className={`input-field ${inviteToken ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                 placeholder="john@company.com"
                 required
               />
@@ -284,5 +329,20 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen gradient-bg flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <p className="mt-2 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <RegisterForm />
+    </Suspense>
   )
 }

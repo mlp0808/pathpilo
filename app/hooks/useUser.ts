@@ -9,8 +9,20 @@ interface User {
   lastName: string
   email: string
   role: string
-  companyId: number
-  companyName: string
+  companyId: number | null
+  companyName: string | null
+  companies?: Array<{
+    id: number
+    name: string
+    role: string
+    isOwner: boolean
+  }>
+  activeCompany?: {
+    id: number
+    name: string
+    role: string
+    isOwner: boolean
+  } | null
 }
 
 export function useUser() {

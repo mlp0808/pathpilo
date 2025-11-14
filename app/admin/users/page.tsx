@@ -5,12 +5,18 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
 
+interface Company {
+  id: number
+  name: string
+  role: string
+}
+
 interface User {
   id: number
   firstName: string
   lastName: string
   email: string
-  companyName: string
+  companies: Company[]
   createdAt: string
 }
 
@@ -120,8 +126,14 @@ export default function AdminUsersPage() {
               <span className="text-xl font-bold text-gray-900">Vevago Admin</span>
             </Link>
             <div className="flex items-center space-x-4">
-              <Link href="/" className="text-gray-600 hover:text-gray-900">
-                Home
+              <Link href="/admin" className="text-gray-600 hover:text-gray-900">
+                Overview
+              </Link>
+              <Link href="/admin/users" className="text-blue-600 hover:text-blue-700 font-medium">
+                Users
+              </Link>
+              <Link href="/admin/companies" className="text-gray-600 hover:text-gray-900">
+                Companies
               </Link>
               <button
                 onClick={() => {
@@ -225,8 +237,31 @@ export default function AdminUsersPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">{user.email}</div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{user.companyName}</div>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-2">
+                          {user.companies && user.companies.length > 0 ? (
+                            user.companies.map((company) => {
+                              const roleColors = {
+                                owner: 'bg-purple-100 text-purple-800 border-purple-200',
+                                admin: 'bg-purple-100 text-purple-800 border-purple-200',
+                                manager: 'bg-blue-100 text-blue-800 border-blue-200',
+                                employee: 'bg-green-100 text-green-800 border-green-200'
+                              };
+                              const colorClass = roleColors[company.role as keyof typeof roleColors] || 'bg-gray-100 text-gray-800 border-gray-200';
+                              
+                              return (
+                                <span
+                                  key={company.id}
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border ${colorClass}`}
+                                >
+                                  {company.name}
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <span className="text-sm text-gray-400 italic">No company</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">{formatDate(user.createdAt)}</div>
@@ -248,9 +283,9 @@ export default function AdminUsersPage() {
             </div>
             <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-green-600">
-                {new Set(users.map(u => u.companyName)).size}
+                {new Set(users.flatMap(u => u.companies?.map(c => c.id) || [])).size}
               </div>
-              <div className="text-sm text-gray-600">Companies</div>
+              <div className="text-sm text-gray-600">Unique Companies</div>
             </div>
             <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-purple-600">

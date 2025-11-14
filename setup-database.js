@@ -1,12 +1,13 @@
+require('dotenv').config();
 const { Pool } = require('pg');
 
 // Database connection
 const pool = new Pool({
-  host: 'localhost',
-  port: 5432,
-  database: 'vevago_',
-  user: 'vevago.app',
-  password: 'E9n!GdczqusW@43i' // Update this if your password is different
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'vevago_',
+  user: process.env.DB_USER || 'vevago.app',
+  password: process.env.DB_PASSWORD || 'E9n!GdczqusW@43i'
 });
 
 async function setupDatabase() {
@@ -15,6 +16,9 @@ async function setupDatabase() {
     
     // Drop existing tables
     console.log('🗑️  Dropping existing tables...');
+    await pool.query('DROP TABLE IF EXISTS company_invitations CASCADE;');
+    await pool.query('DROP TABLE IF EXISTS user_company_work_hours CASCADE;');
+    await pool.query('DROP TABLE IF EXISTS user_companies CASCADE;');
     await pool.query('DROP TABLE IF EXISTS recurring_job_services CASCADE;');
     await pool.query('DROP TABLE IF EXISTS recurring_jobs CASCADE;');
     await pool.query('DROP TABLE IF EXISTS job_notes CASCADE;');
@@ -24,7 +28,11 @@ async function setupDatabase() {
     await pool.query('DROP TABLE IF EXISTS clients CASCADE;');
     await pool.query('DROP TABLE IF EXISTS users CASCADE;');
     await pool.query('DROP TABLE IF EXISTS companies CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS user_company_work_hours CASCADE;');
+    
+    // Drop functions and triggers
+    await pool.query('DROP FUNCTION IF EXISTS prevent_remove_last_owner() CASCADE;');
+    await pool.query('DROP FUNCTION IF EXISTS prevent_update_last_owner() CASCADE;');
+    await pool.query('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;');
     
     // Create companies table first (without foreign key to users)
     console.log('📝 Creating companies table...');
@@ -43,7 +51,7 @@ async function setupDatabase() {
       );
     `);
 
-    // Create users table
+    // Create users table (no company_id - will use user_companies junction table)
     console.log('📝 Creating users table...');
     await pool.query(`
       CREATE TABLE users (
@@ -53,9 +61,23 @@ async function setupDatabase() {
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(20) NOT NULL DEFAULT 'company-owner' CHECK (role IN ('admin', 'company-owner', 'manager', 'employee')),
-        company_id INTEGER REFERENCES companies(id),
+        company_id INTEGER REFERENCES companies(id), -- Deprecated, kept for backward compatibility
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create user_companies junction table (many-to-many relationship)
+    console.log('📝 Creating user_companies table...');
+    await pool.query(`
+      CREATE TABLE user_companies (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        role VARCHAR(20) NOT NULL DEFAULT 'employee' CHECK (role IN ('owner', 'admin', 'manager', 'employee')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, company_id)
       );
     `);
 
@@ -65,6 +87,112 @@ async function setupDatabase() {
       ALTER TABLE companies 
       ADD CONSTRAINT fk_companies_owner 
       FOREIGN KEY (owner_id) REFERENCES users(id);
+    `);
+    
+    // Make owner_id required (NOT NULL)
+    await pool.query(`
+      ALTER TABLE companies 
+      ALTER COLUMN owner_id SET NOT NULL;
+    `);
+    
+    // Create company_invitations table
+    console.log('📝 Creating company_invitations table...');
+    await pool.query(`
+      CREATE TABLE company_invitations (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        invited_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email VARCHAR(255) NOT NULL,
+        role VARCHAR(20) NOT NULL DEFAULT 'employee' CHECK (role IN ('admin', 'manager', 'employee')),
+        token VARCHAR(255) UNIQUE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired', 'cancelled')),
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        accepted_at TIMESTAMP,
+        UNIQUE(company_id, email, status)
+      );
+    `);
+    
+    // Create indexes for performance
+    console.log('📝 Creating indexes...');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_user_id ON user_companies(user_id);');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_company_id ON user_companies(company_id);');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_role ON user_companies(role);');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_token ON company_invitations(token);');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_email ON company_invitations(email);');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_status ON company_invitations(status);');
+    
+    // Create function to update updated_at timestamp
+    console.log('📝 Creating update_updated_at_column function...');
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = CURRENT_TIMESTAMP;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    
+    // Create triggers for updated_at
+    await pool.query(`
+      CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    await pool.query(`
+      CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    await pool.query(`
+      CREATE TRIGGER update_user_companies_updated_at BEFORE UPDATE ON user_companies
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    
+    // Create functions to prevent removing the last owner
+    console.log('📝 Creating owner protection functions...');
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION prevent_remove_last_owner()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF OLD.role = 'owner' THEN
+          IF (SELECT COUNT(*) FROM user_companies WHERE company_id = OLD.company_id AND role = 'owner') <= 1 THEN
+            RAISE EXCEPTION 'Cannot remove the last owner from a company. Company must always have an owner.';
+          END IF;
+        END IF;
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION prevent_update_last_owner()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF OLD.role = 'owner' AND NEW.role != 'owner' THEN
+          IF (SELECT COUNT(*) FROM user_companies WHERE company_id = NEW.company_id AND role = 'owner') <= 1 THEN
+            RAISE EXCEPTION 'Cannot change the last owner to a different role. Company must always have an owner.';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    
+    // Create triggers to enforce owner requirement
+    await pool.query(`
+      DROP TRIGGER IF EXISTS check_last_owner_before_delete ON user_companies;
+      CREATE TRIGGER check_last_owner_before_delete
+        BEFORE DELETE ON user_companies
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_remove_last_owner();
+    `);
+    
+    await pool.query(`
+      DROP TRIGGER IF EXISTS check_last_owner_before_update ON user_companies;
+      CREATE TRIGGER check_last_owner_before_update
+        BEFORE UPDATE ON user_companies
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_update_last_owner();
     `);
 
     // Create services table
@@ -224,12 +352,18 @@ async function setupDatabase() {
     console.log('📊 Tables created:');
     console.log('   Companies table:');
     console.log('     - id, name, cvr_number, address, zip_code, city');
-    console.log('     - owner_id (references users), created_at, updated_at');
+    console.log('     - owner_id (references users, NOT NULL), created_at, updated_at');
     console.log('   Users table:');
     console.log('     - id, first_name, last_name, email');
-    console.log('     - password_hash, role (admin/company-owner)');
-    console.log('     - company_id (references companies)');
+    console.log('     - password_hash, role (admin/company-owner/manager/employee)');
+    console.log('     - company_id (deprecated, kept for backward compatibility)');
     console.log('     - created_at, updated_at');
+    console.log('   User Companies table (many-to-many):');
+    console.log('     - id, user_id, company_id, role (owner/admin/manager/employee)');
+    console.log('     - created_at, updated_at');
+    console.log('   Company Invitations table:');
+    console.log('     - id, company_id, invited_by_user_id, email, role, token');
+    console.log('     - status, expires_at, created_at, accepted_at');
     console.log('   User Company Work Hours table:');
     console.log('     - id, user_id (references users), company_id (references companies)');
     console.log('     - monday_hours, tuesday_hours, wednesday_hours, thursday_hours');
@@ -240,45 +374,55 @@ async function setupDatabase() {
     console.log('👥 Adding demo users...');
     const bcrypt = require('bcryptjs');
     
-    // Create demo company
+    // Create admin user first (no company)
+    console.log('👤 Creating admin user...');
+    const adminPasswordHash = await bcrypt.hash('password123', 10);
+    const adminResult = await pool.query(
+      'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      ['Admin', 'User', 'admin@vevago.com', adminPasswordHash, 'admin']
+    );
+    const adminId = adminResult.rows[0].id;
+    console.log('   ✅ Added admin user: admin@vevago.com');
+    
+    // Create company owner user
+    console.log('👤 Creating company owner user...');
+    const ownerPasswordHash = await bcrypt.hash('password123', 10);
+    const ownerResult = await pool.query(
+      'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      ['John', 'Doe', 'user@vevago.com', ownerPasswordHash, 'company-owner']
+    );
+    const ownerId = ownerResult.rows[0].id;
+    console.log('   ✅ Added company owner: user@vevago.com');
+    
+    // Create demo company with owner
     console.log('🏢 Creating demo company...');
     const companyResult = await pool.query(
-      'INSERT INTO companies (name) VALUES ($1) RETURNING id',
-      ['Demo Company']
+      'INSERT INTO companies (name, owner_id) VALUES ($1, $2) RETURNING id',
+      ['Demo Company', ownerId]
     );
     const companyId = companyResult.rows[0].id;
-
-    const demoUsers = [
-      { first_name: 'Admin', last_name: 'User', email: 'admin@vevago.com', password: 'password123', role: 'admin', company_id: null },
-      { first_name: 'John', last_name: 'Doe', email: 'user@vevago.com', password: 'password123', role: 'company-owner', company_id: companyId }
-    ];
+    console.log('   ✅ Created demo company');
     
-    for (const demoUser of demoUsers) {
-      try {
-        const passwordHash = await bcrypt.hash(demoUser.password, 10);
-        await pool.query(
-          'INSERT INTO users (first_name, last_name, email, password_hash, role, company_id) VALUES ($1, $2, $3, $4, $5, $6)',
-          [demoUser.first_name, demoUser.last_name, demoUser.email, passwordHash, demoUser.role, demoUser.company_id]
-        );
-        console.log(`   ✅ Added demo user: ${demoUser.email}`);
-      } catch (error) {
-        if (error.code === '23505') { // Unique constraint violation
-          console.log(`   ⚠️  Demo user already exists: ${demoUser.email}`);
-        } else {
-          console.log(`   ❌ Failed to add demo user ${demoUser.email}:`, error.message);
-        }
-      }
-    }
-    
-    // Test the table
-    const result = await pool.query('SELECT COUNT(*) FROM users;');
-    console.log(`📈 Total users in database: ${result.rows[0].count}`);
-    
-    // Update company with owner
+    // Link owner to company via user_companies
     await pool.query(
-      'UPDATE companies SET owner_id = $1 WHERE id = $2',
-      [2, companyId] // Assuming the company owner is the second user
+      'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+      [ownerId, companyId, 'owner']
     );
+    console.log('   ✅ Linked owner to company');
+    
+    // Also update users.company_id for backward compatibility
+    await pool.query(
+      'UPDATE users SET company_id = $1 WHERE id = $2',
+      [companyId, ownerId]
+    );
+    
+    // Test the tables
+    const userCount = await pool.query('SELECT COUNT(*) FROM users;');
+    const companyCount = await pool.query('SELECT COUNT(*) FROM companies;');
+    const userCompanyCount = await pool.query('SELECT COUNT(*) FROM user_companies;');
+    console.log(`📈 Total users in database: ${userCount.rows[0].count}`);
+    console.log(`📈 Total companies in database: ${companyCount.rows[0].count}`);
+    console.log(`📈 Total user-company links: ${userCompanyCount.rows[0].count}`);
 
     // Add demo services for the company
     console.log('🔧 Adding demo services...');
@@ -410,19 +554,34 @@ async function setupDatabase() {
     // Add additional team members
     console.log('👥 Adding demo team members...');
     const teamMembers = [
-      { first_name: 'Sarah', last_name: 'Wilson', email: 'sarah.wilson@vevago.com', password: 'password123', role: 'manager', company_id: companyId },
-      { first_name: 'Mike', last_name: 'Brown', email: 'mike.brown@vevago.com', password: 'password123', role: 'employee', company_id: companyId },
-      { first_name: 'Lisa', last_name: 'Garcia', email: 'lisa.garcia@vevago.com', password: 'password123', role: 'employee', company_id: companyId }
+      { first_name: 'Sarah', last_name: 'Wilson', email: 'sarah.wilson@vevago.com', password: 'password123', role: 'manager', companyRole: 'manager' },
+      { first_name: 'Mike', last_name: 'Brown', email: 'mike.brown@vevago.com', password: 'password123', role: 'employee', companyRole: 'employee' },
+      { first_name: 'Lisa', last_name: 'Garcia', email: 'lisa.garcia@vevago.com', password: 'password123', role: 'employee', companyRole: 'employee' }
     ];
 
     for (const member of teamMembers) {
       try {
         const passwordHash = await bcrypt.hash(member.password, 10);
-        await pool.query(
-          'INSERT INTO users (first_name, last_name, email, password_hash, role, company_id) VALUES ($1, $2, $3, $4, $5, $6)',
-          [member.first_name, member.last_name, member.email, passwordHash, member.role, member.company_id]
+        // Create user
+        const userResult = await pool.query(
+          'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+          [member.first_name, member.last_name, member.email, passwordHash, member.role]
         );
-        console.log(`   ✅ Added team member: ${member.email} (${member.role})`);
+        const userId = userResult.rows[0].id;
+        
+        // Link user to company via user_companies
+        await pool.query(
+          'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+          [userId, companyId, member.companyRole]
+        );
+        
+        // Also update users.company_id for backward compatibility
+        await pool.query(
+          'UPDATE users SET company_id = $1 WHERE id = $2',
+          [companyId, userId]
+        );
+        
+        console.log(`   ✅ Added team member: ${member.email} (${member.companyRole})`);
       } catch (error) {
         if (error.code === '23505') {
           console.log(`   ⚠️  Team member already exists: ${member.email}`);

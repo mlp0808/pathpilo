@@ -25,7 +25,7 @@ export default function AdminLoginPage() {
       try {
         const user = JSON.parse(userData)
         if (user.role === 'admin') {
-          router.push('/admin/users')
+          router.push('/admin/overview')
         }
       } catch (error) {
         // Invalid user data, continue to login
@@ -76,8 +76,8 @@ export default function AdminLoginPage() {
         alert('Admin login successful!')
         console.log('Admin logged in:', data.user)
         
-        // Redirect to admin users page
-        router.push('/admin/users')
+        // Redirect to admin overview page
+        router.push('/admin/overview')
       } else {
         setError(data.error || 'Login failed')
       }

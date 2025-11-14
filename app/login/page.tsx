@@ -1,12 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const inviteToken = searchParams.get('invite')
+  
   const [formData, setFormData] = useState({
     email: '',
     password: ''
@@ -30,21 +34,8 @@ export default function LoginPage() {
     setIsLoading(true)
     setError('')
     
-    // Detect if accessing via IP:port and use full backend URL
-    const getApiUrl = (endpoint: string) => {
-      if (typeof window !== 'undefined') {
-        const hostname = window.location.hostname
-        const port = window.location.port
-        // If IP address or explicit port, use full URL with backend port
-        if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
-          return `http://${hostname}:3003${endpoint}`
-        }
-      }
-      return endpoint // Use relative path for domain access
-    }
-    
     try {
-      const response = await fetch(getApiUrl('/api/auth/login'), {
+      const response = await fetch(apiUrl('/auth/login'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -58,15 +49,33 @@ export default function LoginPage() {
       const data = await response.json()
 
       if (response.ok) {
+        // Transform user data to match expected structure
+        const userData = {
+          id: data.user.id,
+          firstName: data.user.firstName,
+          lastName: data.user.lastName,
+          email: data.user.email,
+          role: data.user.activeCompany?.role || data.user.role || 'employee',
+          companyId: data.user.activeCompany?.id || data.user.companyId || null,
+          companyName: data.user.activeCompany?.name || data.user.companyName || null,
+          companies: data.user.companies || [],
+          activeCompany: data.user.activeCompany || null
+        }
+        
         // Store the token in localStorage
         localStorage.setItem('token', data.token)
-        localStorage.setItem('user', JSON.stringify(data.user))
+        localStorage.setItem('user', JSON.stringify(userData))
         
         alert('Login successful! Welcome back!')
-        console.log('User logged in:', data.user)
+        console.log('User logged in:', userData)
         
-        // Redirect to dashboard
-        router.push('/dashboard')
+        // If there's an invitation token, redirect to accept it
+        if (inviteToken) {
+          router.push(`/invite/${inviteToken}`)
+        } else {
+          // Redirect to dashboard
+          router.push('/dashboard')
+        }
       } else {
         setError(data.error || 'Login failed')
       }
@@ -199,6 +208,21 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen gradient-bg flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <p className="mt-2 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   )
 }
 

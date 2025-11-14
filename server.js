@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 const port = 3003;
@@ -46,6 +47,28 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+// Helper function to validate company access and get company ID
+const getActiveCompanyId = async (req, res) => {
+  const userId = req.user.userId;
+  const activeCompanyId = req.user.activeCompanyId;
+
+  if (!activeCompanyId) {
+    return { error: 'No active company selected', status: 400 };
+  }
+
+  // Verify user has access to this company
+  const accessCheck = await pool.query(`
+    SELECT role FROM user_companies 
+    WHERE user_id = $1 AND company_id = $2
+  `, [userId, activeCompanyId]);
+
+  if (accessCheck.rows.length === 0) {
+    return { error: 'You do not have access to this company', status: 403 };
+  }
+
+  return { companyId: activeCompanyId, userRole: accessCheck.rows[0].role };
+};
+
 // Database connection
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -70,20 +93,29 @@ app.get('/', (req, res) => {
 });
 
 // Registration endpoint
+// Supports two paths:
+// 1. Normal registration: Creates user + company, user becomes owner
+// 2. Invitation registration: Creates user + joins existing company with assigned role
 app.post('/api/auth/register', async (req, res) => {
+  const client = await pool.connect();
+  
   try {
-    const { firstName, lastName, email, password } = req.body;
+    await client.query('BEGIN');
+    
+    const { firstName, lastName, email, password, invitationToken } = req.body;
 
-    console.log('Registration attempt:', { firstName, lastName, email });
+    console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken });
 
     // Validate input
     if (!firstName || !lastName || !email || !password) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'All fields are required' });
     }
 
     // Check if user already exists
-    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'User with this email already exists' });
     }
 
@@ -91,49 +123,117 @@ app.post('/api/auth/register', async (req, res) => {
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(password, saltRounds);
 
-    // Create user without company (will be created later)
-    const userResult = await pool.query(
-      'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, first_name, last_name, email, role, created_at',
-      [firstName, lastName, email, passwordHash, 'company-owner']
-    );
+    let user, companyId, companyName, userRole;
 
-    const user = userResult.rows[0];
+    if (invitationToken) {
+      // PATH 2: Invitation registration
+      // Find and validate invitation
+      const inviteResult = await client.query(`
+        SELECT ci.*, c.name as company_name
+        FROM company_invitations ci
+        JOIN companies c ON ci.company_id = c.id
+        WHERE ci.token = $1 
+          AND ci.status = 'pending'
+          AND ci.email = $2
+          AND ci.expires_at > NOW()
+      `, [invitationToken, email]);
 
-    // Generate JWT token for auto-login
+      if (inviteResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Invalid or expired invitation' });
+      }
+
+      const invitation = inviteResult.rows[0];
+      companyId = invitation.company_id;
+      companyName = invitation.company_name;
+      userRole = invitation.role; // Role assigned by owner
+
+      // Create user (no company_id, will be linked via user_companies)
+      const userResult = await client.query(
+        'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, first_name, last_name, email, role, created_at',
+        [firstName, lastName, email, passwordHash, userRole]
+      );
+      user = userResult.rows[0];
+
+      // Link user to company with assigned role
+      await client.query(
+        'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+        [user.id, companyId, userRole]
+      );
+
+      // Mark invitation as accepted
+      await client.query(
+        'UPDATE company_invitations SET status = $1, accepted_at = NOW() WHERE id = $2',
+        ['accepted', invitation.id]
+      );
+
+    } else {
+      // PATH 1: Normal registration - Create user + company
+      // Create user first
+      const userResult = await client.query(
+        'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, first_name, last_name, email, role, created_at',
+        [firstName, lastName, email, passwordHash, 'company-owner']
+      );
+      user = userResult.rows[0];
+      userRole = 'owner';
+
+      // Create company with user as owner
+      const companyResult = await client.query(
+        'INSERT INTO companies (name, owner_id) VALUES ($1, $2) RETURNING id, name',
+        [`${firstName}'s Company`, user.id]
+      );
+      const company = companyResult.rows[0];
+      companyId = company.id;
+      companyName = company.name;
+
+      // Link user to company as owner
+      await client.query(
+        'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+        [user.id, companyId, 'owner']
+      );
+    }
+
+    await client.query('COMMIT');
+
+    // Generate JWT token with active company
     const token = jwt.sign(
       { 
         userId: user.id, 
         email: user.email,
         firstName: user.first_name,
         lastName: user.last_name,
-        role: user.role,
-        companyId: null
+        activeCompanyId: companyId,
+        role: userRole
       },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
     res.status(201).json({
-      message: 'User registered successfully',
+      message: invitationToken ? 'User registered and joined company successfully' : 'User and company created successfully',
       token,
       user: {
         id: user.id,
         firstName: user.first_name,
         lastName: user.last_name,
         email: user.email,
-        role: user.role,
-        companyId: null,
-        companyName: null
+        role: userRole,
+        companyId: companyId,
+        companyName: companyName
       }
     });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Registration error:', error);
     res.status(500).json({ error: 'Registration failed: ' + error.message });
+  } finally {
+    client.release();
   }
 });
 
 // Login endpoint
+// Returns user info and all companies they belong to (with roles)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -145,21 +245,18 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    // Find user with company info
-    const result = await pool.query(`
-      SELECT 
-        u.id, u.first_name, u.last_name, u.email, u.password_hash, u.role, u.company_id,
-        c.name as company_name
-      FROM users u
-      LEFT JOIN companies c ON u.company_id = c.id
-      WHERE u.email = $1
+    // Find user
+    const userResult = await pool.query(`
+      SELECT id, first_name, last_name, email, password_hash, role
+      FROM users
+      WHERE email = $1
     `, [email]);
 
-    if (result.rows.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    const user = result.rows[0];
+    const user = userResult.rows[0];
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
@@ -167,21 +264,50 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        userId: user.id, 
-        email: user.email,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        role: user.role,
-        companyId: user.company_id
-      },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Get all companies user belongs to with their roles
+    const companiesResult = await pool.query(`
+      SELECT 
+        c.id,
+        c.name,
+        uc.role as user_role,
+        c.owner_id,
+        CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
+      FROM user_companies uc
+      JOIN companies c ON uc.company_id = c.id
+      WHERE uc.user_id = $1
+      ORDER BY is_owner DESC, c.created_at ASC
+    `, [user.id]);
 
-    res.json({
+    const companies = companiesResult.rows;
+    
+    // Admin users don't need company association
+    // Regular users must have at least one company
+    if (companies.length === 0 && user.role !== 'admin') {
+      return res.status(403).json({ error: 'User is not associated with any company' });
+    }
+
+    // For admin users without companies, set activeCompany to null
+    // For regular users, use first company as active (prefer owned companies)
+    const activeCompany = companies.length > 0 ? companies[0] : null;
+
+    // Generate JWT token
+    // Admin users without companies won't have activeCompanyId
+    const tokenPayload = {
+      userId: user.id, 
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      role: user.role
+    };
+
+    if (activeCompany) {
+      tokenPayload.activeCompanyId = activeCompany.id;
+      tokenPayload.role = activeCompany.user_role; // Use company role, not user role
+    }
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
+
+    const responseData = {
       message: 'Login successful',
       token,
       user: {
@@ -190,10 +316,28 @@ app.post('/api/auth/login', async (req, res) => {
         lastName: user.last_name,
         email: user.email,
         role: user.role,
-        companyId: user.company_id,
-        companyName: user.company_name
+        companies: companies.map(c => ({
+          id: c.id,
+          name: c.name,
+          role: c.user_role,
+          isOwner: c.is_owner
+        }))
       }
-    });
+    };
+
+    // Only include activeCompany if user has companies
+    if (activeCompany) {
+      responseData.user.activeCompany = {
+        id: activeCompany.id,
+        name: activeCompany.name,
+        role: activeCompany.user_role,
+        isOwner: activeCompany.is_owner
+      };
+      responseData.user.companyId = activeCompany.id;
+      responseData.user.companyName = activeCompany.name;
+    }
+
+    res.status(200).json(responseData);
 
   } catch (error) {
     console.error('Login error:', error);
@@ -201,9 +345,79 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Create company endpoint (for users without companies)
-app.post('/api/companies', authenticateToken, async (req, res) => {
+// Create company endpoint (users can create multiple companies)
+// Update company endpoint (for setup wizard)
+app.put('/api/companies/:companyId', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  
   try {
+    await client.query('BEGIN');
+    
+    const { companyId } = req.params;
+    const { name, country, cvrNumber, address, city, zipCode } = req.body;
+    const userId = req.user.userId;
+
+    // Verify user owns this company
+    const companyCheck = await pool.query(
+      'SELECT owner_id FROM companies WHERE id = $1',
+      [companyId]
+    );
+
+    if (companyCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (companyCheck.rows[0].owner_id !== userId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only the company owner can update company details' });
+    }
+
+    // Validate input
+    if (!name || !country || !address || !city || !zipCode) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Company name, country, address, city, and zip code are required' });
+    }
+
+    // Update company
+    const companyResult = await client.query(
+      'UPDATE companies SET name = $1, country = $2, cvr_number = $3, address = $4, city = $5, zip_code = $6, updated_at = CURRENT_TIMESTAMP WHERE id = $7 RETURNING id, name, country, cvr_number, address, city, zip_code, created_at',
+      [name, country, cvrNumber, address, city, zipCode, companyId]
+    );
+
+    const company = companyResult.rows[0];
+
+    await client.query('COMMIT');
+
+    res.status(200).json({
+      message: 'Company updated successfully',
+      company: {
+        id: company.id,
+        name: company.name,
+        cvrNumber: company.cvr_number,
+        address: company.address,
+        zipCode: company.zip_code,
+        city: company.city,
+        country: company.country,
+        createdAt: company.created_at
+      }
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Company update error:', error);
+    res.status(500).json({ error: 'Company update failed: ' + error.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/companies', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
     const { name, country, cvrNumber, address, city, zipCode } = req.body;
     const userId = req.user.userId;
 
@@ -211,96 +425,500 @@ app.post('/api/companies', authenticateToken, async (req, res) => {
 
     // Validate input
     if (!name || !country || !address || !city || !zipCode) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Company name, country, address, city, and zip code are required' });
     }
 
-    // Check if user already has a company
-    const existingUser = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    if (existingUser.rows[0].company_id) {
-      return res.status(400).json({ error: 'User already has a company' });
-    }
+    // Create company with user as owner
+    const companyResult = await client.query(
+      'INSERT INTO companies (name, country, cvr_number, address, city, zip_code, owner_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, country, cvr_number, address, city, zip_code, created_at',
+      [name, country, cvrNumber, address, city, zipCode, userId]
+    );
 
-    // Start transaction
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    const company = companyResult.rows[0];
 
-      // Create company
-      const companyResult = await client.query(
-        'INSERT INTO companies (name, country, cvr_number, address, city, zip_code, owner_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, country, cvr_number, address, city, zip_code, created_at',
-        [name, country, cvrNumber, address, city, zipCode, userId]
-      );
+    // Link user to company as owner in user_companies table
+    await client.query(
+      'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+      [userId, company.id, 'owner']
+    );
 
-      const company = companyResult.rows[0];
+    await client.query('COMMIT');
 
-      // Update user with company_id
-      await client.query(
-        'UPDATE users SET company_id = $1 WHERE id = $2',
-        [company.id, userId]
-      );
-
-      await client.query('COMMIT');
-
-      res.status(201).json({
-        message: 'Company created successfully',
-        company: {
-          id: company.id,
-          name: company.name,
-          cvrNumber: company.cvr_number,
-          address: company.address,
-          zipCode: company.zip_code,
-          city: company.city,
-          createdAt: company.created_at
-        }
-      });
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    res.status(201).json({
+      message: 'Company created successfully',
+      company: {
+        id: company.id,
+        name: company.name,
+        cvrNumber: company.cvr_number,
+        address: company.address,
+        zipCode: company.zip_code,
+        city: company.city,
+        country: company.country,
+        createdAt: company.created_at
+      }
+    });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Company creation error:', error);
     res.status(500).json({ error: 'Company creation failed: ' + error.message });
+  } finally {
+    client.release();
   }
 });
 
 // Get all users (admin endpoint - protected)
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(`
+    // Get all users
+    const usersResult = await pool.query(`
       SELECT 
         u.id, 
         u.first_name, 
         u.last_name, 
         u.email, 
         u.role,
-        u.created_at,
-        c.name as company_name,
-        c.id as company_id
+        u.created_at
       FROM users u
-      LEFT JOIN companies c ON u.company_id = c.id
       ORDER BY u.created_at DESC
     `);
 
-    res.json({
-      users: result.rows.map(user => ({
+    // Get all companies for each user
+    const users = await Promise.all(usersResult.rows.map(async (user) => {
+      const companiesResult = await pool.query(`
+        SELECT 
+          c.id,
+          c.name,
+          uc.role as company_role
+        FROM user_companies uc
+        JOIN companies c ON uc.company_id = c.id
+        WHERE uc.user_id = $1
+        ORDER BY uc.role = 'owner' DESC, uc.created_at ASC
+      `, [user.id]);
+
+      return {
         id: user.id,
         firstName: user.first_name,
         lastName: user.last_name,
         email: user.email,
         role: user.role,
-        companyId: user.company_id,
-        companyName: user.company_name,
+        companies: companiesResult.rows.map(c => ({
+          id: c.id,
+          name: c.name,
+          role: c.company_role
+        })),
         createdAt: user.created_at
-      }))
-    });
+      };
+    }));
+
+    res.json({ users });
 
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Failed to fetch users: ' + error.message });
+  }
+});
+
+// ============================================
+// COMPANY INVITATION ENDPOINTS
+// ============================================
+
+// Invite user to company (owner/admin only)
+app.post('/api/companies/:companyId/invite', authenticateToken, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { email, role = 'employee' } = req.body;
+    const userId = req.user.userId;
+
+    // Validate input
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    if (!['admin', 'manager', 'employee'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role. Must be admin, manager, or employee' });
+    }
+
+    // Check if user has permission (owner or admin of company)
+    const permissionCheck = await pool.query(`
+      SELECT uc.role, c.owner_id
+      FROM user_companies uc
+      JOIN companies c ON uc.company_id = c.id
+      WHERE uc.user_id = $1 AND uc.company_id = $2
+    `, [userId, companyId]);
+
+    if (permissionCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You do not have access to this company' });
+    }
+
+    const userRole = permissionCheck.rows[0].role;
+    const isOwner = permissionCheck.rows[0].owner_id === userId;
+
+    if (!isOwner && userRole !== 'admin') {
+      return res.status(403).json({ error: 'Only owners and admins can invite users' });
+    }
+
+    // Check if user already exists and is already in company
+    const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      const alreadyInCompany = await pool.query(
+        'SELECT id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [existingUser.rows[0].id, companyId]
+      );
+      if (alreadyInCompany.rows.length > 0) {
+        return res.status(400).json({ error: 'User is already a member of this company' });
+      }
+    }
+
+    // Check for existing pending invitation
+    const existingInvite = await pool.query(`
+      SELECT id FROM company_invitations 
+      WHERE company_id = $1 AND email = $2 AND status = 'pending'
+    `, [companyId, email]);
+
+    if (existingInvite.rows.length > 0) {
+      return res.status(400).json({ error: 'An invitation has already been sent to this email' });
+    }
+
+    // Generate secure token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
+
+    // Create invitation
+    const inviteResult = await pool.query(`
+      INSERT INTO company_invitations (company_id, invited_by_user_id, email, role, token, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, token, expires_at
+    `, [companyId, userId, email, role, token, expiresAt]);
+
+    const invitation = inviteResult.rows[0];
+
+    // TODO: Send email with invitation link
+    // For now, return the token (in production, send via email)
+    // Use frontend URL from environment or construct from request
+    let frontendUrl = process.env.FRONTEND_URL;
+    if (!frontendUrl) {
+      const host = req.get('host') || 'localhost:3003';
+      if (host.includes(':3003')) {
+        // Backend is on 3003, frontend is typically on 3000, 3001, or 3002
+        // Try to detect from environment or default to 3000
+        const frontendPort = process.env.FRONTEND_PORT || '3000';
+        frontendUrl = `${req.protocol}://${host.split(':')[0]}:${frontendPort}`;
+      } else {
+        // Production or already correct host
+        frontendUrl = `${req.protocol}://${host}`;
+      }
+    }
+    const invitationUrl = `${frontendUrl}/invite/${token}`;
+
+    res.status(201).json({
+      message: 'Invitation sent successfully',
+      invitation: {
+        id: invitation.id,
+        email: email,
+        role: role,
+        expiresAt: invitation.expires_at,
+        invitationUrl: invitationUrl // Remove in production, send via email instead
+      }
+    });
+
+  } catch (error) {
+    console.error('Invite user error:', error);
+    res.status(500).json({ error: 'Failed to send invitation: ' + error.message });
+  }
+});
+
+// Get pending invitations for a company
+app.get('/api/companies/:companyId/invitations', authenticateToken, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const userId = req.user.userId;
+
+    // Verify user has access to this company
+    const accessCheck = await pool.query(`
+      SELECT role FROM user_companies 
+      WHERE user_id = $1 AND company_id = $2
+    `, [userId, companyId]);
+
+    if (accessCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You do not have access to this company' });
+    }
+
+    // Get all pending invitations for this company
+    const result = await pool.query(`
+      SELECT 
+        ci.id,
+        ci.email,
+        ci.role,
+        ci.token,
+        ci.status,
+        ci.expires_at,
+        ci.created_at,
+        u.first_name || ' ' || u.last_name as invited_by_name
+      FROM company_invitations ci
+      JOIN users u ON ci.invited_by_user_id = u.id
+      WHERE ci.company_id = $1 AND ci.status = 'pending' AND ci.expires_at > NOW()
+      ORDER BY ci.created_at DESC
+    `, [companyId]);
+
+    const invitations = result.rows.map(inv => ({
+      id: inv.id,
+      email: inv.email,
+      role: inv.role,
+      status: inv.status,
+      invitationUrl: (() => {
+        let frontendUrl = process.env.FRONTEND_URL;
+        if (!frontendUrl) {
+          const host = req.get('host') || 'localhost:3003';
+          if (host.includes(':3003')) {
+            const frontendPort = process.env.FRONTEND_PORT || '3000';
+            frontendUrl = `${req.protocol}://${host.split(':')[0]}:${frontendPort}`;
+          } else {
+            frontendUrl = `${req.protocol}://${host}`;
+          }
+        }
+        return `${frontendUrl}/invite/${inv.token}`;
+      })(),
+      expiresAt: inv.expires_at,
+      invitedByName: inv.invited_by_name
+    }));
+
+    res.json({ invitations });
+  } catch (error) {
+    console.error('Get invitations error:', error);
+    res.status(500).json({ error: 'Failed to get invitations: ' + error.message });
+  }
+});
+
+// Get invitation details (public endpoint for registration page)
+app.get('/api/invitations/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const result = await pool.query(`
+      SELECT 
+        ci.*,
+        c.name as company_name,
+        u.first_name || ' ' || u.last_name as invited_by_name
+      FROM company_invitations ci
+      JOIN companies c ON ci.company_id = c.id
+      JOIN users u ON ci.invited_by_user_id = u.id
+      WHERE ci.token = $1 AND ci.status = 'pending'
+    `, [token]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Invitation not found or already used' });
+    }
+
+    const invitation = result.rows[0];
+
+    // Check if expired
+    if (new Date(invitation.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'Invitation has expired' });
+    }
+
+    // Check if email already exists as a user
+    const userExists = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [invitation.email]
+    );
+
+    res.json({
+      invitation: {
+        id: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        companyName: invitation.company_name,
+        invitedByName: invitation.invited_by_name,
+        expiresAt: invitation.expires_at,
+        userExists: userExists.rows.length > 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Get invitation error:', error);
+    res.status(500).json({ error: 'Failed to get invitation: ' + error.message });
+  }
+});
+
+// Accept invitation (for logged-in users)
+app.post('/api/invitations/:token/accept', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { token } = req.params;
+    const userId = req.user.userId;
+
+    // Find and validate invitation
+    const inviteResult = await client.query(`
+      SELECT ci.*, c.name as company_name
+      FROM company_invitations ci
+      JOIN companies c ON ci.company_id = c.id
+      WHERE ci.token = $1 
+        AND ci.status = 'pending'
+        AND ci.expires_at > NOW()
+    `, [token]);
+
+    if (inviteResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid or expired invitation' });
+    }
+
+    const invitation = inviteResult.rows[0];
+
+    // Check if user email matches invitation email
+    const userResult = await client.query('SELECT email FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (userResult.rows[0].email.toLowerCase() !== invitation.email.toLowerCase()) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'This invitation was sent to a different email address' });
+    }
+
+    // Check if user is already in this company
+    const existingMembership = await client.query(
+      'SELECT id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+      [userId, invitation.company_id]
+    );
+
+    if (existingMembership.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You are already a member of this company' });
+    }
+
+    // Link user to company with assigned role
+    await client.query(
+      'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
+      [userId, invitation.company_id, invitation.role]
+    );
+
+    // Mark invitation as accepted
+    await client.query(
+      'UPDATE company_invitations SET status = $1, accepted_at = NOW() WHERE id = $2',
+      ['accepted', invitation.id]
+    );
+
+    await client.query('COMMIT');
+
+    // Get updated company list
+    const companiesResult = await client.query(`
+      SELECT 
+        c.id,
+        c.name,
+        uc.role as user_role,
+        c.owner_id,
+        CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
+      FROM user_companies uc
+      JOIN companies c ON uc.company_id = c.id
+      WHERE uc.user_id = $1
+      ORDER BY is_owner DESC, c.created_at ASC
+    `, [userId]);
+
+    const companies = companiesResult.rows;
+    const activeCompany = companies.find(c => c.id === invitation.company_id) || companies[0];
+
+    // Generate new JWT with updated active company
+    const newToken = jwt.sign(
+      { 
+        userId: userId, 
+        email: req.user.email,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        activeCompanyId: activeCompany.id,
+        role: activeCompany.user_role
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      message: 'Invitation accepted successfully',
+      token: newToken,
+      user: {
+        id: userId,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        email: req.user.email,
+        activeCompany: {
+          id: activeCompany.id,
+          name: activeCompany.name,
+          role: activeCompany.user_role,
+          isOwner: activeCompany.is_owner
+        },
+        companies: companies.map(c => ({
+          id: c.id,
+          name: c.name,
+          role: c.user_role,
+          isOwner: c.is_owner
+        }))
+      }
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Accept invitation error:', error);
+    res.status(500).json({ error: 'Failed to accept invitation: ' + error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Switch active company
+app.post('/api/companies/:companyId/switch', authenticateToken, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const userId = req.user.userId;
+
+    // Verify user belongs to this company
+    const membershipCheck = await pool.query(`
+      SELECT uc.role, c.name, c.owner_id
+      FROM user_companies uc
+      JOIN companies c ON uc.company_id = c.id
+      WHERE uc.user_id = $1 AND uc.company_id = $2
+    `, [userId, companyId]);
+
+    if (membershipCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You do not have access to this company' });
+    }
+
+    const membership = membershipCheck.rows[0];
+    const isOwner = membership.owner_id === userId;
+
+    // Generate new JWT with updated active company
+    const token = jwt.sign(
+      { 
+        userId: userId, 
+        email: req.user.email,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        activeCompanyId: parseInt(companyId),
+        role: membership.role
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      message: 'Company switched successfully',
+      token,
+      activeCompany: {
+        id: parseInt(companyId),
+        name: membership.name,
+        role: membership.role,
+        isOwner: isOwner
+      }
+    });
+
+  } catch (error) {
+    console.error('Switch company error:', error);
+    res.status(500).json({ error: 'Failed to switch company: ' + error.message });
   }
 });
 
@@ -361,12 +979,12 @@ app.post('/api/services', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to create services' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Create service
     const result = await pool.query(
@@ -401,12 +1019,12 @@ app.put('/api/services/:serviceId', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to update services' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Check if service exists and belongs to user's company
     const serviceCheck = await pool.query(
@@ -445,12 +1063,12 @@ app.delete('/api/services/:serviceId', authenticateToken, async (req, res) => {
     console.log('Service deletion attempt:', { serviceId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to delete services' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Check if service exists and belongs to user's company
     const serviceCheck = await pool.query(
@@ -512,12 +1130,12 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to create jobs' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify client belongs to user's company
     const clientCheck = await pool.query(
@@ -530,8 +1148,9 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
     }
 
     // Verify assigned user belongs to user's company
+    // Check if assigned user belongs to the company (using user_companies table)
     const assignedUserCheck = await pool.query(
-      'SELECT id FROM users WHERE id = $1 AND company_id = $2',
+      'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
       [assigned_user_id, companyId]
     );
 
@@ -656,12 +1275,12 @@ app.post('/api/clients', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to create clients' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Create client
     const result = await pool.query(
@@ -734,12 +1353,12 @@ app.put('/api/clients/:clientId', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to update clients' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Check if client exists and belongs to user's company
     const clientCheck = await pool.query(
@@ -788,12 +1407,12 @@ app.get('/api/clients/:clientId/jobs', authenticateToken, async (req, res) => {
     console.log('Fetching jobs for client:', { clientId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view jobs' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify client belongs to user's company
     const clientCheck = await pool.query(
@@ -880,8 +1499,12 @@ app.get('/api/debug/jobs', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
     
     // Get all jobs with raw data
     const jobsResult = await pool.query(
@@ -912,12 +1535,12 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     console.log('Fetching jobs for company:', { start_date, end_date, userId })
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId])
-    const companyId = userResult.rows[0].company_id
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view jobs' })
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Get real jobs
     let query = `
@@ -1191,12 +1814,12 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     console.log('Job update attempt:', { jobId, title, note, scheduled_date, services, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to update jobs' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
@@ -1270,12 +1893,12 @@ app.get('/api/jobs/:jobId/notes', authenticateToken, async (req, res) => {
     console.log('Fetching notes for job:', { jobId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view job notes' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
@@ -1323,12 +1946,12 @@ app.post('/api/jobs/:jobId/notes', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to add job notes' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
@@ -1377,12 +2000,12 @@ app.delete('/api/jobs/:jobId/notes/:noteId', authenticateToken, async (req, res)
     console.log('Deleting note:', { jobId, noteId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to delete job notes' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
@@ -1419,17 +2042,21 @@ app.get('/api/users', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view team members' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
-    // Get all users for the company (excluding sensitive data)
-    const result = await pool.query(
-      'SELECT id, first_name, last_name, email, role, created_at FROM users WHERE company_id = $1 ORDER BY created_at ASC',
-      [companyId]
+    // Get all users for the company via user_companies (excluding sensitive data)
+    const result = await pool.query(`
+      SELECT u.id, u.first_name, u.last_name, u.email, uc.role, u.created_at
+      FROM users u
+      JOIN user_companies uc ON u.id = uc.user_id
+      WHERE uc.company_id = $1
+      ORDER BY u.created_at ASC
+    `, [companyId]
     );
 
     res.json({
@@ -1446,13 +2073,12 @@ app.get('/api/clients', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view clients' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Get clients for the user's company
     const result = await pool.query(
@@ -1477,13 +2103,12 @@ app.get('/api/clients/:clientId', authenticateToken, async (req, res) => {
 
     console.log('Fetching client:', { clientId, userId });
 
-    // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view clients' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Get client for the user's company
     const result = await pool.query(
@@ -1512,19 +2137,16 @@ app.get('/api/services', authenticateToken, async (req, res) => {
     console.log('🔍 DEBUG: req.user:', req.user);
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    console.log('🔍 DEBUG: User query result:', userResult.rows);
-    
-    if (userResult.rows.length === 0) {
-      console.log('🔍 DEBUG: User not found in database');
-      return res.status(404).json({ error: 'User not found. Please log in again.' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      // If no active company, return empty array instead of error
+      if (companyAccess.status === 400) {
+        return res.json({ services: [] });
+      }
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
-    
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.json({ services: [] });
-    }
+    const companyId = companyAccess.companyId;
 
     // Get services for the company
     const result = await pool.query(
@@ -1586,11 +2208,25 @@ app.get('/api/admin/companies/:companyId/users', authenticateToken, requireAdmin
   try {
     const { companyId } = req.params;
 
-    // Get users for the specified company (ALL columns)
-    const result = await pool.query(
-      'SELECT * FROM users WHERE company_id = $1 ORDER BY created_at ASC',
-      [companyId]
-    );
+    // Get users for the specified company via user_companies table
+    // Order by role (owner first, then admin, manager, employee) then by created_at
+    const result = await pool.query(`
+      SELECT 
+        u.*,
+        uc.role as company_role
+      FROM users u
+      JOIN user_companies uc ON u.id = uc.user_id
+      WHERE uc.company_id = $1
+      ORDER BY 
+        CASE uc.role
+          WHEN 'owner' THEN 1
+          WHEN 'admin' THEN 2
+          WHEN 'manager' THEN 3
+          WHEN 'employee' THEN 4
+          ELSE 5
+        END,
+        u.created_at ASC
+    `, [companyId]);
 
     res.json({
       users: result.rows
@@ -1718,9 +2354,16 @@ app.get('/api/company/profile', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
     const result = await pool.query(
-      'SELECT c.* FROM companies c JOIN users u ON c.id = u.company_id WHERE u.id = $1',
-      [userId]
+      'SELECT * FROM companies WHERE id = $1',
+      [companyId]
     );
 
     if (result.rows.length === 0) {
@@ -1757,16 +2400,17 @@ app.put('/api/company/profile', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query(
-      'SELECT company_id FROM users WHERE id = $1',
-      [userId]
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
-
-    const companyId = userResult.rows[0].company_id;
+    const companyId = companyAccess.companyId;
+    
+    // Verify user is owner or admin of the company
+    if (companyAccess.userRole !== 'owner' && companyAccess.userRole !== 'admin') {
+      return res.status(403).json({ error: 'Only owners and admins can update company profile' });
+    }
 
     // Update company profile
     const result = await pool.query(
@@ -1803,29 +2447,20 @@ app.get('/api/work-hours/:userId', authenticateToken, async (req, res) => {
     const { userId } = req.params;
     const currentUserId = req.user.userId;
 
-    // Get current user's company
-    const userResult = await pool.query(
-      'SELECT company_id FROM users WHERE id = $1',
-      [currentUserId]
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Current user not found' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
-
-    const companyId = userResult.rows[0].company_id;
+    const companyId = companyAccess.companyId;
 
     // Verify the target user belongs to the same company
-    const targetUserResult = await pool.query(
-      'SELECT company_id FROM users WHERE id = $1',
-      [userId]
+    const targetUserCheck = await pool.query(
+      'SELECT id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+      [userId, companyId]
     );
 
-    if (targetUserResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Target user not found' });
-    }
-
-    if (targetUserResult.rows[0].company_id !== companyId) {
+    if (targetUserCheck.rows.length === 0) {
       return res.status(403).json({ error: 'Access denied: User not in same company' });
     }
 
@@ -1865,34 +2500,26 @@ app.put('/api/work-hours/:userId', authenticateToken, async (req, res) => {
     const { userId } = req.params;
     const currentUserId = req.user.userId;
 
-    // Get current user's company and role
-    const userResult = await pool.query(
-      'SELECT company_id, role FROM users WHERE id = $1',
-      [currentUserId]
-    );
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Current user not found' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
-
-    const { company_id: companyId, role } = userResult.rows[0];
+    const companyId = companyAccess.companyId;
+    const currentUserRole = companyAccess.userRole;
 
     // Only owners and admins can edit work hours
-    if (!['company-owner', 'admin'].includes(role)) {
+    if (currentUserRole !== 'owner' && currentUserRole !== 'admin') {
       return res.status(403).json({ error: 'Access denied: Only owners and admins can edit work hours' });
     }
 
     // Verify the target user belongs to the same company
-    const targetUserResult = await pool.query(
-      'SELECT company_id FROM users WHERE id = $1',
-      [userId]
+    const targetUserCheck = await pool.query(
+      'SELECT id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+      [userId, companyId]
     );
 
-    if (targetUserResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Target user not found' });
-    }
-
-    if (targetUserResult.rows[0].company_id !== companyId) {
+    if (targetUserCheck.rows.length === 0) {
       return res.status(403).json({ error: 'Access denied: User not in same company' });
     }
 
@@ -1934,12 +2561,12 @@ app.get('/api/clients/:clientId/subscriptions', authenticateToken, async (req, r
     console.log('Fetching subscriptions for client:', { clientId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to view subscriptions' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify client belongs to user's company
     const clientCheck = await pool.query(
@@ -2023,12 +2650,12 @@ app.post('/api/subscriptions', authenticateToken, async (req, res) => {
     }
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to create subscriptions' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify client belongs to user's company
     const clientCheck = await pool.query(
@@ -2042,8 +2669,9 @@ app.post('/api/subscriptions', authenticateToken, async (req, res) => {
 
     // Verify assigned user belongs to user's company (if provided)
     if (assigned_user_id) {
+      // Check if assigned user belongs to the company (using user_companies table)
       const assignedUserCheck = await pool.query(
-        'SELECT id FROM users WHERE id = $1 AND company_id = $2',
+        'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
         [assigned_user_id, companyId]
       );
 
@@ -2165,12 +2793,12 @@ app.put('/api/subscriptions/:subscriptionId', authenticateToken, async (req, res
     });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to update subscriptions' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify subscription belongs to user's company
     const subscriptionCheck = await pool.query(
@@ -2184,8 +2812,9 @@ app.put('/api/subscriptions/:subscriptionId', authenticateToken, async (req, res
 
     // Verify assigned user belongs to user's company (if provided)
     if (assigned_user_id) {
+      // Check if assigned user belongs to the company (using user_companies table)
       const assignedUserCheck = await pool.query(
-        'SELECT id FROM users WHERE id = $1 AND company_id = $2',
+        'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
         [assigned_user_id, companyId]
       );
 
@@ -2350,12 +2979,12 @@ app.delete('/api/subscriptions/:subscriptionId', authenticateToken, async (req, 
     console.log('Subscription deletion attempt:', { subscriptionId, userId });
 
     // Get user's company
-    const userResult = await pool.query('SELECT company_id FROM users WHERE id = $1', [userId]);
-    const companyId = userResult.rows[0].company_id;
-
-    if (!companyId) {
-      return res.status(400).json({ error: 'User must have a company to delete subscriptions' });
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
+    const companyId = companyAccess.companyId;
 
     // Verify subscription belongs to user's company
     const subscriptionCheck = await pool.query(

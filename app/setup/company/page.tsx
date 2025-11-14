@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
+import { useUser } from '../../hooks/useUser'
 
 export default function CompanySetupPage() {
+  const { user } = useUser()
   const [formData, setFormData] = useState({
     country: '',
     name: '',
@@ -15,7 +17,19 @@ export default function CompanySetupPage() {
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [isUpdating, setIsUpdating] = useState(false)
   const router = useRouter()
+
+  // Check if user already has a company (from registration)
+  useEffect(() => {
+    if (user?.companyId) {
+      setIsUpdating(true)
+      // Pre-fill with existing company name if available
+      if (user.companyName) {
+        setFormData(prev => ({ ...prev, name: user.companyName }))
+      }
+    }
+  }, [user])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -32,8 +46,13 @@ export default function CompanySetupPage() {
     
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl('/companies'), {
-        method: 'POST',
+      
+      // If user already has a company, update it instead of creating new one
+      const method = isUpdating ? 'PUT' : 'POST'
+      const endpoint = isUpdating ? `/companies/${user?.companyId}` : '/companies'
+      
+      const response = await fetch(apiUrl(endpoint), {
+        method: method,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
@@ -50,18 +69,18 @@ export default function CompanySetupPage() {
         // Update user data with companyId
         const userData = localStorage.getItem('user')
         if (userData) {
-          const user = JSON.parse(userData)
-          user.companyId = data.company.id
-          user.companyName = data.company.name
-          localStorage.setItem('user', JSON.stringify(user))
+          const userObj = JSON.parse(userData)
+          userObj.companyId = data.company.id
+          userObj.companyName = data.company.name
+          localStorage.setItem('user', JSON.stringify(userObj))
         }
         
         router.push('/setup/services')
       } else {
-        setError(data.error || 'Failed to create company')
+        setError(data.error || `Failed to ${isUpdating ? 'update' : 'create'} company`)
       }
     } catch (error) {
-      setError('Network error: Failed to create company')
+      setError(`Network error: Failed to ${isUpdating ? 'update' : 'create'} company`)
       console.error('Company creation error:', error)
     } finally {
       setIsLoading(false)
@@ -226,10 +245,10 @@ export default function CompanySetupPage() {
                   {isLoading ? (
                     <span className="flex items-center justify-center space-x-2">
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span>Creating Company...</span>
+                      <span>{isUpdating ? 'Updating Company...' : 'Creating Company...'}</span>
                     </span>
                   ) : (
-                    'Create Company'
+                    isUpdating ? 'Update Company' : 'Create Company'
                   )}
                 </button>
               </form>

@@ -126,6 +126,9 @@ export default function AdminCompaniesPage() {
               <span className="text-xl font-bold text-gray-900">Vevago Admin</span>
             </Link>
             <div className="flex items-center space-x-4">
+              <Link href="/admin" className="text-gray-600 hover:text-gray-900">
+                Overview
+              </Link>
               <Link href="/admin/users" className="text-gray-600 hover:text-gray-900">
                 Users
               </Link>
