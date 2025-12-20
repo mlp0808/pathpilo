@@ -1,4 +1,4 @@
-# VPS Deployment Guide for Vevago
+# Deployment (Production) - Vevago
 
 ## Prerequisites
 - SSH access to your VPS
@@ -36,12 +36,13 @@ npm run build
 ```
 
 ### 6. Set up environment variables
-Make sure you have a `.env` file (or `.env.production`) with:
+Make sure you have a `.env` file (or `.env.production`) with at least:
 ```
 DATABASE_URL=your_database_connection_string
 JWT_SECRET=your_jwt_secret
 NODE_ENV=production
-PORT=3002
+# Express API port (Next.js is separate)
+PORT=3003
 # Add any other environment variables your app needs
 ```
 
@@ -56,14 +57,10 @@ Install PM2 globally (if not already installed):
 npm install -g pm2
 ```
 
-Start the Express backend server:
-```bash
-pm2 start server.js --name vevago-api
-```
+Use the included `ecosystem.config.js` (recommended):
 
-Start the Next.js frontend:
 ```bash
-pm2 start npm --name vevago-frontend -- start
+pm2 start ecosystem.config.js
 ```
 
 Save PM2 configuration:
@@ -83,7 +80,7 @@ nohup npm start > nextjs.log 2>&1 &
 
 ### 8. Configure Reverse Proxy (if using Nginx/Apache)
 
-If your VPS uses Nginx, you'll need to configure it to proxy requests:
+If your VPS uses Nginx, configure it to proxy requests:
 
 **Nginx configuration example:**
 ```nginx
@@ -93,7 +90,7 @@ server {
 
     # Frontend (Next.js)
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:3002;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -103,7 +100,7 @@ server {
 
     # Backend API (Express)
     location /api {
-        proxy_pass http://localhost:3002;
+        proxy_pass http://localhost:3003;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -151,8 +148,8 @@ When you push new changes to GitHub:
 
 ### Check if ports are in use:
 ```bash
-netstat -tulpn | grep :3000  # Next.js frontend
-netstat -tulpn | grep :3002  # Express backend
+netstat -tulpn | grep :3002  # Next.js frontend
+netstat -tulpn | grep :3003  # Express backend
 ```
 
 ### Check logs:
@@ -180,4 +177,5 @@ Make sure you're using Node.js 18+ for Next.js 15.
 - **Build artifacts** (`.next/` folder) are generated on the server, don't commit them
 - **Database migrations** - Make sure your database schema is up to date
 - **SSL/HTTPS** - Set up SSL certificates (Let's Encrypt) for production
+
 

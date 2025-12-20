@@ -14,12 +14,14 @@ interface User {
   companies?: Array<{
     id: number
     name: string
+    slug?: string
     role: string
     isOwner: boolean
   }>
   activeCompany?: {
     id: number
     name: string
+    slug?: string
     role: string
     isOwner: boolean
   } | null

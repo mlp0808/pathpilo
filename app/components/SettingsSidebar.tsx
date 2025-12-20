@@ -8,7 +8,8 @@ import {
   BuildingOfficeIcon,
   CreditCardIcon,
   DocumentTextIcon,
-  ArrowRightOnRectangleIcon
+  ArrowRightOnRectangleIcon,
+  BellIcon
 } from '@heroicons/react/24/outline'
 
 interface SettingsSidebarProps {
@@ -32,6 +33,7 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
   const settingsNavigation = [
     { name: 'User', href: '/settings/user', icon: UserIcon },
     { name: 'Business', href: '/settings/business', icon: BuildingOfficeIcon },
+    { name: 'Notifications', href: '/settings/notifications', icon: BellIcon },
     { name: 'Billing', href: '/settings/billing', icon: CreditCardIcon },
     { name: 'Invoices', href: '/settings/invoices', icon: DocumentTextIcon },
   ]

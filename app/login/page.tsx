@@ -73,8 +73,13 @@ function LoginForm() {
         if (inviteToken) {
           router.push(`/invite/${inviteToken}`)
         } else {
-          // Redirect to dashboard
-          router.push('/dashboard')
+          // Redirect to company slug dashboard
+          const companySlug = data.user.activeCompany?.slug || data.user.companies?.[0]?.slug
+          if (companySlug) {
+            router.push(`/${companySlug}/dashboard`)
+          } else {
+            router.push('/select-company') // Fallback
+          }
         }
       } else {
         setError(data.error || 'Login failed')

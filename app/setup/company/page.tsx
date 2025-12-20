@@ -22,12 +22,11 @@ export default function CompanySetupPage() {
 
   // Check if user already has a company (from registration)
   useEffect(() => {
-    if (user?.companyId) {
+    if (user && user.companyId) {
       setIsUpdating(true)
       // Pre-fill with existing company name if available
-      if (user.companyName) {
-        setFormData(prev => ({ ...prev, name: user.companyName }))
-      }
+      const companyName = user.companyName ?? ''
+      if (companyName) setFormData(prev => ({ ...prev, name: companyName }))
     }
   }, [user])
 
@@ -66,12 +65,29 @@ export default function CompanySetupPage() {
         // Store company data in localStorage
         localStorage.setItem('company', JSON.stringify(data.company))
         
-        // Update user data with companyId
+        // Update user data with companyId + company context (so /select-company + /dashboard redirects work)
         const userData = localStorage.getItem('user')
         if (userData) {
           const userObj = JSON.parse(userData)
           userObj.companyId = data.company.id
           userObj.companyName = data.company.name
+          if (data.company.slug) {
+            const companyEntry = {
+              id: data.company.id,
+              name: data.company.name,
+              slug: data.company.slug,
+              role: 'owner',
+              isOwner: true
+            }
+
+            // Ensure companies array exists and contains the created/updated company
+            const existingCompanies = Array.isArray(userObj.companies) ? userObj.companies : []
+            const withoutThis = existingCompanies.filter((c: any) => c?.id !== companyEntry.id)
+            userObj.companies = [companyEntry, ...withoutThis]
+
+            // Ensure activeCompany is set (used by /dashboard redirect)
+            userObj.activeCompany = companyEntry
+          }
           localStorage.setItem('user', JSON.stringify(userObj))
         }
         
@@ -99,26 +115,25 @@ export default function CompanySetupPage() {
                   Step 1 of 3
                 </div>
                 <h1 className="text-3xl font-semibold text-gray-900 mb-4 tracking-tight">
-                  Setup your company
+                  Create your company
                 </h1>
                 <p className="text-base text-gray-600 leading-relaxed">
-                  Let's get your company set up so you can start managing your clients, 
-                  services, and jobs efficiently.
+                  Let's get started by adding all your company details.
                 </p>
               </div>
               
               <div className="space-y-3 pt-4">
                 <div className="flex items-center space-x-3 text-sm text-gray-500">
                   <div className="w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
-                  <span>Company Information</span>
+                  <span>Create Company</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Team Setup</span>
+                  <span>Setup Services</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Preferences</span>
+                  <span>Add Clients</span>
                 </div>
               </div>
             </div>
@@ -245,10 +260,10 @@ export default function CompanySetupPage() {
                   {isLoading ? (
                     <span className="flex items-center justify-center space-x-2">
                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span>{isUpdating ? 'Updating Company...' : 'Creating Company...'}</span>
+                      <span>Saving...</span>
                     </span>
                   ) : (
-                    isUpdating ? 'Update Company' : 'Create Company'
+                    'Next step'
                   )}
                 </button>
               </form>

@@ -10,7 +10,8 @@ module.exports = {
       cwd: process.cwd(),
       env: {
         NODE_ENV: 'production',
-        PORT: 3000
+        // Next.js runs on 3002 in this project (see package.json "start")
+        PORT: 3002
       },
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',
@@ -26,7 +27,8 @@ module.exports = {
       cwd: process.cwd(),
       env: {
         NODE_ENV: 'production',
-        PORT: 3002
+        // Express API runs separately (default 3003) and should be reverse-proxied under /api
+        PORT: 3003
       },
       error_file: './logs/api-error.log',
       out_file: './logs/api-out.log',

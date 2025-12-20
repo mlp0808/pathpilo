@@ -7,6 +7,8 @@ import EditClientModal from '../../components/EditClientModal'
 import CreateJobSlideout from '../../components/CreateJobSlideout'
 import JobViewSlideout from '../../components/JobViewSlideout'
 import SubscriptionSlideout from '../../components/SubscriptionSlideout'
+import CreateInvoiceModal from '../../components/CreateInvoiceModal'
+import SendInvoiceModal from '../../components/SendInvoiceModal'
 import { apiUrl } from '../../utils/api'
 
 interface Client {
@@ -48,6 +50,28 @@ export default function ClientDetailPage() {
   const [editingSubscription, setEditingSubscription] = useState<any>(null)
   const [subscriptions, setSubscriptions] = useState<any[]>([])
   const [subscriptionsLoading, setSubscriptionsLoading] = useState(false)
+  const [completedJobs, setCompletedJobs] = useState<any[]>([])
+  const [completedJobsLoading, setCompletedJobsLoading] = useState(false)
+  const [invoices, setInvoices] = useState<any[]>([])
+  const [invoicesLoading, setInvoicesLoading] = useState(false)
+  const [selectedJobs, setSelectedJobs] = useState<Set<number>>(new Set())
+  const [showCreateInvoice, setShowCreateInvoice] = useState(false)
+  const [openInvoiceMenuId, setOpenInvoiceMenuId] = useState<number | null>(null)
+  const [deleteInvoiceId, setDeleteInvoiceId] = useState<number | null>(null)
+  const [deleteJobAction, setDeleteJobAction] = useState<'restore' | 'delete_jobs'>('restore')
+  const [sendInvoiceId, setSendInvoiceId] = useState<number | null>(null)
+  const [sendInvoiceDefaultSubject, setSendInvoiceDefaultSubject] = useState('')
+  const [sendInvoiceDefaultMessage, setSendInvoiceDefaultMessage] = useState('')
+  const [sendingInvoice, setSendingInvoice] = useState(false)
+  const [createInvoiceData, setCreateInvoiceData] = useState({
+    issue_date: new Date().toISOString().split('T')[0],
+    due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days from now
+    tax_rate: 25,
+    currency: 'DKK',
+    notes: '',
+    payment_terms: 'Payment due within 30 days',
+    discounts: {} as { [key: string]: number } // job_id -> discount amount
+  })
 
   useEffect(() => {
     if (clientId) {
@@ -160,7 +184,7 @@ export default function ClientDetailPage() {
 
   const handleDeleteSubscription = async (subscriptionId: number) => {
     if (!confirm('Are you sure you want to delete this subscription?')) return
-    
+
     try {
       const token = localStorage.getItem('token')
       const response = await fetch(apiUrl(`/subscriptions/${subscriptionId}`), {
@@ -169,7 +193,7 @@ export default function ClientDetailPage() {
           'Authorization': `Bearer ${token}`
         }
       })
-      
+
       if (response.ok) {
         fetchSubscriptions()
       } else {
@@ -179,6 +203,234 @@ export default function ClientDetailPage() {
     } catch (error) {
       console.error('Error deleting subscription:', error)
       alert('Failed to delete subscription')
+    }
+  }
+
+  const fetchCompletedJobs = async () => {
+    if (!clientId) return
+
+    try {
+      setCompletedJobsLoading(true)
+      const token = localStorage.getItem('token')
+
+      const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        // Filter only completed jobs that have services assigned
+        const completed = data.jobs.filter((job: any) =>
+          job.status === 'completed' &&
+          job.services &&
+          job.services.length > 0 &&
+          !job.invoice_id // hide jobs already connected to an invoice
+        )
+        setCompletedJobs(completed)
+      } else {
+        console.error('Failed to fetch completed jobs:', data.error)
+      }
+    } catch (error) {
+      console.error('Network error: Failed to fetch completed jobs', error)
+    } finally {
+      setCompletedJobsLoading(false)
+    }
+  }
+
+  const fetchInvoices = async () => {
+    if (!clientId) return
+
+    try {
+      setInvoicesLoading(true)
+      const token = localStorage.getItem('token')
+
+      const response = await fetch(apiUrl(`/clients/${clientId}/invoices`), {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setInvoices(data.invoices || [])
+      } else {
+        console.error('Failed to fetch invoices:', data.error)
+      }
+    } catch (error) {
+      console.error('Network error: Failed to fetch invoices', error)
+    } finally {
+      setInvoicesLoading(false)
+    }
+  }
+
+  const downloadInvoicePdf = async (invoiceId: number, invoiceNumber?: string) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/invoices/${invoiceId}/pdf`), {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        alert(data.error || 'Failed to download PDF')
+        return
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `invoice-${invoiceNumber || invoiceId}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('Download PDF failed:', e)
+      alert('Failed to download PDF')
+    }
+  }
+
+  const markInvoiceSentExternal = async (invoiceId: number) => {
+    if (!confirm('Mark this invoice as sent? This will lock it from editing/deleting.')) return
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/invoices/${invoiceId}/status`), {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status: 'sent' })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(data.error || 'Failed to mark as sent')
+        return
+      }
+      await fetchInvoices()
+      await fetchCompletedJobs()
+    } catch (e) {
+      console.error('Mark sent failed:', e)
+      alert('Failed to mark as sent')
+    }
+  }
+
+  const openSendInvoice = async (invoice: any) => {
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl('/email-templates'), {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      const data = await res.json().catch(() => ({}))
+      const tpl = data?.templates?.send_invoice || { subject: '', message: '' }
+      setSendInvoiceDefaultSubject(tpl.subject || `Invoice ${invoice.invoice_number}`)
+      setSendInvoiceDefaultMessage(tpl.message || '')
+      setSendInvoiceId(invoice.id)
+    } catch (e) {
+      console.error('Failed to load email template:', e)
+      setSendInvoiceDefaultSubject(`Invoice ${invoice.invoice_number}`)
+      setSendInvoiceDefaultMessage('')
+      setSendInvoiceId(invoice.id)
+    }
+  }
+
+  const sendInvoiceEmail = async (payload: { subject: string; message: string }) => {
+    if (!sendInvoiceId) return
+    try {
+      setSendingInvoice(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/invoices/${sendInvoiceId}/send-email`), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(data.error || 'Failed to send invoice')
+        return
+      }
+      setSendInvoiceId(null)
+      await fetchInvoices()
+      await fetchCompletedJobs()
+      alert('Invoice sent!')
+    } catch (e) {
+      console.error('Send invoice failed:', e)
+      alert('Failed to send invoice')
+    } finally {
+      setSendingInvoice(false)
+    }
+  }
+
+  const deleteInvoice = async () => {
+    if (!deleteInvoiceId) return
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/invoices/${deleteInvoiceId}`), {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ jobAction: deleteJobAction })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(data.error || 'Failed to delete invoice')
+        return
+      }
+      setDeleteInvoiceId(null)
+      await fetchInvoices()
+      await fetchCompletedJobs()
+    } catch (e) {
+      console.error('Delete invoice failed:', e)
+      alert('Failed to delete invoice')
+    }
+  }
+
+  const handleJobSelection = (jobId: number) => {
+    const newSelection = new Set(selectedJobs)
+    if (newSelection.has(jobId)) {
+      newSelection.delete(jobId)
+    } else {
+      newSelection.add(jobId)
+    }
+    setSelectedJobs(newSelection)
+  }
+
+  const handleCreateInvoice = async (invoiceData: any) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/clients/${clientId}/invoices`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          job_ids: Array.from(selectedJobs),
+          ...invoiceData
+        })
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setSelectedJobs(new Set())
+        setShowCreateInvoice(false)
+        fetchInvoices()
+        fetchCompletedJobs() // Refresh to show which jobs are now invoiced
+      } else {
+        alert(data.error || 'Failed to create invoice')
+      }
+    } catch (error) {
+      console.error('Error creating invoice:', error)
+      alert('Failed to create invoice')
     }
   }
 
@@ -193,6 +445,14 @@ export default function ClientDetailPage() {
   useEffect(() => {
     if (activeTab === 'subscriptions' && clientId) {
       fetchSubscriptions()
+    }
+  }, [activeTab, clientId])
+
+  // Fetch completed jobs and invoices when switching to invoicing tab
+  useEffect(() => {
+    if (activeTab === 'invoicing' && clientId) {
+      fetchCompletedJobs()
+      fetchInvoices()
     }
   }, [activeTab, clientId])
 
@@ -717,30 +977,243 @@ export default function ClientDetailPage() {
 
           {activeTab === 'invoicing' && (
             <div className="p-6">
-              <div className="text-center py-12">
-                <div className="mx-auto h-12 w-12 text-gray-400">
-                  <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
+              {/* Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Invoicing</h2>
+                  <p className="text-sm text-gray-600">
+                    Create and manage invoices for {client.first_name} {client.last_name}
+                  </p>
                 </div>
-                <h3 className="mt-2 text-sm font-medium text-gray-900">Invoicing</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  Create and manage invoices for {client.first_name} {client.last_name}
-                </p>
-                <div className="mt-6">
+                <div className="flex space-x-3">
+                  {selectedJobs.size > 0 && (
+                    <button
+                      onClick={() => setShowCreateInvoice(true)}
+                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      Create Invoice ({selectedJobs.size} job{selectedJobs.size !== 1 ? 's' : ''})
+                    </button>
+                  )}
                   <button
-                    disabled
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-400 bg-gray-100 cursor-not-allowed"
+                    onClick={() => {
+                      fetchCompletedJobs()
+                      fetchInvoices()
+                    }}
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
                   >
                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
-                    Create Invoice (Coming Soon)
+                    Refresh
                   </button>
                 </div>
-                <p className="mt-2 text-xs text-gray-400">
-                  Invoicing will be generated from completed jobs
-                </p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Completed Jobs */}
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <h3 className="text-md font-medium text-gray-900 mb-4">Completed Jobs</h3>
+
+                  {completedJobsLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="text-center">
+                        <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                        <p className="mt-2 text-sm text-gray-600">Loading completed jobs...</p>
+                      </div>
+                    </div>
+                  ) : completedJobs.length === 0 ? (
+                    <div className="text-center py-8">
+                      <div className="mx-auto h-8 w-8 text-gray-400">
+                        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <p className="mt-2 text-sm text-gray-500">No invoice-ready jobs available</p>
+                      <p className="text-xs text-gray-400">Complete jobs with services assigned to create invoices</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {completedJobs.map((job) => (
+                        <div
+                          key={job.id}
+                          className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors cursor-pointer ${
+                            selectedJobs.has(job.id)
+                              ? 'bg-blue-50 border-blue-300'
+                              : 'bg-white border-gray-200 hover:bg-gray-50'
+                          }`}
+                          onClick={() => handleJobSelection(job.id)}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedJobs.has(job.id)}
+                            onChange={() => handleJobSelection(job.id)}
+                            className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-medium text-gray-900 truncate">
+                                {job.title}
+                              </p>
+                              <span className="text-sm font-semibold text-gray-900 ml-2">
+                                {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'DKK' }).format(job.total_price || 0)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Completed {formatDateCompact(job.scheduled_date)}
+                            </p>
+                            <div className="flex items-center mt-2 text-xs text-gray-500">
+                              <span>{job.services.length} service{job.services.length !== 1 ? 's' : ''}</span>
+                              <span className="mx-2">•</span>
+                              <span>{Math.floor((job.total_duration || 0) / 60)}h {(job.total_duration || 0) % 60}m</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Invoices */}
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <h3 className="text-md font-medium text-gray-900 mb-4">Invoices</h3>
+
+                  {invoicesLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="text-center">
+                        <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                        <p className="mt-2 text-sm text-gray-600">Loading invoices...</p>
+                      </div>
+                    </div>
+                  ) : invoices.length === 0 ? (
+                    <div className="text-center py-8">
+                      <div className="mx-auto h-8 w-8 text-gray-400">
+                        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <p className="mt-2 text-sm text-gray-500">No invoices yet</p>
+                      <p className="text-xs text-gray-400">Create your first invoice from completed jobs</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {invoices.map((invoice) => (
+                        <div
+                          key={invoice.id}
+                          className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-shadow"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              #{invoice.invoice_number}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                invoice.status === 'paid' ? 'bg-green-100 text-green-800' :
+                                invoice.status === 'sent' ? 'bg-blue-100 text-blue-800' :
+                                invoice.status === 'overdue' ? 'bg-red-100 text-red-800' :
+                                invoice.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
+                                'bg-yellow-100 text-yellow-800'
+                              }`}>
+                                {invoice.status}
+                              </span>
+
+                              {/* Actions (3 dots) */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setOpenInvoiceMenuId(openInvoiceMenuId === invoice.id ? null : invoice.id)
+                                  }}
+                                  className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
+                                  title="Invoice actions"
+                                >
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
+                                  </svg>
+                                </button>
+
+                                {openInvoiceMenuId === invoice.id && (
+                                  <div
+                                    className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenInvoiceMenuId(null)
+                                        downloadInvoicePdf(invoice.id, invoice.invoice_number)
+                                      }}
+                                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                                    >
+                                      Download PDF
+                                    </button>
+
+                                    {invoice.status === 'draft' && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setOpenInvoiceMenuId(null)
+                                            markInvoiceSentExternal(invoice.id)
+                                          }}
+                                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                                        >
+                                          Mark as sent (external)
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setOpenInvoiceMenuId(null)
+                                            openSendInvoice(invoice)
+                                          }}
+                                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                                        >
+                                          Send invoice to client…
+                                        </button>
+                                        <div className="border-t border-gray-100 my-1" />
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setOpenInvoiceMenuId(null)
+                                            setDeleteJobAction('restore')
+                                            setDeleteInvoiceId(invoice.id)
+                                          }}
+                                          className="w-full text-left px-3 py-2 text-sm hover:bg-red-50 text-red-700"
+                                        >
+                                          Delete invoice…
+                                        </button>
+                                      </>
+                                    )}
+
+                                    {invoice.status !== 'draft' && (
+                                      <div className="px-3 py-2 text-xs text-gray-500">
+                                        Sent invoices are locked (cannot be edited/deleted).
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-500 mb-2">
+                            Issued {formatDateCompact(invoice.issue_date)} • Due {formatDateCompact(invoice.due_date)}
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-gray-500">
+                              {invoice.item_count} item{invoice.item_count !== 1 ? 's' : ''}
+                            </span>
+                            <span className="text-sm font-semibold text-gray-900">
+                              {new Intl.NumberFormat('en-US', { style: 'currency', currency: invoice.currency }).format(invoice.total)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -828,6 +1301,92 @@ export default function ClientDetailPage() {
             subscription={editingSubscription}
           />
         )}
+
+        {/* Create Invoice Modal */}
+        {showCreateInvoice && (
+          <CreateInvoiceModal
+            selectedJobs={selectedJobs}
+            completedJobs={completedJobs}
+            createInvoiceData={createInvoiceData}
+            setCreateInvoiceData={setCreateInvoiceData}
+            onClose={() => setShowCreateInvoice(false)}
+            onCreateInvoice={handleCreateInvoice}
+          />
+        )}
+
+        {/* Delete Invoice Modal */}
+        {deleteInvoiceId && (
+          <div className="fixed inset-0 z-[70]">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setDeleteInvoiceId(null)} />
+            <div className="absolute inset-0 flex items-center justify-center p-4">
+              <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <h3 className="text-base font-semibold text-gray-900">Delete invoice</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    This can only be done while the invoice is <span className="font-medium">draft</span>.
+                  </p>
+                </div>
+                <div className="p-6 space-y-4">
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="jobAction"
+                        className="mt-1"
+                        checked={deleteJobAction === 'restore'}
+                        onChange={() => setDeleteJobAction('restore')}
+                      />
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">Delete invoice, keep jobs</div>
+                        <div className="text-xs text-gray-500">Jobs will be restored and become invoiceable again.</div>
+                      </div>
+                    </label>
+                    <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="jobAction"
+                        className="mt-1"
+                        checked={deleteJobAction === 'delete_jobs'}
+                        onChange={() => setDeleteJobAction('delete_jobs')}
+                      />
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">Delete invoice and delete jobs</div>
+                        <div className="text-xs text-gray-500">Removes the jobs linked to this invoice.</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+                <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteInvoiceId(null)}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={deleteInvoice}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Send Invoice Modal */}
+        <SendInvoiceModal
+          isOpen={sendInvoiceId !== null}
+          invoiceNumber={invoices.find((i) => i.id === sendInvoiceId)?.invoice_number}
+          defaultSubject={sendInvoiceDefaultSubject}
+          defaultMessage={sendInvoiceDefaultMessage}
+          isSending={sendingInvoice}
+          onClose={() => setSendInvoiceId(null)}
+          onSend={sendInvoiceEmail}
+        />
       </div>
     </AppLayout>
   )

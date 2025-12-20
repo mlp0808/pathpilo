@@ -22,6 +22,8 @@ function RegisterForm() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
+  const [formError, setFormError] = useState('')
+  const [emailError, setEmailError] = useState('')
 
   // Load invitation details if token exists
   useEffect(() => {
@@ -48,11 +50,15 @@ function RegisterForm() {
       ...prev,
       [name]: type === 'checkbox' ? checked : value
     }))
+    if (name === 'email') setEmailError('')
+    if (formError) setFormError('')
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
+    setFormError('')
+    setEmailError('')
     
     try {
       const response = await fetch(apiUrl('/auth/register'), {
@@ -91,12 +97,13 @@ function RegisterForm() {
           localStorage.setItem('user', JSON.stringify(userData))
         }
         
-        alert('Registration successful! Welcome to Vevago!')
+        // (Optional UX) you can add a toast later; avoiding alert() for consistency
         console.log('User created and logged in:', data.user)
         
-        // If registered via invitation, invitation was auto-accepted, go to dashboard
+        // If registered via invitation, go straight to company dashboard (or company picker)
         if (inviteToken && userData && userData.companyId) {
-          router.push('/dashboard')
+          const slug = userData.activeCompany?.slug || userData.companies?.[0]?.slug
+          router.push(slug ? `/${slug}/dashboard` : '/select-company')
         } else if (!inviteToken) {
           // Normal registration: always go to setup wizard to configure company
           router.push('/setup/company')
@@ -105,11 +112,24 @@ function RegisterForm() {
           router.push('/setup/company')
         }
       } else {
-        alert('Registration failed: ' + data.error)
+        const msg = (data?.error ? String(data.error) : 'Registration failed')
+        const lower = msg.toLowerCase()
+
+        // Field-level handling for the common "email already exists" case
+        if (lower.includes('email') && (lower.includes('already exists') || lower.includes('already in use'))) {
+          setEmailError('Email is already in use. Try logging in instead.')
+        } else if (lower.includes('already exists') && lower.includes('email')) {
+          setEmailError('Email is already in use. Try logging in instead.')
+        } else if (lower.includes('already exists')) {
+          // Backend currently returns: "User with this email already exists"
+          setEmailError('Email is already in use. Try logging in instead.')
+        } else {
+          setFormError(msg)
+        }
       }
     } catch (error) {
       console.error('Registration error:', error)
-      alert('Registration failed: Network error')
+      setFormError('Network error: registration failed')
     } finally {
       setIsLoading(false)
     }
@@ -137,6 +157,11 @@ function RegisterForm() {
         {/* Registration Form */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {formError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                <p className="text-sm font-medium text-red-700">{formError}</p>
+              </div>
+            )}
             {/* Name Fields */}
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -176,6 +201,11 @@ function RegisterForm() {
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
                 Email Address
               </label>
+              {emailError && (
+                <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                  <p className="text-sm font-medium text-red-700">{emailError}</p>
+                </div>
+              )}
               <input
                 type="email"
                 id="email"
@@ -183,7 +213,8 @@ function RegisterForm() {
                 value={formData.email}
                 onChange={handleInputChange}
                 readOnly={!!inviteToken}
-                className={`input-field ${inviteToken ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                aria-invalid={!!emailError}
+                className={`input-field ${inviteToken ? 'bg-gray-100 cursor-not-allowed' : ''} ${emailError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}
                 placeholder="john@company.com"
                 required
               />

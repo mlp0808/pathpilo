@@ -1,45 +1,63 @@
 require('dotenv').config();
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 
-// Database connection
+/**
+ * Single database setup script (dev/staging).
+ *
+ * Usage:
+ *   node setup-database.js --reset --seed
+ *   node setup-database.js --seed
+ *   node setup-database.js
+ *
+ * Flags:
+ *   --reset  Drops all app tables first (DESTRUCTIVE).
+ *   --seed   Inserts a small demo dataset if database is empty.
+ *
+ * Notes:
+ * - This script is intended for local/dev environments. Do NOT run --reset in production.
+ * - It creates all tables used by the app, including subscriptions (recurring_jobs).
+ */
+
+const args = new Set(process.argv.slice(2));
+const RESET = args.has('--reset');
+const SEED = args.has('--seed');
+
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'vevago_',
-  user: process.env.DB_USER || 'vevago.app',
-  password: process.env.DB_PASSWORD || 'E9n!GdczqusW@43i'
+  database: process.env.DB_NAME || 'vevago_local',
+  user: process.env.DB_USER || 'vevago_local',
+  password: process.env.DB_PASSWORD || 'password123'
 });
 
-async function setupDatabase() {
+function slugify(name) {
+  return String(name)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+async function safeQuery(sql, params) {
   try {
-    console.log('🔧 Setting up database...');
-    
-    // Drop existing tables
-    console.log('🗑️  Dropping existing tables...');
-    await pool.query('DROP TABLE IF EXISTS company_invitations CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS user_company_work_hours CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS user_companies CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS recurring_job_services CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS recurring_jobs CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS job_notes CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS job_services CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS jobs CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS services CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS clients CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS users CASCADE;');
-    await pool.query('DROP TABLE IF EXISTS companies CASCADE;');
-    
-    // Drop functions and triggers
-    await pool.query('DROP FUNCTION IF EXISTS prevent_remove_last_owner() CASCADE;');
-    await pool.query('DROP FUNCTION IF EXISTS prevent_update_last_owner() CASCADE;');
-    await pool.query('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;');
-    
-    // Create companies table first (without foreign key to users)
-    console.log('📝 Creating companies table...');
+    return await pool.query(sql, params);
+  } catch (e) {
+    // Helpful when running against partially-existing schemas
+    console.log(`⚠️  Skipped (non-fatal): ${e.message}`);
+    return null;
+  }
+}
+
+async function createSchema() {
+  console.log('🧱 Creating schema...');
+
+  // Core tables
     await pool.query(`
-      CREATE TABLE companies (
+    CREATE TABLE IF NOT EXISTS companies (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
+        slug VARCHAR(255) UNIQUE NOT NULL,
         country VARCHAR(100),
         cvr_number VARCHAR(50),
         address TEXT,
@@ -51,26 +69,28 @@ async function setupDatabase() {
       );
     `);
 
-    // Create users table (no company_id - will use user_companies junction table)
-    console.log('📝 Creating users table...');
     await pool.query(`
-      CREATE TABLE users (
+    CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         first_name VARCHAR(100) NOT NULL,
         last_name VARCHAR(100) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(20) NOT NULL DEFAULT 'company-owner' CHECK (role IN ('admin', 'company-owner', 'manager', 'employee')),
-        company_id INTEGER REFERENCES companies(id), -- Deprecated, kept for backward compatibility
+      company_id INTEGER REFERENCES companies(id), -- backward compatibility
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // Create user_companies junction table (many-to-many relationship)
-    console.log('📝 Creating user_companies table...');
+  await safeQuery(`
+    ALTER TABLE companies
+    ADD CONSTRAINT fk_companies_owner
+    FOREIGN KEY (owner_id) REFERENCES users(id);
+  `);
+
     await pool.query(`
-      CREATE TABLE user_companies (
+    CREATE TABLE IF NOT EXISTS user_companies (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -81,24 +101,8 @@ async function setupDatabase() {
       );
     `);
 
-    // Add foreign key constraint to companies table after users table exists
-    console.log('🔗 Adding foreign key constraints...');
     await pool.query(`
-      ALTER TABLE companies 
-      ADD CONSTRAINT fk_companies_owner 
-      FOREIGN KEY (owner_id) REFERENCES users(id);
-    `);
-    
-    // Make owner_id required (NOT NULL)
-    await pool.query(`
-      ALTER TABLE companies 
-      ALTER COLUMN owner_id SET NOT NULL;
-    `);
-    
-    // Create company_invitations table
-    console.log('📝 Creating company_invitations table...');
-    await pool.query(`
-      CREATE TABLE company_invitations (
+    CREATE TABLE IF NOT EXISTS company_invitations (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         invited_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -108,97 +112,21 @@ async function setupDatabase() {
         status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'expired', 'cancelled')),
         expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         accepted_at TIMESTAMP,
         UNIQUE(company_id, email, status)
       );
     `);
-    
-    // Create indexes for performance
-    console.log('📝 Creating indexes...');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_user_id ON user_companies(user_id);');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_company_id ON user_companies(company_id);');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_role ON user_companies(role);');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_token ON company_invitations(token);');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_email ON company_invitations(email);');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_status ON company_invitations(status);');
-    
-    // Create function to update updated_at timestamp
-    console.log('📝 Creating update_updated_at_column function...');
-    await pool.query(`
-      CREATE OR REPLACE FUNCTION update_updated_at_column()
-      RETURNS TRIGGER AS $$
-      BEGIN
-        NEW.updated_at = CURRENT_TIMESTAMP;
-        RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    
-    // Create triggers for updated_at
-    await pool.query(`
-      CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
-      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-    `);
-    await pool.query(`
-      CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies
-      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-    `);
-    await pool.query(`
-      CREATE TRIGGER update_user_companies_updated_at BEFORE UPDATE ON user_companies
-      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-    `);
-    
-    // Create functions to prevent removing the last owner
-    console.log('📝 Creating owner protection functions...');
-    await pool.query(`
-      CREATE OR REPLACE FUNCTION prevent_remove_last_owner()
-      RETURNS TRIGGER AS $$
-      BEGIN
-        IF OLD.role = 'owner' THEN
-          IF (SELECT COUNT(*) FROM user_companies WHERE company_id = OLD.company_id AND role = 'owner') <= 1 THEN
-            RAISE EXCEPTION 'Cannot remove the last owner from a company. Company must always have an owner.';
-          END IF;
-        END IF;
-        RETURN OLD;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    
-    await pool.query(`
-      CREATE OR REPLACE FUNCTION prevent_update_last_owner()
-      RETURNS TRIGGER AS $$
-      BEGIN
-        IF OLD.role = 'owner' AND NEW.role != 'owner' THEN
-          IF (SELECT COUNT(*) FROM user_companies WHERE company_id = NEW.company_id AND role = 'owner') <= 1 THEN
-            RAISE EXCEPTION 'Cannot change the last owner to a different role. Company must always have an owner.';
-          END IF;
-        END IF;
-        RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    
-    // Create triggers to enforce owner requirement
-    await pool.query(`
-      DROP TRIGGER IF EXISTS check_last_owner_before_delete ON user_companies;
-      CREATE TRIGGER check_last_owner_before_delete
-        BEFORE DELETE ON user_companies
-        FOR EACH ROW
-        EXECUTE FUNCTION prevent_remove_last_owner();
-    `);
-    
-    await pool.query(`
-      DROP TRIGGER IF EXISTS check_last_owner_before_update ON user_companies;
-      CREATE TRIGGER check_last_owner_before_update
-        BEFORE UPDATE ON user_companies
-        FOR EACH ROW
-        EXECUTE FUNCTION prevent_update_last_owner();
-    `);
 
-    // Create services table
-    console.log('📝 Creating services table...');
+    // Some existing DBs may have company_invitations without updated_at.
+    // We keep an updated_at trigger for consistency, so ensure the column exists.
+    await safeQuery(
+      `ALTER TABLE company_invitations
+       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+    );
+    
     await pool.query(`
-      CREATE TABLE services (
+    CREATE TABLE IF NOT EXISTS services (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         title VARCHAR(255) NOT NULL,
@@ -209,22 +137,18 @@ async function setupDatabase() {
       );
     `);
 
-    // Create clients table
-    console.log('📝 Creating clients table...');
     await pool.query(`
-      CREATE TABLE clients (
+    CREATE TABLE IF NOT EXISTS clients (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         first_name VARCHAR(100) NOT NULL,
         last_name VARCHAR(100) NOT NULL,
         country VARCHAR(100),
-        -- Personal info
         personal_address TEXT,
         personal_zip_code VARCHAR(20),
         personal_city VARCHAR(100),
         personal_email VARCHAR(255),
         personal_phone VARCHAR(50),
-        -- Billing info (optional - if null, use personal info)
         billing_address TEXT,
         billing_zip_code VARCHAR(20),
         billing_city VARCHAR(100),
@@ -235,14 +159,13 @@ async function setupDatabase() {
       );
     `);
 
-    // Create jobs table
-    console.log('📝 Creating jobs table...');
     await pool.query(`
-      CREATE TABLE jobs (
+    CREATE TABLE IF NOT EXISTS jobs (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
         assigned_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      invoice_id INTEGER,
         title VARCHAR(255) NOT NULL,
         note TEXT,
         scheduled_date VARCHAR(10) NOT NULL,
@@ -250,16 +173,23 @@ async function setupDatabase() {
         scheduled_time_to TIME,
         status VARCHAR(50) DEFAULT 'scheduled',
         recurring_job_id INTEGER,
+        -- Occurrence index within a subscription (1 = first occurrence, 2 = second, ...)
+        recurring_occurrence INTEGER,
         is_generated BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // Create recurring_jobs table for recurring job templates
-    console.log('📝 Creating recurring_jobs table...');
+    // Backward-compatible: ensure recurring_occurrence exists if jobs table already existed.
+    await safeQuery(
+      `ALTER TABLE jobs
+       ADD COLUMN IF NOT EXISTS recurring_occurrence INTEGER`
+    );
+
+  // Subscriptions / recurring job templates
     await pool.query(`
-      CREATE TABLE recurring_jobs (
+    CREATE TABLE IF NOT EXISTS recurring_jobs (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -279,18 +209,21 @@ async function setupDatabase() {
       );
     `);
 
-    // Add foreign key constraint for recurring_job_id
-    console.log('🔗 Adding recurring_job foreign key constraint...');
-    await pool.query(`
+  await safeQuery(`
       ALTER TABLE jobs 
       ADD CONSTRAINT fk_jobs_recurring_job 
       FOREIGN KEY (recurring_job_id) REFERENCES recurring_jobs(id) ON DELETE SET NULL;
     `);
 
-    // Create recurring_job_services table
-    console.log('📝 Creating recurring_job_services table...');
+  // Uniquely identify a subscription occurrence per company to prevent duplicate ghosts/materializations.
+  await safeQuery(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_recurring_occurrence
+    ON jobs(company_id, recurring_job_id, recurring_occurrence)
+    WHERE recurring_job_id IS NOT NULL AND recurring_occurrence IS NOT NULL
+  `);
+
     await pool.query(`
-      CREATE TABLE recurring_job_services (
+    CREATE TABLE IF NOT EXISTS recurring_job_services (
         id SERIAL PRIMARY KEY,
         recurring_job_id INTEGER NOT NULL REFERENCES recurring_jobs(id) ON DELETE CASCADE,
         service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
@@ -301,13 +234,13 @@ async function setupDatabase() {
       );
     `);
 
-  // Create job_services table (many-to-many relationship between jobs and services)
-  console.log('📝 Creating job_services table...');
   await pool.query(`
-    CREATE TABLE job_services (
+    CREATE TABLE IF NOT EXISTS job_services (
       id SERIAL PRIMARY KEY,
       job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-      service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+      -- service_id is nullable to support ad-hoc job tasks that are not saved in the services catalog
+      service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+      custom_title TEXT,
       custom_price DECIMAL(10,2),
       custom_duration_minutes INTEGER,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -315,10 +248,24 @@ async function setupDatabase() {
     );
   `);
 
-  // Create job_notes table for multiple notes per job
-  console.log('📝 Creating job_notes table...');
+  // Backward-compatible: ensure ad-hoc fields exist if table already existed.
+  await safeQuery(`ALTER TABLE job_services ADD COLUMN IF NOT EXISTS custom_title TEXT`);
+  await safeQuery(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'job_services'
+          AND column_name = 'service_id'
+          AND is_nullable = 'NO'
+      ) THEN
+        ALTER TABLE job_services ALTER COLUMN service_id DROP NOT NULL;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
-    CREATE TABLE job_notes (
+    CREATE TABLE IF NOT EXISTS job_notes (
       id SERIAL PRIMARY KEY,
       job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -327,10 +274,100 @@ async function setupDatabase() {
     );
   `);
 
-  // Create user_company_work_hours table
-  console.log('📝 Creating user_company_work_hours table...');
   await pool.query(`
-    CREATE TABLE user_company_work_hours (
+    CREATE TABLE IF NOT EXISTS job_logs (
+      id SERIAL PRIMARY KEY,
+      job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      action VARCHAR(100) NOT NULL,
+      description TEXT NOT NULL,
+      notification_message TEXT,
+      notification_email VARCHAR(255),
+      note_content TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Invoices
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      invoice_number VARCHAR(50) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled')),
+      issue_date DATE NOT NULL,
+      due_date DATE NOT NULL,
+      subtotal DECIMAL(10,2) NOT NULL DEFAULT 0,
+      tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+      tax_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+      total DECIMAL(10,2) NOT NULL DEFAULT 0,
+      currency VARCHAR(3) NOT NULL DEFAULT 'DKK',
+      notes TEXT,
+      payment_terms TEXT,
+      created_by INTEGER REFERENCES users(id),
+      sent_at TIMESTAMP,
+      paid_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(company_id, invoice_number)
+    );
+  `);
+
+  await safeQuery(`
+    ALTER TABLE jobs
+    ADD CONSTRAINT fk_jobs_invoice
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_jobs_invoice_id ON jobs(invoice_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_items (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      -- service_id is nullable to support invoicing ad-hoc job tasks
+      service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      unit_price DECIMAL(10,2) NOT NULL,
+      line_total DECIMAL(10,2) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(invoice_id, job_id, service_id)
+    );
+  `);
+
+  await safeQuery(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'invoice_items'
+          AND column_name = 'service_id'
+          AND is_nullable = 'NO'
+      ) THEN
+        ALTER TABLE invoice_items ALTER COLUMN service_id DROP NOT NULL;
+      END IF;
+    END $$;
+  `);
+
+  // Email templates
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_templates (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      template_type VARCHAR(50) NOT NULL CHECK (template_type IN ('change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice')),
+      subject TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(company_id, template_type)
+    );
+  `);
+
+  // Work hours
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_company_work_hours (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -347,272 +384,328 @@ async function setupDatabase() {
     );
   `);
 
-    
-    console.log('✅ Database setup complete!');
-    console.log('📊 Tables created:');
-    console.log('   Companies table:');
-    console.log('     - id, name, cvr_number, address, zip_code, city');
-    console.log('     - owner_id (references users, NOT NULL), created_at, updated_at');
-    console.log('   Users table:');
-    console.log('     - id, first_name, last_name, email');
-    console.log('     - password_hash, role (admin/company-owner/manager/employee)');
-    console.log('     - company_id (deprecated, kept for backward compatibility)');
-    console.log('     - created_at, updated_at');
-    console.log('   User Companies table (many-to-many):');
-    console.log('     - id, user_id, company_id, role (owner/admin/manager/employee)');
-    console.log('     - created_at, updated_at');
-    console.log('   Company Invitations table:');
-    console.log('     - id, company_id, invited_by_user_id, email, role, token');
-    console.log('     - status, expires_at, created_at, accepted_at');
-    console.log('   User Company Work Hours table:');
-    console.log('     - id, user_id (references users), company_id (references companies)');
-    console.log('     - monday_hours, tuesday_hours, wednesday_hours, thursday_hours');
-    console.log('     - friday_hours, saturday_hours, sunday_hours');
-    console.log('     - created_at, updated_at');
-    
-    // Add demo users for testing
-    console.log('👥 Adding demo users...');
-    const bcrypt = require('bcryptjs');
-    
-    // Create admin user first (no company)
-    console.log('👤 Creating admin user...');
-    const adminPasswordHash = await bcrypt.hash('password123', 10);
-    const adminResult = await pool.query(
-      'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      ['Admin', 'User', 'admin@vevago.com', adminPasswordHash, 'admin']
-    );
-    const adminId = adminResult.rows[0].id;
-    console.log('   ✅ Added admin user: admin@vevago.com');
-    
-    // Create company owner user
-    console.log('👤 Creating company owner user...');
-    const ownerPasswordHash = await bcrypt.hash('password123', 10);
-    const ownerResult = await pool.query(
-      'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      ['John', 'Doe', 'user@vevago.com', ownerPasswordHash, 'company-owner']
-    );
-    const ownerId = ownerResult.rows[0].id;
-    console.log('   ✅ Added company owner: user@vevago.com');
-    
-    // Create demo company with owner
-    console.log('🏢 Creating demo company...');
-    const companyResult = await pool.query(
-      'INSERT INTO companies (name, owner_id) VALUES ($1, $2) RETURNING id',
-      ['Demo Company', ownerId]
-    );
-    const companyId = companyResult.rows[0].id;
-    console.log('   ✅ Created demo company');
-    
-    // Link owner to company via user_companies
-    await pool.query(
-      'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
-      [ownerId, companyId, 'owner']
-    );
-    console.log('   ✅ Linked owner to company');
-    
-    // Also update users.company_id for backward compatibility
-    await pool.query(
-      'UPDATE users SET company_id = $1 WHERE id = $2',
-      [companyId, ownerId]
-    );
-    
-    // Test the tables
-    const userCount = await pool.query('SELECT COUNT(*) FROM users;');
-    const companyCount = await pool.query('SELECT COUNT(*) FROM companies;');
-    const userCompanyCount = await pool.query('SELECT COUNT(*) FROM user_companies;');
-    console.log(`📈 Total users in database: ${userCount.rows[0].count}`);
-    console.log(`📈 Total companies in database: ${companyCount.rows[0].count}`);
-    console.log(`📈 Total user-company links: ${userCompanyCount.rows[0].count}`);
+  // updated_at triggers
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = CURRENT_TIMESTAMP;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
 
-    // Add demo services for the company
-    console.log('🔧 Adding demo services...');
-    const demoServices = [
-      { title: 'Window Cleaning', price: 150.00, duration_minutes: 60 },
-      { title: 'Deep Window Cleaning', price: 250.00, duration_minutes: 120 },
-      { title: 'Gutter Cleaning', price: 200.00, duration_minutes: 90 },
-      { title: 'Pressure Washing', price: 300.00, duration_minutes: 180 },
-      { title: 'Roof Cleaning', price: 400.00, duration_minutes: 240 },
-      { title: 'Solar Panel Cleaning', price: 180.00, duration_minutes: 75 },
-      { title: 'Exterior House Washing', price: 350.00, duration_minutes: 150 },
-      { title: 'Driveway Cleaning', price: 120.00, duration_minutes: 45 }
-    ];
+  const tablesWithUpdatedAt = [
+    'companies',
+    'users',
+    'user_companies',
+    'company_invitations',
+    'clients',
+    'services',
+    'jobs',
+    'recurring_jobs',
+    'invoices',
+    'email_templates',
+    'user_company_work_hours'
+  ];
 
-    for (const service of demoServices) {
-      try {
-        await pool.query(
-          'INSERT INTO services (company_id, title, price, duration_minutes) VALUES ($1, $2, $3, $4)',
-          [companyId, service.title, service.price, service.duration_minutes]
-        );
-        console.log(`   ✅ Added service: ${service.title}`);
-      } catch (error) {
-        console.log(`   ❌ Failed to add service ${service.title}:`, error.message);
-      }
+  for (const t of tablesWithUpdatedAt) {
+    try {
+      await pool.query(`
+        CREATE TRIGGER update_${t}_updated_at
+        BEFORE UPDATE ON ${t}
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+      `);
+    } catch (_) {
+      // trigger already exists
     }
+  }
 
-    // Add demo clients
-    console.log('👥 Adding demo clients...');
-    const demoClients = [
-      {
-        first_name: 'Alice',
-        last_name: 'Johnson',
-        country: 'Denmark',
-        personal_address: 'Københavnsvej 123',
-        personal_zip_code: '2100',
-        personal_city: 'København',
-        personal_email: 'alice.johnson@email.com',
-        personal_phone: '+45 1234 5678',
-        billing_address: null,
-        billing_zip_code: null,
-        billing_city: null,
-        billing_email: null,
-        billing_phone: null
-      },
-      {
-        first_name: 'Bob',
-        last_name: 'Andersen',
-        country: 'Denmark',
-        personal_address: 'Aarhusvej 456',
-        personal_zip_code: '8000',
-        personal_city: 'Aarhus',
-        personal_email: 'bob.andersen@email.com',
-        personal_phone: '+45 8765 4321',
-        billing_address: 'Aarhusvej 456',
-        billing_zip_code: '8000',
-        billing_city: 'Aarhus',
-        billing_email: 'bob.andersen@email.com',
-        billing_phone: '+45 8765 4321'
-      },
-      {
-        first_name: 'Claire',
-        last_name: 'Nielsen',
-        country: 'Denmark',
-        personal_address: 'Odensevej 789',
-        personal_zip_code: '5000',
-        personal_city: 'Odense',
-        personal_email: 'claire.nielsen@email.com',
-        personal_phone: '+45 2468 1357',
-        billing_address: 'Odensevej 789',
-        billing_zip_code: '5000',
-        billing_city: 'Odense',
-        billing_email: 'billing@claire-company.dk',
-        billing_phone: '+45 2468 1358'
-      },
-      {
-        first_name: 'David',
-        last_name: 'Hansen',
-        country: 'Denmark',
-        personal_address: 'Aalborgvej 321',
-        personal_zip_code: '9000',
-        personal_city: 'Aalborg',
-        personal_email: 'david.hansen@email.com',
-        personal_phone: '+45 3691 2580',
-        billing_address: null,
-        billing_zip_code: null,
-        billing_city: null,
-        billing_email: null,
-        billing_phone: null
-      },
-      {
-        first_name: 'Eva',
-        last_name: 'Pedersen',
-        country: 'Denmark',
-        personal_address: 'Esbjergvej 654',
-        personal_zip_code: '6700',
-        personal_city: 'Esbjerg',
-        personal_email: 'eva.pedersen@email.com',
-        personal_phone: '+45 4815 9263',
-        billing_address: 'Esbjergvej 654',
-        billing_zip_code: '6700',
-        billing_city: 'Esbjerg',
-        billing_email: 'eva.pedersen@email.com',
-        billing_phone: '+45 4815 9263'
-      }
-    ];
+  // Helpful indexes
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_user_id ON user_companies(user_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_user_companies_company_id ON user_companies(company_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_company_invitations_token ON company_invitations(token);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_jobs_company_id ON jobs(company_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_jobs_client_id ON jobs(client_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_jobs_assigned_user_id ON jobs(assigned_user_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_recurring_jobs_company_id ON recurring_jobs(company_id);');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_recurring_jobs_client_id ON recurring_jobs(client_id);');
+}
 
-    for (const client of demoClients) {
-      try {
+async function resetDatabase() {
+  console.log('🗑️  Resetting database (dropping tables)...');
+
+  // Drop in dependency order (safe with CASCADE)
+  const tablesToDrop = [
+    'invoice_items',
+    'invoices',
+    'email_templates',
+    'company_invitations',
+    'user_company_work_hours',
+    'recurring_job_services',
+    'recurring_jobs',
+    'job_logs',
+    'job_notes',
+    'job_services',
+    'jobs',
+    'services',
+    'clients',
+    'user_companies',
+    'users',
+    'companies'
+  ];
+
+  for (const t of tablesToDrop) {
+    await pool.query(`DROP TABLE IF EXISTS ${t} CASCADE;`);
+  }
+
+  await pool.query('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;');
+  await pool.query('DROP FUNCTION IF EXISTS prevent_remove_last_owner() CASCADE;');
+  await pool.query('DROP FUNCTION IF EXISTS prevent_update_last_owner() CASCADE;');
+}
+
+async function seedMiniDemo() {
+  console.log('🌱 Seeding demo data (small)...');
+
+  const companyCount = await pool.query('SELECT COUNT(*)::int AS n FROM companies;');
+  if ((companyCount.rows[0]?.n || 0) > 0) {
+    console.log('✅ Seed skipped (companies already exist).');
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash('password123', 10);
+
+  const upsertUser = async (first, last, email, role) => {
+    const res = await pool.query(
+      `INSERT INTO users (first_name, last_name, email, password_hash, role)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (email) DO UPDATE SET
+         first_name = EXCLUDED.first_name,
+         last_name = EXCLUDED.last_name,
+         password_hash = EXCLUDED.password_hash,
+         role = EXCLUDED.role
+       RETURNING id`,
+      [first, last, email, passwordHash, role]
+    );
+    return res.rows[0].id;
+  };
+
+  const adminId = await upsertUser('Admin', 'User', 'admin@vevago.com', 'admin');
+  const ownerId = await upsertUser('John', 'Doe', 'user@vevago.com', 'company-owner');
+  const managerId = await upsertUser('Sarah', 'Wilson', 'sarah.wilson@vevago.com', 'manager');
+  const employeeId = await upsertUser('Lisa', 'Garcia', 'employee@vevago.com', 'employee');
+
+  const companyName = 'Demo Company';
+  const companySlug = slugify(companyName);
+
+  const companyRes = await pool.query(
+    `INSERT INTO companies (name, slug, owner_id)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+     RETURNING id`,
+    [companyName, companySlug, ownerId]
+  );
+  const companyId = companyRes.rows[0].id;
+
+  // Set default active company for demo logins (back-compat field)
+  await pool.query('UPDATE users SET company_id = $1 WHERE id = ANY($2::int[])', [
+    companyId,
+    [adminId, ownerId, managerId, employeeId]
+  ]);
+
+  // Link users to company
+  await safeQuery(
+    'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1,$2,$3) ON CONFLICT (user_id, company_id) DO NOTHING',
+    [adminId, companyId, 'admin']
+  );
+  await safeQuery(
+    'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1,$2,$3) ON CONFLICT (user_id, company_id) DO NOTHING',
+    [ownerId, companyId, 'owner']
+  );
+  await safeQuery(
+    'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1,$2,$3) ON CONFLICT (user_id, company_id) DO NOTHING',
+    [managerId, companyId, 'manager']
+  );
+  await safeQuery(
+    'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1,$2,$3) ON CONFLICT (user_id, company_id) DO NOTHING',
+    [employeeId, companyId, 'employee']
+  );
+
+  const clients = await pool.query(
+    `INSERT INTO clients (company_id, first_name, last_name, personal_email, personal_phone, personal_address, personal_city, personal_zip_code, country)
+     VALUES
+      ($1,'Zoe','Johanson','zoe@example.com','+45 1111 1111','Main St 1','Copenhagen','1000','Denmark'),
+      ($1,'Emma','Nielsen','emma@example.com','+45 2222 2222','Park Ave 12','Copenhagen','2100','Denmark'),
+      ($1,'Oliver','Hansen','oliver@example.com','+45 3333 3333','Beach Rd 5','Aarhus','8000','Denmark')
+     RETURNING id, first_name, last_name`,
+    [companyId]
+  );
+  const [clientA, clientB, clientC] = clients.rows;
+
+  const services = await pool.query(
+    `INSERT INTO services (company_id, title, price, duration_minutes)
+     VALUES
+      ($1,'Window cleaning', 199.00, 60),
+      ($1,'Garden maintenance', 299.00, 90),
+      ($1,'Deep cleaning', 499.00, 120)
+     RETURNING id, title, price, duration_minutes`,
+    [companyId]
+  );
+  const [svc1, svc2, svc3] = services.rows;
+
+  // One subscription (recurring job) for testing subscriptions UI/APIs
+  const today = new Date();
+  const yyyyMmDd = (d) => d.toISOString().slice(0, 10);
+  const startDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+      const nextDate = new Date(startDate);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 14);
+
+  const subscription = await pool.query(
+          `INSERT INTO recurring_jobs (
+            company_id, client_id, assigned_user_id, title, note,
+            scheduled_time_from, scheduled_time_to, day_of_week, interval_weeks,
+            is_active, starting_date, next_occurrence_date
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    RETURNING id`,
+    [
+      companyId,
+      clientA.id,
+      employeeId,
+      'Bi-weekly window cleaning',
+      'Seeded subscription for testing',
+      '09:00',
+      '10:00',
+      2,
+      2,
+      true,
+      yyyyMmDd(startDate),
+      yyyyMmDd(nextDate)
+    ]
+  );
+  const subscriptionId = subscription.rows[0].id;
+
         await pool.query(
-          `INSERT INTO clients (
-            company_id, first_name, last_name, country,
-            personal_address, personal_zip_code, personal_city, personal_email, personal_phone,
-            billing_address, billing_zip_code, billing_city, billing_email, billing_phone
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-          [
-            companyId, client.first_name, client.last_name, client.country,
-            client.personal_address, client.personal_zip_code, client.personal_city, 
-            client.personal_email, client.personal_phone,
-            client.billing_address, client.billing_zip_code, client.billing_city,
-            client.billing_email, client.billing_phone
-          ]
-        );
-        console.log(`   ✅ Added client: ${client.first_name} ${client.last_name}`);
-      } catch (error) {
-        console.log(`   ❌ Failed to add client ${client.first_name} ${client.last_name}:`, error.message);
-      }
-    }
+    `INSERT INTO recurring_job_services (recurring_job_id, service_id, custom_price, custom_duration_minutes)
+     VALUES ($1,$2,$3,$4)`,
+    [subscriptionId, svc1.id, 199.0, 60]
+  );
 
-    // Add additional team members
-    console.log('👥 Adding demo team members...');
-    const teamMembers = [
-      { first_name: 'Sarah', last_name: 'Wilson', email: 'sarah.wilson@vevago.com', password: 'password123', role: 'manager', companyRole: 'manager' },
-      { first_name: 'Mike', last_name: 'Brown', email: 'mike.brown@vevago.com', password: 'password123', role: 'employee', companyRole: 'employee' },
-      { first_name: 'Lisa', last_name: 'Garcia', email: 'lisa.garcia@vevago.com', password: 'password123', role: 'employee', companyRole: 'employee' }
-    ];
+  // Jobs: 3 completed (invoiceable), 1 completed already invoiced, 1 scheduled
+  const jobs = await pool.query(
+    `INSERT INTO jobs (company_id, client_id, assigned_user_id, title, note, scheduled_date, scheduled_time_from, scheduled_time_to, status, recurring_job_id, is_generated)
+     VALUES
+      ($1,$2,$3,'Window cleaning - Apartment','Please ring bell',$6,'09:00','10:00','completed', NULL, false),
+      ($1,$4,$3,'Garden maintenance','Gate code 1234',$7,'12:00','13:30','completed', NULL, false),
+      ($1,$5,$3,'Deep cleaning','Bring eco products',$8,'14:00','16:00','completed', NULL, false),
+      ($1,$2,$3,'Window cleaning (already invoiced)','Old invoice test',$9,'10:00','11:00','completed', NULL, false),
+      ($1,$2,$3,'Scheduled follow-up','Confirm by SMS',$10,'09:00','10:00','scheduled', $11, true)
+     RETURNING id, client_id, title, status`,
+    [
+      companyId,
+      clientA.id,
+      employeeId,
+      clientB.id,
+      clientC.id,
+      yyyyMmDd(new Date(Date.now() - 1 * 86400000)),
+      yyyyMmDd(new Date(Date.now() - 2 * 86400000)),
+      yyyyMmDd(new Date(Date.now() - 3 * 86400000)),
+      yyyyMmDd(new Date(Date.now() - 4 * 86400000)),
+      yyyyMmDd(new Date(Date.now() + 3 * 86400000)),
+      subscriptionId
+    ]
+  );
 
-    for (const member of teamMembers) {
-      try {
-        const passwordHash = await bcrypt.hash(member.password, 10);
-        // Create user
-        const userResult = await pool.query(
-          'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-          [member.first_name, member.last_name, member.email, passwordHash, member.role]
-        );
-        const userId = userResult.rows[0].id;
-        
-        // Link user to company via user_companies
-        await pool.query(
-          'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
-          [userId, companyId, member.companyRole]
-        );
-        
-        // Also update users.company_id for backward compatibility
-        await pool.query(
-          'UPDATE users SET company_id = $1 WHERE id = $2',
-          [companyId, userId]
-        );
-        
-        console.log(`   ✅ Added team member: ${member.email} (${member.companyRole})`);
-      } catch (error) {
-        if (error.code === '23505') {
-          console.log(`   ⚠️  Team member already exists: ${member.email}`);
-        } else {
-          console.log(`   ❌ Failed to add team member ${member.email}:`, error.message);
-        }
-      }
-    }
+  const [job1, job2, job3, jobInvoiced] = jobs.rows;
 
-    console.log('\n🔑 Demo Login Credentials:');
-    console.log('   Admin (can access /admin/users): admin@vevago.com / password123');
-    console.log('   Company Owner: user@vevago.com / password123');
-    console.log('   Manager: sarah.wilson@vevago.com / password123');
-    console.log('   Employee: mike.brown@vevago.com / password123');
-    console.log('   Employee: lisa.garcia@vevago.com / password123');
-    console.log('\n📊 Demo Data Summary:');
-    console.log(`   - 8 services (Window Cleaning, Deep Cleaning, etc.)`);
-    console.log(`   - 5 clients (Alice, Bob, Claire, David, Eva)`);
-    console.log(`   - 5 users (1 admin, 1 owner, 1 manager, 2 employees)`);
-    
-  } catch (error) {
-    console.error('❌ Database setup failed:', error.message);
-    console.log('\n🔍 Troubleshooting tips:');
-    console.log('1. Make sure PostgreSQL is running');
-    console.log('2. Check if the password in this script matches your PostgreSQL password');
-    console.log('3. Make sure the database "vevago_dev" exists');
-    console.log('\nTo create the database, run:');
-    console.log('CREATE DATABASE vevago_dev;');
+  // Assign services to jobs
+  await pool.query(
+    'INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes) VALUES ($1,$2,$3,$4)',
+    [job1.id, svc1.id, 144.0, 45]
+  );
+  await pool.query(
+    'INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes) VALUES ($1,$2,$3,$4)',
+    [job2.id, svc2.id, 299.0, 90]
+  );
+  await pool.query(
+    'INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes) VALUES ($1,$2,$3,$4)',
+    [job3.id, svc3.id, 499.0, 120]
+  );
+          await pool.query(
+    'INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes) VALUES ($1,$2,$3,$4)',
+    [jobInvoiced.id, svc1.id, 199.0, 60]
+  );
+
+  // Create one draft invoice + connect one job to it (to test "can't invoice twice")
+  const inv = await pool.query(
+    `INSERT INTO invoices (company_id, client_id, invoice_number, issue_date, due_date, subtotal, tax_rate, tax_amount, total, currency, notes, payment_terms, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING id`,
+    [
+      companyId,
+      clientA.id,
+      'INV-DEMO-0001',
+      yyyyMmDd(new Date(Date.now() - 4 * 86400000)),
+      yyyyMmDd(new Date(Date.now() + 26 * 86400000)),
+      199.0,
+      25,
+      49.75,
+      248.75,
+      'DKK',
+      'Seeded invoice for testing',
+      'Payment due within 30 days',
+      ownerId
+    ]
+  );
+  const invoiceId = inv.rows[0].id;
+
+                await pool.query(
+    `INSERT INTO invoice_items (invoice_id, job_id, service_id, description, quantity, unit_price, line_total)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [invoiceId, jobInvoiced.id, svc1.id, 'Window cleaning', 1, 199.0, 199.0]
+  );
+  await pool.query('UPDATE jobs SET invoice_id = $1 WHERE id = $2', [invoiceId, jobInvoiced.id]);
+
+  // Ensure basic templates exist
+  const templateTypes = ['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice'];
+  for (const t of templateTypes) {
+    await safeQuery(
+      `INSERT INTO email_templates (company_id, template_type, subject, message)
+       VALUES ($1,$2,'','')
+       ON CONFLICT (company_id, template_type) DO NOTHING`,
+      [companyId, t]
+    );
+  }
+
+  console.log('✅ Demo seed complete!');
+  console.log('🏢 Company slug:', companySlug);
+  console.log('👤 Login users (password: password123):');
+  console.log('   - admin@vevago.com (admin)');
+  console.log('   - user@vevago.com (company-owner)');
+  console.log('   - sarah.wilson@vevago.com (manager)');
+  console.log('   - employee@vevago.com (employee)');
+  console.log('🔄 Subscriptions: 1 recurring job seeded (bi-weekly).');
+}
+
+async function main() {
+  try {
+    console.log('🔧 Vevago database setup');
+    console.log(`   reset: ${RESET ? 'yes' : 'no'}`);
+    console.log(`   seed:  ${SEED ? 'yes' : 'no'}`);
+
+    if (RESET) await resetDatabase();
+    await createSchema();
+    if (SEED) await seedMiniDemo();
+
+    console.log('✅ Done.');
+  } catch (e) {
+    console.error('❌ Database setup failed:', e);
+    process.exitCode = 1;
   } finally {
     await pool.end();
   }
 }
 
-setupDatabase();
+main();
+
+

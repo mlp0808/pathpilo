@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { PlusIcon } from '@heroicons/react/24/outline'
+import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 
 interface Client {
@@ -125,7 +125,23 @@ export default function ClientsSetupPage() {
   }
 
   const handleContinue = () => {
-    router.push('/dashboard')
+    try {
+      const userData = localStorage.getItem('user')
+      const userObj = userData ? JSON.parse(userData) : null
+      const slug = userObj?.activeCompany?.slug || userObj?.companies?.[0]?.slug
+      if (slug) {
+        router.replace(`/${slug}/dashboard`)
+      } else {
+        // Fallback: /dashboard will redirect if it can infer an active company
+        router.replace('/dashboard')
+      }
+    } catch {
+      router.replace('/dashboard')
+    }
+  }
+
+  const handleBack = () => {
+    router.push('/setup/services')
   }
 
   const handleCancel = () => {
@@ -171,15 +187,15 @@ export default function ClientsSetupPage() {
               <div className="space-y-3 pt-4">
                 <div className="flex items-center space-x-3 text-sm text-gray-500">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Company Information</span>
+                  <span>Create Company</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-500">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Services</span>
+                  <span>Setup Services</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-500">
                   <div className="w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
-                  <span>First Client</span>
+                  <span>Add Clients</span>
                 </div>
               </div>
             </div>
@@ -187,6 +203,16 @@ export default function ClientsSetupPage() {
 
           {/* Right Column - Form (60%) */}
           <div className="col-span-3">
+            <div className="mb-3">
+              <button
+                type="button"
+                onClick={handleBack}
+                className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+                <span>go back</span>
+              </button>
+            </div>
             <div className="bg-white/70 backdrop-blur-sm border border-gray-200/60 rounded-2xl p-8 shadow-xl shadow-gray-900/5">
               
               {/* Clients List */}
@@ -483,34 +509,31 @@ export default function ClientsSetupPage() {
 
               {/* Action Buttons */}
               <div className="mt-8 pt-6 border-t border-gray-200/60">
-                <div className="flex flex-col sm:flex-row gap-3">
-                  {clients.length > 0 && !showForm ? (
-                    <button
-                      onClick={handleContinue}
-                      className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-xl text-sm font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 shadow-lg hover:shadow-xl hover:shadow-blue-500/25"
-                    >
-                      Continue to Dashboard
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        onClick={handleContinue}
-                        className="flex-1 bg-gray-100 text-gray-700 py-3 px-6 rounded-xl text-sm font-semibold hover:bg-gray-200 focus:ring-2 focus:ring-gray-500/20 focus:ring-offset-2 transition-all duration-200"
-                      >
-                        Skip Clients
-                      </button>
-                      <button
-                        onClick={handleContinue}
-                        className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-xl text-sm font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 shadow-lg hover:shadow-xl hover:shadow-blue-500/25"
-                      >
-                        Continue to Dashboard
-                      </button>
-                    </>
-                  )}
+                <button
+                  type="button"
+                  onClick={handleContinue}
+                  disabled={clients.length === 0 || showForm}
+                  className={`w-full py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-offset-2 transition-all duration-200 shadow-lg ${
+                    clients.length === 0 || showForm
+                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 focus:ring-blue-500/20 hover:shadow-xl hover:shadow-blue-500/25'
+                  }`}
+                >
+                  Continue to Dashboard
+                </button>
+
+                <div className="mt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={handleContinue}
+                    disabled={showForm}
+                    className={`text-xs font-medium transition-colors ${
+                      showForm ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Skip this step.
+                  </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-2 text-center">
-                  You can add clients later from your dashboard
-                </p>
               </div>
             </div>
           </div>

@@ -109,8 +109,9 @@ export default function InvitePage() {
           localStorage.setItem('user', JSON.stringify(userData))
         }
         
-        // Redirect to dashboard
-        router.push('/dashboard')
+        // Redirect to company dashboard (or to company picker as fallback)
+        const companySlug = data.user?.activeCompany?.slug || data.user?.companies?.[0]?.slug
+        router.push(companySlug ? `/${companySlug}/dashboard` : '/select-company')
       } else {
         setError(data.error || 'Failed to accept invitation')
       }

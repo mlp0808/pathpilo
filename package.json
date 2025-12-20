@@ -4,12 +4,16 @@
   "description": "Client management system for service companies",
   "main": "server.js",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.js",
+    "dev:3002": "next dev -p 3002",
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",
     "dev:server": "node server.js",
-    "dev:fullstack": "concurrently \"npm run dev:server\" \"npm run dev\""
+    "dev:fullstack": "concurrently \"npm run dev:server\" \"npm run dev\"",
+    "clean": "node -e \"const fs=require('fs'); const path=require('path'); const rm=(p)=>fs.rmSync(p,{recursive:true,force:true}); ['.next'].forEach(d=>{const p=path.join(process.cwd(),d); if(fs.existsSync(p)) rm(p);}); console.log('cleaned .next');\"",
+    "db:setup": "node setup-database.js --seed",
+    "db:reset": "node setup-database.js --reset --seed"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -27,6 +31,7 @@
     "next": "^15.5.5",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.7",
+    "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
     "postcss": "^8.5.6",
     "react": "^19.2.0",
