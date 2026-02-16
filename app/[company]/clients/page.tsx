@@ -8,12 +8,13 @@ import { apiUrl } from '../../utils/api'
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
-  personal_address: string
-  personal_zip_code: string
-  personal_phone: string
-  personal_email: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name: string | null
+  address: string | null
+  zip_code: string | null
+  phone: string | null
+  email: string | null
   created_at: string
 }
 
@@ -23,6 +24,7 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
 
   useEffect(() => {
     fetchClients()
@@ -63,6 +65,11 @@ export default function ClientsPage() {
     fetchClients()
   }
 
+  // Reset to page 1 when search term changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchTerm])
+
   if (loading) {
     return (
       <AppLayout>
@@ -102,14 +109,14 @@ export default function ClientsPage() {
                   placeholder="Search clients..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="block w-full pl-10 pr-3 py-2 border border-primary-200 rounded-xl text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 bg-white shadow-sm transition-all duration-200"
                 />
               </div>
               
               {/* Add Client Button */}
               <button
                 onClick={handleAddClient}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                className="inline-flex items-center px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-xl hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 transition-all duration-200 shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25 transform hover:scale-[1.02]"
               >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -148,7 +155,12 @@ export default function ClientsPage() {
         )}
 
         {/* Clients Table */}
-        <ClientsTable clients={clients} searchTerm={searchTerm} />
+        <ClientsTable 
+          clients={clients} 
+          searchTerm={searchTerm} 
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+        />
         
         {/* Add Client Modal */}
         <AddClientModal

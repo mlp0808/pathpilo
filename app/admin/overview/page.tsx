@@ -113,7 +113,7 @@ export default function AdminOverviewPage() {
               <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-lg">V</span>
               </div>
-              <span className="text-xl font-bold text-gray-900">Vevago Admin</span>
+              <span className="text-xl font-bold text-gray-900">PathPilo Admin</span>
             </Link>
             <div className="flex items-center space-x-4">
               <Link href="/admin" className="text-blue-600 hover:text-blue-700 font-medium">

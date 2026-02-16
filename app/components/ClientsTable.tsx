@@ -2,38 +2,49 @@
 
 import { useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { EyeIcon } from '@heroicons/react/24/outline'
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
-  personal_address: string
-  personal_zip_code: string
-  personal_phone: string
-  personal_email: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name: string | null
+  address: string | null
+  zip_code: string | null
+  phone: string | null
+  email: string | null
   created_at: string
 }
 
 interface ClientsTableProps {
   clients: Client[]
   searchTerm: string
+  currentPage: number
+  onPageChange: (page: number) => void
 }
 
-export default function ClientsTable({ clients, searchTerm }: ClientsTableProps) {
+export default function ClientsTable({ clients, searchTerm, currentPage, onPageChange }: ClientsTableProps) {
   const router = useRouter()
-  
+  const ITEMS_PER_PAGE = 50
+
   const filteredClients = useMemo(() => {
     if (!searchTerm) {
       return clients
     }
+    // Remove spaces from search term for phone number matching
+    const normalizedSearchTerm = searchTerm.replace(/\s+/g, '').toLowerCase()
     const lowercasedSearchTerm = searchTerm.toLowerCase()
-    return clients.filter(client =>
-      client.first_name.toLowerCase().includes(lowercasedSearchTerm) ||
-      client.last_name.toLowerCase().includes(lowercasedSearchTerm) ||
-      client.personal_email?.toLowerCase().includes(lowercasedSearchTerm) ||
-      client.personal_phone?.toLowerCase().includes(lowercasedSearchTerm)
-    )
+    
+    return clients.filter(client => {
+      // Normalize phone numbers by removing spaces for comparison
+      const normalizedPhone = client.phone ? client.phone.replace(/\s+/g, '').toLowerCase() : ''
+      
+      return (
+        client.name.toLowerCase().includes(lowercasedSearchTerm) ||
+        (client.last_name && client.last_name.toLowerCase().includes(lowercasedSearchTerm)) ||
+        (client.email && client.email.toLowerCase().includes(lowercasedSearchTerm)) ||
+        (normalizedPhone && normalizedPhone.includes(normalizedSearchTerm))
+      )
+    })
   }, [clients, searchTerm])
 
   const handleClientClick = (clientId: number) => {
@@ -47,6 +58,12 @@ export default function ClientsTable({ clients, searchTerm }: ClientsTableProps)
       day: 'numeric'
     })
   }
+
+  // Pagination logic
+  const totalPages = Math.ceil(filteredClients.length / ITEMS_PER_PAGE)
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
+  const endIndex = startIndex + ITEMS_PER_PAGE
+  const paginatedClients = filteredClients.slice(startIndex, endIndex)
 
   if (filteredClients.length === 0) {
     return (
@@ -70,31 +87,29 @@ export default function ClientsTable({ clients, searchTerm }: ClientsTableProps)
   }
 
   return (
-    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-      <table className="min-w-full divide-y divide-gray-300">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Name
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Address
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Phone
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Email
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Actions
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
-          {filteredClients.map((client) => (
-            <tr 
-              key={client.id} 
+    <>
+      <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+        <table className="min-w-full divide-y divide-gray-300">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Name
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Address
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Phone
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Email
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {paginatedClients.map((client) => (
+            <tr
+              key={client.id}
               className="hover:bg-gray-50 cursor-pointer transition-colors"
               onClick={() => handleClientClick(client.id)}
             >
@@ -102,7 +117,7 @@ export default function ClientsTable({ clients, searchTerm }: ClientsTableProps)
                 <div className="flex items-center">
                   <div>
                     <div className="text-sm font-medium text-gray-900">
-                      {client.first_name} {client.last_name}
+                      {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                     </div>
                     <div className="text-sm text-gray-500">
                       Added {formatDate(client.created_at)}
@@ -112,11 +127,11 @@ export default function ClientsTable({ clients, searchTerm }: ClientsTableProps)
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <div className="text-sm text-gray-900">
-                  {client.personal_address ? (
+                  {client.address ? (
                     <>
-                      {client.personal_address}
-                      {client.personal_zip_code && (
-                        <><br />{client.personal_zip_code}</>
+                      {client.address}
+                      {client.zip_code && (
+                        <><br />{client.zip_code}</>
                       )}
                     </>
                   ) : (
@@ -126,33 +141,88 @@ export default function ClientsTable({ clients, searchTerm }: ClientsTableProps)
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <div className="text-sm text-gray-900">
-                  {client.personal_phone || (
+                  {client.phone || (
                     <span className="text-gray-400 italic">No phone</span>
                   )}
                 </div>
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <div className="text-sm text-gray-900">
-                  {client.personal_email || (
+                  {client.email || (
                     <span className="text-gray-400 italic">No email</span>
                   )}
                 </div>
               </td>
-              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleClientClick(client.id)
-                  }}
-                  className="text-blue-600 hover:text-blue-900 transition-colors"
-                >
-                  <EyeIcon className="h-4 w-4" />
-                </button>
-              </td>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="mt-4 flex items-center justify-between">
+          <div className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex + 1}</span> to <span className="font-medium">{Math.min(endIndex, filteredClients.length)}</span> of <span className="font-medium">{filteredClients.length}</span> clients
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onPageChange(currentPage - 1)}
+              disabled={currentPage === 1}
+              className={`px-3 py-2 text-sm font-medium rounded-lg border ${
+                currentPage === 1
+                  ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
+                  : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              Previous
+            </button>
+            <div className="flex gap-1">
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(page => {
+                  // Show first page, last page, current page, and pages around current
+                  return (
+                    page === 1 ||
+                    page === totalPages ||
+                    (page >= currentPage - 2 && page <= currentPage + 2)
+                  )
+                })
+                .map((page, index, array) => {
+                  // Add ellipsis if there's a gap
+                  const showEllipsisBefore = index > 0 && array[index - 1] < page - 1
+                  return (
+                    <div key={page} className="flex items-center gap-1">
+                      {showEllipsisBefore && (
+                        <span className="px-2 text-gray-500">...</span>
+                      )}
+                      <button
+                        onClick={() => onPageChange(page)}
+                        className={`px-3 py-2 text-sm font-medium rounded-lg border ${
+                          currentPage === page
+                            ? 'bg-accent-500 text-white border-accent-500'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    </div>
+                  )
+                })}
+            </div>
+            <button
+              onClick={() => onPageChange(currentPage + 1)}
+              disabled={currentPage === totalPages}
+              className={`px-3 py-2 text-sm font-medium rounded-lg border ${
+                currentPage === totalPages
+                  ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
+                  : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   )
 }

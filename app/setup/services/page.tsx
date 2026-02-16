@@ -111,17 +111,17 @@ export default function ServicesSetupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+    <div className="min-h-screen bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50">
       <div className="max-w-4xl mx-auto px-6 py-16">
         <div className="grid grid-cols-5 gap-16 items-start">
           {/* Left Column - Text (40%) */}
           <div className="col-span-2 pt-4">
             <div className="space-y-6">
               <div>
-                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 mb-4">
+                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-accent-50 text-accent-700 border border-accent-200 mb-4">
                   Step 2 of 3
                 </div>
-                <h1 className="text-3xl font-semibold text-gray-900 mb-4 tracking-tight">
+                <h1 className="text-3xl font-bold text-primary-800 mb-4 tracking-tight">
                   Add your services
                 </h1>
                 <p className="text-base text-gray-600 leading-relaxed">
@@ -130,12 +130,12 @@ export default function ServicesSetupPage() {
               </div>
               
               <div className="space-y-3 pt-4">
-                <div className="flex items-center space-x-3 text-sm text-gray-500">
+                <div className="flex items-center space-x-3 text-sm text-gray-400">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
                   <span>Create Company</span>
                 </div>
-                <div className="flex items-center space-x-3 text-sm text-gray-500">
-                  <div className="w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
+                <div className="flex items-center space-x-3 text-sm font-medium text-primary-700">
+                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full"></div>
                   <span>Setup Services</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
@@ -152,18 +152,18 @@ export default function ServicesSetupPage() {
               <button
                 type="button"
                 onClick={handleBack}
-                className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-primary-800 transition-colors"
               >
                 <ArrowLeftIcon className="w-4 h-4" />
                 <span>go back</span>
               </button>
             </div>
-            <div className="bg-white/70 backdrop-blur-sm border border-gray-200/60 rounded-2xl p-8 shadow-xl shadow-gray-900/5">
+            <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-primary-500/5">
               
               {/* Services List */}
               {services.length > 0 && (
                 <div className="mb-6">
-                  <h3 className="text-sm font-medium text-gray-900 mb-3">Your Services</h3>
+                  <h3 className="text-xs font-semibold text-primary-700 mb-3">Your Services</h3>
                   <div className="space-y-2">
                     {services.map((service, index) => {
                       // Convert minutes back to hours and minutes for display
@@ -202,14 +202,14 @@ export default function ServicesSetupPage() {
                   </div>
 
                   {error && (
-                    <div className="bg-red-50/80 border border-red-200/60 rounded-xl p-4 backdrop-blur-sm">
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
                       <p className="text-red-600 text-sm font-medium">{error}</p>
                     </div>
                   )}
 
                   {/* Service Title */}
                   <div className="group">
-                    <label htmlFor="title" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="title" className="block text-xs font-semibold text-primary-700 mb-2">
                       Service title <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -246,7 +246,7 @@ export default function ServicesSetupPage() {
                   {/* Duration - Hours and Minutes */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="group">
-                      <label htmlFor="duration_hours" className="block text-sm font-medium text-gray-900 mb-2">
+                      <label htmlFor="duration_hours" className="block text-xs font-semibold text-primary-700 mb-2">
                         Hours <span className="text-red-500">*</span>
                       </label>
                       <input
@@ -281,8 +281,8 @@ export default function ServicesSetupPage() {
                   </div>
 
                   {/* Note about customization */}
-                  <div className="bg-blue-50/80 border border-blue-200/60 rounded-xl p-4 backdrop-blur-sm">
-                    <p className="text-blue-700 text-xs">
+                  <div className="bg-accent-50 border border-accent-200/60 rounded-xl p-4">
+                    <p className="text-accent-700 text-xs">
                       <span className="font-medium">Note:</span> These are standard values that can be customized for each client later.
                     </p>
                   </div>
@@ -290,7 +290,7 @@ export default function ServicesSetupPage() {
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-xl text-sm font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:shadow-blue-500/25"
+                    className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
                   >
                       {isSubmitting ? (
                         <span className="flex items-center justify-center space-x-2">
@@ -315,7 +315,7 @@ export default function ServicesSetupPage() {
               )}
 
               {/* Action Buttons */}
-              <div className="mt-8 pt-6 border-t border-gray-200/60">
+              <div className="mt-8 pt-6 border-t border-gray-100">
                 <button
                   type="button"
                   onClick={handleContinue}
@@ -323,7 +323,7 @@ export default function ServicesSetupPage() {
                   className={`w-full py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-offset-2 transition-all duration-200 shadow-lg ${
                     services.length === 0 || showForm
                       ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-                      : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 focus:ring-blue-500/20 hover:shadow-xl hover:shadow-blue-500/25'
+                      : 'bg-accent-500 hover:bg-accent-600 text-white focus:ring-accent-500/20 shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25'
                   }`}
                 >
                   Next step

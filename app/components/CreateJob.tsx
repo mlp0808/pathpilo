@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { XMarkIcon } from '@heroicons/react/24/outline'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import ConfirmModal from './ConfirmModal'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -212,14 +214,33 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
           
           <div className="space-y-2 max-h-40 overflow-y-auto">
             {getJobsForDate(new Date(selectedDate)).map((job) => (
-              <div key={job.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg border border-gray-200">
+              <div key={job.id} className={`flex items-center justify-between p-2 rounded-lg border ${
+                job.status === 'cancelled'
+                  ? 'bg-gray-100 border-gray-300 opacity-60'
+                  : 'bg-gray-50 border-gray-200'
+              }`}>
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-gray-900 truncate">{job.first_name} {job.last_name}</div>
-                  <div className="text-xs text-gray-500 truncate">
+                  <div className={`text-xs font-medium truncate ${
+                    job.status === 'cancelled' ? 'text-gray-600' : 'text-gray-900'
+                  }`}>
+                    {job.name}{job.last_name ? ` ${job.last_name}` : ''}
+                    {job.status === 'cancelled' && (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                        Cancelled
+                      </span>
+                    )}
+                  </div>
+                  <div className={`text-xs truncate ${
+                    job.status === 'cancelled' ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
                     {job.personal_address ? `${job.personal_address}, ${job.personal_city}` : 'No address'}
                   </div>
                 </div>
-                <div className="text-xs text-gray-600 font-medium ml-2">{Math.round(job.total_duration / 60)}h</div>
+                <div className={`text-xs font-medium ml-2 ${
+                  job.status === 'cancelled' ? 'text-gray-400' : 'text-gray-600'
+                }`}>
+                  {Math.round(job.total_duration / 60)}h
+                </div>
               </div>
             ))}
             
@@ -229,10 +250,10 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
                   <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium text-blue-900 truncate">
-                      {selectedClient.first_name} {selectedClient.last_name}
+                      {selectedClient.name}{selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}
                     </div>
                     <div className="text-xs text-blue-600 truncate">
-                      {selectedClient.personal_address ? `${selectedClient.personal_address}, ${selectedClient.personal_city}` : 'No address'}
+                      {selectedClient.address ? `${selectedClient.address}${selectedClient.city ? `, ${selectedClient.city}` : ''}` : 'No address'}
                     </div>
                   </div>
                 </div>
@@ -260,11 +281,16 @@ interface Service {
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
-  personal_address: string
-  personal_zip_code: string
-  personal_city: string
+  client_type?: 'person' | 'company'
+  name: string
+  last_name?: string | null
+  company_number?: string
+  address?: string
+  zip_code?: string
+  city?: string
+  email?: string
+  phone?: string
+  personal_city?: string
   personal_email?: string
   personal_phone?: string
 }
@@ -312,30 +338,59 @@ interface CreateJobProps {
   onJobCreated?: () => void
   initialDate?: string
   initialAssignedUserId?: number | null
+  mode?: 'job' | 'subscription'
 }
 
-export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId }: CreateJobProps) {
+export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job' }: CreateJobProps) {
   const [services, setServices] = useState<Service[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+  const [isEditingClient, setIsEditingClient] = useState(false)
+  const [editingClientData, setEditingClientData] = useState({
+    client_type: 'person' as 'person' | 'company',
+    name: '',
+    last_name: '',
+    company_number: '',
+    address: '',
+    zip_code: '',
+    city: '',
+    email: '',
+    phone: ''
+  })
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
   const [showClientDropdown, setShowClientDropdown] = useState(false)
+  const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [clientSearch, setClientSearch] = useState('')
+  const [showTimeModal, setShowTimeModal] = useState(false)
+  const [pendingTimeFrom, setPendingTimeFrom] = useState('')
+  const [pendingTimeTo, setPendingTimeTo] = useState('')
+  const [isTimeRangeMode, setIsTimeRangeMode] = useState(false)
   const [jobDate, setJobDate] = useState('')
   const [jobTimeFrom, setJobTimeFrom] = useState('')
   const [jobTimeTo, setJobTimeTo] = useState('')
   const [jobNote, setJobNote] = useState('')
-  const [showDatePicker, setShowDatePicker] = useState(false)
-  const [showTimeFromPicker, setShowTimeFromPicker] = useState(false)
-  const [isTimeRangeMode, setIsTimeRangeMode] = useState(false)
   const [showNoteInput, setShowNoteInput] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [createdJobId, setCreatedJobId] = useState<number | null>(null)
-  const [expandedSections, setExpandedSections] = useState({ client: true, job: false, schedule: false })
+
+  // Refs and portal positions for job-only dropdowns (so they escape overflow-hidden)
+  const clientDropdownTriggerRef = useRef<HTMLDivElement>(null)
+  const serviceDropdownTriggerRef = useRef<HTMLDivElement>(null)
+  const userDropdownTriggerRef = useRef<HTMLDivElement>(null)
+  const [clientDropdownRect, setClientDropdownRect] = useState<DOMRect | null>(null)
+  const [serviceDropdownRect, setServiceDropdownRect] = useState<DOMRect | null>(null)
+  const [userDropdownRect, setUserDropdownRect] = useState<DOMRect | null>(null)
+
+  // Subscription state
+  const [recurrenceType, setRecurrenceType] = useState<'weekly' | 'monthly'>('weekly')
+  const [dayOfWeek, setDayOfWeek] = useState<number>(1) // Monday
+  const [dayOfMonth, setDayOfMonth] = useState<number>(1)
+  const [intervalValue, setIntervalValue] = useState<number>(1)
+  const [expandedSections, setExpandedSections] = useState({ client: true, job: false, schedule: false, recurring: false })
   const [jobType, setJobType] = useState<'new' | 'redo'>('new')
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [editingDuration, setEditingDuration] = useState<number | null>(null)
@@ -344,19 +399,21 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [selectedPastJob, setSelectedPastJob] = useState<PastJob | null>(null)
   const [isAddingNewClient, setIsAddingNewClient] = useState(false)
   const [newClientData, setNewClientData] = useState({
-    first_name: '',
+    client_type: 'person' as 'person' | 'company',
+    name: '',
     last_name: '',
-    personal_address: '',
-    personal_zip_code: '',
-    personal_city: '',
-    personal_email: '',
-    personal_phone: ''
+    company_number: '',
+    address: '',
+    zip_code: '',
+    city: '',
+    email: '',
+    phone: ''
   })
   
-  const toggleSection = (section: 'client' | 'job' | 'schedule') => {
+  const toggleSection = (section: 'client' | 'job' | 'schedule' | 'recurring') => {
     setExpandedSections(prev => {
       // Only allow one section open at a time
-      const newState = { client: false, job: false, schedule: false }
+      const newState = { client: false, job: false, schedule: false, recurring: false }
       // If clicking the currently open section, close it. Otherwise, open the clicked section
       newState[section] = !prev[section]
       return newState
@@ -366,9 +423,18 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   // Auto-close client section and open job section only when an existing client is selected (not when adding new)
   useEffect(() => {
     if (selectedClient && !isAddingNewClient && expandedSections.client) {
-      setExpandedSections({ client: false, job: true, schedule: false })
+      setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
     }
   }, [selectedClient])
+
+  // Set initial state based on mode
+  useEffect(() => {
+    if (mode === 'subscription') {
+      setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
+    } else {
+      setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
+    }
+  }, [mode])
   
   // Don't auto-close job section when services are added - user may want to add more
   
@@ -383,10 +449,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   useEffect(() => {
     if (isOpen) {
       // Prefill date/user when provided (e.g. when opened from the calendar column "Add job")
-      setJobDate(initialDate ? String(initialDate).split('T')[0] : '')
+      setJobDate(initialDate ? String(initialDate).split('T')[0] : (mode === 'job' ? new Date().toISOString().split('T')[0] : ''))
       setJobTimeFrom('')
       setJobTimeTo('')
-      setIsTimeRangeMode(false)
       setJobNote('')
       setShowNoteInput(false)
       setSelectedServices([])
@@ -395,20 +460,22 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setServiceSearch('')
       setClientSearch('')
       setCreatedJobId(null)
-      setExpandedSections({ client: true, job: false, schedule: false })
+      setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
       setJobType('new')
       setSelectedPastJob(null)
       setEditingPrice(null)
       setEditingDuration(null)
       setIsAddingNewClient(false)
       setNewClientData({
-        first_name: '',
+        client_type: 'person',
+        name: '',
         last_name: '',
-        personal_address: '',
-        personal_zip_code: '',
-        personal_city: '',
-        personal_email: '',
-        personal_phone: ''
+        company_number: '',
+        address: '',
+        zip_code: '',
+        city: '',
+        email: '',
+        phone: ''
       })
     }
   }, [isOpen, initialDate, initialAssignedUserId])
@@ -429,8 +496,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       if (!target.closest('.dropdown-container') && !target.closest('[data-time-picker]')) {
         setShowServiceDropdown(false)
         setShowClientDropdown(false)
-        setShowDatePicker(false)
-        setShowTimeFromPicker(false)
+        setShowUserDropdown(false)
       }
     }
     if (isOpen) {
@@ -438,6 +504,41 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [isOpen])
+
+  // Measure dropdown trigger rects for portaling (job-only) so dropdowns escape overflow-hidden
+  useLayoutEffect(() => {
+    if (!showClientDropdown || !clientDropdownTriggerRef.current) {
+      setClientDropdownRect(null)
+      return
+    }
+    const el = clientDropdownTriggerRef.current
+    const update = () => setClientDropdownRect(el.getBoundingClientRect())
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [showClientDropdown])
+  useLayoutEffect(() => {
+    if (!showServiceDropdown || !serviceDropdownTriggerRef.current) {
+      setServiceDropdownRect(null)
+      return
+    }
+    const el = serviceDropdownTriggerRef.current
+    const update = () => setServiceDropdownRect(el.getBoundingClientRect())
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [showServiceDropdown])
+  useLayoutEffect(() => {
+    if (!showUserDropdown || selectedUserId || !userDropdownTriggerRef.current) {
+      setUserDropdownRect(null)
+      return
+    }
+    const el = userDropdownTriggerRef.current
+    const update = () => setUserDropdownRect(el.getBoundingClientRect())
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [showUserDropdown, selectedUserId])
 
   const fetchServices = async () => {
     try {
@@ -525,7 +626,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     }
     
     // If adding new client, we need to validate the form
-    if (isAddingNewClient && !newClientData.first_name.trim()) {
+    if (isAddingNewClient && !newClientData.name.trim()) {
       return
     }
     
@@ -549,13 +650,15 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            first_name: newClientData.first_name,
-            last_name: newClientData.last_name,
-            personal_address: newClientData.personal_address || null,
-            personal_zip_code: newClientData.personal_zip_code || null,
-            personal_city: newClientData.personal_city || null,
-            personal_email: newClientData.personal_email || null,
-            personal_phone: newClientData.personal_phone || null
+            client_type: newClientData.client_type,
+            name: newClientData.name,
+            last_name: newClientData.last_name || null,
+            company_number: newClientData.company_number || null,
+            address: newClientData.address || null,
+            zip_code: newClientData.zip_code || null,
+            city: newClientData.city || null,
+            email: newClientData.email || null,
+            phone: newClientData.phone || null
           })
         })
         
@@ -570,50 +673,101 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         clientId = clientData.client.id
       }
       
-      const jobData = {
-        title: '',
-        client_id: clientId,
-        assigned_user_id: selectedUserId,
-        services: jobType === 'new' ? selectedServices.map(service => (
-          service.isCustom
-            ? {
-                custom_title: (service.customTitle && service.customTitle.trim().length > 0) ? service.customTitle : 'Custom task',
-                custom_price: parseFloat(service.customPrice) || 0,
-                custom_duration: service.customDuration || 0
-              }
-            : {
-          service_id: service.id,
-          custom_price: parseFloat(service.customPrice) || service.price,
-          custom_duration: service.customDuration
-              }
-        )) : (selectedPastJob?.services?.map(service => ({
-          service_id: service.service_id,
-          custom_price: service.custom_price,
-          custom_duration: service.custom_duration_minutes
-        })) || []),
-        scheduled_date: jobDate ? jobDate.split('T')[0] : null,
-        scheduled_time_from: jobTimeFrom && jobTimeFrom.trim() !== '' ? jobTimeFrom : null,
-        scheduled_time_to: jobTimeTo && jobTimeTo.trim() !== '' ? jobTimeTo : null,
-        note: jobNote.trim() || null
-      }
-      
-      const response = await fetch(apiUrl('/jobs'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(jobData)
-      })
+      if (mode === 'subscription') {
+        // Create subscription
+        const subscriptionData = {
+          title: '',
+          client_id: clientId,
+          assigned_user_id: selectedUserId,
+          services: selectedServices.map(service => (
+            service.isCustom
+              ? {
+                  custom_title: (service.customTitle && service.customTitle.trim().length > 0) ? service.customTitle : 'Custom task',
+                  custom_price: parseFloat(service.customPrice) || 0,
+                  custom_duration: service.customDuration || 0
+                }
+              : {
+            service_id: service.id,
+            custom_price: parseFloat(service.customPrice) || service.price,
+            custom_duration: service.customDuration
+                }
+          )),
+          starting_date: jobDate ? jobDate.split('T')[0] : null,
+          recurrence_type: recurrenceType,
+          day_of_week: recurrenceType === 'weekly' ? dayOfWeek : null,
+          day_of_month: recurrenceType === 'monthly' ? dayOfMonth : null,
+          interval_value: intervalValue,
+          scheduled_time_from: jobTimeFrom && jobTimeFrom.trim() !== '' ? jobTimeFrom : null,
+          scheduled_time_to: jobTimeTo && jobTimeTo.trim() !== '' ? jobTimeTo : null,
+          note: jobNote.trim() || null
+        }
 
-      const data = await response.json()
+        const response = await fetch(apiUrl('/subscriptions'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(subscriptionData)
+        })
 
-      if (response.ok) {
-        setCreatedJobId(data.job.id)
-        setTimeout(() => onJobCreated?.(), 100)
+        const data = await response.json()
+
+        if (response.ok) {
+          onJobCreated?.()
+          onClose()
+        } else {
+          console.error('Error creating subscription:', data.error)
+          alert(`Error creating subscription: ${data.error || 'Unknown error'}`)
+        }
       } else {
-        console.error('Error creating job:', data.error, data.details || '')
-        alert(`Failed to create job: ${data.details || data.error || 'Unknown error'}`)
+        // Create regular job
+        const jobData = {
+          title: '',
+          client_id: clientId,
+          assigned_user_id: selectedUserId,
+          services: jobType === 'new' ? selectedServices.map(service => (
+            service.isCustom
+              ? {
+                  custom_title: (service.customTitle && service.customTitle.trim().length > 0) ? service.customTitle : 'Custom task',
+                  custom_price: parseFloat(service.customPrice) || 0,
+                  custom_duration: service.customDuration || 0
+                }
+              : {
+            service_id: service.id,
+            custom_price: parseFloat(service.customPrice) || service.price,
+            custom_duration: service.customDuration
+                }
+          )) : (selectedPastJob?.services?.map(service => ({
+            service_id: service.service_id,
+            custom_price: service.custom_price,
+            custom_duration: service.custom_duration_minutes
+          })) || []),
+          scheduled_date: jobDate ? jobDate.split('T')[0] : null,
+          scheduled_time_from: jobTimeFrom && jobTimeFrom.trim() !== '' ? jobTimeFrom : null,
+          scheduled_time_to: jobTimeTo && jobTimeTo.trim() !== '' ? jobTimeTo : null,
+          note: jobNote.trim() || null
+        }
+
+        const response = await fetch(apiUrl('/jobs'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(jobData)
+        })
+
+        const data = await response.json()
+
+        if (response.ok) {
+          setCreatedJobId(data.job.id)
+          onJobCreated?.()
+          onClose()
+        } else {
+          console.error('Error creating job:', data.error)
+          alert(`Error creating job: ${data.error || 'Unknown error'}`)
+        }
       }
     } catch (error) {
       console.error('Error creating job:', error)
@@ -626,12 +780,272 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     service.title.toLowerCase().includes(serviceSearch.toLowerCase())
   )
 
-  const filteredClients = clients.filter(client =>
-    `${client.first_name} ${client.last_name}`.toLowerCase().includes(clientSearch.toLowerCase()) ||
-    (client.personal_address && client.personal_address.toLowerCase().includes(clientSearch.toLowerCase()))
-  )
+  const filteredClients = clients.filter(client => {
+    const searchTerm = clientSearch.toLowerCase()
+    const name = client.client_type === 'company'
+      ? client.name
+      : `${client.name}${client.last_name ? ` ${client.last_name}` : ''}`.trim()
+    const address = client.address || ''
+
+    return name.toLowerCase().includes(searchTerm) ||
+           address.toLowerCase().includes(searchTerm) ||
+           (client.email && client.email.toLowerCase().includes(searchTerm))
+  })
 
   if (!isOpen) return null
+
+  // Job-only: subscription-style single slide with date at bottom
+  if (mode === 'job') {
+    return (
+      <>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn" onClick={onClose}>
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden animate-slideDown" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
+              <div className="space-y-0.5">
+                <h2 className="text-2xl font-bold text-primary-800 tracking-tight">Create Job</h2>
+                <p className="text-sm text-gray-500 font-medium">Schedule a one-time job</p>
+              </div>
+              <button onClick={onClose} className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all duration-200 ease-out shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group">
+                <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-white to-gray-50/50">
+              {/* Client */}
+              <div className="space-y-4">
+                <label className="block text-xs font-semibold text-primary-700 mb-2">Client *</label>
+                {selectedClient ? (
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-gray-900">
+                          {selectedClient.client_type === 'company' ? selectedClient.name : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim()}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {selectedClient.address && selectedClient.city ? `${selectedClient.address}, ${selectedClient.city}` : 'No address'}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => { setSelectedClient(null); setClientSearch('') }} className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100">
+                        <XMarkIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : isAddingNewClient ? (
+                  <div className="space-y-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">New client</span>
+                      <button type="button" onClick={() => { setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="w-4 h-4" /></button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input type="text" value={newClientData.name} onChange={e => setNewClientData({ ...newClientData, name: e.target.value })} placeholder="Name *" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
+                      {newClientData.client_type === 'person' && <input type="text" value={newClientData.last_name} onChange={e => setNewClientData({ ...newClientData, last_name: e.target.value })} placeholder="Last name" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input type="text" value={newClientData.address} onChange={e => setNewClientData({ ...newClientData, address: e.target.value })} placeholder="Address" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
+                      <input type="text" value={newClientData.city} onChange={e => setNewClientData({ ...newClientData, city: e.target.value })} placeholder="City" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
+                    </div>
+                    <button type="button" onClick={async () => {
+                      if (!newClientData.name.trim()) return
+                      try {
+                        const token = localStorage.getItem('token')
+                        const res = await fetch(apiUrl('/clients'), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ client_type: newClientData.client_type, name: newClientData.name, last_name: newClientData.last_name || null, address: newClientData.address || null, zip_code: newClientData.zip_code || null, city: newClientData.city || null, email: newClientData.email || null, phone: newClientData.phone || null }) })
+                        const data = await res.json()
+                        if (res.ok && data.client) { setSelectedClient(data.client); setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }
+                      } catch (e) { console.error(e) }
+                    }} disabled={!newClientData.name.trim()} className="w-full px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-xl hover:bg-accent-600 disabled:opacity-50">Save & select</button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="relative dropdown-container" ref={clientDropdownTriggerRef}>
+                      <input type="text" value={clientSearch} onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }} onFocus={() => setShowClientDropdown(true)} placeholder="Choose a client" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                    </div>
+                    {typeof document !== 'undefined' && showClientDropdown && clientDropdownRect && createPortal(
+                      <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-60 overflow-y-auto" style={{ position: 'fixed', top: clientDropdownRect.bottom + 8, left: clientDropdownRect.left, width: clientDropdownRect.width, zIndex: 9999 }}>
+                        {filteredClients.length > 0 ? filteredClients.map((client) => (
+                          <button key={client.id} type="button" onClick={() => { setSelectedClient(client); setClientSearch(''); setShowClientDropdown(false) }} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
+                            <div className="text-sm font-medium text-gray-900">{client.client_type === 'company' ? client.name : `${client.name}${client.last_name ? ` ${client.last_name}` : ''}`.trim()}</div>
+                            <div className="text-xs text-gray-500">{client.address ? `${client.address}, ${client.city}` : 'No address'}</div>
+                          </button>
+                        )) : null}
+                        <button type="button" onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }} className="w-full px-4 py-3 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 text-sm font-medium text-blue-600 flex items-center gap-2">
+                          <PlusIcon className="w-4 h-4" /> Add new client
+                        </button>
+                      </div>,
+                      document.body
+                    )}
+                  </>
+                )}
+              </div>
+              {/* Services */}
+              <div className="space-y-4">
+                {!selectedClient && !isAddingNewClient ? <div className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg">Select a client first</div> : (
+                  <>
+                    <label className="block text-xs font-semibold text-primary-700 mb-2">Services *</label>
+                    <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
+                      <input type="text" value={serviceSearch} onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }} onFocus={() => setShowServiceDropdown(true)} placeholder="Search for services..." className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                    </div>
+                    {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
+                      <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-60 overflow-y-auto" style={{ position: 'fixed', top: serviceDropdownRect.bottom + 8, left: serviceDropdownRect.left, width: serviceDropdownRect.width, zIndex: 9999 }}>
+                        {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
+                          <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
+                            <div className="text-sm font-semibold text-primary-800">{service.title}</div>
+                            <div className="text-xs text-gray-500">{service.price} DKK · {service.duration_minutes} min</div>
+                          </button>
+                        ))}
+                      </div>,
+                      document.body
+                    )}
+                    {selectedServices.length > 0 && (
+                      <div className="space-y-2">
+                        {selectedServices.map((service) => (
+                          <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
+                            <div className="text-sm font-semibold text-primary-800">{service.title}</div>
+                            <div className="flex items-center gap-2">
+                              <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
+                              <span className="text-xs text-gray-500">kr.</span>
+                              <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
+                              <span className="text-xs text-gray-500">min</span>
+                              <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                  {/* Assign to User, Time, and Note - same place and time as subscription (flex wrap right after services) */}
+                  {selectedServices.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                      <div className="relative dropdown-container" ref={userDropdownTriggerRef}>
+                        {selectedUserId ? (
+                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 group">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm ring-2 ring-white/50">
+                                {users.find(u => u.id === selectedUserId)?.first_name?.[0]}{users.find(u => u.id === selectedUserId)?.last_name?.[0]}
+                              </div>
+                              <span className="text-sm font-semibold text-primary-800">
+                                {users.find(u => u.id === selectedUserId)?.first_name} {users.find(u => u.id === selectedUserId)?.last_name}
+                              </span>
+                            </div>
+                            <button type="button" onClick={() => setSelectedUserId(null)} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
+                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setShowUserDropdown(!showUserDropdown)}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
+                          >
+                            <UserIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
+                            <span>Assign employee</span>
+                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
+                          </button>
+                        )}
+                        {typeof document !== 'undefined' && showUserDropdown && !selectedUserId && userDropdownRect && createPortal(
+                          <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl min-w-[220px] max-h-60 overflow-y-auto animate-slideDown backdrop-blur-sm" style={{ position: 'fixed', top: userDropdownRect.bottom + 8, left: userDropdownRect.left, zIndex: 9999 }}>
+                            {users.map((u) => (
+                              <button key={u.id} type="button" onClick={() => { setSelectedUserId(u.id); setShowUserDropdown(false) }} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 transition-all duration-150 ease-out flex items-center gap-3 group first:rounded-t-2xl last:rounded-b-2xl hover:pl-5">
+                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm group-hover:shadow-md group-hover:scale-110 transition-all ring-2 ring-white/50">
+                                  {u.first_name?.[0]}{u.last_name?.[0]}
+                                </div>
+                                <div className="text-sm font-semibold text-primary-800 group-hover:text-accent-600 transition-colors">{u.first_name} {u.last_name}</div>
+                              </button>
+                            ))}
+                          </div>,
+                          document.body
+                        )}
+                      </div>
+                      <div className="relative">
+                        {jobTimeFrom || jobTimeTo ? (
+                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 group">
+                            <div className="flex items-center gap-2">
+                              <ClockIcon className="w-4 h-4 text-accent-600" />
+                              <span className="text-sm font-semibold text-primary-800">
+                                {jobTimeFrom && jobTimeTo ? `${jobTimeFrom} - ${jobTimeTo}` : jobTimeFrom ? jobTimeFrom : jobTimeTo ? jobTimeTo : ''}
+                              </span>
+                            </div>
+                            <button type="button" onClick={() => { setJobTimeFrom(''); setJobTimeTo('') }} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
+                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => { setPendingTimeFrom(jobTimeFrom); setPendingTimeTo(jobTimeTo); setIsTimeRangeMode(!!jobTimeTo); setShowTimeModal(true) }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
+                          >
+                            <ClockIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
+                            <span>Add time</span>
+                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative">
+                        {jobNote.trim() ? (
+                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 max-w-xs group">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <DocumentTextIcon className="w-4 h-4 text-accent-600 flex-shrink-0" />
+                              <span className="text-sm font-semibold text-primary-800 truncate">{jobNote.length > 20 ? `${jobNote.substring(0, 20)}...` : jobNote}</span>
+                            </div>
+                            <button type="button" onClick={() => { setJobNote(''); setShowNoteInput(false) }} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60 flex-shrink-0">
+                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setShowNoteInput(true)}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
+                          >
+                            <DocumentTextIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
+                            <span>Add note</span>
+                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  </>
+                )}
+              </div>
+
+              {/* Date selector - only difference from subscription: last step right after employee/time/note buttons; only when service picked */}
+              {selectedServices.length > 0 && (
+                <div className="space-y-2 pt-4">
+                  <label className="block text-xs font-semibold text-primary-700 mb-2">Date *</label>
+                  <input type="date" value={jobDate ? String(jobDate).split('T')[0] : ''} onChange={e => setJobDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                </div>
+              )}
+
+              <div className="flex justify-end pt-6 border-t border-gray-100">
+                <button type="button" onClick={() => handleSubmitJob()} disabled={(!selectedClient && !isAddingNewClient) || selectedServices.length === 0 || !selectedUserId || !jobDate || isSubmitting} className="px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20">
+                  {isSubmitting ? 'Creating...' : 'Create Job'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        {/* Time modal (job-only) */}
+        <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title="Set Time" description="Set the scheduled time for this job" confirmLabel="Save Time">
+          <div className="space-y-3">
+            <div className="flex items-center space-x-1 bg-gray-100 rounded p-0.5">
+              <button type="button" onClick={() => { setIsTimeRangeMode(false); setPendingTimeTo('') }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${!isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Single Time</button>
+              <button type="button" onClick={() => { setIsTimeRangeMode(true); if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom) }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Time Range</button>
+            </div>
+            {!isTimeRangeMode ? (
+              <div><label className="block text-xs text-gray-500 mb-1.5">Time</label><input type="time" value={pendingTimeFrom} onChange={e => setPendingTimeFrom(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 bg-white" /></div>
+            ) : (
+              <div><label className="block text-xs text-gray-500 mb-1.5">Between</label><div className="flex items-center gap-2"><input type="time" value={pendingTimeFrom} onChange={e => setPendingTimeFrom(e.target.value)} className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm bg-white" /><span className="text-xs text-gray-500">to</span><input type="time" value={pendingTimeTo} onChange={e => setPendingTimeTo(e.target.value)} className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm bg-white" /></div></div>
+            )}
+            <div className="pt-3 border-t border-gray-100"><button type="button" onClick={() => { setPendingTimeFrom(''); setPendingTimeTo(''); setShowTimeModal(false) }} className="w-full py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100">Clear</button></div>
+          </div>
+        </ConfirmModal>
+        {/* Note modal (job-only) */}
+        <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title="Add Note" description="Add a note to this job" confirmLabel="Save Note" enableNotification={false}>
+          <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">Note</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder="Enter a note for this job..." rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
+        </ConfirmModal>
+      </>
+    )
+  }
 
   return (
     <>
@@ -653,7 +1067,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
           {/* Client Section */}
           <div>
             {/* Summary view when client is selected or new client is being added */}
-            {(selectedClient || (isAddingNewClient && newClientData.first_name.trim())) && !expandedSections.client && (
+            {(selectedClient || (isAddingNewClient && newClientData.name.trim())) && !expandedSections.client && (
                 <button
                 type="button"
                 onClick={() => toggleSection('client')}
@@ -661,15 +1075,21 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               >
                 <div className="flex-1 min-w-0 text-left">
                   <div className="text-sm font-medium text-gray-900 truncate">
-                    {selectedClient 
-                      ? `${selectedClient.first_name} ${selectedClient.last_name}`
-                      : `${newClientData.first_name} ${newClientData.last_name}`.trim()
+                    {selectedClient
+                      ? (selectedClient.client_type === 'company'
+                          ? selectedClient.name
+                          : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim()
+                        )
+                      : (newClientData.client_type === 'company'
+                          ? newClientData.name
+                          : `${newClientData.name}${newClientData.last_name ? ` ${newClientData.last_name}` : ''}`.trim()
+                        )
                     }
                   </div>
                   <div className="text-xs text-gray-500 truncate mt-0.5">
                     {selectedClient
-                      ? (selectedClient.personal_address ? `${selectedClient.personal_address}, ${selectedClient.personal_city}` : 'No address')
-                      : (newClientData.personal_address ? `${newClientData.personal_address}, ${newClientData.personal_city}` : 'No address')
+                      ? (selectedClient.address ? `${selectedClient.address}, ${selectedClient.city}` : 'No address')
+                      : (newClientData.address ? `${newClientData.address}, ${newClientData.city}` : 'No address')
                     }
                   </div>
                 </div>
@@ -687,40 +1107,143 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     <div className="space-y-4">
                       <div className="flex items-center justify-between pb-2 border-b border-gray-100">
                         <h3 className="text-sm font-medium text-gray-900">Client Information</h3>
-                <button
-                          onClick={() => { setSelectedClient(null); setClientSearch('') }} 
-                          className="text-gray-400 hover:text-gray-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-gray-100"
-                        >
-                          <XMarkIcon className="w-4 h-4" />
-                </button>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => {
+                              if (!isEditingClient) {
+                                // Entering edit mode - populate with current client data
+                                setEditingClientData({
+                                  client_type: selectedClient.client_type || 'person',
+                                  name: selectedClient.name || '',
+                                  last_name: selectedClient.last_name || '',
+                                  company_number: selectedClient.company_number || '',
+                                  address: selectedClient.address || '',
+                                  zip_code: selectedClient.zip_code || '',
+                                  city: selectedClient.city || '',
+                                  email: selectedClient.email || '',
+                                  phone: selectedClient.phone || ''
+                                });
+                              }
+                              setIsEditingClient(!isEditingClient);
+                            }}
+                            className="text-xs text-blue-600 hover:text-blue-700 transition-colors duration-150 ease-out"
+                          >
+                            {isEditingClient ? 'Cancel' : 'Edit'}
+                          </button>
+                          <button
+                            onClick={() => { setSelectedClient(null); setClientSearch(''); setIsEditingClient(false) }}
+                            className="text-gray-400 hover:text-gray-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-gray-100"
+                          >
+                            <XMarkIcon className="w-4 h-4" />
+                          </button>
+                        </div>
             </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      {/* Client Type Selector (only in edit mode) */}
+                      {isEditingClient && (
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">First Name</label>
-                          <input
-                            type="text"
-                            value={selectedClient.first_name}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
-                          />
-          </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
-                          <input
-                            type="text"
-                            value={selectedClient.last_name}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
-                          />
-                  </div>
-                </div>
+                          <label className="block text-xs text-gray-500 mb-1.5">Client Type</label>
+                          <div className="flex bg-gray-100 rounded p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingClientData({ ...editingClientData, client_type: 'person' })}
+                              className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                                editingClientData.client_type === 'person' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                            >
+                              Private Person
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingClientData({ ...editingClientData, client_type: 'company' })}
+                              className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                                editingClientData.client_type === 'company' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                            >
+                              Company
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Company fields (only show when editing and it's a company) */}
+                      {isEditingClient && editingClientData.client_type === 'company' && (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Company Name</label>
+                            <input
+                              type="text"
+                              value={editingClientData.name}
+                              onChange={(e) => setEditingClientData({ ...editingClientData, name: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Company Number</label>
+                            <input
+                              type="text"
+                              value={editingClientData.company_number}
+                              onChange={(e) => setEditingClientData({ ...editingClientData, company_number: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Person fields (only show when editing and it's a person) */}
+                      {isEditingClient && editingClientData.client_type === 'person' && (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">First Name</label>
+                            <input
+                              type="text"
+                              value={editingClientData.name}
+                              onChange={(e) => setEditingClientData({ ...editingClientData, name: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
+                            <input
+                              type="text"
+                              value={editingClientData.last_name}
+                              onChange={(e) => setEditingClientData({ ...editingClientData, last_name: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Display fields (non-editable view) */}
+                      {!isEditingClient && (
+                        <>
+                          {selectedClient.client_type === 'company' ? (
+                            <div className="space-y-2">
+                              <div className="text-sm font-medium text-gray-900">{selectedClient.name}</div>
+                              {selectedClient.company_number && (
+                                <div className="text-xs text-gray-500">CVR: {selectedClient.company_number}</div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-sm font-medium text-gray-900">
+                              {selectedClient.name}{selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Address fields (show in both view and edit modes) */}
                       <div>
                         <label className="block text-xs text-gray-500 mb-1.5">Address</label>
                         <input
                           type="text"
-                          value={selectedClient.personal_address || ''}
-                          disabled
-                          className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
+                          value={isEditingClient ? editingClientData.address : (selectedClient.address || '')}
+                          onChange={(e) => isEditingClient && setEditingClientData({ ...editingClientData, address: e.target.value })}
+                          disabled={!isEditingClient}
+                          className={`w-full px-3 py-2 border border-gray-200 rounded text-sm transition-all duration-150 ease-out ${
+                            isEditingClient
+                              ? 'focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white'
+                              : 'bg-gray-50 text-gray-700 cursor-not-allowed'
+                          }`}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
@@ -728,82 +1251,211 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           <label className="block text-xs text-gray-500 mb-1.5">Zip Code</label>
                           <input
                             type="text"
-                            value={selectedClient.personal_zip_code || ''}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
+                            value={isEditingClient ? editingClientData.zip_code : (selectedClient.zip_code || '')}
+                            onChange={(e) => isEditingClient && setEditingClientData({ ...editingClientData, zip_code: e.target.value })}
+                            disabled={!isEditingClient}
+                            className={`w-full px-3 py-2 border border-gray-200 rounded text-sm transition-all duration-150 ease-out ${
+                              isEditingClient
+                                ? 'focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white'
+                                : 'bg-gray-50 text-gray-700 cursor-not-allowed'
+                            }`}
                           />
-                      </div>
+                        </div>
                         <div>
                           <label className="block text-xs text-gray-500 mb-1.5">City</label>
                           <input
                             type="text"
-                            value={selectedClient.personal_city || ''}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
+                            value={isEditingClient ? editingClientData.city : (selectedClient.city || '')}
+                            onChange={(e) => isEditingClient && setEditingClientData({ ...editingClientData, city: e.target.value })}
+                            disabled={!isEditingClient}
+                            className={`w-full px-3 py-2 border border-gray-200 rounded text-sm transition-all duration-150 ease-out ${
+                              isEditingClient
+                                ? 'focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white'
+                                : 'bg-gray-50 text-gray-700 cursor-not-allowed'
+                            }`}
                           />
-                    </div>
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs text-gray-500 mb-1.5">Email</label>
                           <input
                             type="email"
-                            value={selectedClient.personal_email || ''}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
+                            value={isEditingClient ? editingClientData.email : (selectedClient.email || '')}
+                            onChange={(e) => isEditingClient && setEditingClientData({ ...editingClientData, email: e.target.value })}
+                            disabled={!isEditingClient}
+                            className={`w-full px-3 py-2 border border-gray-200 rounded text-sm transition-all duration-150 ease-out ${
+                              isEditingClient
+                                ? 'focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white'
+                                : 'bg-gray-50 text-gray-700 cursor-not-allowed'
+                            }`}
                           />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-500 mb-1.5">Phone</label>
                           <input
                             type="tel"
-                            value={selectedClient.personal_phone || ''}
-                            disabled
-                            className="w-full px-3 py-2 border border-gray-200 rounded bg-gray-50 text-gray-700 text-sm cursor-not-allowed"
+                            value={isEditingClient ? editingClientData.phone : (selectedClient.phone || '')}
+                            onChange={(e) => isEditingClient && setEditingClientData({ ...editingClientData, phone: e.target.value })}
+                            disabled={!isEditingClient}
+                            className={`w-full px-3 py-2 border border-gray-200 rounded text-sm transition-all duration-150 ease-out ${
+                              isEditingClient
+                                ? 'focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white'
+                                : 'bg-gray-50 text-gray-700 cursor-not-allowed'
+                            }`}
                           />
                         </div>
                       </div>
+
+                      {isEditingClient && (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              // Save the edited client
+                              try {
+                                const token = localStorage.getItem('token')
+                                const response = await fetch(apiUrl(`/clients/${selectedClient.id}`), {
+                                  method: 'PUT',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`
+                                  },
+                                  body: JSON.stringify({
+                                    client_type: editingClientData.client_type,
+                                    name: editingClientData.name,
+                                    last_name: editingClientData.last_name,
+                                    company_number: editingClientData.company_number || null,
+                                    address: editingClientData.address || null,
+                                    zip_code: editingClientData.zip_code || null,
+                                    city: editingClientData.city || null,
+                                    email: editingClientData.email || null,
+                                    phone: editingClientData.phone || null,
+                                  })
+                                })
+
+                                const data = await response.json()
+
+                                if (response.ok) {
+                                  // Update the selected client with new data
+                                  setSelectedClient(data.client)
+                                  setIsEditingClient(false)
+                                  // Move to next step (services)
+                                  setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
+                                } else {
+                                  console.error('Failed to update client:', data.error)
+                                }
+                              } catch (error) {
+                                console.error('Error updating client:', error)
+                              }
+                            }}
+                            disabled={
+                              !editingClientData.name.trim()
+                            }
+                            className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
+                          >
+                            Save Changes & Continue
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : isAddingNewClient ? (
                     <div className="space-y-4">
                       <div className="flex items-center justify-between pb-2 border-b border-gray-100">
                         <h3 className="text-sm font-medium text-gray-900">New Client Information</h3>
                     <button
-                          onClick={() => { setIsAddingNewClient(false); setNewClientData({ first_name: '', last_name: '', personal_address: '', personal_zip_code: '', personal_city: '', personal_email: '', personal_phone: '' }) }} 
+                          onClick={() => { setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }}
                           className="text-gray-400 hover:text-gray-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-gray-100"
                     >
                       <XMarkIcon className="w-4 h-4" />
                     </button>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">First Name *</label>
-                          <input
-                            type="text"
-                            value={newClientData.first_name}
-                            onChange={(e) => setNewClientData({ ...newClientData, first_name: e.target.value })}
-                            placeholder="First name"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
-                          <input
-                            type="text"
-                            value={newClientData.last_name}
-                            onChange={(e) => setNewClientData({ ...newClientData, last_name: e.target.value })}
-                            placeholder="Last name"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
+
+                      {/* Client Type Selector */}
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1.5">Client Type</label>
+                        <div className="flex bg-gray-100 rounded p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setNewClientData({ ...newClientData, client_type: 'person' })}
+                            className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                              newClientData.client_type === 'person' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                            }`}
+                          >
+                            Private Person
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewClientData({ ...newClientData, client_type: 'company' })}
+                            className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                              newClientData.client_type === 'company' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                            }`}
+                          >
+                            Company
+                          </button>
                         </div>
                       </div>
+
+                      {/* Company fields (only show for companies) */}
+                      {newClientData.client_type === 'company' && (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Company Name *</label>
+                            <input
+                              type="text"
+                              value={newClientData.name}
+                              onChange={(e) => setNewClientData({ ...newClientData, name: e.target.value })}
+                              placeholder="Company name"
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Company Number</label>
+                            <input
+                              type="text"
+                              value={newClientData.company_number}
+                              onChange={(e) => setNewClientData({ ...newClientData, company_number: e.target.value })}
+                              placeholder="CVR number or similar"
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Person fields (only show for persons) */}
+                      {newClientData.client_type === 'person' && (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">First Name *</label>
+                            <input
+                              type="text"
+                              value={newClientData.name}
+                              onChange={(e) => setNewClientData({ ...newClientData, name: e.target.value })}
+                              placeholder="First name"
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
+                            <input
+                              type="text"
+                              value={newClientData.last_name}
+                              onChange={(e) => setNewClientData({ ...newClientData, last_name: e.target.value })}
+                              placeholder="Last name"
+                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Address fields (common for both) */}
                       <div>
                         <label className="block text-xs text-gray-500 mb-1.5">Address</label>
                         <input
                           type="text"
-                          value={newClientData.personal_address}
-                          onChange={(e) => setNewClientData({ ...newClientData, personal_address: e.target.value })}
-                          placeholder="Street address"
+                          value={newClientData.address}
+                          onChange={(e) => setNewClientData({ ...newClientData, address: e.target.value })}
+                          placeholder={newClientData.client_type === 'company' ? "Company address" : "Street address"}
                           className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                         />
                       </div>
@@ -812,8 +1464,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           <label className="block text-xs text-gray-500 mb-1.5">Zip Code</label>
                           <input
                             type="text"
-                            value={newClientData.personal_zip_code}
-                            onChange={(e) => setNewClientData({ ...newClientData, personal_zip_code: e.target.value })}
+                            value={newClientData.zip_code}
+                            onChange={(e) => setNewClientData({ ...newClientData, zip_code: e.target.value })}
                             placeholder="Zip code"
                             className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                           />
@@ -822,8 +1474,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           <label className="block text-xs text-gray-500 mb-1.5">City</label>
                           <input
                             type="text"
-                            value={newClientData.personal_city}
-                            onChange={(e) => setNewClientData({ ...newClientData, personal_city: e.target.value })}
+                            value={newClientData.city}
+                            onChange={(e) => setNewClientData({ ...newClientData, city: e.target.value })}
                             placeholder="City"
                             className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                           />
@@ -834,8 +1486,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           <label className="block text-xs text-gray-500 mb-1.5">Email</label>
                           <input
                             type="email"
-                            value={newClientData.personal_email}
-                            onChange={(e) => setNewClientData({ ...newClientData, personal_email: e.target.value })}
+                            value={newClientData.email}
+                            onChange={(e) => setNewClientData({ ...newClientData, email: e.target.value })}
                             placeholder="Email"
                             className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                           />
@@ -844,12 +1496,74 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           <label className="block text-xs text-gray-500 mb-1.5">Phone</label>
                           <input
                             type="tel"
-                            value={newClientData.personal_phone}
-                            onChange={(e) => setNewClientData({ ...newClientData, personal_phone: e.target.value })}
+                            value={newClientData.phone}
+                            onChange={(e) => setNewClientData({ ...newClientData, phone: e.target.value })}
                             placeholder="Phone"
                             className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                           />
                         </div>
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            // Save the new client
+                            try {
+                              const token = localStorage.getItem('token')
+                              const response = await fetch(apiUrl('/clients'), {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${token}`
+                                },
+                                body: JSON.stringify({
+                                  client_type: newClientData.client_type,
+                                  name: newClientData.name,
+                                  last_name: newClientData.last_name || null,
+                                  company_number: newClientData.company_number || null,
+                                  address: newClientData.address || null,
+                                  zip_code: newClientData.zip_code || null,
+                                  city: newClientData.city || null,
+                                  email: newClientData.email || null,
+                                  phone: newClientData.phone || null,
+                                })
+                              })
+
+                              const data = await response.json()
+
+                              if (response.ok) {
+                                // Set the newly created client as selected
+                                setSelectedClient(data.client)
+                                setIsAddingNewClient(false)
+                                // Reset form
+                                setNewClientData({
+                                  client_type: 'person',
+                                  name: '',
+                                  last_name: '',
+                                  company_number: '',
+                                  address: '',
+                                  zip_code: '',
+                                  city: '',
+                                  email: '',
+                                  phone: ''
+                                })
+                                // Move to next step (job details)
+                                setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
+                              } else {
+                                console.error('Failed to create client:', data.error)
+                              }
+                            } catch (error) {
+                              console.error('Error creating client:', error)
+                            }
+                          }}
+                          disabled={
+                            !newClientData.name.trim()
+                          }
+                          className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
+                        >
+                          Save Client & Continue
+                        </button>
                       </div>
                   </div>
                 ) : (
@@ -874,9 +1588,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                     onClick={() => { setSelectedClient(client); setClientSearch(''); setShowClientDropdown(false) }}
                                     className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-100 transition-colors duration-150 ease-out"
                                   >
-                                    <div className="text-sm font-medium text-gray-900">{client.first_name} {client.last_name}</div>
+                                    <div className="text-sm font-medium text-gray-900">
+                                      {client.client_type === 'company'
+                                        ? client.name
+                                        : `${client.name}${client.last_name ? ` ${client.last_name}` : ''}`.trim()
+                                      }
+                                    </div>
                                     <div className="text-xs text-gray-500 mt-0.5">
-                                {client.personal_address ? `${client.personal_address}, ${client.personal_city}` : 'No address'}
+                                {client.address ? `${client.address}, ${client.city}` : 'No address'}
                               </div>
                             </button>
                                 ))}
@@ -1214,6 +1933,21 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 )}
               </div>
               )}
+
+              {selectedServices.length > 0 && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Move to next step (schedule)
+                      setExpandedSections({ client: false, job: false, schedule: true, recurring: false })
+                    }}
+                    className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors duration-150 ease-out"
+                  >
+                    Continue to Schedule
+                  </button>
+                </div>
+              )}
                     </>
                   )}
                 </div>
@@ -1293,156 +2027,77 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 )}
               </div>
 
-                    <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                        <label className="block text-xs text-gray-500">Date & Time</label>
-                  <div className="relative">
-                    <button
-                      type="button"
-                            onClick={() => { setShowTimeFromPicker(!showTimeFromPicker); setShowDatePicker(false) }}
-                            className="text-xs text-gray-500 hover:text-gray-700 transition-colors duration-150 ease-out"
-                      title="Click to set time (optional)"
-                    >
-                            {jobTimeFrom && jobTimeTo ? `${jobTimeFrom} - ${jobTimeTo}`
-                            : jobTimeFrom ? jobTimeFrom
-                            : jobTimeTo ? jobTimeTo
-                            : 'Set time'}
-                    </button>
-                    
-                    {showTimeFromPicker && (
-                            <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-50 p-4 min-w-[280px] animate-fadeIn" data-time-picker>
-                              <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100">
-                                <h3 className="text-sm font-medium text-gray-900">Set Time</h3>
-                                <button type="button" onClick={() => setShowTimeFromPicker(false)} className="text-gray-400 hover:text-gray-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-gray-100">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-
-                              <div className="mb-3">
-                                <div className="flex space-x-1 bg-gray-100 rounded p-0.5">
-                            <button
-                              type="button"
-                                    onClick={() => { setJobTimeTo(''); setIsTimeRangeMode(false) }}
-                                    className={`flex-1 py-1.5 px-2 text-xs font-medium rounded transition-colors duration-150 ease-out ${
-                                      !isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
-                              }`}
-                            >
-                              Single Time
-                            </button>
-                            <button
-                              type="button"
-                                    onClick={() => { setIsTimeRangeMode(true); if (!jobTimeTo && jobTimeFrom) setJobTimeTo(jobTimeFrom) }}
-                                    className={`flex-1 py-1.5 px-2 text-xs font-medium rounded transition-colors duration-150 ease-out ${
-                                      isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
-                              }`}
-                            >
-                              Time Range
-                            </button>
-                          </div>
-                        </div>
-
-                              <div className="space-y-2">
-                          {!isTimeRangeMode ? (
-                            <div>
-                                    <label className="block text-xs text-gray-500 mb-1.5">Time</label>
-                              <input
-                                type="time"
-                                value={jobTimeFrom}
-                                onChange={(e) => setJobTimeFrom(e.target.value)}
-                                      className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                              />
-                            </div>
-                          ) : (
-                            <div>
-                                    <label className="block text-xs text-gray-500 mb-1.5">Between</label>
-                                    <div className="flex items-center space-x-2">
-                                <input
-                                  type="time"
-                                  value={jobTimeFrom}
-                                  onChange={(e) => setJobTimeFrom(e.target.value)}
-                                        className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                                />
-                                      <span className="text-xs text-gray-500">to</span>
-                                <input
-                                  type="time"
-                                  value={jobTimeTo}
-                                  onChange={(e) => setJobTimeTo(e.target.value)}
-                                        className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-4 pt-3 border-t border-gray-100">
-                          <div className="flex space-x-2">
-                            <button
-                              type="button"
-                                    onClick={() => { setJobTimeFrom(''); setJobTimeTo(''); setShowTimeFromPicker(false) }}
-                                    className="flex-1 py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors duration-150 ease-out rounded hover:bg-gray-100"
-                            >
-                              Clear
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setShowTimeFromPicker(false)}
-                                    className="flex-1 py-2 px-3 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors duration-150 ease-out"
-                            >
-                              Done
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                        </div>
-                  </div>
+                    <div className="space-y-3">
                 </div>
                 
-                <div className="relative dropdown-container">
-                  <button
-                    type="button"
-                        onClick={() => { setShowDatePicker(!showDatePicker); setShowTimeFromPicker(false) }}
-                        className={`w-full px-3 py-2 rounded flex items-center justify-between transition-colors duration-150 ease-out text-sm ${
-                      jobDate 
-                            ? 'bg-blue-600 text-white hover:bg-blue-700' 
-                            : 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
-                    }`}
-                    title="Click to select date (required)"
-                  >
-                        <span>
-                        {jobDate ? new Date(jobDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Select Date (Required)'}
-                      </span>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                  </button>
-                  
-                  {showDatePicker && (
-                        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-50 p-3 min-w-[280px] animate-fadeIn">
-                      <CalendarView 
-                        selectedDate={jobDate}
-                            onDateSelect={(date) => { setJobDate(date); setShowDatePicker(false) }}
-                        selectedUserId={selectedUserId}
-                        selectedServices={selectedServices}
-                        selectedClient={selectedClient}
-                        jobType={jobType}
-                        selectedPastJob={selectedPastJob}
-                      />
-                    </div>
-                  )}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">
+                  {mode === 'subscription' ? 'Starting Date *' : 'Date *'}
+                </label>
+                <input
+                  type="date"
+                  value={jobDate}
+                  onChange={(e) => setJobDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-gray-500 mb-1.5">Time</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingTimeFrom(jobTimeFrom)
+                    setPendingTimeTo(jobTimeTo)
+                    setIsTimeRangeMode(!!jobTimeTo)
+                    setShowTimeModal(true)
+                  }}
+                  className={`w-full px-3 py-2 rounded flex items-center justify-between transition-colors duration-150 ease-out text-sm ${
+                    jobTimeFrom || jobTimeTo
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <span>
+                    {jobTimeFrom && jobTimeTo ? `${jobTimeFrom} - ${jobTimeTo}`
+                    : jobTimeFrom ? jobTimeFrom
+                    : jobTimeTo ? jobTimeTo
+                    : 'Set time (optional)'}
+                  </span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </button>
               </div>
 
                   <div className="space-y-2 pt-2">
                 {!showNoteInput ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowNoteInput(true)}
-                        className="w-full flex items-center justify-center px-3 py-2 bg-gray-50 text-gray-700 border border-gray-200 rounded hover:bg-gray-100 transition-colors duration-150 ease-out text-sm"
-                  >
-                        Add Note
-                  </button>
+                  jobNote.trim() ? (
+                    <div className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded">
+                      <div className="flex items-center space-x-2">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        <span className="text-sm text-blue-700 font-medium">Note added</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowNoteInput(true)}
+                        className="text-xs text-blue-600 hover:text-blue-700 transition-colors duration-150 ease-out"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowNoteInput(true)}
+                          className="w-full flex items-center justify-center px-3 py-2 bg-gray-50 text-gray-700 border border-gray-200 rounded hover:bg-gray-100 transition-colors duration-150 ease-out text-sm"
+                    >
+                          Add Note
+                    </button>
+                  )
                 ) : (
                   <div className="space-y-2">
                     <textarea
@@ -1474,12 +2129,188 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               </div>
             </div>
           )}
+
+          {/* Show create button after all required steps are complete */}
+          {(() => {
+            const hasBasicRequirements = jobDate && selectedUserId && selectedClient && (jobType === 'new' ? selectedServices.length > 0 : selectedPastJob);
+            const hasRecurringSettings = mode !== 'subscription' || (recurrenceType && intervalValue > 0 && ((recurrenceType === 'weekly' && dayOfWeek !== null) || (recurrenceType === 'monthly' && dayOfMonth !== null)));
+
+            return hasBasicRequirements && hasRecurringSettings && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleSubmitJob}
+                  disabled={isSubmitting}
+                  className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
+                >
+                  {isSubmitting ? (mode === 'subscription' ? 'Creating Subscription...' : 'Creating Job...') : (mode === 'subscription' ? 'Create Subscription' : 'Create Job')}
+                </button>
+              </div>
+            );
+          })()}
                 </div>
               </div>
-            )}
-          </div>
+          )}
 
-          {createdJobId && (
+          {/* Recurring Step - Only for subscriptions */}
+          {mode === 'subscription' && (
+            <div className="border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => toggleSection('recurring')}
+                className={`w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors duration-150 ease-out ${
+                  expandedSections.recurring ? 'bg-blue-50' : ''
+                }`}
+                disabled={!selectedClient && !isAddingNewClient}
+              >
+                <div className="flex items-center">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">Recurring Settings</div>
+                    <div className="text-xs text-gray-500">
+                      {recurrenceType === 'weekly'
+                        ? `Every ${intervalValue} week${intervalValue > 1 ? 's' : ''} on ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}`
+                        : `Every ${intervalValue} month${intervalValue > 1 ? 's' : ''} on the ${dayOfMonth}${dayOfMonth === 1 ? 'st' : dayOfMonth === 2 ? 'nd' : dayOfMonth === 3 ? 'rd' : 'th'}`
+                      }
+                    </div>
+                  </div>
+                </div>
+                <svg className="w-4 h-4 text-gray-400 ml-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {/* Expanded view */}
+              {expandedSections.recurring && (
+                <div>
+                  <div className="py-3 space-y-4 animate-slideDown px-3">
+                    <h3 className="text-sm font-medium text-gray-900 pb-2 border-b border-gray-100">Recurring Settings</h3>
+
+                    {!selectedClient && !isAddingNewClient ? (
+                      <div className="text-sm text-gray-500 text-center py-4">
+                        Please select or add a client first
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Recurrence Type */}
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-2">Recurrence Type</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setRecurrenceType('weekly')}
+                              className={`px-3 py-2 text-sm font-medium rounded border transition-colors ${
+                                recurrenceType === 'weekly'
+                                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                                  : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                              }`}
+                            >
+                              Weekly
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRecurrenceType('monthly')}
+                              className={`px-3 py-2 text-sm font-medium rounded border transition-colors ${
+                                recurrenceType === 'monthly'
+                                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                                  : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                              }`}
+                            >
+                              Monthly
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Weekly Settings */}
+                        {recurrenceType === 'weekly' && (
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-2">Day of Week</label>
+                              <select
+                                value={dayOfWeek}
+                                onChange={(e) => setDayOfWeek(parseInt(e.target.value))}
+                                className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                              >
+                                <option value={0}>Sunday</option>
+                                <option value={1}>Monday</option>
+                                <option value={2}>Tuesday</option>
+                                <option value={3}>Wednesday</option>
+                                <option value={4}>Thursday</option>
+                                <option value={5}>Friday</option>
+                                <option value={6}>Saturday</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-2">Every X Weeks</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="52"
+                                value={intervalValue}
+                                onChange={(e) => setIntervalValue(parseInt(e.target.value) || 1)}
+                                className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm"
+                                placeholder="1"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Monthly Settings */}
+                        {recurrenceType === 'monthly' && (
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-2">Day of Month</label>
+                              <select
+                                value={dayOfMonth}
+                                onChange={(e) => setDayOfMonth(parseInt(e.target.value))}
+                                className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
+                              >
+                                {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                                  <option key={day} value={day}>
+                                    {day}{day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th'}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 mb-2">Every X Months</label>
+                              <input
+                                type="number"
+                                min="1"
+                                max="12"
+                                value={intervalValue}
+                                onChange={(e) => setIntervalValue(parseInt(e.target.value) || 1)}
+                                className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm"
+                                placeholder="1"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Preview */}
+                        <div className="bg-gray-50 rounded p-3">
+                          <div className="text-xs text-gray-500 mb-1">Preview</div>
+                          <div className="text-sm text-gray-700">
+                            {recurrenceType === 'weekly'
+                              ? `Every ${intervalValue} week${intervalValue > 1 ? 's' : ''} on ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}`
+                              : `Every ${intervalValue} month${intervalValue > 1 ? 's' : ''} on the ${dayOfMonth}${dayOfMonth === 1 ? 'st' : dayOfMonth === 2 ? 'nd' : dayOfMonth === 3 ? 'rd' : 'th'}`
+                            }
+                          </div>
+                          {jobDate && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              Starts: {new Date(jobDate).toLocaleDateString()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {createdJobId && (
             <div className="text-center space-y-3 py-6 animate-fadeIn">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
                 <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1494,24 +2325,98 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
           )}
         </div>
 
-        <div className="border-t border-gray-200 bg-white p-4">
-          {!createdJobId ? (
+        {/* Time Modal */}
+        <ConfirmModal
+          isOpen={showTimeModal}
+          onClose={() => setShowTimeModal(false)}
+          onConfirm={(data) => {
+            setJobTimeFrom(pendingTimeFrom)
+            setJobTimeTo(isTimeRangeMode ? pendingTimeTo : '')
+            setShowTimeModal(false)
+          }}
+          title="Set Time"
+          description="Set the scheduled time for this job"
+          confirmLabel="Save Time"
+        >
+          <div className="space-y-3">
+            <div className="flex items-center space-x-1 bg-gray-100 rounded p-0.5">
               <button
-              onClick={handleSubmitJob}
-              disabled={isSubmitting || (!selectedClient && !isAddingNewClient) || (isAddingNewClient && !newClientData.first_name.trim()) || (jobType === 'new' ? selectedServices.length === 0 : !selectedPastJob) || !selectedUserId || !jobDate}
-              className="w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
-            >
-              {isSubmitting ? 'Creating...' : 'Create Job'}
+                type="button"
+                onClick={() => {
+                  setIsTimeRangeMode(false)
+                  setPendingTimeTo('')
+                }}
+                className={`flex-1 py-1.5 px-2 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                  !isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Single Time
               </button>
-          ) : (
-            <button
-              onClick={onClose}
-              className="w-full bg-green-600 text-white py-2.5 px-4 rounded font-medium hover:bg-green-700 transition-colors duration-150 ease-out"
-            >
-              Done
-            </button>
-          )}
-        </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTimeRangeMode(true)
+                  if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom)
+                }}
+                className={`flex-1 py-1.5 px-2 text-xs font-medium rounded transition-colors duration-150 ease-out ${
+                  isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Time Range
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {!isTimeRangeMode ? (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5">Time</label>
+                  <input
+                    type="time"
+                    value={pendingTimeFrom}
+                    onChange={(e) => setPendingTimeFrom(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1.5">Between</label>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="time"
+                      value={pendingTimeFrom}
+                      onChange={(e) => setPendingTimeFrom(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
+                    />
+                    <span className="text-xs text-gray-500">to</span>
+                    <input
+                      type="time"
+                      value={pendingTimeTo}
+                      onChange={(e) => setPendingTimeTo(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-gray-100">
+              <div className="flex space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingTimeFrom('')
+                    setPendingTimeTo('')
+                    setShowTimeModal(false)
+                  }}
+                  className="flex-1 py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors duration-150 ease-out rounded hover:bg-gray-100"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        </ConfirmModal>
+
       </div>
     </>
   )

@@ -11,7 +11,7 @@ export default function PricingPage() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <span className="text-white font-bold text-lg">V</span>
             </div>
-            <span className="text-xl font-bold text-gray-900">Vevago</span>
+            <span className="text-xl font-bold text-gray-900">PathPilo</span>
           </Link>
           <div className="flex items-center space-x-4">
             <Link href="/login" className="text-gray-600 hover:text-gray-900 font-medium">
@@ -25,7 +25,7 @@ export default function PricingPage() {
       </nav>
 
       {/* Pricing Section */}
-      <main className="relative px-6 py-16 md:py-24">
+      <main className="relative p-[40px]">
         <div className="max-w-7xl mx-auto">
           {/* Header */}
           <div className="text-center mb-16">
@@ -160,10 +160,10 @@ export default function PricingPage() {
               <div className="w-6 h-6 bg-blue-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-sm">V</span>
               </div>
-              <span className="text-lg font-semibold text-gray-900">Vevago</span>
+              <span className="text-lg font-semibold text-gray-900">PathPilo</span>
             </div>
             <div className="text-sm text-gray-500">
-              © 2024 Vevago. All rights reserved.
+              © 2024 PathPilo. All rights reserved.
             </div>
           </div>
         </div>

@@ -46,8 +46,13 @@ export function useUser() {
       const user = JSON.parse(userData)
       setUser(user)
       
-      // If user has no company, redirect to company setup
-      if (!user.companyId) {
+      // Check if user has companies or active company
+      // If user has no companies and no activeCompany, redirect to company setup
+      const hasCompanies = user.companies && user.companies.length > 0
+      const hasActiveCompany = user.activeCompany !== null && user.activeCompany !== undefined
+      const hasCompanyId = user.companyId !== null && user.companyId !== undefined
+      
+      if (!hasCompanies && !hasActiveCompany && !hasCompanyId) {
         router.push('/setup/company')
         return
       }

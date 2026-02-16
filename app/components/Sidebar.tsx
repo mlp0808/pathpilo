@@ -9,11 +9,11 @@ import {
   UsersIcon, 
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
-  QuestionMarkCircleIcon,
   ClipboardDocumentListIcon,
   ChevronUpIcon,
   ChevronDownIcon,
-  BuildingOfficeIcon
+  BuildingOfficeIcon,
+  InboxIcon
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 
@@ -47,6 +47,9 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Jobs sub-nav: show Overview + Completed when we're on any jobs route (not an accordion)
+  const isOnJobsSection = pathname.includes('/jobs')
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -132,90 +135,169 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const activeCompany = user.activeCompany || (user.companies && user.companies.length > 0 ? user.companies[0] : null)
   const companySlug = (activeCompany as any)?.slug || (user.companies?.[0] as any)?.slug || ''
 
-  const navigation = [
+  const jobsBase = companySlug ? `/${companySlug}/jobs` : '/jobs'
+  const navigation: Array<{
+    name: string
+    href?: string
+    icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
+    children?: Array<{ name: string; href: string }>
+  }> = [
     { name: 'Dashboard', href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
-    { name: 'Jobs', href: companySlug ? `/${companySlug}/jobs` : '/jobs', icon: ClipboardDocumentListIcon },
+    {
+      name: 'Jobs',
+      icon: ClipboardDocumentListIcon,
+      children: [
+        { name: 'Overview', href: jobsBase },
+        { name: 'Completed', href: `${jobsBase}/completed` },
+      ],
+    },
     { name: 'Clients', href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
+    { name: 'Leads', href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
     { name: 'Team', href: companySlug ? `/${companySlug}/team` : '/team', icon: UsersIcon },
     { name: 'Services', href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
 
   return (
-    <div className="fixed inset-y-0 left-0 w-[200px] bg-gray-900 flex flex-col overflow-hidden">
-      {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+    <div className="fixed inset-y-0 left-0 w-[200px] bg-[#1a2e2e] flex flex-col overflow-hidden">
+      {/* Header: PathPilo.app */}
+      <div className="px-4 pt-4 pb-2">
+        <Link href={companySlug ? `/${companySlug}/dashboard` : '/dashboard'} className="block">
+          <span className="text-white font-semibold text-base">PathPilo</span>
+          <span className="text-white/70 font-normal text-sm">.app</span>
+        </Link>
+      </div>
+
+      {/* Top bar: Logout | Help */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
         <button
           onClick={handleLogout}
-          className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors duration-200"
+          className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
         >
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           <span className="text-xs font-medium">Logout</span>
         </button>
-        
-        <Link 
-          href="#" 
-          className="text-gray-400 hover:text-white transition-colors duration-200 text-xs font-medium"
-        >
+        <Link href="#" className="text-gray-400 hover:text-white text-xs font-medium transition-colors">
           Help
         </Link>
       </div>
 
-      {/* User Info Container */}
-      <div className="px-4 py-3 bg-[#2F3A53]">
-        <div className="flex items-center justify-between">
-          <div className="flex-1 min-w-0">
-            <p className="text-white font-medium text-xs truncate">
+      {/* User */}
+      <div className="px-4 py-3 border-b border-white/10">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-white font-semibold text-sm truncate">
               {user.firstName} {user.lastName}
             </p>
-            <p className="text-gray-300 text-xs truncate">
+            <p className="text-gray-400 text-xs truncate">
               {user.email}
             </p>
           </div>
-          
-          <button 
+          <button
             onClick={onSettingsClick}
-            className="ml-2 text-gray-400 hover:text-white transition-colors duration-200"
+            className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
           >
             <Cog6ToothIcon className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800 hover:scrollbar-thumb-gray-500">
+      {/* Navigation - design: inactive = green icon + white text; active = green vertical bar + white icon + white text */}
+      <nav className="flex-1 px-0 py-4 overflow-y-auto">
         {navigation.map((item) => {
           const Icon = item.icon
-          const isActive = pathname === item.href
+          const hasChildren = item.children && item.children.length > 0
+
+          if (hasChildren) {
+            // Jobs: link to Overview (same as first child). Sub-items Overview + Completed show when we're in jobs section.
+            const overviewHref = item.children![0].href
+            const isJobsActive = pathname === overviewHref
+            return (
+              <div key={item.name} className="flex flex-col">
+                <Link
+                  href={overviewHref}
+                  className={`group flex items-stretch w-full text-sm font-medium transition-colors ${
+                    isJobsActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
+                  }`}
+                >
+                  <span
+                    className={`flex-shrink-0 w-1 min-h-[2.5rem] self-stretch ${
+                      isJobsActive ? 'bg-accent-500' : 'bg-transparent'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="flex items-center flex-1 py-2.5 pl-3 pr-4">
+                    <Icon
+                      className={`mr-3 h-5 w-5 flex-shrink-0 ${
+                        isJobsActive ? 'text-white' : 'text-accent-500 group-hover:text-accent-400'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    {item.name}
+                  </span>
+                </Link>
+                {isOnJobsSection && item.children!.map((sub) => {
+                  const isActive = pathname === sub.href
+                  return (
+                    <Link
+                      key={sub.name}
+                      href={sub.href}
+                      className={`group flex items-stretch w-full text-sm font-medium transition-colors pl-4 ${
+                        isActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <span
+                        className={`flex-shrink-0 w-1 min-h-[2.25rem] self-stretch ${
+                          isActive ? 'bg-accent-500' : 'bg-transparent'
+                        }`}
+                        aria-hidden="true"
+                      />
+                      <span className="flex items-center flex-1 py-2 pl-3 pr-4 text-white/95">
+                        {sub.name}
+                      </span>
+                    </Link>
+                  )
+                })}
+              </div>
+            )
+          }
+
+          const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
           return (
             <Link
               key={item.name}
-              href={item.href}
-              className={`group flex items-center px-3 py-2 text-xs font-medium rounded-lg transition-all duration-200 ${
-                isActive
-                  ? 'bg-gray-800 text-blue-400'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+              href={item.href!}
+              className={`group flex items-stretch w-full text-sm font-medium transition-colors ${
+                isActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
               }`}
             >
-              <Icon
-                className={`mr-2.5 h-4 w-4 flex-shrink-0 transition-colors duration-200 ${
-                  isActive ? 'text-blue-400' : 'text-gray-400 group-hover:text-white'
+              <span
+                className={`flex-shrink-0 w-1 min-h-[2.5rem] self-stretch ${
+                  isActive ? 'bg-accent-500' : 'bg-transparent'
                 }`}
                 aria-hidden="true"
               />
-              {item.name}
+              <span className="flex items-center flex-1 py-2.5 pl-3 pr-4">
+                <Icon
+                  className={`mr-3 h-5 w-5 flex-shrink-0 ${
+                    isActive ? 'text-white' : 'text-accent-500 group-hover:text-accent-400'
+                  }`}
+                  aria-hidden="true"
+                />
+                {item.name}
+              </span>
             </Link>
           )
         })}
       </nav>
 
-      {/* Company Switcher - Only show if user has multiple companies */}
+      {/* Company Switcher */}
       {showCompanySwitcher && (
-        <div className="px-4 py-3 border-t border-gray-800">
+        <div className="px-4 py-3 border-t border-white/10">
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
               disabled={isSwitching}
-              className="w-full flex items-center justify-between px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex items-center justify-between px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <div className="flex items-center space-x-2 min-w-0 flex-1">
                 <BuildingOfficeIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -230,9 +312,8 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
               )}
             </button>
 
-            {/* Dropdown Menu */}
             {isCompanyDropdownOpen && (
-              <div className="absolute bottom-full left-0 right-0 mb-2 bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden z-50">
+              <div className="absolute bottom-full left-0 right-0 mb-2 bg-sidebar-dark rounded-lg shadow-xl border border-white/10 overflow-hidden z-50">
                 {user.companies?.map((company) => {
                   const isActive = activeCompany?.id === company.id
                   return (
@@ -240,21 +321,17 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
                       key={company.id}
                       onClick={() => handleCompanySwitch(company.id)}
                       disabled={isActive || isSwitching}
-                      className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors duration-200 ${
+                      className={`w-full text-left px-3 py-2 text-xs font-medium transition-colors ${
                         isActive
-                          ? 'bg-gray-700 text-blue-400 cursor-default'
-                          : 'text-gray-300 hover:bg-gray-700 hover:text-white cursor-pointer'
+                          ? 'bg-accent-500/20 text-accent-400 cursor-default'
+                          : 'text-gray-300 hover:bg-white/5 hover:text-white cursor-pointer'
                       } ${isSwitching ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="truncate">{company.name}</span>
-                        {isActive && (
-                          <span className="ml-2 text-blue-400 text-[10px]">Active</span>
-                        )}
+                        {isActive && <span className="ml-2 text-accent-400 text-[10px]">Active</span>}
                       </div>
-                      <div className="text-[10px] text-gray-500 mt-0.5 capitalize">
-                        {company.role}
-                      </div>
+                      <div className="text-[10px] text-gray-500 mt-0.5 capitalize">{company.role}</div>
                     </button>
                   )
                 })}
@@ -264,12 +341,6 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
         </div>
       )}
 
-      {/* Bottom Spacing */}
-      <div className="px-4 py-3">
-        <div className="text-xs text-gray-500 text-center">
-          Vevago v1.0
-        </div>
-      </div>
     </div>
   )
 }

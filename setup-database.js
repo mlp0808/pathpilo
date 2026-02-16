@@ -117,7 +117,7 @@ async function createSchema() {
         UNIQUE(company_id, email, status)
       );
     `);
-
+    
     // Some existing DBs may have company_invitations without updated_at.
     // We keep an updated_at trigger for consistency, so ensure the column exists.
     await safeQuery(
@@ -141,23 +141,120 @@ async function createSchema() {
     CREATE TABLE IF NOT EXISTS clients (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        first_name VARCHAR(100) NOT NULL,
-        last_name VARCHAR(100) NOT NULL,
+        client_type VARCHAR(20) NOT NULL DEFAULT 'person' CHECK (client_type IN ('person', 'company')),
+        name VARCHAR(255) NOT NULL,
+        last_name VARCHAR(100),
+        company_number VARCHAR(50),
+        contact_name VARCHAR(255),
         country VARCHAR(100),
-        personal_address TEXT,
-        personal_zip_code VARCHAR(20),
-        personal_city VARCHAR(100),
-        personal_email VARCHAR(255),
-        personal_phone VARCHAR(50),
+        address TEXT,
+        zip_code VARCHAR(20),
+        city VARCHAR(100),
+        email VARCHAR(255),
+        phone VARCHAR(50),
         billing_address TEXT,
         billing_zip_code VARCHAR(20),
         billing_city VARCHAR(100),
         billing_email VARCHAR(255),
         billing_phone VARCHAR(50),
+        deleted_at TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Add new columns for client type support (safe for existing databases)
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS client_type VARCHAR(20) DEFAULT 'person'`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS name VARCHAR(255)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS company_number VARCHAR(50)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS contact_name VARCHAR(255)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS address TEXT`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS zip_code VARCHAR(20)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS city VARCHAR(100)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS email VARCHAR(255)`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
+
+    // Migrate data from old columns to new ones (only if old columns exist and new ones are empty)
+    await safeQuery(`
+      UPDATE clients
+      SET address = COALESCE(address, personal_address),
+          zip_code = COALESCE(zip_code, personal_zip_code),
+          city = COALESCE(city, personal_city),
+          email = COALESCE(email, personal_email),
+          phone = COALESCE(phone, personal_phone)
+      WHERE address IS NULL OR zip_code IS NULL OR city IS NULL OR email IS NULL OR phone IS NULL
+    `);
+
+    // Migrate name data from old schema (first_name for persons, company_name for companies)
+    await safeQuery(`
+      UPDATE clients
+      SET name = CASE
+        WHEN client_type = 'company' AND company_name IS NOT NULL THEN company_name
+        WHEN client_type = 'person' AND first_name IS NOT NULL THEN first_name
+        ELSE name
+      END
+      WHERE name IS NULL
+    `);
+
+    // Add constraint for client_type if it doesn't exist
+    await safeQuery(`ALTER TABLE clients DROP CONSTRAINT IF EXISTS clients_client_type_check`);
+    await safeQuery(`ALTER TABLE clients ADD CONSTRAINT clients_client_type_check CHECK (client_type IN ('person', 'company'))`);
+
+    // Drop old columns that are no longer needed
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS first_name`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS company_name`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS personal_address`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS personal_zip_code`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS personal_city`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS personal_email`);
+    await safeQuery(`ALTER TABLE clients DROP COLUMN IF EXISTS personal_phone`);
+
+    // ============================================
+    // Leads (public embeddable form intake)
+    // ============================================
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lead_forms (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL UNIQUE REFERENCES companies(id) ON DELETE CASCADE,
+        token VARCHAR(255) UNIQUE NOT NULL,
+        settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        status VARCHAR(20) NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'contacted', 'won', 'lost')),
+        source VARCHAR(50) NOT NULL DEFAULT 'form',
+        first_name VARCHAR(100),
+        last_name VARCHAR(100),
+        country VARCHAR(100),
+        address TEXT,
+        zip_code VARCHAR(20),
+        city VARCHAR(100),
+        email VARCHAR(255),
+        phone VARCHAR(50),
+        message TEXT,
+        preferred_date DATE,
+        preferred_time TIME,
+        notes TEXT,
+        meta JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Backward-compatible: ensure new lead fields exist if table already existed.
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS country VARCHAR(100)`);
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS address TEXT`);
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS zip_code VARCHAR(20)`);
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS city VARCHAR(100)`);
+
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_leads_company_created_at ON leads(company_id, created_at DESC)`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_leads_company_status ON leads(company_id, status)`);
 
     await pool.query(`
     CREATE TABLE IF NOT EXISTS jobs (
@@ -187,6 +284,24 @@ async function createSchema() {
        ADD COLUMN IF NOT EXISTS recurring_occurrence INTEGER`
     );
 
+    // Add sort_order field for job ordering within a day
+    await safeQuery(
+      `ALTER TABLE jobs
+       ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`
+    );
+
+    // Create index for efficient sorting
+    await safeQuery(
+      `CREATE INDEX IF NOT EXISTS idx_jobs_sort_order 
+       ON jobs(company_id, scheduled_date, assigned_user_id, sort_order)`
+    );
+
+    // Backward-compatible: ensure deleted_at exists if clients table already existed.
+    await safeQuery(
+      `ALTER TABLE clients
+       ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP NULL`
+    );
+
   // Subscriptions / recurring job templates
     await pool.query(`
     CREATE TABLE IF NOT EXISTS recurring_jobs (
@@ -198,8 +313,10 @@ async function createSchema() {
         note TEXT,
         scheduled_time_from TIME,
         scheduled_time_to TIME,
-        day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-        interval_weeks INTEGER NOT NULL DEFAULT 2,
+        recurrence_type VARCHAR(20) NOT NULL DEFAULT 'weekly' CHECK (recurrence_type IN ('weekly', 'monthly')),
+        day_of_week INTEGER CHECK (day_of_week BETWEEN 0 AND 6), -- NULL for monthly
+        day_of_month INTEGER CHECK (day_of_month BETWEEN 1 AND 31), -- NULL for weekly
+        interval_value INTEGER NOT NULL DEFAULT 1, -- Every N weeks/months
         is_active BOOLEAN DEFAULT TRUE,
         starting_date DATE NOT NULL,
         next_occurrence_date DATE NOT NULL,
@@ -214,6 +331,12 @@ async function createSchema() {
       ADD CONSTRAINT fk_jobs_recurring_job 
       FOREIGN KEY (recurring_job_id) REFERENCES recurring_jobs(id) ON DELETE SET NULL;
     `);
+
+    // Add sort_order to existing recurring_jobs if it doesn't exist
+    await safeQuery(
+      `ALTER TABLE recurring_jobs
+       ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`
+    );
 
   // Uniquely identify a subscription occurrence per company to prevent duplicate ghosts/materializations.
   await safeQuery(`
@@ -250,6 +373,7 @@ async function createSchema() {
 
   // Backward-compatible: ensure ad-hoc fields exist if table already existed.
   await safeQuery(`ALTER TABLE job_services ADD COLUMN IF NOT EXISTS custom_title TEXT`);
+  await safeQuery(`ALTER TABLE recurring_job_services ADD COLUMN IF NOT EXISTS custom_title TEXT`);
   await safeQuery(`
     DO $$
     BEGIN
@@ -260,6 +384,19 @@ async function createSchema() {
           AND is_nullable = 'NO'
       ) THEN
         ALTER TABLE job_services ALTER COLUMN service_id DROP NOT NULL;
+      END IF;
+    END $$;
+  `);
+  await safeQuery(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'recurring_job_services'
+          AND column_name = 'service_id'
+          AND is_nullable = 'NO'
+      ) THEN
+        ALTER TABLE recurring_job_services ALTER COLUMN service_id DROP NOT NULL;
       END IF;
     END $$;
   `);
@@ -313,6 +450,11 @@ async function createSchema() {
       UNIQUE(company_id, invoice_number)
     );
   `);
+
+  await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS title VARCHAR(50) DEFAULT ''`);
+
+  await safeQuery(`ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_status_check`);
+  await safeQuery(`ALTER TABLE invoices ADD CONSTRAINT invoices_status_check CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited'))`);
 
   await safeQuery(`
     ALTER TABLE jobs
@@ -533,15 +675,16 @@ async function seedMiniDemo() {
   );
 
   const clients = await pool.query(
-    `INSERT INTO clients (company_id, first_name, last_name, personal_email, personal_phone, personal_address, personal_city, personal_zip_code, country)
+    `INSERT INTO clients (company_id, client_type, name, last_name, email, phone, address, city, zip_code, country)
      VALUES
-      ($1,'Zoe','Johanson','zoe@example.com','+45 1111 1111','Main St 1','Copenhagen','1000','Denmark'),
-      ($1,'Emma','Nielsen','emma@example.com','+45 2222 2222','Park Ave 12','Copenhagen','2100','Denmark'),
-      ($1,'Oliver','Hansen','oliver@example.com','+45 3333 3333','Beach Rd 5','Aarhus','8000','Denmark')
-     RETURNING id, first_name, last_name`,
+      ($1,'person','Zoe','Johanson','zoe@example.com','+45 1111 1111','Main St 1','Copenhagen','1000','Denmark'),
+      ($1,'person','Emma','Nielsen','emma@example.com','+45 2222 2222','Park Ave 12','Copenhagen','2100','Denmark'),
+      ($1,'company','TechCorp ApS',NULL,'contact@techcorp.dk','+45 3333 3333','Business Blvd 5','Aarhus','8000','Denmark'),
+      ($1,'company','Clean Solutions Ltd',NULL,'info@cleansolutions.dk','+45 4444 4444','Industrial Ave 10','Copenhagen','2200','Denmark')
+     RETURNING id, name, last_name, client_type`,
     [companyId]
   );
-  const [clientA, clientB, clientC] = clients.rows;
+  const [clientA, clientB, clientC, clientD] = clients.rows;
 
   const services = await pool.query(
     `INSERT INTO services (company_id, title, price, duration_minutes)
@@ -689,7 +832,7 @@ async function seedMiniDemo() {
 
 async function main() {
   try {
-    console.log('🔧 Vevago database setup');
+    console.log('🔧 PathPilo database setup');
     console.log(`   reset: ${RESET ? 'yes' : 'no'}`);
     console.log(`   seed:  ${SEED ? 'yes' : 'no'}`);
 

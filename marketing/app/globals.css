@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .gradient-bg {
+    @apply bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50;
+  }
+
+  .btn-primary {
+    @apply bg-accent-500 hover:bg-accent-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200 shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25 transform hover:scale-[1.02];
+  }
+
+  .btn-secondary {
+    @apply bg-white hover:bg-primary-50 text-primary-800 font-semibold py-3 px-6 rounded-xl border border-primary-200 transition-all duration-200 shadow-sm hover:shadow-md;
+  }
+
+  .btn-outline {
+    @apply bg-transparent hover:bg-accent-500 text-accent-600 hover:text-white font-semibold py-3 px-6 rounded-xl border-2 border-accent-500 transition-all duration-200;
+  }
+
+  .feature-card {
+    @apply bg-white rounded-2xl shadow-lg border border-primary-100 hover:shadow-xl transition-all duration-300 p-8;
+  }
+
+  .section-title {
+    @apply text-4xl md:text-5xl font-bold text-primary-800 mb-4;
+  }
+
+  .section-subtitle {
+    @apply text-xl text-gray-600 mb-8 max-w-3xl;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 border border-primary-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 outline-none transition-all duration-200 bg-white shadow-sm;
+  }
+}

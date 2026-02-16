@@ -1,6 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
+
+const MAX_INVOICE_TITLE_LEN = 30
 
 interface CreateInvoiceModalProps {
   selectedJobs: Set<number>
@@ -35,6 +37,18 @@ export default function CreateInvoiceModal({
       .map(jobId => completedJobs.find(j => j.id === jobId))
       .filter(Boolean) as any[]
   }, [selectedJobs, completedJobs])
+
+  // Default invoice title: "Invoice" (max 30 chars)
+  const defaultInvoiceTitle = 'Invoice'
+
+  useEffect(() => {
+    setCreateInvoiceData((prev: any) => ({
+      ...prev,
+      title: prev.title != null && prev.title !== '' ? prev.title : defaultInvoiceTitle
+    }))
+  }, [defaultInvoiceTitle])
+
+  const invoiceTitleValue = (createInvoiceData.title ?? defaultInvoiceTitle).slice(0, MAX_INVOICE_TITLE_LEN)
 
   const subtotal = useMemo(() => {
     const discounts = createInvoiceData.discounts || {}
@@ -255,6 +269,24 @@ export default function CreateInvoiceModal({
             </div>
 
             <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+              <div className="grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Invoice title <span className="text-gray-500 font-normal">(max {MAX_INVOICE_TITLE_LEN} characters)</span>
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={MAX_INVOICE_TITLE_LEN}
+                    value={invoiceTitleValue}
+                    onChange={(e) => setCreateInvoiceData((prev: any) => ({ ...prev, title: e.target.value.slice(0, MAX_INVOICE_TITLE_LEN) }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="e.g. job name or [Job 1] + [Job 2]"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    {invoiceTitleValue.length}/{MAX_INVOICE_TITLE_LEN}
+                  </p>
+                </div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">

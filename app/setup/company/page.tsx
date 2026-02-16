@@ -104,17 +104,17 @@ export default function CompanySetupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+    <div className="min-h-screen bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50">
       <div className="max-w-4xl mx-auto px-6 py-16">
         <div className="grid grid-cols-5 gap-16 items-start">
           {/* Left Column - Text (40%) */}
           <div className="col-span-2 pt-4">
             <div className="space-y-6">
               <div>
-                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 mb-4">
+                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-accent-50 text-accent-700 border border-accent-200 mb-4">
                   Step 1 of 3
                 </div>
-                <h1 className="text-3xl font-semibold text-gray-900 mb-4 tracking-tight">
+                <h1 className="text-3xl font-bold text-primary-800 mb-4 tracking-tight">
                   Create your company
                 </h1>
                 <p className="text-base text-gray-600 leading-relaxed">
@@ -123,8 +123,8 @@ export default function CompanySetupPage() {
               </div>
               
               <div className="space-y-3 pt-4">
-                <div className="flex items-center space-x-3 text-sm text-gray-500">
-                  <div className="w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
+                <div className="flex items-center space-x-3 text-sm font-medium text-primary-700">
+                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full"></div>
                   <span>Create Company</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
@@ -141,10 +141,10 @@ export default function CompanySetupPage() {
 
           {/* Right Column - Form (60%) */}
           <div className="col-span-3">
-            <div className="bg-white/70 backdrop-blur-sm border border-gray-200/60 rounded-2xl p-8 shadow-xl shadow-gray-900/5">
+            <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-primary-500/5">
               <form onSubmit={handleSubmit} className="space-y-6">
                 {error && (
-                  <div className="bg-red-50/80 border border-red-200/60 rounded-xl p-4 backdrop-blur-sm">
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-4">
                     <p className="text-red-600 text-sm font-medium">{error}</p>
                   </div>
                 )}
@@ -162,14 +162,14 @@ export default function CompanySetupPage() {
                       value={formData.country}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. Denmark"
                     />
                   </div>
 
                   {/* Company Name */}
                   <div className="group">
-                    <label htmlFor="name" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="name" className="block text-xs font-semibold text-primary-700 mb-2">
                       Company name <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -179,7 +179,7 @@ export default function CompanySetupPage() {
                       value={formData.name}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. Clean Windows Co."
                     />
                   </div>
@@ -195,14 +195,14 @@ export default function CompanySetupPage() {
                       name="cvrNumber"
                       value={formData.cvrNumber}
                       onChange={handleInputChange}
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. 12345678"
                     />
                   </div>
 
                   {/* Address */}
                   <div className="group">
-                    <label htmlFor="address" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="address" className="block text-xs font-semibold text-primary-700 mb-2">
                       Address <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -212,7 +212,7 @@ export default function CompanySetupPage() {
                       value={formData.address}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. Main Street 123"
                     />
                   </div>
@@ -230,12 +230,12 @@ export default function CompanySetupPage() {
                         value={formData.city}
                         onChange={handleInputChange}
                         required
-                        className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                         placeholder="e.g. Copenhagen"
                       />
                     </div>
                     <div className="group">
-                      <label htmlFor="zipCode" className="block text-sm font-medium text-gray-900 mb-2">
+                      <label htmlFor="zipCode" className="block text-xs font-semibold text-primary-700 mb-2">
                         Zip <span className="text-red-500">*</span>
                       </label>
                       <input
@@ -245,7 +245,7 @@ export default function CompanySetupPage() {
                         value={formData.zipCode}
                         onChange={handleInputChange}
                         required
-                        className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
+                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
                         placeholder="e.g. 2100"
                       />
                     </div>
@@ -255,7 +255,7 @@ export default function CompanySetupPage() {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-xl text-sm font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:shadow-blue-500/25"
+                  className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
                 >
                   {isLoading ? (
                     <span className="flex items-center justify-center space-x-2">

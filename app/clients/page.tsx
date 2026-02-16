@@ -8,12 +8,13 @@ import { apiUrl } from '../utils/api'
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
-  personal_address: string
-  personal_zip_code: string
-  personal_phone: string
-  personal_email: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name: string | null
+  address: string | null
+  zip_code: string | null
+  phone: string | null
+  email: string | null
   created_at: string
 }
 

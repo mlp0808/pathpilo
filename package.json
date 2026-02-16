@@ -10,13 +10,18 @@
     "start": "next start -p 3002",
     "lint": "next lint",
     "dev:server": "node server.js",
-    "dev:fullstack": "concurrently \"npm run dev:server\" \"npm run dev\"",
+    "dev:marketing": "cd marketing && npm run dev",
+    "build:marketing": "cd marketing && npm run build",
+    "dev:fullstack": "concurrently \"npm run dev:api-server\" \"npm run dev\" \"npm run dev:marketing\"",
+    "dev:api-server": "cd api-server && node server.js",
     "clean": "node -e \"const fs=require('fs'); const path=require('path'); const rm=(p)=>fs.rmSync(p,{recursive:true,force:true}); ['.next'].forEach(d=>{const p=path.join(process.cwd(),d); if(fs.existsSync(p)) rm(p);}); console.log('cleaned .next');\"",
     "db:setup": "node setup-database.js --seed",
-    "db:reset": "node setup-database.js --reset --seed"
+    "db:reset": "node setup-database.js --reset --seed",
+    "generate-test-data": "node generate-test-data.js"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@internationalized/date": "^3.11.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "autoprefixer": "^10.4.21",
@@ -35,7 +40,11 @@
     "pg": "^8.16.3",
     "postcss": "^8.5.6",
     "react": "^19.2.0",
+    "react-aria-components": "^1.15.0",
     "react-dom": "^19.2.0",
+    "react-stately": "^3.44.0",
+    "recharts": "^3.7.0",
+    "resend": "^6.7.0",
     "tailwindcss": "^3.4.0"
   },
   "devDependencies": {
@@ -57,6 +66,6 @@
     "client-management",
     "service-companies"
   ],
-  "author": "Vevago Team",
+  "author": "PathPilo Team",
   "license": "MIT"
 }

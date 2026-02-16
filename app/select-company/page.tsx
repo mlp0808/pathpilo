@@ -40,13 +40,19 @@ export default function SelectCompanyPage() {
 
       if (response.ok) {
         const data = await response.json()
+        console.log('Company switch response:', data)
         // Update token and user data
         localStorage.setItem('token', data.token)
         localStorage.setItem('user', JSON.stringify(data.user))
-        // Redirect to company dashboard
-        router.replace(`/${company.slug}/dashboard`)
+        // Redirect to company dashboard - use the slug from the response
+        const targetSlug = data.user?.activeCompany?.slug || company.slug
+        console.log('Redirecting to:', targetSlug)
+        // Use push instead of replace to avoid navigation issues
+        router.push(`/${targetSlug}/dashboard`)
       } else {
-        console.error('Failed to switch company')
+        const errorData = await response.json().catch(() => ({}))
+        console.error('Failed to switch company:', response.status, errorData)
+        alert(`Failed to switch company: ${errorData.error || 'Unknown error'}`)
       }
     } catch (error) {
       console.error('Error switching company:', error)

@@ -11,7 +11,7 @@ export default function HomePage() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <span className="text-white font-bold text-lg">V</span>
             </div>
-            <span className="text-xl font-bold text-gray-900">Vevago</span>
+            <span className="text-xl font-bold text-gray-900">PathPilo</span>
           </div>
           <div className="flex items-center space-x-4">
             <Link href="/admin" className="text-gray-600 hover:text-gray-900 font-medium">
@@ -28,7 +28,7 @@ export default function HomePage() {
       </nav>
 
       {/* Hero Section */}
-      <main className="relative px-6 py-16 md:py-24">
+      <main className="relative p-[40px]">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6">
@@ -36,7 +36,7 @@ export default function HomePage() {
               <span className="block text-blue-600">Like a Pro</span>
             </h1>
             <p className="text-xl text-gray-600 mb-10 max-w-3xl mx-auto leading-relaxed">
-              Vevago helps service companies like window cleaners, landscapers, and maintenance teams 
+              PathPilo helps service companies like window cleaners, landscapers, and maintenance teams 
               streamline client management, job scheduling, and recurring tasks.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-16">
@@ -109,9 +109,9 @@ export default function HomePage() {
           {/* Additional Section 1 */}
           <div className="mb-24">
             <div className="max-w-7xl mx-auto text-center px-6">
-              <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6">Why Choose Vevago?</h2>
+              <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6">Why Choose PathPilo?</h2>
               <p className="text-xl text-gray-600 max-w-3xl mx-auto leading-relaxed">
-                Join hundreds of service companies that trust Vevago to manage their business operations efficiently.
+                Join hundreds of service companies that trust PathPilo to manage their business operations efficiently.
               </p>
             </div>
           </div>
@@ -149,7 +149,7 @@ export default function HomePage() {
               <span className="text-lg font-semibold text-gray-900">Vevago</span>
             </div>
             <div className="text-sm text-gray-500">
-              © 2024 Vevago. All rights reserved.
+              © 2024 PathPilo. All rights reserved.
             </div>
           </div>
         </div>

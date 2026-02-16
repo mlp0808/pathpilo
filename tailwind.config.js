@@ -8,14 +8,29 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Design system
         primary: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          900: '#1e3a8a',
+          50: '#F6F9F7',   // Off-white
+          100: '#F6F9F7',
+          200: '#F6F9F7',
+          500: '#193434',   // Dark
+          600: '#193434',
+          700: '#193434',
+          800: '#193434',
+          900: '#193434',
         },
+        accent: {
+          400: '#3DD57A',   // Green
+          500: '#3DD57A',
+          600: '#35c06e',
+          700: '#2da861',
+        },
+        sidebar: {
+          DEFAULT: '#193434',  // Dark (same as primary)
+          dark: '#122626',
+        },
+        badge: '#F7665E',
+        page: '#F6F9F7',    // Off-white (main content)
         gray: {
           50: '#f9fafb',
           100: '#f3f4f6',
@@ -27,6 +42,14 @@ module.exports = {
           700: '#374151',
           800: '#1f2937',
           900: '#111827',
+        },
+        // Legacy blue colors (for gradual migration)
+        blue: {
+          50: '#eff6ff',
+          100: '#dbeafe',
+          500: '#3b82f6',
+          600: '#2563eb',
+          700: '#1d4ed8',
         }
       },
       fontFamily: {

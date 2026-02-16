@@ -1,4 +1,4 @@
-# Vevago
+# PathPilo
 
 ## Local development
 
@@ -8,6 +8,18 @@
 
 ### Environment
 Copy `env.example` to `.env` and fill in DB credentials.
+
+### Email Setup (Optional)
+For email notifications (invoices, lead submissions):
+
+1. **Resend (Recommended)** - Free tier, easy setup:
+   - Sign up at [resend.com](https://resend.com)
+   - Get API key from dashboard
+   - Add `RESEND_API_KEY=re_xxx...` to `.env`
+
+2. **SMTP (Alternative)** - Configure SMTP settings in `.env`
+
+Without email config, emails log to console (development) or fail silently (production).
 
 ### Run (frontend + API)
 ```bash

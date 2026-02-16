@@ -154,7 +154,7 @@ export default function TeamPage() {
       <AppLayout>
         <div className="flex items-center justify-center h-64">
           <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500"></div>
             <p className="mt-2 text-gray-600">Loading team members...</p>
           </div>
         </div>
@@ -207,7 +207,7 @@ export default function TeamPage() {
               onClick={() => setActiveTab('management')}
               className={`py-2 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'management'
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-accent-500 text-accent-500'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
@@ -217,7 +217,7 @@ export default function TeamPage() {
               onClick={() => setActiveTab('employees')}
               className={`py-2 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'employees'
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-accent-500 text-accent-500'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
@@ -233,7 +233,13 @@ export default function TeamPage() {
               <h2 className="text-lg font-medium text-gray-900">Management Team</h2>
               <p className="text-sm text-gray-600">Owners and managers with administrative access</p>
             </div>
-            <TeamTable users={managementUsers} role="management" currentUserId={currentUser?.id} />
+            <TeamTable 
+              users={managementUsers} 
+              role="management" 
+              currentUserId={currentUser?.id}
+              onAddClick={() => setShowAddModal(true)}
+              onUserRemoved={fetchUsers}
+            />
           </div>
         )}
 
@@ -246,7 +252,7 @@ export default function TeamPage() {
               </div>
               <button
                 onClick={() => setShowAddModal(true)}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                className="inline-flex items-center px-4 py-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 transition-colors text-sm font-medium"
               >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -259,6 +265,8 @@ export default function TeamPage() {
               role="employees" 
               currentUserId={currentUser?.id}
               pendingInvitations={pendingInvitations.filter(inv => inv.role === 'employee')}
+              onAddClick={() => setShowAddModal(true)}
+              onUserRemoved={fetchUsers}
             />
           </div>
         )}
@@ -299,7 +307,7 @@ export default function TeamPage() {
                     id="email"
                     value={emailInput}
                     onChange={(e) => setEmailInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
                     placeholder="employee@example.com"
                     disabled={isSubmitting}
                   />
@@ -320,7 +328,7 @@ export default function TeamPage() {
                   <button
                     onClick={handleAddEmployee}
                     disabled={isSubmitting || !emailInput.trim()}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    className="px-4 py-2 text-sm font-medium text-white bg-accent-500 rounded-lg hover:bg-accent-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                   >
                     {isSubmitting ? 'Sending...' : 'Send Invitation'}
                   </button>

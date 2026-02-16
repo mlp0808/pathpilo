@@ -26,16 +26,44 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { user, loading: userLoading } = useUser()
   const [isResolving, setIsResolving] = useState(true)
+  const [lastResolvedSlug, setLastResolvedSlug] = useState<string | null>(null)
 
   const companySlug = params?.company as string
 
   useEffect(() => {
-    if (userLoading || !companySlug) return
+    if (userLoading || !companySlug) {
+      if (!userLoading && !companySlug) {
+        setIsResolving(false)
+      }
+      return
+    }
+
+    // If we already resolved this slug, don't do it again
+    if (lastResolvedSlug === companySlug) {
+      setIsResolving(false)
+      return
+    }
 
     const resolveAndSwitchCompany = async () => {
       try {
         setIsResolving(true)
         const token = localStorage.getItem('token')
+        
+        // Check if user's active company already matches this slug
+        const userStr = localStorage.getItem('user')
+        if (userStr) {
+          try {
+            const userData = JSON.parse(userStr)
+            if (userData.activeCompany?.slug === companySlug) {
+              // Already on this company, just render
+              setLastResolvedSlug(companySlug)
+              setIsResolving(false)
+              return
+            }
+          } catch (e) {
+            console.error('Error parsing user data in layout:', e)
+          }
+        }
         
         // Resolve slug to company
         const resolveResponse = await fetch(apiUrl(`/companies/slug/${companySlug}`), {
@@ -71,13 +99,18 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         const companyId = resolveData.company.id
         
         // Check if user's active company matches
-        const userStr = localStorage.getItem('user')
-        if (userStr) {
-          const userData = JSON.parse(userStr)
-          if (userData.activeCompany?.id === companyId) {
-            // Already on this company, just render
-            setIsResolving(false)
-            return
+        const userStr2 = localStorage.getItem('user')
+        if (userStr2) {
+          try {
+            const userData = JSON.parse(userStr2)
+            if (userData.activeCompany?.id === companyId) {
+              // Already on this company, just render
+              setLastResolvedSlug(companySlug)
+              setIsResolving(false)
+              return
+            }
+          } catch (e) {
+            console.error('Error parsing user data in layout:', e)
           }
         }
         
@@ -96,8 +129,10 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
           // Update token and user data
           localStorage.setItem('token', switchData.token)
           localStorage.setItem('user', JSON.stringify(switchData.user))
-          // Reload to update user context
-          window.location.reload()
+          // Mark this slug as resolved and continue
+          setLastResolvedSlug(companySlug)
+          setIsResolving(false)
+          return
         } else {
           // Failed to switch, try to find a valid company
           console.log('Failed to switch company, trying to find valid company...')
@@ -146,7 +181,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     }
 
     resolveAndSwitchCompany()
-  }, [companySlug, user, userLoading, router])
+  }, [companySlug, userLoading, router, lastResolvedSlug]) // Track last resolved slug to prevent loops
 
   if (userLoading || isResolving) {
     return (

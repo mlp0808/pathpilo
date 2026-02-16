@@ -13,14 +13,15 @@ import { apiUrl } from '../../utils/api'
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name: string | null
   country: string
-  personal_address: string
-  personal_zip_code: string
-  personal_city: string
-  personal_email: string
-  personal_phone: string
+  address: string | null
+  zip_code: string | null
+  city: string | null
+  email: string | null
+  phone: string | null
   billing_address: string | null
   billing_zip_code: string | null
   billing_city: string | null
@@ -62,6 +63,7 @@ export default function ClientDetailPage() {
   const [sendInvoiceId, setSendInvoiceId] = useState<number | null>(null)
   const [sendInvoiceDefaultSubject, setSendInvoiceDefaultSubject] = useState('')
   const [sendInvoiceDefaultMessage, setSendInvoiceDefaultMessage] = useState('')
+  const [isDeletingClient, setIsDeletingClient] = useState(false)
   const [sendingInvoice, setSendingInvoice] = useState(false)
   const [createInvoiceData, setCreateInvoiceData] = useState({
     issue_date: new Date().toISOString().split('T')[0],
@@ -82,8 +84,15 @@ export default function ClientDetailPage() {
   const fetchClient = async () => {
     try {
       setLoading(true)
+      setError('')
       const token = localStorage.getItem('token')
       
+      if (!token) {
+        setError('No authentication token found')
+        return
+      }
+      
+      console.log('Fetching client:', clientId)
       const response = await fetch(apiUrl(`/clients/${clientId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -91,11 +100,16 @@ export default function ClientDetailPage() {
       })
       
       const data = await response.json()
+      console.log('Client API response:', { status: response.status, data })
       
       if (response.ok) {
-        setClient(data.client)
+        if (data.client) {
+          setClient(data.client)
+        } else {
+          setError('Client data not found in response')
+        }
       } else {
-        setError(data.error || 'Failed to fetch client')
+        setError(data.error || `Failed to fetch client (${response.status})`)
       }
     } catch (error) {
       setError('Network error: Failed to fetch client')
@@ -107,6 +121,38 @@ export default function ClientDetailPage() {
 
   const handleClientUpdated = () => {
     fetchClient() // Refresh client data
+  }
+
+  const handleDeleteClient = async () => {
+    if (!client) return
+
+    const confirmed = confirm(`Are you sure you want to delete ${client.name}${client.last_name ? ` ${client.last_name}` : ''}?\n\nThis will:\n• Anonymize their personal information (name, email, phone, address)\n• Delete ALL jobs and subscriptions\n• Preserve all invoices and financial records\n• Replace their name with "Deleted Client #${client.id}" in invoice records\n\nThis action cannot be undone but maintains legal compliance for business records.`)
+
+    if (!confirmed) return
+
+    try {
+      setIsDeletingClient(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/clients/${clientId}`), {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to delete client')
+      }
+
+      // Redirect to clients list
+      router.push('/clients')
+    } catch (error) {
+      console.error('Error deleting client:', error)
+      alert('Failed to delete client. Please try again.')
+    } finally {
+      setIsDeletingClient(false)
+    }
   }
 
   const fetchJobs = async () => {
@@ -153,6 +199,7 @@ export default function ClientDetailPage() {
       setSubscriptionsLoading(true)
       const token = localStorage.getItem('token')
       
+      console.log('Fetching subscriptions for client:', clientId)
       const response = await fetch(apiUrl(`/clients/${clientId}/subscriptions`), {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -160,8 +207,10 @@ export default function ClientDetailPage() {
       })
       
       const data = await response.json()
+      console.log('Subscriptions response:', data)
       
       if (response.ok) {
+        console.log('Setting subscriptions:', data.subscriptions || [])
         setSubscriptions(data.subscriptions || [])
       } else {
         console.error('Failed to fetch subscriptions:', data.error)
@@ -553,7 +602,7 @@ export default function ClientDetailPage() {
                 Back to Clients
               </button>
               <h1 className="text-2xl font-bold text-gray-900">
-                {client.first_name} {client.last_name}
+                {client.name}{client.last_name ? ` ${client.last_name}` : ''}
               </h1>
               <p className="text-sm text-gray-600 mt-1">
                 Client since {formatDate(client.created_at)}
@@ -562,12 +611,23 @@ export default function ClientDetailPage() {
             
             <button
               onClick={() => setIsEditClientModalOpen(true)}
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors mr-3"
             >
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
               Edit Client
+            </button>
+
+            <button
+              onClick={handleDeleteClient}
+              disabled={isDeletingClient}
+              className="inline-flex items-center px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-50"
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              {isDeletingClient ? 'Deleting…' : 'Delete Client'}
             </button>
           </div>
         </div>
@@ -606,7 +666,7 @@ export default function ClientDetailPage() {
                     <div>
                       <dt className="text-sm font-medium text-gray-500">Name</dt>
                       <dd className="mt-1 text-sm text-gray-900">
-                        {client.first_name} {client.last_name}
+                        {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                       </dd>
                     </div>
                     <div>
@@ -616,18 +676,18 @@ export default function ClientDetailPage() {
                     <div>
                       <dt className="text-sm font-medium text-gray-500">Address</dt>
                       <dd className="mt-1 text-sm text-gray-900">
-                        {client.personal_address || '-'}
-                        {client.personal_zip_code && `, ${client.personal_zip_code}`}
-                        {client.personal_city && `, ${client.personal_city}`}
+                        {client.address || '-'}
+                        {client.zip_code && `, ${client.zip_code}`}
+                        {client.city && `, ${client.city}`}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-sm font-medium text-gray-500">Email</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{client.personal_email || '-'}</dd>
+                      <dd className="mt-1 text-sm text-gray-900">{client.email || '-'}</dd>
                     </div>
                     <div>
                       <dt className="text-sm font-medium text-gray-500">Phone</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{client.personal_phone || '-'}</dd>
+                      <dd className="mt-1 text-sm text-gray-900">{client.phone || '-'}</dd>
                     </div>
                   </dl>
                 </div>
@@ -688,7 +748,7 @@ export default function ClientDetailPage() {
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">Jobs</h2>
                   <p className="text-sm text-gray-600">
-                    {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'} for {client.first_name} {client.last_name}
+                    {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'} for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                   </p>
                 </div>
                 <button
@@ -719,7 +779,7 @@ export default function ClientDetailPage() {
                   </div>
                   <h3 className="mt-2 text-sm font-medium text-gray-900">No jobs yet</h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    Get started by creating your first job for {client.first_name} {client.last_name}
+                    Get started by creating your first job for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                   </p>
                 </div>
               ) : (
@@ -779,16 +839,18 @@ export default function ClientDetailPage() {
                           </td>
                           <td className="px-6 py-4">
                             <div className="text-sm text-gray-900">
-                              {job.services.length} service{job.services.length !== 1 ? 's' : ''}
+                              {job.services?.length || 0} service{(job.services?.length || 0) !== 1 ? 's' : ''}
                             </div>
-                            <div className="text-xs text-gray-500 mt-1 max-w-xs">
-                              {job.services.map((service: any, index: number) => (
-                                <span key={service.id}>
-                                  {service.service_title}
-                                  {index < job.services.length - 1 ? ', ' : ''}
-                                </span>
-                              ))}
-                            </div>
+                            {job.services && job.services.length > 0 && (
+                              <div className="text-xs text-gray-500 mt-1 max-w-xs">
+                                {job.services.map((service: any, index: number) => (
+                                  <span key={service.id}>
+                                    {service.service_title || service.custom_title || 'Service'}
+                                    {index < job.services.length - 1 ? ', ' : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {Math.floor((job.total_duration || 0) / 60)}h {(job.total_duration || 0) % 60}m
@@ -833,7 +895,7 @@ export default function ClientDetailPage() {
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">Subscriptions</h2>
                   <p className="text-sm text-gray-600">
-                    {subscriptions.length} {subscriptions.length === 1 ? 'subscription' : 'subscriptions'} for {client.first_name} {client.last_name}
+                    {subscriptions.length} {subscriptions.length === 1 ? 'subscription' : 'subscriptions'} for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                   </p>
                 </div>
                 <button
@@ -863,7 +925,7 @@ export default function ClientDetailPage() {
                   </div>
                   <h3 className="mt-2 text-sm font-medium text-gray-900">No subscriptions yet</h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    Create recurring subscriptions for {client.first_name} {client.last_name}
+                    Create recurring subscriptions for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                   </p>
                 </div>
               ) : (
@@ -982,7 +1044,7 @@ export default function ClientDetailPage() {
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">Invoicing</h2>
                   <p className="text-sm text-gray-600">
-                    Create and manage invoices for {client.first_name} {client.last_name}
+                    Create and manage invoices for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                   </p>
                 </div>
                 <div className="flex space-x-3">
@@ -1228,7 +1290,7 @@ export default function ClientDetailPage() {
                 </div>
                 <h3 className="mt-2 text-sm font-medium text-gray-900">Reporting</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  View history and revenue reports for {client.first_name} {client.last_name}
+                  View history and revenue reports for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
                 </p>
                 <div className="mt-6">
                   <button
@@ -1264,7 +1326,7 @@ export default function ClientDetailPage() {
             onClose={() => setIsCreateJobModalOpen(false)}
             onJobCreated={handleJobCreated}
             clientId={client.id}
-            clientName={`${client.first_name} ${client.last_name}`}
+            clientName={`${client.name}${client.last_name ? ` ${client.last_name}` : ''}`}
           />
         )}
 
@@ -1276,6 +1338,11 @@ export default function ClientDetailPage() {
             setEditingJob(null)
           }}
           job={editingJob}
+          onJobUpdated={() => {
+            // Refresh both lists so materialize/complete/move updates show immediately
+            fetchJobs()
+            fetchCompletedJobs()
+          }}
         />
 
         {/* Create Subscription Slideout */}

@@ -7,31 +7,118 @@ const cors = require('cors');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
 const app = express();
 // Express API port (keep separate from Next.js). In dev, default is 3003.
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3003;
 
-// Email (used for sending invoices)
+// Email (used for sending invoices and notifications)
 const emailTransporter = (() => {
+  const resendApiKey = process.env.RESEND_API_KEY;
+
+  // Use Resend if API key is available (recommended for production)
+  if (resendApiKey) {
+    console.log('✅ Using Resend for email delivery');
+    return new Resend(resendApiKey);
+  }
+
+  // Fallback to SMTP if configured
   const host = process.env.EMAIL_HOST;
   const port = process.env.EMAIL_PORT ? parseInt(process.env.EMAIL_PORT, 10) : undefined;
   const user = process.env.EMAIL_USER;
   const pass = process.env.EMAIL_PASS;
 
-  // If SMTP isn't configured, use a JSON transport so calls succeed in dev (and log content).
-  if (!host || !user || !pass) {
-    console.log('⚠️ EMAIL_* not configured. Using nodemailer jsonTransport (emails will not be delivered).');
-    return nodemailer.createTransport({ jsonTransport: true });
+  if (host && user && pass) {
+    console.log('📧 Using SMTP for email delivery');
+    return nodemailer.createTransporter({
+      host,
+      port: port || 587,
+      secure: (port || 587) === 465,
+      auth: { user, pass }
+    });
   }
 
-  return nodemailer.createTransport({
-    host,
-    port: port || 587,
-    secure: (port || 587) === 465,
-    auth: { user, pass }
-  });
+  // Final fallback: JSON transport for local development
+  console.log('⚠️ No email provider configured. Using JSON transport (emails will not be delivered).');
+  console.log('   Set RESEND_API_KEY for production email delivery.');
+  return nodemailer.createTransport({ jsonTransport: true });
 })();
+
+// Unified email sending function (works with both Resend and nodemailer)
+async function sendEmail(options) {
+  const { to, from, subject, text, html, attachments } = options;
+
+  console.log('📧 Attempting to send email:', { to, from, subject, hasAttachments: !!attachments?.length });
+
+  try {
+    // Check if we're using Resend
+    if (emailTransporter.constructor.name === 'Resend') {
+      // Resend API
+      const emailOptions = {
+        from: from || 'PathPilo <onboarding@resend.dev>',
+        to,
+        subject,
+        text,
+        html,
+        attachments: attachments?.map(att => ({
+          filename: att.filename,
+          content: att.content,
+          type: att.contentType || 'application/octet-stream'
+        }))
+      };
+
+      console.log('📧 Sending via Resend...');
+      console.log('📧 Email options:', { from: emailOptions.from, to: emailOptions.to, subject: emailOptions.subject });
+
+      const result = await emailTransporter.emails.send(emailOptions);
+
+      console.log('✅ Email sent via Resend - Response:', JSON.stringify(result, null, 2));
+
+      // Check if Resend returned an error
+      if (result.error) {
+        console.error('❌ Resend API error:', result.error);
+        throw new Error(`Resend API error: ${result.error.message || 'Unknown error'}`);
+      }
+
+      return result;
+    } else {
+      // Nodemailer API (including JSON transport for dev)
+      const emailOptions = {
+        from,
+        to,
+        subject,
+        text,
+        html,
+        attachments
+      };
+
+      console.log('📧 Sending via nodemailer...');
+      const result = await emailTransporter.sendMail(emailOptions);
+
+      if (emailTransporter.transporter?.options?.jsonTransport) {
+        console.log('📧 JSON Transport result (development mode):', result);
+      } else {
+        console.log('✅ Email sent via nodemailer');
+      }
+
+      return result;
+    }
+  } catch (error) {
+    console.error('❌ Email sending failed:', error);
+
+    // Provide more specific error messages
+    if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
+      console.error('❌ Resend API key is invalid or expired. Check your RESEND_API_KEY in .env');
+    } else if (error.message?.includes('Forbidden') || error.message?.includes('403')) {
+      console.error('❌ Resend API access forbidden. Check your API key permissions');
+    } else if (error.message?.includes('rate limit')) {
+      console.error('❌ Resend rate limit exceeded. Try again later');
+    }
+
+    throw error;
+  }
+}
 
 function renderTemplate(text, vars) {
   if (!text) return '';
@@ -249,6 +336,63 @@ const pool = new Pool({
   } catch (e) {
     console.warn('⚠️ DB compat: could not relax invoice_items.service_id:', e.message);
   }
+
+  // Subscription recurrence patterns (recurrence_type, day_of_month, interval_value)
+  try {
+    await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS recurrence_type VARCHAR(20) DEFAULT 'weekly'`);
+    await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS day_of_month INTEGER`);
+    await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS interval_value INTEGER DEFAULT 1`);
+    // Update existing records to have proper recurrence_type
+    await pool.query(`UPDATE recurring_jobs SET recurrence_type = 'weekly' WHERE recurrence_type IS NULL`);
+    await pool.query(`UPDATE recurring_jobs SET interval_value = interval_weeks WHERE interval_value IS NULL AND interval_weeks IS NOT NULL`);
+  } catch (e) {
+    console.warn('⚠️ DB compat: could not ensure recurring_jobs new columns:', e.message);
+  }
+
+  // Leads tables (safe to run in prod; creates if missing)
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lead_forms (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL UNIQUE REFERENCES companies(id) ON DELETE CASCADE,
+        token VARCHAR(255) UNIQUE NOT NULL,
+        settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        status VARCHAR(20) NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'contacted', 'won', 'lost')),
+        source VARCHAR(50) NOT NULL DEFAULT 'form',
+        first_name VARCHAR(100),
+        last_name VARCHAR(100),
+        country VARCHAR(100),
+        address TEXT,
+        zip_code VARCHAR(20),
+        city VARCHAR(100),
+        email VARCHAR(255),
+        phone VARCHAR(50),
+        message TEXT,
+        preferred_date DATE,
+        preferred_time TIME,
+        notes TEXT,
+        meta JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS country VARCHAR(100)`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS address TEXT`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS zip_code VARCHAR(20)`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS city VARCHAR(100)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_company_created_at ON leads(company_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_company_status ON leads(company_id, status)`);
+  } catch (e) {
+    console.warn('⚠️ DB compat: could not ensure leads tables:', e.message);
+  }
 })();
 
 // Test database connection
@@ -262,7 +406,7 @@ pool.on('error', (err) => {
 
 // Routes
 app.get('/', (req, res) => {
-  res.json({ message: 'Hello Vevago! Server is working!' });
+  res.json({ message: 'Hello PathPilo! Server is working!' });
 });
 
 // Registration endpoint
@@ -820,6 +964,417 @@ app.post('/api/companies', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Company creation failed: ' + error.message });
   } finally {
     client.release();
+  }
+});
+
+// ============================================
+// LEADS + LEAD FORM (embeddable public form)
+// ============================================
+
+const defaultLeadFormSettings = () => ({
+  version: 2,
+  // Section 1: Customer details (maps to existing client fields)
+  customer: {
+    fields: {
+      first_name: true,
+      last_name: true,
+      country: false,
+      address: false,
+      zip_code: false,
+      city: false,
+      email: true,
+      phone: false
+    },
+    required: {
+      email: true
+    }
+  },
+  // Section 2: Job (service selectors + scheduling preferences)
+  job: {
+    includePreferredDate: false,
+    includePreferredTime: false,
+    // Admin can create 0..n selectors
+    serviceSelectors: []
+  },
+  // Section 3: Custom fields (for price calculation / tagging)
+  custom: {
+    selectors: [],
+    inputs: []
+  },
+  title: 'Contact us',
+  subtitle: 'Send us your details and we will get back to you.',
+  successMessage: 'Thanks! We received your request and will get back to you soon.'
+});
+
+// Backward compatibility: upgrade older settings (v1 fields) to v2 structure.
+const normalizeLeadFormSettings = (settings) => {
+  try {
+    if (!settings || typeof settings !== 'object') return defaultLeadFormSettings();
+    if (settings.version === 2 && settings.customer && settings.job && settings.custom) return settings;
+
+    // v1 shape: { fields: {...}, required: {...}, title, subtitle, successMessage }
+    const v1Fields = settings.fields || {};
+    const v1Required = settings.required || {};
+
+    const v2 = defaultLeadFormSettings();
+    v2.title = settings.title || v2.title;
+    v2.subtitle = settings.subtitle || v2.subtitle;
+    v2.successMessage = settings.successMessage || v2.successMessage;
+
+    // Map known v1 keys
+    v2.customer.fields.first_name = v1Fields.first_name ?? v2.customer.fields.first_name;
+    v2.customer.fields.last_name = v1Fields.last_name ?? v2.customer.fields.last_name;
+    v2.customer.fields.email = v1Fields.email ?? v2.customer.fields.email;
+    v2.customer.fields.phone = v1Fields.phone ?? v2.customer.fields.phone;
+    v2.job.includePreferredDateTime = (v1Fields.preferred_date || v1Fields.preferred_time) ? true : v2.job.includePreferredDateTime;
+
+    v2.customer.required.email = v1Required.email ?? v2.customer.required.email;
+    // Message kept as a custom input in v2
+    if (v1Fields.message) {
+      v2.custom.inputs.push({ id: 'message', label: 'Message', type: 'textarea', required: false });
+    }
+
+    return v2;
+  } catch {
+    return defaultLeadFormSettings();
+  }
+};
+
+// Get or create the active company's lead form (owner/admin/manager/employee can view)
+app.get('/api/lead-form', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const { companyId } = companyAccess;
+
+    let existing = await pool.query(
+      `SELECT id, token, settings, created_at, updated_at
+       FROM lead_forms
+       WHERE company_id = $1`,
+      [companyId]
+    );
+
+    if (existing.rows.length === 0) {
+      const token = crypto.randomBytes(18).toString('hex');
+      const settings = defaultLeadFormSettings();
+      const created = await pool.query(
+        `INSERT INTO lead_forms (company_id, token, settings)
+         VALUES ($1, $2, $3)
+         RETURNING id, token, settings, created_at, updated_at`,
+        [companyId, token, settings]
+      );
+      existing = created;
+    }
+
+    const form = existing.rows[0];
+    form.settings = normalizeLeadFormSettings(form.settings);
+    res.json({ form });
+  } catch (error) {
+    console.error('Get lead form error:', error);
+    res.status(500).json({ error: 'Failed to fetch lead form: ' + error.message });
+  }
+});
+
+// Update lead form settings (owner/admin/manager)
+app.put('/api/lead-form', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const { companyId, userRole } = companyAccess;
+
+    if (!['owner', 'admin', 'manager'].includes(userRole)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const { settings } = req.body || {};
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: 'settings is required' });
+    }
+
+    // Ensure record exists
+    const ensure = await pool.query(`SELECT id FROM lead_forms WHERE company_id = $1`, [companyId]);
+    if (ensure.rows.length === 0) {
+      const token = crypto.randomBytes(18).toString('hex');
+      await pool.query(`INSERT INTO lead_forms (company_id, token, settings) VALUES ($1, $2, $3)`, [companyId, token, defaultLeadFormSettings()]);
+    }
+
+    const updated = await pool.query(
+      `UPDATE lead_forms
+       SET settings = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE company_id = $1
+       RETURNING id, token, settings, created_at, updated_at`,
+      [companyId, normalizeLeadFormSettings(settings)]
+    );
+
+    res.json({ form: updated.rows[0] });
+  } catch (error) {
+    console.error('Update lead form error:', error);
+    res.status(500).json({ error: 'Failed to update lead form: ' + error.message });
+  }
+});
+
+// List leads for active company
+app.get('/api/leads', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const { companyId } = companyAccess;
+
+    const { status } = req.query;
+    const params = [companyId];
+    let where = 'WHERE company_id = $1';
+    if (status && ['new', 'contacted', 'won', 'lost'].includes(String(status))) {
+      params.push(String(status));
+      where += ` AND status = $${params.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT *
+       FROM leads
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT 500`,
+      params
+    );
+
+    res.json({ leads: result.rows });
+  } catch (error) {
+    console.error('List leads error:', error);
+    res.status(500).json({ error: 'Failed to fetch leads: ' + error.message });
+  }
+});
+
+// Update a lead (status/notes)
+app.put('/api/leads/:leadId', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const { companyId } = companyAccess;
+
+    const leadId = parseInt(req.params.leadId, 10);
+    if (!leadId) return res.status(400).json({ error: 'Invalid lead id' });
+
+    const {
+      status,
+      notes,
+      first_name,
+      last_name,
+      country,
+      address,
+      zip_code,
+      city,
+      email,
+      phone
+    } = req.body || {};
+
+    if (status && !['new', 'contacted', 'won', 'lost'].includes(String(status))) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const updated = await pool.query(
+      `UPDATE leads
+       SET status = COALESCE($3, status),
+           notes = COALESCE($4, notes),
+           first_name = COALESCE($5, first_name),
+           last_name = COALESCE($6, last_name),
+           country = COALESCE($7, country),
+           address = COALESCE($8, address),
+           zip_code = COALESCE($9, zip_code),
+           city = COALESCE($10, city),
+           email = COALESCE($11, email),
+           phone = COALESCE($12, phone),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND company_id = $2
+       RETURNING *`,
+      [
+        leadId,
+        companyId,
+        status ?? null,
+        notes ?? null,
+        first_name ?? null,
+        last_name ?? null,
+        country ?? null,
+        address ?? null,
+        zip_code ?? null,
+        city ?? null,
+        email ?? null,
+        phone ?? null
+      ]
+    );
+
+    if (updated.rows.length === 0) return res.status(404).json({ error: 'Lead not found' });
+    res.json({ lead: updated.rows[0] });
+  } catch (error) {
+    console.error('Update lead error:', error);
+    res.status(500).json({ error: 'Failed to update lead: ' + error.message });
+  }
+});
+
+// Public: get lead form settings by token (used by iframe page)
+app.get('/api/public/lead-forms/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const result = await pool.query(
+      `SELECT lf.token, lf.settings, c.name as company_name
+       FROM lead_forms lf
+       JOIN companies c ON lf.company_id = c.id
+       WHERE lf.token = $1`,
+      [token]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Form not found' });
+    const form = result.rows[0];
+    form.settings = normalizeLeadFormSettings(form.settings);
+    res.json({ form });
+  } catch (error) {
+    console.error('Public get lead form error:', error);
+    res.status(500).json({ error: 'Failed to fetch form: ' + error.message });
+  }
+});
+
+// Public: submit a lead by token
+app.post('/api/public/lead-forms/:token/submit', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const formRes = await pool.query(`SELECT company_id, settings FROM lead_forms WHERE token = $1`, [token]);
+    if (formRes.rows.length === 0) return res.status(404).json({ error: 'Form not found' });
+
+    const { company_id: companyId, settings } = formRes.rows[0];
+    const body = req.body || {};
+
+    // Simple honeypot to reduce spam
+    if (body.website && String(body.website).trim() !== '') {
+      return res.json({ ok: true });
+    }
+
+    const s = normalizeLeadFormSettings(settings);
+    const required = (s?.customer?.required && typeof s.customer.required === 'object') ? s.customer.required : { email: true };
+
+    const firstName = body.first_name ? String(body.first_name).trim() : null;
+    const lastName = body.last_name ? String(body.last_name).trim() : null;
+    const country = body.country ? String(body.country).trim() : null;
+    const address = body.address ? String(body.address).trim() : null;
+    const zipCode = body.zip_code ? String(body.zip_code).trim() : null;
+    const city = body.city ? String(body.city).trim() : null;
+    const email = body.email ? String(body.email).trim() : null;
+    const phone = body.phone ? String(body.phone).trim() : null;
+
+    const preferredDate = body.preferred_date ? String(body.preferred_date).trim() : null; // YYYY-MM-DD
+    const preferredTime = body.preferred_time ? String(body.preferred_time).trim() : null; // HH:MM
+
+    // custom inputs/selectors + service selections are stored in meta for now
+    const metaFromBody = body.meta && typeof body.meta === 'object' ? body.meta : null;
+    const message = body.message ? String(body.message).trim() : null; // optional legacy direct message field
+
+    if (required.email && (!email || !email.includes('@'))) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const created = await pool.query(
+      `INSERT INTO leads (
+        company_id, status, source,
+        first_name, last_name, country, address, zip_code, city,
+        email, phone,
+        message,
+        preferred_date, preferred_time,
+        meta
+      )
+      VALUES (
+        $1, 'new', 'form',
+        $2, $3, $4, $5, $6, $7,
+        $8, $9,
+        $10,
+        $11::date, $12::time,
+        $13
+      )
+      RETURNING id`,
+      [
+        companyId,
+        firstName,
+        lastName,
+        country,
+        address,
+        zipCode,
+        city,
+        email,
+        phone,
+        message,
+        preferredDate,
+        preferredTime,
+        {
+          token,
+          userAgent: req.headers['user-agent'] || null,
+          ip: req.headers['x-forwarded-for'] || req.ip || null,
+          meta: metaFromBody
+        }
+      ]
+    );
+
+    // Send CC email notification if configured
+    if (s?.ccEmail && typeof s.ccEmail === 'string' && s.ccEmail.trim()) {
+      try {
+        const ccEmail = s.ccEmail.trim();
+        if (ccEmail.includes('@')) {
+          // Send notification email
+          await sendEmail({
+            from: process.env.EMAIL_FROM || 'no-reply@vevago.com',
+            to: ccEmail,
+            subject: 'New Lead Form Submission',
+            html: `
+              <h2>New Lead Received</h2>
+              <p>A new lead has been submitted through your form:</p>
+              <ul>
+                ${firstName ? `<li><strong>Name:</strong> ${firstName} ${lastName || ''}</li>` : ''}
+                ${email ? `<li><strong>Email:</strong> ${email}</li>` : ''}
+                ${phone ? `<li><strong>Phone:</strong> ${phone}</li>` : ''}
+                ${country ? `<li><strong>Country:</strong> ${country}</li>` : ''}
+                ${address ? `<li><strong>Address:</strong> ${address}</li>` : ''}
+                ${zipCode ? `<li><strong>Zip Code:</strong> ${zipCode}</li>` : ''}
+                ${city ? `<li><strong>City:</strong> ${city}</li>` : ''}
+                ${preferredDate ? `<li><strong>Preferred Date:</strong> ${preferredDate}</li>` : ''}
+                ${preferredTime ? `<li><strong>Preferred Time:</strong> ${preferredTime}</li>` : ''}
+                ${message ? `<li><strong>Message:</strong> ${message}</li>` : ''}
+              </ul>
+              <p><strong>Lead ID:</strong> ${created.rows[0].id}</p>
+            `
+          });
+        }
+      } catch (emailError) {
+        console.error('Failed to send CC notification email:', emailError);
+        // Don't fail the submission if email fails
+      }
+    }
+
+    res.json({ ok: true, leadId: created.rows[0].id });
+  } catch (error) {
+    console.error('Public submit lead error:', error);
+    res.status(500).json({ error: 'Failed to submit lead: ' + error.message });
+  }
+});
+
+// Test email endpoint (development only)
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { to } = req.body;
+    if (!to) {
+      return res.status(400).json({ error: 'Email "to" address required' });
+    }
+
+    await sendEmail({
+      to,
+      from: 'Vevago <onboarding@resend.dev>',
+      subject: 'PathPilo Email Test',
+      html: `
+        <h2>🧪 Email Test Successful!</h2>
+        <p>This is a test email from your PathPilo system using Resend.</p>
+        <p>If you received this, your email configuration is working perfectly!</p>
+        <p><strong>Time sent:</strong> ${new Date().toLocaleString()}</p>
+      `
+    });
+
+    res.json({ success: true, message: 'Test email sent successfully' });
+  } catch (error) {
+    console.error('Test email failed:', error);
+    res.status(500).json({ error: 'Test email failed', details: error.message });
   }
 });
 
@@ -1668,39 +2223,49 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
 // Create client endpoint
 app.post('/api/clients', authenticateToken, async (req, res) => {
   try {
-    const { 
-      first_name, 
-      last_name, 
+    const {
+      client_type,
+      name,
+      last_name,
+      company_number,
+      contact_name,
       country,
-      personal_address, 
-      personal_zip_code, 
-      personal_email, 
-      personal_phone,
+      address,
+      zip_code,
+      city,
+      email,
+      phone,
       billing_address,
       billing_zip_code,
+      billing_city,
       billing_email,
       billing_phone
     } = req.body;
     const userId = req.user.userId;
 
-    console.log('Client creation attempt:', { 
-      first_name, 
-      last_name, 
+    console.log('Client creation attempt:', {
+      client_type,
+      name,
+      last_name,
+      company_number,
+      contact_name,
       country,
-      personal_address, 
-      personal_zip_code, 
-      personal_email, 
-      personal_phone,
+      address,
+      zip_code,
+      city,
+      email,
+      phone,
       billing_address,
       billing_zip_code,
+      billing_city,
       billing_email,
       billing_phone,
-      userId 
+      userId
     });
 
-    // Validate input - only first_name is required
-    if (!first_name) {
-      return res.status(400).json({ error: 'First name is required' });
+    // Validate input - name is always required
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
     }
 
     // Get user's company
@@ -1714,14 +2279,14 @@ app.post('/api/clients', authenticateToken, async (req, res) => {
     // Create client
     const result = await pool.query(
       `INSERT INTO clients (
-        company_id, first_name, last_name, country,
-        personal_address, personal_zip_code, personal_email, personal_phone,
-        billing_address, billing_zip_code, billing_email, billing_phone
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        company_id, client_type, name, last_name, company_number, contact_name,
+        country, address, zip_code, city, email, phone,
+        billing_address, billing_zip_code, billing_city, billing_email, billing_phone
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *`,
       [
-        companyId, first_name, last_name, country,
-        personal_address, personal_zip_code, personal_email, personal_phone,
-        billing_address, billing_zip_code, billing_email, billing_phone
+        companyId, client_type, name, last_name, company_number, contact_name,
+        country, address, zip_code, city, email, phone,
+        billing_address, billing_zip_code, billing_city, billing_email, billing_phone
       ]
     );
 
@@ -1741,15 +2306,18 @@ app.post('/api/clients', authenticateToken, async (req, res) => {
 app.put('/api/clients/:clientId', authenticateToken, async (req, res) => {
   try {
     const { clientId } = req.params;
-    const { 
-      first_name, 
-      last_name, 
+    const {
+      client_type,
+      name,
+      last_name,
+      company_number,
+      contact_name,
       country,
-      personal_address, 
-      personal_zip_code, 
-      personal_city,
-      personal_email, 
-      personal_phone,
+      address,
+      zip_code,
+      city,
+      email,
+      phone,
       billing_address,
       billing_zip_code,
       billing_city,
@@ -1758,27 +2326,30 @@ app.put('/api/clients/:clientId', authenticateToken, async (req, res) => {
     } = req.body;
     const userId = req.user.userId;
 
-    console.log('Client update attempt:', { 
+    console.log('Client update attempt:', {
       clientId,
-      first_name, 
-      last_name, 
+      client_type,
+      name,
+      last_name,
+      company_number,
+      contact_name,
       country,
-      personal_address, 
-      personal_zip_code, 
-      personal_city,
-      personal_email, 
-      personal_phone,
+      address,
+      zip_code,
+      city,
+      email,
+      phone,
       billing_address,
       billing_zip_code,
       billing_city,
       billing_email,
       billing_phone,
-      userId 
+      userId
     });
 
-    // Validate input - only first_name is required
-    if (!first_name) {
-      return res.status(400).json({ error: 'First name is required' });
+    // Validate input - name is always required
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
     }
 
     // Get user's company
@@ -1801,15 +2372,15 @@ app.put('/api/clients/:clientId', authenticateToken, async (req, res) => {
 
     // Update client
     const result = await pool.query(
-      `UPDATE clients SET 
-        first_name = $1, last_name = $2, country = $3,
-        personal_address = $4, personal_zip_code = $5, personal_city = $6, personal_email = $7, personal_phone = $8,
-        billing_address = $9, billing_zip_code = $10, billing_city = $11, billing_email = $12, billing_phone = $13,
+      `UPDATE clients SET
+        client_type = $1, name = $2, last_name = $3, company_number = $4, contact_name = $5,
+        country = $6, address = $7, zip_code = $8, city = $9, email = $10, phone = $11,
+        billing_address = $12, billing_zip_code = $13, billing_city = $14, billing_email = $15, billing_phone = $16,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $14 AND company_id = $15 RETURNING *`,
+      WHERE id = $17 AND company_id = $18 RETURNING *`,
       [
-        first_name, last_name, country,
-        personal_address, personal_zip_code, personal_city, personal_email, personal_phone,
+        client_type, name, last_name, company_number, contact_name,
+        country, address, zip_code, city, email, phone,
         billing_address, billing_zip_code, billing_city, billing_email, billing_phone,
         clientId, companyId
       ]
@@ -1824,6 +2395,89 @@ app.put('/api/clients/:clientId', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Client update error:', error);
     res.status(500).json({ error: 'Failed to update client' });
+  }
+});
+
+// Delete (anonymize) client - GDPR compliant soft delete
+app.delete('/api/clients/:clientId', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { clientId } = req.params;
+    const userId = req.user.userId;
+
+    console.log('Client deletion attempt:', { clientId, userId });
+
+    // Get and validate active company access
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      client.release();
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    // Ensure client exists and belongs to this company
+    const clientRes = await client.query(
+      'SELECT id, first_name, last_name FROM clients WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [clientId, companyId]
+    );
+
+    if (clientRes.rows.length === 0) {
+      client.release();
+      return res.status(404).json({ error: 'Client not found or access denied' });
+    }
+
+    const originalClient = clientRes.rows[0];
+
+    try {
+      await client.query('BEGIN');
+
+      // Delete all subscriptions for this client (recurring jobs)
+      await client.query('DELETE FROM recurring_jobs WHERE client_id = $1 AND company_id = $2', [clientId, companyId]);
+
+      // Delete ALL jobs for this client
+      await client.query('DELETE FROM jobs WHERE client_id = $1 AND company_id = $2', [clientId, companyId]);
+
+      // Anonymize personal data while preserving business relationships
+      await client.query(`
+        UPDATE clients SET
+          deleted_at = CURRENT_TIMESTAMP,
+          first_name = 'Deleted Client',
+          last_name = '#' || $1::text,
+          country = NULL,
+          personal_address = NULL,
+          personal_zip_code = NULL,
+          personal_city = NULL,
+          personal_email = NULL,
+          personal_phone = NULL,
+          billing_address = NULL,
+          billing_zip_code = NULL,
+          billing_city = NULL,
+          billing_email = NULL,
+          billing_phone = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND company_id = $2
+      `, [clientId, companyId]);
+
+      // Log the deletion for audit purposes
+      console.log(`Client ${clientId} (${originalClient.first_name} ${originalClient.last_name}) anonymized for GDPR compliance`);
+
+      await client.query('COMMIT');
+
+      res.json({
+        message: 'Client anonymized successfully. All jobs and subscriptions deleted. Invoices preserved.',
+        deletedClientId: parseInt(clientId, 10),
+        anonymizedName: `Deleted Client #${clientId}`
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('Error anonymizing client:', err);
+      res.status(500).json({ error: 'Failed to anonymize client data', details: err.message });
+    }
+  } catch (error) {
+    console.error('Error in client deletion (outer):', error);
+    res.status(500).json({ error: 'Failed to process client deletion', details: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -1855,13 +2509,15 @@ app.get('/api/clients/:clientId/jobs', authenticateToken, async (req, res) => {
 
     // Get jobs for the client with services and client information
     const jobsResult = await pool.query(
-      `SELECT 
+      `SELECT
         j.*,
-        c.first_name,
+        c.name,
         c.last_name,
-        c.personal_address,
-        c.personal_zip_code,
-        c.personal_city,
+        c.email as client_email,
+        c.phone as client_phone,
+        c.address,
+        c.zip_code,
+        c.city,
         COUNT(js.id) as service_count,
         COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) as total_price,
         COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes)), 0) as total_duration
@@ -1870,7 +2526,7 @@ app.get('/api/clients/:clientId/jobs', authenticateToken, async (req, res) => {
       LEFT JOIN job_services js ON j.id = js.job_id
       LEFT JOIN services s ON js.service_id = s.id
       WHERE j.client_id = $1 AND j.company_id = $2
-      GROUP BY j.id, c.first_name, c.last_name, c.personal_address, c.personal_zip_code, c.personal_city
+      GROUP BY j.id, c.name, c.last_name, c.email, c.phone, c.address, c.zip_code, c.city
       ORDER BY j.scheduled_date DESC, j.created_at DESC`,
       [clientId, companyId]
     );
@@ -1973,15 +2629,17 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Get real jobs (exclude cancelled)
+    // Get all jobs including cancelled
     let query = `
-      SELECT 
+      SELECT
         j.*,
-        c.first_name,
+        c.name,
         c.last_name,
-        c.personal_address,
-        c.personal_zip_code,
-        c.personal_city,
+        c.email as client_email,
+        c.phone as client_phone,
+        c.address,
+        c.zip_code,
+        c.city,
         COUNT(js.id) as service_count,
         COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) as total_price,
         COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes)), 0) as total_duration
@@ -1990,7 +2648,6 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
       LEFT JOIN job_services js ON j.id = js.job_id
       LEFT JOIN services s ON js.service_id = s.id
       WHERE j.company_id = $1
-        AND j.status != 'cancelled'
     `
     
     const params = [companyId]
@@ -2001,12 +2658,18 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     }
     
     query += `
-      GROUP BY j.id, c.first_name, c.last_name, c.personal_address, c.personal_zip_code, c.personal_city
+      GROUP BY j.id, c.name, c.last_name, c.email, c.phone, c.address, c.zip_code, c.city
       ORDER BY j.scheduled_date ASC, j.created_at ASC
     `
 
     const realJobsResult = await pool.query(query, params)
     const realJobs = realJobsResult.rows
+    
+    // Debug: Log cancelled jobs count
+    const cancelledCount = realJobs.filter(j => j.status === 'cancelled').length
+    if (cancelledCount > 0) {
+      console.log(`📋 Found ${cancelledCount} cancelled job(s) in query results`)
+    }
 
     // Get projected jobs from active subscriptions if date range is provided
     // NOTE: Some lightweight/demo DB setups may not include recurring_jobs tables.
@@ -2017,13 +2680,13 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
       try {
         // Get all active subscriptions for the company
         const subscriptionsResult = await pool.query(
-          `SELECT 
+          `SELECT
             rj.*,
-            c.first_name,
+            c.name,
             c.last_name,
-            c.personal_address,
-            c.personal_zip_code,
-            c.personal_city
+            c.address,
+            c.zip_code,
+            c.city
           FROM recurring_jobs rj
           LEFT JOIN clients c ON rj.client_id = c.id
           WHERE rj.company_id = $1 AND rj.is_active = true`,
@@ -2133,13 +2796,24 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
             subscriptionStartingDate = subscriptionStartingDate.split('T')[0]
           }
           
-          // Validate day_of_week
-          if (subscription.day_of_week === null || subscription.day_of_week === undefined) {
-            console.log(`⚠️ Subscription ${subscription.id} has no day_of_week, skipping`)
+          // Validate recurrence pattern based on type
+          let firstOccurrenceDateStr;
+          if (subscription.recurrence_type === 'weekly') {
+            if (subscription.day_of_week === null || subscription.day_of_week === undefined) {
+              console.log(`⚠️ Subscription ${subscription.id} has no day_of_week for weekly recurrence, skipping`)
+              continue
+            }
+            firstOccurrenceDateStr = calculateFirstOccurrence(subscriptionStartingDate, subscription.day_of_week)
+          } else if (subscription.recurrence_type === 'monthly') {
+            if (subscription.day_of_month === null || subscription.day_of_month === undefined) {
+              console.log(`⚠️ Subscription ${subscription.id} has no day_of_month for monthly recurrence, skipping`)
+              continue
+            }
+            firstOccurrenceDateStr = calculateFirstMonthlyOccurrence(subscriptionStartingDate, subscription.day_of_month)
+          } else {
+            console.log(`⚠️ Subscription ${subscription.id} has invalid recurrence_type: ${subscription.recurrence_type}, skipping`)
             continue
           }
-          
-          const firstOccurrenceDateStr = calculateFirstOccurrence(subscriptionStartingDate, subscription.day_of_week)
           
           // Parse for comparison
           const [firstYear, firstMonth, firstDay] = firstOccurrenceDateStr.split('-').map(Number)
@@ -2157,26 +2831,50 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
           // If the date range starts after the first occurrence, we need to find the correct occurrence
           // that aligns with the interval pattern and is within the date range
           if (startDateObj > firstOccurrenceDateObj) {
-            // Find the first occurrence of the target day that is >= startDate
-            currentDate = new Date(startDateObj)
-            const currentDay = currentDate.getDay()
-            let daysUntilTargetDay = (subscription.day_of_week - currentDay + 7) % 7
-            
-            if (daysUntilTargetDay > 0) {
-              currentDate.setDate(currentDate.getDate() + daysUntilTargetDay)
-            }
-            
-            // Now we need to check if this date aligns with the subscription's interval pattern
-            // Calculate how many intervals have passed since the first occurrence
-            const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / (1000 * 60 * 60 * 24))
-            const intervalsSinceFirst = Math.floor(daysSinceFirst / (7 * subscription.interval_weeks))
-            const remainderDays = daysSinceFirst % (7 * subscription.interval_weeks)
-            
-            // If there's a remainder, we're not on an interval boundary - move to the next interval
-            if (remainderDays !== 0 || currentDate < firstOccurrenceDateObj) {
-              const nextIntervalOccurrence = new Date(firstOccurrenceDateObj)
-              nextIntervalOccurrence.setDate(firstOccurrenceDateObj.getDate() + ((intervalsSinceFirst + 1) * 7 * subscription.interval_weeks))
-              currentDate = nextIntervalOccurrence
+            if (subscription.recurrence_type === 'weekly') {
+              // Find the first occurrence of the target day that is >= startDate
+              currentDate = new Date(startDateObj)
+              const currentDay = currentDate.getDay()
+              let daysUntilTargetDay = (subscription.day_of_week - currentDay + 7) % 7
+
+              if (daysUntilTargetDay > 0) {
+                currentDate.setDate(currentDate.getDate() + daysUntilTargetDay)
+              }
+
+              // Now we need to check if this date aligns with the subscription's interval pattern
+              // Calculate how many intervals have passed since the first occurrence
+              const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / (1000 * 60 * 60 * 24))
+              const intervalsSinceFirst = Math.floor(daysSinceFirst / (7 * subscription.interval_value))
+              const remainderDays = daysSinceFirst % (7 * subscription.interval_value)
+
+              // If there's a remainder, we're not on an interval boundary - move to the next interval
+              if (remainderDays !== 0 || currentDate < firstOccurrenceDateObj) {
+                const nextIntervalOccurrence = new Date(firstOccurrenceDateObj)
+                nextIntervalOccurrence.setDate(firstOccurrenceDateObj.getDate() + ((intervalsSinceFirst + 1) * 7 * subscription.interval_value))
+                currentDate = nextIntervalOccurrence
+              }
+            } else if (subscription.recurrence_type === 'monthly') {
+              // For monthly, find the next occurrence of the target day of month >= startDate
+              currentDate = new Date(startDateObj)
+              const currentYear = currentDate.getFullYear()
+              const currentMonth = currentDate.getMonth()
+
+              // If we're past the target day this month, move to next month
+              if (currentDate.getDate() > subscription.day_of_month) {
+                currentDate.setMonth(currentMonth + 1)
+              }
+              currentDate.setDate(subscription.day_of_month)
+
+              // Calculate intervals since first occurrence
+              const monthsSinceFirst = (currentDate.getFullYear() - firstOccurrenceDateObj.getFullYear()) * 12 +
+                                       (currentDate.getMonth() - firstOccurrenceDateObj.getMonth())
+              const intervalsSinceFirst = Math.floor(monthsSinceFirst / subscription.interval_value)
+
+              // Move to the correct interval
+              const targetMonth = firstOccurrenceDateObj.getMonth() + (intervalsSinceFirst * subscription.interval_value)
+              currentDate.setFullYear(firstOccurrenceDateObj.getFullYear() + Math.floor(targetMonth / 12))
+              currentDate.setMonth(targetMonth % 12)
+              currentDate.setDate(subscription.day_of_month)
             }
           }
           
@@ -2187,9 +2885,16 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
               const dateStr = formatDateString(currentDate)
               
               // Compute occurrence index within subscription pattern (1-based)
-              const msPerDay = 1000 * 60 * 60 * 24
-              const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / msPerDay)
-              const occ = Math.floor(daysSinceFirst / (7 * subscription.interval_weeks)) + 1
+              let occ;
+              if (subscription.recurrence_type === 'weekly') {
+                const msPerDay = 1000 * 60 * 60 * 24
+                const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / msPerDay)
+                occ = Math.floor(daysSinceFirst / (7 * subscription.interval_value)) + 1
+              } else if (subscription.recurrence_type === 'monthly') {
+                const monthsSinceFirst = (currentDate.getFullYear() - firstOccurrenceDateObj.getFullYear()) * 12 +
+                                         (currentDate.getMonth() - firstOccurrenceDateObj.getMonth())
+                occ = Math.floor(monthsSinceFirst / subscription.interval_value) + 1
+              }
 
               occurrencePairs.push({
                 subId: subscription.id,
@@ -2201,9 +2906,14 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
                 totalDuration
               })
             }
-            
-            // Move to next occurrence based on interval
-            currentDate.setDate(currentDate.getDate() + (7 * subscription.interval_weeks))
+
+            // Move to next occurrence based on recurrence type and interval
+            if (subscription.recurrence_type === 'weekly') {
+              currentDate.setDate(currentDate.getDate() + (7 * subscription.interval_value))
+            } else if (subscription.recurrence_type === 'monthly') {
+              currentDate.setMonth(currentDate.getMonth() + subscription.interval_value)
+              currentDate.setDate(subscription.day_of_month)
+            }
           }
         } catch (subscriptionError) {
           console.error(`❌ Error processing subscription ${subscription.id}:`, subscriptionError)
@@ -2277,6 +2987,13 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
       return 0
     })
 
+    // Log all job statuses for debugging
+    const statusCounts = allJobs.reduce((acc: any, job: any) => {
+      acc[job.status || 'undefined'] = (acc[job.status || 'undefined'] || 0) + 1
+      return acc
+    }, {})
+    console.log('📊 Jobs returned by status:', statusCounts)
+    
     res.json({
       jobs: allJobs
     })
@@ -2356,6 +3073,41 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
       }
 
       await pool.query('COMMIT');
+
+      // Send email notification about job update
+      try {
+        const jobDetails = await pool.query(`
+          SELECT j.*, c.first_name, c.last_name, c.email
+          FROM jobs j
+          JOIN clients c ON j.client_id = c.id
+          WHERE j.id = $1
+        `, [jobId]);
+
+        if (jobDetails.rows.length > 0) {
+          const job = jobDetails.rows[0];
+          const clientName = `${job.first_name} ${job.last_name}`;
+
+          await sendEmail({
+            to: job.email,
+            subject: `Job Updated: ${job.title}`,
+            html: `
+              <h2>Job Update Notification</h2>
+              <p>Dear ${clientName},</p>
+              <p>Your job has been updated:</p>
+              <ul>
+                <li><strong>Job:</strong> ${job.title}</li>
+                <li><strong>Scheduled Date:</strong> ${new Date(job.scheduled_date).toLocaleDateString()}</li>
+                ${job.note ? `<li><strong>Note:</strong> ${job.note}</li>` : ''}
+              </ul>
+              <p>If you have any questions, please contact us.</p>
+              <p>Best regards,<br>PathPilo Team</p>
+            `
+          });
+        }
+      } catch (emailError) {
+        console.error('Failed to send job update email:', emailError);
+        // Don't fail the job update if email fails
+      }
 
       res.json({
         message: 'Job updated successfully'
@@ -2491,6 +3243,60 @@ app.put('/api/jobs/:jobId/status', authenticateToken, async (req, res) => {
 
       await dbClient.query('COMMIT');
 
+      // Send email notification about status change if requested or for important changes
+      if (notify_customer || status === 'completed' || status === 'cancelled') {
+        try {
+          const jobDetails = await pool.query(`
+            SELECT j.*, c.first_name, c.last_name, c.email
+            FROM jobs j
+            JOIN clients c ON j.client_id = c.id
+            WHERE j.id = $1
+          `, [jobId]);
+
+          if (jobDetails.rows.length > 0) {
+            const job = jobDetails.rows[0];
+            const clientName = `${job.first_name} ${job.last_name}`;
+
+            let subject, message;
+            if (notify_customer && notification_subject && notification_message) {
+              // Custom notification
+              subject = notification_subject;
+              message = notification_message;
+            } else {
+              // Default notification based on status
+              subject = `Job Status Update: ${job.title}`;
+              if (status === 'completed') {
+                message = `Your job "${job.title}" has been completed. Thank you for choosing our service!`;
+              } else if (status === 'cancelled') {
+                message = `Your job "${job.title}" scheduled for ${new Date(job.scheduled_date).toLocaleDateString()} has been cancelled.`;
+              } else {
+                message = `Your job "${job.title}" status has been updated to: ${status}`;
+              }
+            }
+
+            await sendEmail({
+              to: job.email,
+              subject: subject,
+              html: `
+                <h2>Job Status Update</h2>
+                <p>Dear ${clientName},</p>
+                <p>${message}</p>
+                <ul>
+                  <li><strong>Job:</strong> ${job.title}</li>
+                  <li><strong>Status:</strong> ${status}</li>
+                  <li><strong>Scheduled Date:</strong> ${new Date(job.scheduled_date).toLocaleDateString()}</li>
+                </ul>
+                <p>If you have any questions, please contact us.</p>
+                <p>Best regards,<br>PathPilo Team</p>
+              `
+            });
+          }
+        } catch (emailError) {
+          console.error('Failed to send job status email:', emailError);
+          // Don't fail the status update if email fails
+        }
+      }
+
       res.json({
         message: 'Job status updated successfully',
         job: {
@@ -2540,8 +3346,8 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
     const oldFrom = job.scheduled_time_from;
     const oldTo = job.scheduled_time_to;
     
-    const client = await pool.query('SELECT personal_email FROM clients WHERE id = $1', [job.client_id]);
-    const clientEmail = client.rows[0]?.personal_email || null;
+    const client = await pool.query('SELECT email FROM clients WHERE id = $1', [job.client_id]);
+    const clientEmail = client.rows[0]?.email || null;
     
     // Update times
     await pool.query(
@@ -2589,7 +3395,47 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
         throw logError;
       }
     }
-    
+
+    // Send email notification about time change if requested
+    if (notifyCustomer) {
+      try {
+        const jobDetails = await pool.query(`
+          SELECT j.*, c.first_name, c.last_name, c.email
+          FROM jobs j
+          JOIN clients c ON j.client_id = c.id
+          WHERE j.id = $1
+        `, [jobId]);
+
+        if (jobDetails.rows.length > 0) {
+          const job = jobDetails.rows[0];
+          const clientName = `${job.first_name} ${job.last_name}`;
+
+          const subject = notification_subject || `Job Rescheduled: ${job.title}`;
+          const message = notification_message || `Your job "${job.title}" has been rescheduled.`;
+
+          await sendEmail({
+            to: job.email,
+            subject: subject,
+            html: `
+              <h2>Job Rescheduled</h2>
+              <p>Dear ${clientName},</p>
+              <p>${message}</p>
+              <ul>
+                <li><strong>Job:</strong> ${job.title}</li>
+                <li><strong>New Time:</strong> ${scheduled_time_from ? new Date(scheduled_time_from).toLocaleString() : 'Not set'} - ${scheduled_time_to ? new Date(scheduled_time_to).toLocaleString() : 'Not set'}</li>
+                <li><strong>Scheduled Date:</strong> ${new Date(job.scheduled_date).toLocaleDateString()}</li>
+              </ul>
+              <p>If you have any questions, please contact us.</p>
+              <p>Best regards,<br>PathPilo Team</p>
+            `
+          });
+        }
+      } catch (emailError) {
+        console.error('Failed to send job time change email:', emailError);
+        // Don't fail the time update if email fails
+      }
+    }
+
     res.json({ message: 'Job time updated' });
   } catch (error) {
     console.error('❌ TIME UPDATE ERROR:', error);
@@ -2640,8 +3486,8 @@ app.put('/api/jobs/:jobId/assignee', authenticateToken, async (req, res) => {
     );
     
     // Fetch client email for potential notification
-    const client = await pool.query('SELECT personal_email FROM clients WHERE id = $1', [job.client_id]);
-    const clientEmail = client.rows[0]?.personal_email || null;
+    const client = await pool.query('SELECT email FROM clients WHERE id = $1', [job.client_id]);
+    const clientEmail = client.rows[0]?.email || null;
     
     // Ensure subject column exists
     try {
@@ -3063,9 +3909,9 @@ app.get('/api/clients', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Get clients for the user's company
+    // Get clients for the user's company (exclude deleted)
     const result = await pool.query(
-      'SELECT * FROM clients WHERE company_id = $1 ORDER BY created_at DESC',
+      'SELECT * FROM clients WHERE company_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC',
       [companyId]
     );
 
@@ -3093,9 +3939,9 @@ app.get('/api/clients/:clientId', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Get client for the user's company
+    // Get client for the user's company (exclude deleted)
     const result = await pool.query(
-      'SELECT * FROM clients WHERE id = $1 AND company_id = $2',
+      'SELECT * FROM clients WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
       [clientId, companyId]
     );
 
@@ -3585,7 +4431,7 @@ app.get('/api/clients/:clientId/subscriptions', authenticateToken, async (req, r
             rjs.*,
             s.title
           FROM recurring_job_services rjs
-          JOIN services s ON rjs.service_id = s.id
+          LEFT JOIN services s ON rjs.service_id = s.id
           WHERE rjs.recurring_job_id = $1
           ORDER BY rjs.created_at ASC`,
           [subscription.id]
@@ -3610,26 +4456,54 @@ app.get('/api/clients/:clientId/subscriptions', authenticateToken, async (req, r
 // Create subscription endpoint
 app.post('/api/subscriptions', authenticateToken, async (req, res) => {
   try {
-    const { title, client_id, assigned_user_id, services, starting_date, day_of_week, interval_weeks, scheduled_time_from, scheduled_time_to, note } = req.body;
+    const { title, client_id, assigned_user_id, services, starting_date, recurrence_type, day_of_week, day_of_month, interval_value, scheduled_time_from, scheduled_time_to, note } = req.body;
     const userId = req.user.userId;
 
-    console.log('Subscription creation attempt:', { 
-      title, 
-      client_id, 
-      assigned_user_id, 
-      services, 
+    console.log('Subscription creation attempt:', {
+      title,
+      client_id,
+      assigned_user_id,
+      services,
       starting_date,
-      day_of_week, 
-      interval_weeks,
+      recurrence_type,
+      day_of_week,
+      day_of_month,
+      interval_value,
       scheduled_time_from,
       scheduled_time_to,
       note,
-      userId 
+      userId
     });
 
     // Validate input
-    if (!title || !client_id || !services || !Array.isArray(services) || services.length === 0 || !starting_date || day_of_week === null || day_of_week === undefined || !interval_weeks) {
-      return res.status(400).json({ error: 'Title, client, services, starting date, day of week, and interval are required' });
+    if (!client_id || !services || !Array.isArray(services) || services.length === 0 || !starting_date || !recurrence_type || !interval_value) {
+      return res.status(400).json({ error: 'Client, services, starting date, recurrence type, and interval are required' });
+    }
+
+    // Generate title if not provided (for subscriptions, we can generate based on services)
+    let finalTitle = title;
+    if (!finalTitle || finalTitle.trim() === '') {
+      const serviceNames = [];
+      for (const serviceData of services) {
+        if (serviceData.service_id) {
+          // Get service name from database
+          const serviceResult = await pool.query('SELECT title FROM services WHERE id = $1', [serviceData.service_id]);
+          if (serviceResult.rows.length > 0) {
+            serviceNames.push(serviceResult.rows[0].title);
+          }
+        } else if (serviceData.custom_title) {
+          serviceNames.push(serviceData.custom_title);
+        }
+      }
+      finalTitle = serviceNames.length > 0 ? serviceNames.slice(0, 2).join(' + ') + (serviceNames.length > 2 ? ' +' : '') : 'Subscription';
+    }
+
+    // Validate recurrence type specific fields
+    if (recurrence_type === 'weekly' && (day_of_week === null || day_of_week === undefined)) {
+      return res.status(400).json({ error: 'Day of week is required for weekly recurrence' });
+    }
+    if (recurrence_type === 'monthly' && (day_of_month === null || day_of_month === undefined)) {
+      return res.status(400).json({ error: 'Day of month is required for monthly recurrence' });
     }
 
     // Get user's company
@@ -3695,7 +4569,33 @@ app.post('/api/subscriptions', authenticateToken, async (req, res) => {
       }
     }
 
-    const firstOccurrence = calculateFirstOccurrence(starting_date, day_of_week)
+    // Calculate first monthly occurrence date based on starting_date and day_of_month
+    const calculateFirstMonthlyOccurrence = (startingDateStr, dayOfMonth) => {
+      // Parse the date string as local date (YYYY-MM-DD)
+      const [year, month, day] = startingDateStr.split('-').map(Number)
+      const startDate = new Date(year, month - 1, day)
+
+      // Create the target date for the current month
+      const targetDate = new Date(year, month - 1, dayOfMonth)
+
+      // If the target date is on or after the starting date, use it
+      // Otherwise, move to next month
+      if (targetDate >= startDate) {
+        return formatDateString(targetDate)
+      } else {
+        // Move to next month
+        targetDate.setMonth(targetDate.getMonth() + 1)
+        return formatDateString(targetDate)
+      }
+    }
+
+    // Calculate first occurrence based on recurrence type
+    let firstOccurrence;
+    if (recurrence_type === 'weekly') {
+      firstOccurrence = calculateFirstOccurrence(starting_date, day_of_week);
+    } else if (recurrence_type === 'monthly') {
+      firstOccurrence = calculateFirstMonthlyOccurrence(starting_date, day_of_month);
+    }
 
     // Start transaction
     const dbClient = await pool.connect();
@@ -3706,8 +4606,8 @@ app.post('/api/subscriptions', authenticateToken, async (req, res) => {
       // Convert undefined to null for assigned_user_id (optional field)
       const assignedUserId = assigned_user_id || null
       const subscriptionResult = await dbClient.query(
-        'INSERT INTO recurring_jobs (company_id, client_id, assigned_user_id, title, note, scheduled_time_from, scheduled_time_to, day_of_week, interval_weeks, is_active, starting_date, next_occurrence_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
-        [companyId, client_id, assignedUserId, title, note, scheduled_time_from, scheduled_time_to, day_of_week, interval_weeks, true, starting_date, firstOccurrence]
+        'INSERT INTO recurring_jobs (company_id, client_id, assigned_user_id, title, note, scheduled_time_from, scheduled_time_to, recurrence_type, day_of_week, day_of_month, interval_value, is_active, starting_date, next_occurrence_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *',
+        [companyId, client_id, assignedUserId, finalTitle, note, scheduled_time_from, scheduled_time_to, recurrence_type, day_of_week || null, day_of_month || null, interval_value, true, starting_date, firstOccurrence]
       );
 
       const subscription = subscriptionResult.rows[0];
@@ -4781,7 +5681,7 @@ app.post('/api/invoices/:invoiceId/send-email', authenticateToken, async (req, r
 
     const fromEmail = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'no-reply@vevago.com';
 
-    await emailTransporter.sendMail({
+    await sendEmail({
       from: fromEmail,
       to: toEmail,
       subject: resolvedSubject,
@@ -4876,7 +5776,8 @@ app.delete('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+// Start server with error handling
+const server = app.listen(port, () => {
   console.log(`🚀 Server running on http://localhost:${port}`);
   console.log(`📊 Registration API: POST http://localhost:${port}/api/auth/register`);
   console.log(`🔐 Login API: POST http://localhost:${port}/api/auth/login`);
@@ -4912,4 +5813,18 @@ app.listen(port, () => {
   console.log(`🛠️ Company Services API: GET http://localhost:${port}/api/admin/companies/:id/services`);
   console.log(`👥 Company Clients API: GET http://localhost:${port}/api/admin/companies/:id/clients`);
   console.log(`👤 Company Users API: GET http://localhost:${port}/api/admin/companies/:id/users`);
+});
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${port} is already in use.`);
+    console.error(`💡 Solution: Kill the existing process and try again.`);
+    console.error(`   1. Find process: netstat -ano | findstr :${port}`);
+    console.error(`   2. Kill process: taskkill /PID <PID> /F`);
+    console.error(`   3. Restart server: npm run dev:server`);
+    process.exit(1);
+  } else {
+    console.error('❌ Server error:', error);
+    process.exit(1);
+  }
 });

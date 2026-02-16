@@ -19,14 +19,14 @@ const getApiBaseUrl = (): string => {
     const hostname = window.location.hostname
     const port = window.location.port
     
-    // If accessing via IP or with explicit port, use full backend URL
+    // If accessing via IP or with explicit port, use full backend URL (api-server on port 8000)
     if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
-      return `http://${hostname}:3003`
+      return `http://${hostname}:8000`
     }
     
-    // If localhost with port, use localhost backend
+    // If localhost with port, use localhost api-server
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return 'http://localhost:3003'
+      return 'http://localhost:8000'
     }
   }
   
@@ -44,28 +44,23 @@ export const API_BASE_URL = getApiBaseUrl()
  */
 export const apiUrl = (endpoint: string): string => {
   // Ensure endpoint starts with /api
-  const cleanEndpoint = endpoint.startsWith('/api') 
-    ? endpoint 
-    : endpoint.startsWith('/') 
-      ? `/api${endpoint}` 
+  const cleanEndpoint = endpoint.startsWith('/api')
+    ? endpoint
+    : endpoint.startsWith('/')
+      ? `/api${endpoint}`
       : `/api/${endpoint}`
-  
-  // If accessing via IP:port, use full backend URL
+
+  // Always use full backend URL in development
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname
     const port = window.location.port
-    
-    // If IP address or explicit port 3002, use full backend URL
-    if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
-      return `http://${hostname}:3003${cleanEndpoint}`
-    }
-    
-    // If localhost, use localhost backend
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return `http://localhost:3003${cleanEndpoint}`
+
+    // If accessing from any port (3000, 3002, etc.), use localhost api-server (port 8000)
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      return `http://localhost:8000${cleanEndpoint}`
     }
   }
-  
+
   // Production domain: use relative path (works with reverse proxy)
   return cleanEndpoint
 }

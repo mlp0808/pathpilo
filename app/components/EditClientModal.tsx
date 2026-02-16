@@ -6,14 +6,15 @@ import { apiUrl } from '../utils/api'
 
 interface Client {
   id: number
-  first_name: string
-  last_name: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name: string | null
   country: string
-  personal_address: string
-  personal_zip_code: string
-  personal_city: string
-  personal_email: string
-  personal_phone: string
+  address: string | null
+  zip_code: string | null
+  city: string | null
+  email: string | null
+  phone: string | null
   billing_address: string | null
   billing_zip_code: string | null
   billing_city: string | null
@@ -30,14 +31,15 @@ interface EditClientModalProps {
 
 export default function EditClientModal({ isOpen, onClose, onClientUpdated, client }: EditClientModalProps) {
   const [currentClient, setCurrentClient] = useState({
-    first_name: '',
+    client_type: 'person' as 'person' | 'company',
+    name: '',
     last_name: '',
     country: '',
-    personal_address: '',
-    personal_zip_code: '',
-    personal_city: '',
-    personal_email: '',
-    personal_phone: '',
+    address: '',
+    zip_code: '',
+    city: '',
+    email: '',
+    phone: '',
     billing_address: '',
     billing_zip_code: '',
     billing_city: '',
@@ -53,14 +55,15 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
   useEffect(() => {
     if (client) {
       setCurrentClient({
-        first_name: client.first_name || '',
+        client_type: client.client_type || 'person',
+        name: client.name || '',
         last_name: client.last_name || '',
         country: client.country || '',
-        personal_address: client.personal_address || '',
-        personal_zip_code: client.personal_zip_code || '',
-        personal_city: client.personal_city || '',
-        personal_email: client.personal_email || '',
-        personal_phone: client.personal_phone || '',
+        address: client.address || '',
+        zip_code: client.zip_code || '',
+        city: client.city || '',
+        email: client.email || '',
+        phone: client.phone || '',
         billing_address: client.billing_address || '',
         billing_zip_code: client.billing_zip_code || '',
         billing_city: client.billing_city || '',
@@ -93,14 +96,15 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
       const token = localStorage.getItem('token')
       
       const clientData = {
-        first_name: currentClient.first_name,
+        client_type: currentClient.client_type,
+        name: currentClient.name,
         last_name: currentClient.last_name,
         country: currentClient.country,
-        personal_address: currentClient.personal_address,
-        personal_zip_code: currentClient.personal_zip_code,
-        personal_city: currentClient.personal_city,
-        personal_email: currentClient.personal_email,
-        personal_phone: currentClient.personal_phone,
+        address: currentClient.address,
+        zip_code: currentClient.zip_code,
+        city: currentClient.city,
+        email: currentClient.email,
+        phone: currentClient.phone,
         billing_address: separateBillingAddress ? currentClient.billing_address : null,
         billing_zip_code: separateBillingAddress ? currentClient.billing_zip_code : null,
         billing_city: separateBillingAddress ? currentClient.billing_city : null,
@@ -171,9 +175,9 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               </label>
               <input
                 type="text"
-                id="first_name"
-                name="first_name"
-                value={currentClient.first_name}
+                id="name"
+                name="name"
+                value={currentClient.name}
                 onChange={handleInputChange}
                 required
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
@@ -220,37 +224,37 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               </label>
               <input
                 type="text"
-                id="personal_address"
-                name="personal_address"
-                value={currentClient.personal_address}
+                id="address"
+                name="address"
+                value={currentClient.address}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="Street address"
               />
             </div>
             <div className="col-span-3">
-              <label htmlFor="personal_zip_code" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="zip_code" className="block text-sm font-medium text-gray-900 mb-2">
                 Zip
               </label>
               <input
                 type="text"
-                id="personal_zip_code"
-                name="personal_zip_code"
-                value={currentClient.personal_zip_code}
+                id="zip_code"
+                name="zip_code"
+                value={currentClient.zip_code}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="1234"
               />
             </div>
             <div className="col-span-3">
-              <label htmlFor="personal_city" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="city" className="block text-sm font-medium text-gray-900 mb-2">
                 City
               </label>
               <input
                 type="text"
-                id="personal_city"
-                name="personal_city"
-                value={currentClient.personal_city}
+                id="city"
+                name="city"
+                value={currentClient.city}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="Copenhagen"
@@ -261,28 +265,28 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
           {/* Contact Information */}
           <div className="space-y-4">
             <div>
-              <label htmlFor="personal_email" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-900 mb-2">
                 Email
               </label>
               <input
                 type="email"
-                id="personal_email"
-                name="personal_email"
-                value={currentClient.personal_email}
+                id="email"
+                name="email"
+                value={currentClient.email}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="client@example.com"
               />
             </div>
             <div>
-              <label htmlFor="personal_phone" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="phone" className="block text-sm font-medium text-gray-900 mb-2">
                 Phone
               </label>
               <input
                 type="tel"
-                id="personal_phone"
-                name="personal_phone"
-                value={currentClient.personal_phone}
+                id="phone"
+                name="phone"
+                value={currentClient.phone}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="+45 1234 5678"

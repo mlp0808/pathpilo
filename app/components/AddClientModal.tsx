@@ -5,13 +5,17 @@ import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 
 interface Client {
-  first_name: string
-  last_name: string
+  client_type: 'person' | 'company'
+  name: string
+  last_name?: string
+  company_number?: string
+  contact_name?: string
   country: string
-  personal_address: string
-  personal_zip_code: string
-  personal_email: string
-  personal_phone: string
+  address: string
+  zip_code: string
+  city: string
+  email: string
+  phone: string
   billing_address: string
   billing_zip_code: string
   billing_city: string
@@ -27,13 +31,17 @@ interface AddClientModalProps {
 
 export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddClientModalProps) {
   const [currentClient, setCurrentClient] = useState<Client>({
-    first_name: '',
+    client_type: 'person',
+    name: '',
     last_name: '',
+    company_number: '',
+    contact_name: '',
     country: '',
-    personal_address: '',
-    personal_zip_code: '',
-    personal_email: '',
-    personal_phone: '',
+    address: '',
+    zip_code: '',
+    city: '',
+    email: '',
+    phone: '',
     billing_address: '',
     billing_zip_code: '',
     billing_city: '',
@@ -42,6 +50,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
   })
   const [separateBillingAddress, setSeparateBillingAddress] = useState(false)
   const [separateBillingContact, setSeparateBillingContact] = useState(false)
+  const [includeContactPerson, setIncludeContactPerson] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -62,15 +71,20 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
       const token = localStorage.getItem('token')
       
       const clientData = {
-        first_name: currentClient.first_name,
+        client_type: currentClient.client_type,
+        name: currentClient.name,
         last_name: currentClient.last_name,
+        company_number: currentClient.company_number,
+        contact_name: includeContactPerson ? currentClient.contact_name : null,
         country: currentClient.country,
-        personal_address: currentClient.personal_address,
-        personal_zip_code: currentClient.personal_zip_code,
-        personal_email: currentClient.personal_email,
-        personal_phone: currentClient.personal_phone,
+        address: currentClient.address,
+        zip_code: currentClient.zip_code,
+        city: currentClient.city,
+        email: currentClient.email,
+        phone: currentClient.phone,
         billing_address: separateBillingAddress ? currentClient.billing_address : null,
         billing_zip_code: separateBillingAddress ? currentClient.billing_zip_code : null,
+        billing_city: separateBillingAddress ? currentClient.billing_city : null,
         billing_email: separateBillingContact ? currentClient.billing_email : null,
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
@@ -89,13 +103,17 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
       if (response.ok) {
         // Reset form
         setCurrentClient({
-          first_name: '',
+          client_type: 'person',
+          name: '',
           last_name: '',
+          company_number: '',
+          contact_name: '',
           country: '',
-          personal_address: '',
-          personal_zip_code: '',
-          personal_email: '',
-          personal_phone: '',
+          address: '',
+          zip_code: '',
+          city: '',
+          email: '',
+          phone: '',
           billing_address: '',
           billing_zip_code: '',
           billing_city: '',
@@ -104,6 +122,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         })
         setSeparateBillingAddress(false)
         setSeparateBillingContact(false)
+        setIncludeContactPerson(false)
         setError('')
         
         // Close modal and refresh client list
@@ -123,13 +142,17 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
   const handleClose = () => {
     // Reset form when closing
     setCurrentClient({
-      first_name: '',
+      client_type: 'person',
+      name: '',
       last_name: '',
+      company_number: '',
+      contact_name: '',
       country: '',
-      personal_address: '',
-      personal_zip_code: '',
-      personal_email: '',
-      personal_phone: '',
+      address: '',
+      zip_code: '',
+      city: '',
+      email: '',
+      phone: '',
       billing_address: '',
       billing_zip_code: '',
       billing_city: '',
@@ -138,6 +161,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
     })
     setSeparateBillingAddress(false)
     setSeparateBillingContact(false)
+    setIncludeContactPerson(false)
     setError('')
     onClose()
   }
@@ -174,78 +198,185 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
               </div>
             )}
 
-            {/* Name and Last Name */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="group">
-                <label htmlFor="first_name" className="block text-sm font-medium text-gray-900 mb-2">
-                  Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  id="first_name"
-                  name="first_name"
-                  value={currentClient.first_name}
-                  onChange={handleInputChange}
-                  required
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
-                  placeholder="e.g. John"
-                />
-              </div>
-              <div className="group">
-                <label htmlFor="last_name" className="block text-sm font-medium text-gray-900 mb-2">
-                  Last name
-                </label>
-                <input
-                  type="text"
-                  id="last_name"
-                  name="last_name"
-                  value={currentClient.last_name}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
-                  placeholder="e.g. Smith"
-                />
+            {/* Client Type Selector */}
+            <div>
+              <label className="block text-sm font-medium text-gray-900 mb-3">
+                Client Type
+              </label>
+              <div className="flex bg-gray-100 rounded-xl p-1">
+                <button
+                  type="button"
+                  onClick={() => setCurrentClient({ ...currentClient, client_type: 'person' })}
+                  className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
+                    currentClient.client_type === 'person'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Private Person
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentClient({ ...currentClient, client_type: 'company' })}
+                  className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
+                    currentClient.client_type === 'company'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Company
+                </button>
               </div>
             </div>
 
-            {/* Address, Zip, City */}
+            {/* Company fields (only show for companies) */}
+            {currentClient.client_type === 'company' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="group">
+                    <label htmlFor="name" className="block text-sm font-medium text-gray-900 mb-2">
+                      Company Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="name"
+                      name="name"
+                      value={currentClient.name}
+                      onChange={handleInputChange}
+                      required
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                      placeholder="e.g. ABC Corp"
+                    />
+                  </div>
+                  <div className="group">
+                    <label htmlFor="company_number" className="block text-sm font-medium text-gray-900 mb-2">
+                      Company Number
+                    </label>
+                    <input
+                      type="text"
+                      id="company_number"
+                      name="company_number"
+                      value={currentClient.company_number}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                      placeholder="e.g. CVR 12345678"
+                    />
+                  </div>
+                </div>
+
+                {/* Contact Person Checkbox */}
+                <div className="flex items-center">
+                  <input
+                    id="includeContactPerson"
+                    type="checkbox"
+                    checked={includeContactPerson}
+                    onChange={(e) => setIncludeContactPerson(e.target.checked)}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="includeContactPerson" className="ml-2 block text-sm text-gray-900">
+                    Add contact person?
+                  </label>
+                </div>
+
+                {/* Contact Person fields (only show if checkbox is checked) */}
+                {includeContactPerson && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="group">
+                      <label htmlFor="contact_name" className="block text-sm font-medium text-gray-900 mb-2">
+                        Contact Person Name
+                      </label>
+                      <input
+                        type="text"
+                        id="contact_name"
+                        name="contact_name"
+                        value={currentClient.contact_name}
+                        onChange={handleInputChange}
+                        className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                        placeholder="e.g. John Smith"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Person fields (only show for persons) */}
+            {currentClient.client_type === 'person' && (
+              <div>
+                {/* Name and Last Name */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="group">
+                          <label htmlFor="name" className="block text-sm font-medium text-gray-900 mb-2">
+                            First Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            id="name"
+                            name="name"
+                            value={currentClient.name}
+                            onChange={handleInputChange}
+                            required
+                            className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                            placeholder="e.g. John"
+                          />
+                        </div>
+                        <div className="group">
+                          <label htmlFor="last_name" className="block text-sm font-medium text-gray-900 mb-2">
+                            Last name
+                          </label>
+                          <input
+                            type="text"
+                            id="last_name"
+                            name="last_name"
+                            value={currentClient.last_name}
+                            onChange={handleInputChange}
+                            className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                            placeholder="e.g. Smith"
+                          />
+                        </div>
+                      </div>
+              </div>
+            )}
+
+            {/* Address fields (common for both) */}
             <div className="grid grid-cols-12 gap-4">
               <div className="col-span-6 group">
-                <label htmlFor="personal_address" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="address" className="block text-sm font-medium text-gray-900 mb-2">
                   Address
                 </label>
                 <input
                   type="text"
-                  id="personal_address"
-                  name="personal_address"
-                  value={currentClient.personal_address}
+                  id="address"
+                  name="address"
+                  value={currentClient.address}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
                   placeholder="e.g. Main Street 123"
                 />
               </div>
               <div className="col-span-3 group">
-                <label htmlFor="personal_zip_code" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="zip_code" className="block text-sm font-medium text-gray-900 mb-2">
                   Zip
                 </label>
                 <input
                   type="text"
-                  id="personal_zip_code"
-                  name="personal_zip_code"
-                  value={currentClient.personal_zip_code}
+                  id="zip_code"
+                  name="zip_code"
+                  value={currentClient.zip_code}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
                   placeholder="e.g. 2100"
                 />
               </div>
               <div className="col-span-3 group">
-                <label htmlFor="country" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="city" className="block text-sm font-medium text-gray-900 mb-2">
                   City
                 </label>
                 <input
                   type="text"
-                  id="country"
-                  name="country"
-                  value={currentClient.country}
+                  id="city"
+                  name="city"
+                  value={currentClient.city}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
                   placeholder="e.g. Copenhagen"
@@ -318,28 +449,28 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
             {/* Email and Phone */}
             <div className="grid grid-cols-2 gap-4">
               <div className="group">
-                <label htmlFor="personal_email" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="email" className="block text-sm font-medium text-gray-900 mb-2">
                   Email
                 </label>
                 <input
                   type="email"
-                  id="personal_email"
-                  name="personal_email"
-                  value={currentClient.personal_email}
+                  id="email"
+                  name="email"
+                  value={currentClient.email}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
                   placeholder="e.g. john@example.com"
                 />
               </div>
               <div className="group">
-                <label htmlFor="personal_phone" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="phone" className="block text-sm font-medium text-gray-900 mb-2">
                   Phone
                 </label>
                 <input
                   type="tel"
-                  id="personal_phone"
-                  name="personal_phone"
-                  value={currentClient.personal_phone}
+                  id="phone"
+                  name="phone"
+                  value={currentClient.phone}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
                   placeholder="e.g. +45 12 34 56 78"

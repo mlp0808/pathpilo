@@ -140,25 +140,25 @@ function RegisterForm() {
                      formData.acceptTerms && formData.password === formData.confirmPassword
 
   return (
-    <div className="min-h-screen gradient-bg flex flex-col justify-center py-12 px-6">
+    <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-12 px-6">
       <div className="max-w-md mx-auto w-full">
         {/* Header */}
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center space-x-2 mb-6">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+            <div className="w-8 h-8 bg-gradient-to-br from-accent-500 to-accent-600 rounded-xl flex items-center justify-center shadow-lg shadow-accent-500/20">
               <span className="text-white font-bold text-lg">V</span>
             </div>
-            <span className="text-xl font-bold text-gray-900">Vevago</span>
+            <span className="text-xl font-bold text-primary-800 tracking-tight">PathPilo</span>
           </Link>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Create your account</h1>
-          <p className="text-gray-600">Start managing your service business today</p>
+          <h1 className="text-3xl font-bold text-primary-800 tracking-tight mb-2">Create your account</h1>
+          <p className="text-gray-600 font-medium">Start managing your service business today</p>
         </div>
 
         {/* Registration Form */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+        <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8 shadow-primary-500/5">
           <form onSubmit={handleSubmit} className="space-y-6">
             {formError && (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
                 <p className="text-sm font-medium text-red-700">{formError}</p>
               </div>
             )}
@@ -180,7 +180,7 @@ function RegisterForm() {
                 />
               </div>
               <div>
-                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="lastName" className="block text-xs font-semibold text-primary-700 mb-2">
                   Last Name
                 </label>
                 <input
@@ -223,7 +223,7 @@ function RegisterForm() {
 
             {/* Password */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="password" className="block text-xs font-semibold text-primary-700 mb-2">
                 Password
               </label>
               <div className="relative">
@@ -253,7 +253,7 @@ function RegisterForm() {
 
             {/* Confirm Password */}
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="confirmPassword" className="block text-xs font-semibold text-primary-700 mb-2">
                 Confirm Password
               </label>
               <div className="relative">
@@ -299,11 +299,11 @@ function RegisterForm() {
               </div>
               <label htmlFor="acceptTerms" className="text-sm text-gray-600">
                 I agree to the{' '}
-                <Link href="/terms" className="text-blue-600 hover:text-blue-700 font-medium">
+                <Link href="/terms" className="text-accent-600 hover:text-accent-700 font-medium">
                   Terms of Service
                 </Link>{' '}
                 and{' '}
-                <Link href="/privacy" className="text-blue-600 hover:text-blue-700 font-medium">
+                <Link href="/privacy" className="text-accent-600 hover:text-accent-700 font-medium">
                   Privacy Policy
                 </Link>
               </label>
@@ -313,10 +313,10 @@ function RegisterForm() {
             <button
               type="submit"
               disabled={!isFormValid || isLoading}
-              className={`w-full py-3 px-4 rounded-lg font-medium transition-colors duration-200 ${
+              className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-200 ${
                 isFormValid && !isLoading
-                  ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm hover:shadow-md'
-                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  ? 'bg-accent-500 hover:bg-accent-600 text-white shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25'
+                  : 'bg-gray-200 text-gray-500 cursor-not-allowed'
               }`}
             >
               {isLoading ? (
@@ -343,17 +343,17 @@ function RegisterForm() {
 
         {/* Features Preview */}
         <div className="mt-8 text-center">
-          <div className="flex items-center justify-center space-x-6 text-sm text-gray-500">
+          <div className="flex items-center justify-center space-x-6 text-sm text-gray-600">
             <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-green-500" />
+              <CheckIcon className="w-4 h-4 text-accent-500" />
               <span>Free 14-day trial</span>
             </div>
             <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-green-500" />
+              <CheckIcon className="w-4 h-4 text-accent-500" />
               <span>No credit card required</span>
             </div>
             <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-green-500" />
+              <CheckIcon className="w-4 h-4 text-accent-500" />
               <span>Cancel anytime</span>
             </div>
           </div>
@@ -366,9 +366,9 @@ function RegisterForm() {
 export default function RegisterPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen gradient-bg flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500"></div>
           <p className="mt-2 text-gray-600">Loading...</p>
         </div>
       </div>

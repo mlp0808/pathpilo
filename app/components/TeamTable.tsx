@@ -1,6 +1,8 @@
 'use client'
 
-import { UserPlusIcon } from '@heroicons/react/24/outline'
+import { useState } from 'react'
+import { UserPlusIcon, EllipsisVerticalIcon } from '@heroicons/react/24/outline'
+import { apiUrl } from '../utils/api'
 
 interface User {
   id: number
@@ -24,9 +26,13 @@ interface TeamTableProps {
   role: 'management' | 'employees'
   currentUserId?: number
   pendingInvitations?: PendingInvitation[]
+  onAddClick?: () => void
+  onUserRemoved?: () => void
 }
 
-export default function TeamTable({ users, role, currentUserId, pendingInvitations = [] }: TeamTableProps) {
+export default function TeamTable({ users, role, currentUserId, pendingInvitations = [], onAddClick, onUserRemoved }: TeamTableProps) {
+  const [openDropdownId, setOpenDropdownId] = useState<number | null>(null)
+  const [removingUserId, setRemovingUserId] = useState<number | null>(null)
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -41,7 +47,7 @@ export default function TeamTable({ users, role, currentUserId, pendingInvitatio
       case 'company-owner':
         return 'bg-purple-100 text-purple-800'
       case 'manager':
-        return 'bg-blue-100 text-blue-800'
+        return 'bg-green-100 text-accent-700'
       case 'employee':
         return 'bg-green-100 text-green-800'
       default:
@@ -63,12 +69,46 @@ export default function TeamTable({ users, role, currentUserId, pendingInvitatio
     }
   }
 
+  const handleRemoveUser = async (userId: number, userName: string) => {
+    if (!confirm(`Are you sure you want to remove ${userName} from this company? They will no longer have access to this company, but their account will remain.`)) {
+      return
+    }
+
+    setRemovingUserId(userId)
+    setOpenDropdownId(null)
+
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/users/${userId}`), {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        if (onUserRemoved) {
+          onUserRemoved()
+        }
+      } else {
+        alert(data.error || 'Failed to remove user')
+      }
+    } catch (error) {
+      console.error('Error removing user:', error)
+      alert('Failed to remove user. Please try again.')
+    } finally {
+      setRemovingUserId(null)
+    }
+  }
+
   if (users.length === 0 && (!pendingInvitations || pendingInvitations.length === 0)) {
     return (
       <div className="text-center py-12">
-        <div className="mx-auto h-12 w-12 text-gray-400 mb-4">
-          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+        <div className="mx-auto h-12 w-12 text-gray-400 mb-4 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-full h-full">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
           </svg>
         </div>
         <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -80,7 +120,10 @@ export default function TeamTable({ users, role, currentUserId, pendingInvitatio
             : 'Employees will appear here'
           }
         </p>
-        <button className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+        <button 
+          onClick={onAddClick}
+          className="inline-flex items-center px-4 py-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 transition-colors"
+        >
           <UserPlusIcon className="w-4 h-4 mr-2" />
           Invite {role === 'management' ? 'Manager' : 'Employee'}
         </button>
@@ -161,7 +204,7 @@ export default function TeamTable({ users, role, currentUserId, pendingInvitatio
                         navigator.clipboard.writeText(invitation.invitationUrl)
                         // You could add a toast notification here
                       }}
-                      className="text-blue-600 hover:text-blue-900 transition-colors"
+                      className="text-accent-500 hover:text-accent-600 transition-colors"
                       title="Copy link"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -213,19 +256,39 @@ export default function TeamTable({ users, role, currentUserId, pendingInvitatio
                 </td>
               )}
               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                <div className="flex space-x-2">
-                  <button className="text-blue-600 hover:text-blue-900 transition-colors">
-                    Edit
-                  </button>
-                  {/* Don't show Remove button for owners or current user */}
-                  {user.role !== 'owner' && 
-                   user.role !== 'company-owner' && 
-                   user.id !== currentUserId && (
-                    <button className="text-red-600 hover:text-red-900 transition-colors">
-                      Remove
+                {/* Don't show dropdown for owners or current user */}
+                {user.role !== 'owner' && 
+                 user.role !== 'company-owner' && 
+                 user.id !== currentUserId ? (
+                  <div className="relative">
+                    <button
+                      onClick={() => setOpenDropdownId(openDropdownId === user.id ? null : user.id)}
+                      className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                      disabled={removingUserId === user.id}
+                    >
+                      <EllipsisVerticalIcon className="w-5 h-5" />
                     </button>
-                  )}
-                </div>
+                    {openDropdownId === user.id && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-10" 
+                          onClick={() => setOpenDropdownId(null)}
+                        />
+                        <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                          <button
+                            onClick={() => handleRemoveUser(user.id, `${user.first_name} ${user.last_name}`)}
+                            disabled={removingUserId === user.id}
+                            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {removingUserId === user.id ? 'Removing...' : 'Remove from company'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-gray-400">-</span>
+                )}
               </td>
             </tr>
           ))}

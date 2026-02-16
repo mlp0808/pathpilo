@@ -1,5 +1,9 @@
-// PM2 Ecosystem Configuration
-// Upload this to ~/httpdocs/app/ and run: pm2 start ecosystem.config.js
+// PM2 Ecosystem Configuration for PathPilo
+// Run from repo root: pm2 start ecosystem.config.js
+// Requires: npm install (root), npm run build (root), npm install (api-server)
+
+const path = require('path');
+const root = path.resolve(__dirname);
 
 module.exports = {
   apps: [
@@ -7,14 +11,13 @@ module.exports = {
       name: 'vevago-frontend',
       script: 'npm',
       args: 'start',
-      cwd: process.cwd(),
+      cwd: root,
       env: {
         NODE_ENV: 'production',
-        // Next.js runs on 3002 in this project (see package.json "start")
         PORT: 3002
       },
-      error_file: './logs/frontend-error.log',
-      out_file: './logs/frontend-out.log',
+      error_file: path.join(root, 'logs', 'frontend-error.log'),
+      out_file: path.join(root, 'logs', 'frontend-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       autorestart: true,
@@ -24,14 +27,13 @@ module.exports = {
     {
       name: 'vevago-api',
       script: 'server.js',
-      cwd: process.cwd(),
+      cwd: path.join(root, 'api-server'),
       env: {
         NODE_ENV: 'production',
-        // Express API runs separately (default 3003) and should be reverse-proxied under /api
-        PORT: 3003
+        API_PORT: 3003
       },
-      error_file: './logs/api-error.log',
-      out_file: './logs/api-out.log',
+      error_file: path.join(root, 'logs', 'api-error.log'),
+      out_file: path.join(root, 'logs', 'api-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       autorestart: true,
@@ -39,5 +41,5 @@ module.exports = {
       max_memory_restart: '1G'
     }
   ]
-}
+};
 

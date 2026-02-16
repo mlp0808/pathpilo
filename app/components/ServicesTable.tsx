@@ -196,7 +196,7 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
                 <div className="flex space-x-2">
                   <button 
                     onClick={() => handleEditService(service)}
-                    className="text-blue-600 hover:text-blue-900 transition-colors"
+                    className="text-accent-500 hover:text-accent-600 transition-colors"
                   >
                     Edit
                   </button>

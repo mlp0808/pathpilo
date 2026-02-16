@@ -18,10 +18,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-page flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-gray-600">Loading...</p>
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500"></div>
+          <p className="mt-2 text-primary-500">Loading...</p>
         </div>
       </div>
     )
@@ -32,7 +32,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="min-h-screen bg-page flex overflow-x-hidden">
       {/* Conditional Sidebar */}
       {isSettingsPage ? (
         <SettingsSidebar 
@@ -53,8 +53,8 @@ export default function AppLayout({ children }: AppLayoutProps) {
       )}
       
       {/* Main Content */}
-      <div className="flex-1 ml-[200px] relative">
-        <main className="p-3">
+      <div className="flex-1 ml-[200px] relative overflow-x-hidden max-w-full flex flex-col">
+        <main className="px-[40px] pt-[15px] pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
           {children}
         </main>
       </div>

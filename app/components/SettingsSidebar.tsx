@@ -9,7 +9,8 @@ import {
   CreditCardIcon,
   DocumentTextIcon,
   ArrowRightOnRectangleIcon,
-  BellIcon
+  BellIcon,
+  InboxIcon
 } from '@heroicons/react/24/outline'
 
 interface SettingsSidebarProps {
@@ -34,40 +35,32 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
     { name: 'User', href: '/settings/user', icon: UserIcon },
     { name: 'Business', href: '/settings/business', icon: BuildingOfficeIcon },
     { name: 'Notifications', href: '/settings/notifications', icon: BellIcon },
+    { name: 'Lead form', href: '/settings/leads-form', icon: InboxIcon },
     { name: 'Billing', href: '/settings/billing', icon: CreditCardIcon },
     { name: 'Invoices', href: '/settings/invoices', icon: DocumentTextIcon },
   ]
 
   return (
-    <div className="fixed inset-y-0 left-0 w-[200px] bg-gray-50 flex flex-col overflow-hidden border-r border-gray-200">
+    <div className="fixed inset-y-0 left-0 w-[200px] bg-sidebar flex flex-col overflow-hidden">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <button
-          onClick={handleLogout}
-          className="flex items-center space-x-1.5 text-gray-600 hover:text-gray-900 transition-colors duration-200"
-        >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <button onClick={handleLogout} className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors">
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           <span className="text-xs font-medium">Logout</span>
         </button>
-        
-        <div className="text-gray-400 text-xs font-medium">
-          Settings
-        </div>
+        <span className="text-gray-400 text-xs font-medium">Settings</span>
       </div>
 
-      {/* Back Button Container */}
-      <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
-        <button
-          onClick={onBack}
-          className="flex items-center space-x-2 text-gray-700 hover:text-gray-900 transition-colors duration-200"
-        >
+      {/* Back */}
+      <div className="px-4 py-3 border-b border-white/10">
+        <button onClick={onBack} className="flex items-center space-x-2 text-gray-300 hover:text-white transition-colors">
           <ArrowLeftIcon className="w-4 h-4" />
           <span className="text-sm font-medium">Back to Dashboard</span>
         </button>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {settingsNavigation.map((item) => {
           const Icon = item.icon
           const isActive = pathname === item.href
@@ -75,18 +68,11 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
             <Link
               key={item.name}
               href={item.href}
-              className={`group flex items-center px-3 py-2 text-xs font-medium rounded-lg transition-all duration-200 ${
-                isActive
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              className={`group flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-all ${
+                isActive ? 'bg-accent-500 text-white' : 'text-gray-300 hover:bg-white/5 hover:text-white'
               }`}
             >
-              <Icon
-                className={`mr-2.5 h-4 w-4 flex-shrink-0 transition-colors duration-200 ${
-                  isActive ? 'text-blue-700' : 'text-gray-400 group-hover:text-gray-700'
-                }`}
-                aria-hidden="true"
-              />
+              <Icon className={`mr-3 h-4 w-4 flex-shrink-0 ${isActive ? 'text-white' : 'text-gray-400 group-hover:text-white'}`} aria-hidden="true" />
               {item.name}
             </Link>
           )
@@ -96,7 +82,7 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
       {/* Bottom Spacing */}
       <div className="px-4 py-3">
         <div className="text-xs text-gray-500 text-center">
-          Vevago v1.0
+          PathPilo v1.0
         </div>
       </div>
     </div>

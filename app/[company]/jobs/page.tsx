@@ -1,16 +1,18 @@
 'use client'
 
 import { useState, useEffect, Suspense, useRef } from 'react'
+import Link from 'next/link'
 import { useUser } from '@/app/hooks/useUser'
 import AppLayout from '@/app/components/AppLayout'
 import CreateJob from '@/app/components/CreateJob'
+import CreateSubscription from '@/app/components/CreateSubscription'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
 import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
 import { apiUrl } from '@/app/utils/api'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useSearchParams } from 'next/navigation'
-import { CheckCircleIcon, PlusIcon } from '@heroicons/react/24/outline'
+import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 
 interface User {
     id: number
@@ -77,19 +79,25 @@ function JobsPageContent() {
   const [showCreateMenu, setShowCreateMenu] = useState(false)
   const [createJobPrefillDate, setCreateJobPrefillDate] = useState<string | null>(null)
   const [createJobPrefillUserId, setCreateJobPrefillUserId] = useState<number | null>(null)
+  const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
-  const [showWeekend, setShowWeekend] = useState(false)
   const [workHours, setWorkHours] = useState<WorkHours | null>(null)
+  const [allUsersWorkHours, setAllUsersWorkHours] = useState<WorkHours | null>(null)
+  const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>('week')
   
   // Drag and drop state
   const [draggedJob, setDraggedJob] = useState<any>(null)
   const [dragOverDate, setDragOverDate] = useState<string | null>(null)
+  const [dragOverJobId, setDragOverJobId] = useState<number | 'top' | 'bottom' | null>(null) // Track which job we're hovering over for divider, or 'top'/'bottom' for list edges
+  const [dragOverPosition, setDragOverPosition] = useState<'above' | 'below' | null>(null) // Track position relative to hovered job
   const [showMoveModal, setShowMoveModal] = useState(false)
   const [pendingMoveDate, setPendingMoveDate] = useState<string | null>(null)
   const [pendingMoveJob, setPendingMoveJob] = useState<any>(null) // Store job separately for modal
   const [isMovingJob, setIsMovingJob] = useState(false)
   const [moveTemplate, setMoveTemplate] = useState<{ subject: string; message: string }>({ subject: '', message: '' })
+  const weekScrollContainerRef = useRef<HTMLDivElement>(null)
+  const [weekScrollPosition, setWeekScrollPosition] = useState(0)
 
     // Get the start of the week (Monday)
     const getWeekStart = (date: Date) => {
@@ -122,7 +130,7 @@ function JobsPageContent() {
 
     const formatWeekday = (date: Date) => {
         return date.toLocaleDateString('en-US', {
-            weekday: 'short'
+            weekday: 'long'
         })
     }
 
@@ -159,6 +167,63 @@ function JobsPageContent() {
     try {
       localStorage.setItem('vevago_jobs_week', today.toISOString())
     } catch (e) {}
+  }
+
+  // Month navigation functions
+  const goToPreviousMonth = () => {
+    const newDate = new Date(currentWeek)
+    newDate.setMonth(newDate.getMonth() - 1)
+    setCurrentWeek(newDate)
+    try {
+      localStorage.setItem('vevago_jobs_week', newDate.toISOString())
+    } catch (e) {}
+  }
+
+  const goToNextMonth = () => {
+    const newDate = new Date(currentWeek)
+    newDate.setMonth(newDate.getMonth() + 1)
+    setCurrentWeek(newDate)
+    try {
+      localStorage.setItem('vevago_jobs_week', newDate.toISOString())
+    } catch (e) {}
+  }
+
+  const goToCurrentMonth = () => {
+    const today = new Date()
+    setCurrentWeek(today)
+    try {
+      localStorage.setItem('vevago_jobs_week', today.toISOString())
+    } catch (e) {}
+  }
+
+  // Get all days for month view (including padding days from previous/next month)
+  const getMonthDays = () => {
+    const year = currentWeek.getFullYear()
+    const month = currentWeek.getMonth()
+    
+    // First day of the month
+    const firstDay = new Date(year, month, 1)
+    // Last day of the month
+    const lastDay = new Date(year, month + 1, 0)
+    
+    // Get the day of week for the first day (0 = Sunday, 1 = Monday, etc.)
+    // We want Monday to be the first day of the week, so adjust
+    let firstDayOfWeek = firstDay.getDay()
+    firstDayOfWeek = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1 // Convert to Monday=0, Sunday=6
+    
+    // Start from the Monday before (or on) the first day of the month
+    const startDate = new Date(firstDay)
+    startDate.setDate(firstDay.getDate() - firstDayOfWeek)
+    
+    // Calculate how many days to show (6 weeks = 42 days)
+    const days: Date[] = []
+    for (let i = 0; i < 42; i++) {
+      const day = new Date(startDate)
+      day.setDate(startDate.getDate() + i)
+      days.push(day)
+    }
+    
+    return days
   }
   
   // Save week when it changes (e.g., from date picker or other interactions)
@@ -198,10 +263,61 @@ function JobsPageContent() {
 
     // Fetch work hours for selected user
     const fetchWorkHours = async () => {
-        if (selectedUserId === 'all') return
+        const token = localStorage.getItem('token')
+        
+        if (selectedUserId === 'all') {
+            // Fetch work hours for all users and sum them
+            try {
+                const workHoursPromises = users.map(user => 
+                    fetch(apiUrl(`/work-hours/${user.id}`), {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    }).then(res => res.json())
+                )
+                
+                const allWorkHoursData = await Promise.all(workHoursPromises)
+                
+                // Sum up all work hours
+                const aggregatedWorkHours: WorkHours = {
+                    monday_hours: 0,
+                    tuesday_hours: 0,
+                    wednesday_hours: 0,
+                    thursday_hours: 0,
+                    friday_hours: 0,
+                    saturday_hours: 0,
+                    sunday_hours: 0
+                }
+                
+                allWorkHoursData.forEach(data => {
+                    const rawWorkHours = data.workHours || {
+                        monday_hours: 7.5,
+                        tuesday_hours: 7.5,
+                        wednesday_hours: 7.5,
+                        thursday_hours: 7.5,
+                        friday_hours: 7.0,
+                        saturday_hours: 0,
+                        sunday_hours: 0
+                    }
+                    
+                    aggregatedWorkHours.monday_hours += parseFloat(rawWorkHours.monday_hours) || 0
+                    aggregatedWorkHours.tuesday_hours += parseFloat(rawWorkHours.tuesday_hours) || 0
+                    aggregatedWorkHours.wednesday_hours += parseFloat(rawWorkHours.wednesday_hours) || 0
+                    aggregatedWorkHours.thursday_hours += parseFloat(rawWorkHours.thursday_hours) || 0
+                    aggregatedWorkHours.friday_hours += parseFloat(rawWorkHours.friday_hours) || 0
+                    aggregatedWorkHours.saturday_hours += parseFloat(rawWorkHours.saturday_hours) || 0
+                    aggregatedWorkHours.sunday_hours += parseFloat(rawWorkHours.sunday_hours) || 0
+                })
+                
+                setAllUsersWorkHours(aggregatedWorkHours)
+                setWorkHours(null) // Clear individual work hours
+            } catch (error) {
+                console.error('Error fetching work hours for all users:', error)
+            }
+            return
+        }
 
         try {
-            const token = localStorage.getItem('token')
             const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
                 headers: {
                     'Authorization': `Bearer ${token}`
@@ -233,21 +349,33 @@ function JobsPageContent() {
                 }
 
                 setWorkHours(parsedWorkHours)
+                setAllUsersWorkHours(null) // Clear aggregated work hours
             }
         } catch (error) {
             console.error('Error fetching work hours:', error)
         }
     }
 
-    // Fetch jobs for the current week
+    // Fetch jobs for the current week or month
     const fetchJobsForWeek = async () => {
         try {
             setLoading(true)
             setApiError('')
             const token = localStorage.getItem('token')
 
-            const startDate = toLocalDateString(weekDays[0])
-            const endDate = toLocalDateString(weekDays[6])
+            let startDate: string
+            let endDate: string
+            
+            if (viewMode === 'month') {
+                const monthDays = getMonthDays()
+                startDate = toLocalDateString(monthDays[0])
+                endDate = toLocalDateString(monthDays[monthDays.length - 1])
+            } else {
+                startDate = toLocalDateString(weekDays[0])
+                endDate = toLocalDateString(weekDays[6])
+            }
+            
+            console.log(`📅 Fetching jobs for date range: ${startDate} to ${endDate}`)
 
             const response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
                 headers: {
@@ -255,14 +383,60 @@ function JobsPageContent() {
                 }
             })
 
-            const data = await response.json().catch(() => ({}))
+            const data = await response.json().catch((err) => {
+                console.error('❌ JSON parse error:', err)
+                return {}
+            })
+
+            if (!response.ok) {
+                console.error('❌ API Error:', response.status, data)
+                setApiError(data?.error || 'Failed to fetch jobs')
+                // Don't clear jobs on error - keep existing jobs visible
+                // setJobs([])
+                return
+            }
 
             if (response.ok) {
                 const allJobs = (data.jobs || [])
+                console.log(`📋 Frontend received ${allJobs.length} total job(s)`)
+                
+                // Log projected jobs
+                const projectedJobs = allJobs.filter((job: any) => job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-')))
+                console.log(`👻 Found ${projectedJobs.length} projected job(s):`, projectedJobs.map(j => ({ 
+                  id: j.id, 
+                  assigned_user_id: j.assigned_user_id, 
+                  scheduled_date: j.scheduled_date,
+                  is_projected: j.is_projected 
+                })))
+                
+                // Log status breakdown
+                const statusCounts = allJobs.reduce((acc: any, job: any) => {
+                  acc[job.status || 'undefined'] = (acc[job.status || 'undefined'] || 0) + 1
+                  return acc
+                }, {})
+                console.log('📊 Jobs by status:', statusCounts)
+                
+                const cancelledJobs = allJobs.filter((job: any) => job.status === 'cancelled')
+                if (cancelledJobs.length > 0) {
+                  console.log(`📋 Found ${cancelledJobs.length} cancelled job(s):`, cancelledJobs.map(j => ({ id: j.id, status: j.status, assigned_user_id: j.assigned_user_id, scheduled_date: j.scheduled_date })))
+                }
+                
+                console.log(`🔍 Current selectedUserId: ${selectedUserId} (type: ${typeof selectedUserId})`)
+                
                 if (selectedUserId === 'all') {
                   setJobs(allJobs)
+                  console.log(`✅ Set ${allJobs.length} jobs (all users)`)
                 } else {
-                  const filteredJobs = allJobs.filter((job: any) => job.assigned_user_id === selectedUserId)
+                  // Convert selectedUserId to number for comparison
+                  const userIdNum = typeof selectedUserId === 'string' ? parseInt(selectedUserId, 10) : selectedUserId
+                  const filteredJobs = allJobs.filter((job: any) => {
+                    // Check if job is assigned to the selected user (both real and projected jobs)
+                    const jobUserId = job.assigned_user_id
+                    if (jobUserId === null || jobUserId === undefined) return false
+                    return Number(jobUserId) === Number(userIdNum)
+                  })
+                  const projectedCount = filteredJobs.filter((job: any) => job.is_projected).length
+                  console.log(`🔍 Filtered to ${filteredJobs.length} jobs for user ${selectedUserId} (${projectedCount} projected)`)
                   setJobs(filteredJobs)
                 }
             } else {
@@ -394,22 +568,42 @@ function JobsPageContent() {
     isUserActionRef.current = false
   }, [selectedUserId, users, searchParams, initializedFromUrl])
 
-    // Fetch work hours when user changes
+    // Fetch work hours when user changes or users list changes
     useEffect(() => {
-        if (selectedUserId !== 'all') fetchWorkHours()
-    }, [selectedUserId])
+        if (users.length > 0 || selectedUserId !== 'all') {
+            fetchWorkHours()
+        }
+    }, [selectedUserId, users])
 
     // Fetch jobs when week or selected user changes
     useEffect(() => {
-        if (user && !userLoading) {
+        if (user && !userLoading && selectedUserId !== null && selectedUserId !== undefined) {
+            console.log(`🔄 useEffect triggered: fetching jobs for ${viewMode} ${currentWeek}, user ${selectedUserId}`)
             fetchJobsForWeek()
+        } else {
+            console.log(`⏸️ useEffect skipped: user=${!!user}, userLoading=${userLoading}, selectedUserId=${selectedUserId}`)
         }
-    }, [currentWeek, selectedUserId, user, userLoading])
+    }, [currentWeek, selectedUserId, user, userLoading, viewMode])
 
-    // Filter jobs by day
+    // Reset scroll position when week changes
+    useEffect(() => {
+        if (weekScrollContainerRef.current && viewMode === 'week') {
+            weekScrollContainerRef.current.scrollLeft = 0
+            setWeekScrollPosition(0)
+        }
+    }, [currentWeek, viewMode])
+
+    // Filter jobs by day and sort by sort_order
     const getJobsForDay = (date: Date) => {
         const dateString = toLocalDateString(date)
-        return jobs.filter(job => toDateOnlyString(job.scheduled_date) === dateString)
+        const dayJobs = jobs.filter(job => toDateOnlyString(job.scheduled_date) === dateString)
+        // Sort by sort_order (defaulting to 0), then by created_at
+        return dayJobs.sort((a, b) => {
+            const aOrder = a.sort_order ?? 0
+            const bOrder = b.sort_order ?? 0
+            if (aOrder !== bOrder) return aOrder - bOrder
+            return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        })
     }
 
     const openCreateJobForDate = (dateString: string) => {
@@ -421,7 +615,10 @@ function JobsPageContent() {
 
     // Get work hours for a specific day (dayIndex: 0=Monday, 1=Tuesday, etc.)
     const getWorkHoursForDay = (dayIndex: number) => {
-        if (!workHours) return 0
+        // Use aggregated work hours if "all teams" is selected, otherwise use individual work hours
+        const hoursToUse = selectedUserId === 'all' ? allUsersWorkHours : workHours
+        if (!hoursToUse) return 0
+        
         // Convert day index (0=Monday) to work hours day mapping (1=Monday)
         // workHours uses: monday_hours, tuesday_hours, etc. (1=Monday, 0=Sunday)
         const dayMap: (keyof WorkHours)[] = [
@@ -433,7 +630,7 @@ function JobsPageContent() {
             'saturday_hours',  // 5 = Saturday
             'sunday_hours'     // 6 = Sunday
         ]
-        const hours = workHours[dayMap[dayIndex]]
+        const hours = hoursToUse[dayMap[dayIndex]]
         // Ensure we return a number, parse if it's a string
         const numHours = typeof hours === 'string' ? parseFloat(hours) : (hours || 0)
         return isNaN(numHours) ? 0 : numHours
@@ -442,7 +639,12 @@ function JobsPageContent() {
     // Calculate occupied time for a day (in hours)
     const getOccupiedTime = (date: Date) => {
         const dayJobs = getJobsForDay(date)
-        const totalMinutes = dayJobs.reduce((total, job) => total + (job.total_duration || 0), 0)
+        const totalMinutes = dayJobs.reduce((total, job) => {
+            const duration = job.total_duration
+            // Ensure we parse as number (handle string values from API)
+            const minutes = duration != null && duration !== '' ? parseFloat(String(duration)) : 0
+            return total + (isNaN(minutes) ? 0 : minutes)
+        }, 0)
         return totalMinutes / 60 // Convert minutes to hours
     }
 
@@ -472,6 +674,8 @@ function JobsPageContent() {
             setDraggedJob(null)
         }
         setDragOverDate(null)
+        setDragOverJobId(null)
+        setDragOverPosition(null)
     }
     
     const handleDragOver = (e: React.DragEvent, dateString: string) => {
@@ -480,56 +684,291 @@ function JobsPageContent() {
         e.dataTransfer.dropEffect = 'move'
         setDragOverDate(dateString)
     }
+
+    const handleDragOverJob = (e: React.DragEvent, job: any, position: 'above' | 'below') => {
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'move'
+        setDragOverJobId(job.id)
+        setDragOverPosition(position)
+        setDragOverDate(job.scheduled_date)
+    }
+
+    const handleDragLeaveJob = () => {
+        setDragOverJobId(null)
+        setDragOverPosition(null)
+    }
     
     const handleDragLeave = () => {
         setDragOverDate(null)
+        setDragOverJobId(null)
+        setDragOverPosition(null)
     }
     
-    const handleDrop = async (e: React.DragEvent, dateString: string) => {
+    const handleDrop = async (e: React.DragEvent, dateString: string, targetJobId?: number | 'top' | 'bottom', dropPosition?: 'above' | 'below') => {
         e.preventDefault()
         e.stopPropagation()
         
         if (!draggedJob) return
         
-        // Check if dropping on the same date
-        if (draggedJob.scheduled_date === dateString) {
-            setDraggedJob(null)
-            setDragOverDate(null)
+        const isSameDay = draggedJob.scheduled_date === dateString
+        
+        // If dropping on the same day, handle reordering without popup (targetJobId can be a number, 'top', or 'bottom')
+        if (isSameDay && targetJobId !== undefined) {
+            // Helper function to get subscription metadata from projected job
+            const getProjectedMeta = (j: any): { subscriptionId: number; occurrence: number } | null => {
+                const subId = typeof j?.recurring_job_id === 'number' ? j.recurring_job_id : null
+                const occ = typeof j?.recurring_occurrence === 'number' ? j.recurring_occurrence : null
+                if (subId && occ) return { subscriptionId: subId, occurrence: occ }
+
+                if (typeof j?.id === 'string' && String(j.id).startsWith('subscription-')) {
+                    const parts = String(j.id).split('-')
+                    if (parts.length >= 3) {
+                        const ps = parseInt(parts[1], 10)
+                        const po = parseInt(parts[2], 10)
+                        if (Number.isFinite(ps) && Number.isFinite(po)) return { subscriptionId: ps, occurrence: po }
+                    }
+                }
+                return null
+            }
+            
+            let realJobId: number | null = (typeof draggedJob.id === 'number') ? draggedJob.id : null
+            
+            // If this is a projected job, materialize it first
+            if (!realJobId && (draggedJob.is_projected || (typeof draggedJob.id === 'string' && draggedJob.id.startsWith('subscription-')))) {
+                const meta = getProjectedMeta(draggedJob)
+                if (!meta) {
+                    alert('Could not materialize this subscription job. Please try again.')
+                    setDraggedJob(null)
+                    setDragOverDate(null)
+                    setDragOverJobId(null)
+                    setDragOverPosition(null)
+                    return
+                }
+                
+                try {
+                    const token = localStorage.getItem('token')
+                    // Materialize the job on its current date first
+                    const mat = await fetch(apiUrl(`/subscriptions/${meta.subscriptionId}/occurrences/${meta.occurrence}/materialize`), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({ scheduled_date: draggedJob.scheduled_date })
+                    })
+                    const matData = await mat.json().catch(() => ({}))
+                    if (!mat.ok) {
+                        throw new Error(matData.error || matData.details || 'Failed to create real job from subscription')
+                    }
+                    realJobId = matData.jobId
+                    if (typeof realJobId !== 'number') {
+                        throw new Error('Invalid jobId returned from materialize endpoint')
+                    }
+                    
+                    // Update the dragged job object with the real ID for subsequent operations
+                    draggedJob.id = realJobId
+                    draggedJob.is_projected = false
+                } catch (error) {
+                    console.error('Error materializing job:', error)
+                    alert('Failed to materialize subscription job. Please try again.')
+                    setDraggedJob(null)
+                    setDragOverDate(null)
+                    setDragOverJobId(null)
+                    setDragOverPosition(null)
+                    return
+                }
+            }
+            
+            if (!realJobId) {
+                alert('Cannot reorder this job. Please try again.')
+                setDraggedJob(null)
+                setDragOverDate(null)
+                setDragOverJobId(null)
+                setDragOverPosition(null)
+                return
+            }
+            
+            // Find the target index from current jobs list
+            // Filter out projected jobs for index calculation (they'll be materialized if needed)
+            const dayJobs = jobs.filter((j: any) => 
+                j.scheduled_date === dateString && 
+                j.assigned_user_id === draggedJob.assigned_user_id &&
+                typeof j.id === 'number' // Only count real jobs for positioning
+            )
+            
+            // Sort by current sort_order or created_at
+            dayJobs.sort((a: any, b: any) => {
+                const aOrder = a.sort_order ?? 0
+                const bOrder = b.sort_order ?? 0
+                if (aOrder !== bOrder) return aOrder - bOrder
+                return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+            })
+            
+            // Find target index (for 'top' / 'bottom' or from a specific job)
+            let newIndex: number
+            if (targetJobId === 'top') {
+                newIndex = 0
+            } else if (targetJobId === 'bottom') {
+                newIndex = dayJobs.length
+            } else {
+                // Target is a job id
+                let targetIndex = typeof targetJobId === 'number' ? dayJobs.findIndex((j: any) => j.id === targetJobId) : -1
+                if (targetIndex === -1) {
+                    targetIndex = dayJobs.length // projected job or not found -> end of list
+                }
+                newIndex = dropPosition === 'above' ? targetIndex : targetIndex + 1
+            }
+            
+            // If moving the dragged job, adjust index (exclude it from count)
+            const draggedIndex = dayJobs.findIndex((j: any) => j.id === realJobId)
+            if (draggedIndex !== -1 && draggedIndex < newIndex) {
+                newIndex-- // Adjust because we're removing from before the target
+            }
+            
+            // Ensure newIndex is not negative
+            newIndex = Math.max(0, newIndex)
+            
+            // Call API to reorder
+            try {
+                const token = localStorage.getItem('token')
+                const response = await fetch(apiUrl('/jobs/reorder'), {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        jobId: realJobId, // Use the real job ID (materialized if needed)
+                        targetDate: dateString,
+                        targetIndex: newIndex,
+                        sourceDate: draggedJob.scheduled_date
+                    })
+                })
+                
+                if (!response.ok) {
+                    const error = await response.json()
+                    throw new Error(error.error || 'Failed to reorder job')
+                }
+                
+                // Optimistically update the local jobs state - no refresh needed
+                // Use a functional update to ensure we're working with the latest state
+                setJobs((prevJobs) => {
+                    // Filter out the old job (if it exists) and projected version
+                    const filteredJobs = prevJobs.filter((j: any) => 
+                        j.id !== realJobId && 
+                        j.id !== draggedJob.id &&
+                        !(typeof draggedJob.id === 'string' && j.id === draggedJob.id)
+                    )
+                    
+                    // Get the job object to update (find it first)
+                    let jobToUpdate = prevJobs.find((j: any) => 
+                        j.id === realJobId || 
+                        (j.id === draggedJob.id && typeof draggedJob.id === 'number')
+                    ) || draggedJob
+                    
+                    // Update the job with new position
+                    const updatedJob = {
+                        ...jobToUpdate,
+                        id: realJobId,
+                        scheduled_date: dateString,
+                        sort_order: newIndex,
+                        is_projected: false
+                    }
+                    
+                    // Get all jobs for the target day (excluding the moved one)
+                    const targetDayJobs = filteredJobs.filter((j: any) => 
+                        j.scheduled_date === dateString && 
+                        j.assigned_user_id === draggedJob.assigned_user_id &&
+                        typeof j.id === 'number'
+                    )
+                    
+                    // Sort them by current sort_order
+                    targetDayJobs.sort((a: any, b: any) => {
+                        const aOrder = a.sort_order ?? 0
+                        const bOrder = b.sort_order ?? 0
+                        if (aOrder !== bOrder) return aOrder - bOrder
+                        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+                    })
+                    
+                    // Insert the updated job at the correct position
+                    targetDayJobs.splice(newIndex, 0, updatedJob)
+                    
+                    // Update sort_order for all jobs in the target day to match their array position
+                    targetDayJobs.forEach((job: any, idx: number) => {
+                        job.sort_order = idx
+                    })
+                    
+                    // Rebuild the jobs array: keep jobs from other days, replace jobs from target day
+                    const otherDaysJobs = filteredJobs.filter((j: any) => 
+                        !(j.scheduled_date === dateString && j.assigned_user_id === draggedJob.assigned_user_id)
+                    )
+                    
+                    // Combine: other days + updated target day jobs
+                    return [...otherDaysJobs, ...targetDayJobs]
+                })
+                
+                // Clear drag state immediately
+                setDraggedJob(null)
+                setDragOverDate(null)
+                setDragOverJobId(null)
+                setDragOverPosition(null)
+                
+                // No refresh - the optimistic update is sufficient
+            } catch (error) {
+                console.error('Error reordering job:', error)
+                alert('Failed to reorder job. Please try again.')
+                setDraggedJob(null)
+                setDragOverDate(null)
+                setDragOverJobId(null)
+                setDragOverPosition(null)
+            }
             return
         }
         
-        // Store the job and date for the modal (before handleDragEnd clears draggedJob)
-        setPendingMoveJob(draggedJob)
-        setPendingMoveDate(dateString)
-        
-        // Fetch email template
-        const oldDate = new Date(draggedJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
-        const newDate = new Date(dateString + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
-        
-        let userName = 'Our team'
-        try {
-            const u = JSON.parse(localStorage.getItem('user') || '{}')
-            if (u.first_name && u.last_name) {
-                userName = `${u.first_name} ${u.last_name}`
-            } else if (u.firstName && u.lastName) {
-                userName = `${u.firstName} ${u.lastName}`
-            }
-        } catch {}
-        
-        const template = await getEmailTemplate('change_date', {
-            clientName: `${draggedJob.first_name || ''} ${draggedJob.last_name || ''}`.trim() || 'Customer',
-            clientFirstName: draggedJob.first_name || 'Customer',
-            clientLastName: draggedJob.last_name || '',
-            jobDate: oldDate,
-            jobOldDate: oldDate,
-            jobNewDate: newDate,
-            userName: userName,
-            companyName: draggedJob.company_name || ''
-        })
-        
-        setMoveTemplate(template)
-        setShowMoveModal(true)
-        setDragOverDate(null)
+        // If dropping on a different day, show the move modal
+        if (!isSameDay) {
+            // Store the job and date for the modal (before handleDragEnd clears draggedJob)
+            setPendingMoveJob(draggedJob)
+            setPendingMoveDate(dateString)
+            
+            // Fetch email template
+            const oldDate = new Date(draggedJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+            const newDate = new Date(dateString + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+            
+            let userName = 'Our team'
+            try {
+                const u = JSON.parse(localStorage.getItem('user') || '{}')
+                if (u.first_name && u.last_name) {
+                    userName = `${u.first_name} ${u.last_name}`
+                } else if (u.firstName && u.lastName) {
+                    userName = `${u.firstName} ${u.lastName}`
+                }
+            } catch {}
+            
+            const template = await getEmailTemplate('change_date', {
+                clientName: `${draggedJob.first_name || ''} ${draggedJob.last_name || ''}`.trim() || 'Customer',
+                clientFirstName: draggedJob.first_name || 'Customer',
+                clientLastName: draggedJob.last_name || '',
+                jobDate: oldDate,
+                jobOldDate: oldDate,
+                jobNewDate: newDate,
+                userName: userName,
+                companyName: draggedJob.company_name || ''
+            })
+            
+            setMoveTemplate(template)
+            setShowMoveModal(true)
+            setDragOverDate(null)
+            setDragOverJobId(null)
+            setDragOverPosition(null)
+        } else {
+            // Same day but no target job - just clear
+            setDraggedJob(null)
+            setDragOverDate(null)
+            setDragOverJobId(null)
+            setDragOverPosition(null)
+        }
     }
     
     // Handle move job confirmation
@@ -639,24 +1078,21 @@ function JobsPageContent() {
         }).format(price).replace('kr', 'kr.')
     }
 
-    // Get address string for display (city • address)
+    // Get address string for display (address • zip city) to match design e.g. "Tyttebærvej 2 • 2400 København"
     const getAddressDisplay = (job: any) => {
-        const city = job.personal_city || ''
-        const address = job.personal_address || ''
-
-        if (!city && !address) return ''
-        if (!city) return address
-        if (!address) return city
-
-        return `${city} • ${address}`
+        const parts: string[] = []
+        if (job.address) parts.push(job.address)
+        const zipCity = [job.zip_code, job.city].filter(Boolean).join(' ')
+        if (zipCity) parts.push(zipCity)
+        return parts.join(' • ')
     }
 
     // Get full address for clipboard (Google Maps format)
     const getFullAddressForClipboard = (job: any) => {
         const parts = []
-        if (job.personal_address) parts.push(job.personal_address)
-        if (job.personal_zip_code) parts.push(job.personal_zip_code)
-        if (job.personal_city) parts.push(job.personal_city)
+        if (job.address) parts.push(job.address)
+        if (job.zip_code) parts.push(job.zip_code)
+        if (job.city) parts.push(job.city)
         return parts.join(', ')
     }
 
@@ -731,10 +1167,10 @@ function JobsPageContent() {
 
     if (userLoading) {
         return (
-            <div className="flex items-center justify-center min-h-screen">
+            <div className="flex items-center justify-center min-h-screen bg-page">
                 <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="mt-2 text-gray-600">Loading...</p>
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-500 border-t-transparent"></div>
+                    <p className="mt-2 text-primary-500">Loading...</p>
                 </div>
             </div>
         )
@@ -742,7 +1178,7 @@ function JobsPageContent() {
 
     return (
         <AppLayout>
-            <div className="space-y-4">
+            <div className="space-y-4 overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
                 {apiError && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
                     <div className="text-sm text-red-800 font-medium">Jobs page error</div>
@@ -752,325 +1188,554 @@ function JobsPageContent() {
                     </div>
                   </div>
                 )}
-                {/* Filter/Navigation Bar */}
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                            {/* Today Button */}
-                            <button
-                                onClick={goToCurrentWeek}
-                                className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md transition-colors"
-                            >
-                                Today
-                            </button>
+                {/* Top Bar — no background, border, or shadow; no padding so sides align with content */}
+                <div className="flex items-center justify-between gap-4">
+                    {/* Left: square softly-rounded arrows, Today (underlined), month year */}
+                    <div className="flex items-center gap-3">
+                        <button 
+                            onClick={viewMode === 'month' ? goToPreviousMonth : goToPreviousWeek} 
+                            className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
+                            aria-label={viewMode === 'month' ? 'Previous month' : 'Previous week'}
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                        </button>
+                        <button 
+                            onClick={viewMode === 'month' ? goToNextMonth : goToNextWeek} 
+                            className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
+                            aria-label={viewMode === 'month' ? 'Next month' : 'Next week'}
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                        </button>
+                        <button 
+                            onClick={viewMode === 'month' ? goToCurrentMonth : goToCurrentWeek} 
+                            className="text-sm font-medium text-gray-700 hover:text-primary-600 underline"
+                        >
+                            Today
+                        </button>
+                        <span className="text-sm font-medium text-primary-500">
+                            {viewMode === 'month' 
+                                ? currentWeek.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                                : weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                            }
+                        </span>
+                    </div>
 
-                            {/* Employee Selector */}
-                            <div className="flex items-center space-x-2">
-                                <label className="text-xs font-medium text-gray-600">Employee:</label>
-                <select
-                  value={selectedUserId === 'all' ? 'all' : String(selectedUserId || '')}
-                  onChange={(e) => {
-                    // Mark this as a user action so the persistence effect knows to update URL
-                    isUserActionRef.current = true
-                    const raw = e.target.value
-                    if (raw === 'all') {
-                      setSelectedUserId('all')
-                      return
-                    }
-                    const newUserId = parseInt(raw)
-                    if (!isNaN(newUserId)) setSelectedUserId(newUserId)
-                  }}
-                                    className="px-2.5 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white"
+                    {/* Right: user pill (thin light green border, green icon+name), then Day|Week|Month|Year */}
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2 min-w-0 max-w-[200px] border border-accent-500/70 rounded-full px-3 py-1.5 bg-white">
+                            <UserCircleIcon className="w-5 h-5 text-accent-500 flex-shrink-0" />
+                            <div className="relative flex-1 min-w-0">
+                                <select
+                                    value={selectedUserId === 'all' ? 'all' : String(selectedUserId || '')}
+                                    onChange={(e) => {
+                                        isUserActionRef.current = true
+                                        const raw = e.target.value
+                                        if (raw === 'all') { setSelectedUserId('all'); return }
+                                        const id = parseInt(raw)
+                                        if (!isNaN(id)) setSelectedUserId(id)
+                                    }}
+                                    className="w-full bg-transparent border-none text-sm font-medium text-accent-500 focus:ring-0 focus:outline-none cursor-pointer appearance-none pr-6 py-1"
                                 >
                                     <option value="all">All team</option>
-                                    {users.map(user => (
-                                        <option key={user.id} value={user.id}>
-                                            {user.first_name} {user.last_name}
-                                        </option>
+                                    {users.map((u) => (
+                                        <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>
                                     ))}
                                 </select>
+                                <ChevronDownIcon className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
                             </div>
                         </div>
-
-                        {/* Week Navigation */}
-                        <div className="flex items-center space-x-2">
-                            <button
-                                onClick={goToPreviousWeek}
-                                className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                                </svg>
-                            </button>
-
-                            <span className="text-xs font-medium text-gray-700 min-w-[120px] text-center">
-                                {weekDays[0].toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                            </span>
-
-                            <button
-                                onClick={goToNextWeek}
-                                className="p-1.5 text-gray-400 hover:text-gray-600 transition-colors"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                            </button>
+                        <div className="flex rounded-lg bg-gray-100 p-0.5">
+                            {(['day','week','month','year'] as const).map((m) => (
+                                <button
+                                    key={m}
+                                    onClick={() => setViewMode(m)}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md capitalize transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                >
+                                    {m}
+                                </button>
+                            ))}
                         </div>
-
-                        {/* Show Weekend Toggle */}
-                        <button
-                            onClick={() => setShowWeekend(!showWeekend)}
-                            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${showWeekend
-                                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                }`}
-                        >
-                            {showWeekend ? 'Hide Weekend' : 'Show Weekend'}
-                        </button>
                     </div>
                 </div>
 
-                {/* Weekly Calendar Body */}
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                    {/* Week Days Grid Container */}
-                    <div className="relative overflow-hidden">
-                        <div
-                            className={`grid divide-x divide-gray-200 transition-all duration-300 ease-in-out ${showWeekend ? 'grid-cols-7' : 'grid-cols-5'
-                                }`}
+                {/* Wrapper around all job lists — background #fff, padding 10px */}
+                <div className="bg-[#fff] rounded-xl p-[10px] flex flex-col overflow-hidden max-w-full flex-1 min-h-0">
+                {viewMode === 'month' ? (
+                    /* Month Calendar View */
+                    <div className="space-y-2">
+                        {/* Weekday headers */}
+                        <div className="grid grid-cols-7 gap-2 mb-2">
+                            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
+                                <div key={day} className="text-center text-xs font-semibold text-gray-600 py-2">
+                                    {day}
+                                </div>
+                            ))}
+                        </div>
+                        {/* Calendar grid */}
+                        <div className="grid grid-cols-7 gap-2">
+                            {getMonthDays().map((day, index) => {
+                                const dayJobs = getJobsForDay(day)
+                                const dateString = toLocalDateString(day)
+                                const isDragOver = dragOverDate === dateString
+                                const isTodayBanner = isToday(day)
+                                const isCurrentMonth = day.getMonth() === currentWeek.getMonth()
+                                
+                                // Calculate capacity bar for this day
+                                const jsDayOfWeek = day.getDay()
+                                const dayOfWeekIndex = jsDayOfWeek === 0 ? 6 : jsDayOfWeek - 1
+                                const workHoursForDay = getWorkHoursForDay(dayOfWeekIndex)
+                                const occupiedHours = getOccupiedTime(day)
+                                const workHoursNum = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
+                                
+                                // If there are jobs but 0 hours, show red
+                                const hasJobsButNoHours = dayJobs.length > 0 && occupiedHours === 0
+                                
+                                // Calculate utilization - if jobs exist but no hours, treat as 100%+ (red)
+                                const utilizationPercent = hasJobsButNoHours 
+                                    ? 100 
+                                    : (workHoursNum > 0 ? (occupiedHours / workHoursNum) * 100 : 0)
+                                
+                                // Cap at 100% - if over 100%, show all red (don't extend beyond container)
+                                const barPercent = Math.min(100, utilizationPercent)
+                                const barColor = hasJobsButNoHours || utilizationPercent > 100 
+                                    ? '#EF4444' // Red if jobs with 0 hours or over capacity
+                                    : utilizationPercent > 0 
+                                        ? '#3DD57A' // Green if within capacity
+                                        : 'transparent' // Transparent if no utilization
+                                
+                                return (
+                                    <div
+                                        key={index}
+                                        className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative min-h-[120px] ${
+                                            !isCurrentMonth ? 'opacity-50' : ''
+                                        } ${isDragOver ? 'ring-2 ring-accent-500/50' : ''} ${
+                                            isTodayBanner ? 'ring-2 ring-accent-500' : ''
+                                        }`}
+                                        onDragOver={(e) => handleDragOver(e, dateString)}
+                                        onDragLeave={handleDragLeave}
+                                        onDrop={(e) => handleDrop(e, dateString)}
+                                    >
+                                        {/* Date header */}
+                                        <div className={`text-xs font-medium mb-2 ${isTodayBanner ? 'text-accent-600 font-bold' : 'text-gray-700'}`}>
+                                            {day.getDate()}
+                                        </div>
+                                        
+                                        {/* Capacity bar - always show if current month */}
+                                        {isCurrentMonth && (
+                                            <div className="mb-2">
+                                                <div className="w-full h-1 bg-primary-500/30 rounded-full overflow-hidden relative">
+                                                    {/* Bar - capped at 100% width, color depends on utilization */}
+                                                    {barPercent > 0 && (
+                                                        <div
+                                                            className="h-full rounded-full transition-all absolute left-0 top-0 z-10"
+                                                            style={{ 
+                                                                width: `${barPercent}%`, 
+                                                                backgroundColor: barColor
+                                                            }}
+                                                        />
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {/* Job cards */}
+                                        <div className="flex-1 overflow-y-auto space-y-1.5" style={{ maxHeight: '200px' }}>
+                                            {loading ? (
+                                                <div className="flex items-center justify-center h-16">
+                                                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-500 border-t-transparent" />
+                                                </div>
+                                            ) : dayJobs.length > 0 ? (
+                                                dayJobs.slice(0, 3).map((job) => {
+                                                    const isJobCompleted = job.status === 'completed'
+                                                    const isJobCancelled = job.status === 'cancelled'
+                                                    
+                                                    return (
+                                                        <div
+                                                            key={job.id}
+                                                            draggable={!isJobCancelled}
+                                                            onDragStart={(e) => !isJobCancelled && handleDragStart(e, job)}
+                                                            onDragEnd={handleDragEnd}
+                                                            onClick={() => handleJobClick(job)}
+                                                            className={`rounded-lg p-2 text-xs transition-all border ${
+                                                                isJobCancelled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
+                                                            } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
+                                                        >
+                                                            <div className="font-semibold text-gray-800 truncate flex items-center gap-1">
+                                                                {isJobCompleted && !isJobCancelled && (
+                                                                    <CheckIcon className="w-3 h-3 text-accent-500 flex-shrink-0" strokeWidth={3} />
+                                                                )}
+                                                                <span className="truncate">
+                                                                    {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
+                                                                </span>
+                                                            </div>
+                                                            {isJobCancelled && (
+                                                                <span className="text-[9px] font-medium text-red-600">Cancelled</span>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })
+                                            ) : null}
+                                            {dayJobs.length > 3 && (
+                                                <div className="text-[10px] text-gray-500 text-center pt-1">
+                                                    +{dayJobs.length - 3} more
+                                                </div>
+                                            )}
+                                        </div>
+                                        
+                                        {/* Add job button */}
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
+                                            className="absolute bottom-1 right-1 inline-flex items-center justify-center w-5 h-5 text-accent-600 hover:text-accent-700 hover:bg-accent-50 rounded"
+                                            title="Add job"
+                                        >
+                                            <PlusIcon className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                ) : (
+                    /* Weekly Calendar — horizontal slider showing 5 days by default, scrollable to show all 7 days */
+                    <div className="flex flex-col flex-1 min-h-0 w-full overflow-hidden">
+                        {/* Scrollable columns container */}
+                        <div 
+                            ref={weekScrollContainerRef}
+                            className="flex gap-2 overflow-x-auto week-scrollbar flex-1 min-h-0 w-full"
+                            style={{ 
+                                scrollbarWidth: 'thin',
+                                scrollbarColor: '#9CA3AF #F3F4F6',
+                                scrollSnapType: 'x mandatory',
+                                WebkitOverflowScrolling: 'touch',
+                                overflowY: 'hidden'
+                            }}
+                            onScroll={(e) => {
+                                const target = e.target as HTMLDivElement
+                                setWeekScrollPosition(target.scrollLeft)
+                            }}
                         >
-                            {weekDays
-                                .map((day, originalIndex) => ({ day, originalIndex }))
-                                .filter(({ originalIndex }) => showWeekend || originalIndex < 5)
-                                .map(({ day, originalIndex }) => {
+                            {weekDays.map((day, originalIndex) => {
                                     const dayJobs = getJobsForDay(day)
-                                    // Convert JavaScript day (0=Sunday) to our day index (0=Monday)
-                                    const jsDayOfWeek = day.getDay() // 0=Sunday, 1=Monday, etc.
-                                    const dayOfWeekIndex = jsDayOfWeek === 0 ? 6 : jsDayOfWeek - 1 // Convert to 0=Monday
+                                    const jsDayOfWeek = day.getDay()
+                                    const dayOfWeekIndex = jsDayOfWeek === 0 ? 6 : jsDayOfWeek - 1
                                     const workHoursForDay = getWorkHoursForDay(dayOfWeekIndex)
                                     const occupiedHours = getOccupiedTime(day)
-                                    // Ensure workHoursForDay is a number
                                     const workHoursNum = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
-                                    const availableHours = workHoursNum - occupiedHours
                                     const utilizationPercent = workHoursNum > 0 ? (occupiedHours / workHoursNum) * 100 : 0
+                                    const greenPercent = Math.min(100, utilizationPercent) // Green bar up to 100%
+                                    const amberPercent = Math.max(0, utilizationPercent - 100) // Overflow percentage (e.g., 20% for 120%)
+                                    const overflowColor = amberPercent > 50 ? '#EF4444' : '#F59E0B' // Red if overflow > 50%, otherwise amber
 
                                     const dateString = toLocalDateString(day)
                                     const isDragOver = dragOverDate === dateString
-                                    
+                                    const isTodayBanner = isToday(day)
+
                                     return (
                                         <div
                                             key={originalIndex}
-                                            className={`flex flex-col transition-colors relative ${isDragOver ? 'bg-blue-50' : ''}`}
-                                            style={{ minHeight: '600px' }}
+                                            className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative flex-shrink-0 h-full ${isDragOver ? 'ring-2 ring-accent-500/50' : ''}`}
+                                            style={{ 
+                                                width: 'calc((100% - 32px) / 5)', // 5 columns visible, accounting for gap (8px * 4 gaps = 32px)
+                                                minWidth: '200px',
+                                                scrollSnapAlign: 'start',
+                                                scrollSnapStop: 'always'
+                                            }}
                                             onDragOver={(e) => handleDragOver(e, dateString)}
                                             onDragLeave={handleDragLeave}
                                             onDrop={(e) => handleDrop(e, dateString)}
                                         >
-                                            {/* Day Header */}
-                                            <div className={`px-3 py-2.5 border-b border-gray-200 ${isToday(day) ? 'bg-blue-50' : 'bg-gray-50'
-                                                }`}>
-                                                <div className={`text-xs font-semibold mb-0.5 ${isToday(day) ? 'text-blue-600' : 'text-gray-600'
-                                                    }`}>
-                                                    {formatWeekday(day)}
-                                                </div>
-                                                <div className={`text-sm font-bold ${isToday(day) ? 'text-blue-900' : 'text-gray-900'
-                                                    }`}>
-                                                    {formatDate(day)}
-                                                </div>
-
-                                                {/* Time Availability Bar */}
-                                                {workHoursNum > 0 && (
-                                                    <div className="mt-2">
-                                                        <div className="flex items-center justify-between mb-1">
-                                                            <span className="text-[11px] text-gray-500">
-                                                                {occupiedHours.toFixed(1)}h / {workHoursNum.toFixed(1)}h
-                                                            </span>
-                                                            <span className={`text-[11px] font-medium ${availableHours >= 0 ? 'text-gray-600' : 'text-red-600'
-                                                                }`}>
-                                                                {availableHours >= 0 ? `${availableHours.toFixed(1)}h free` : `${Math.abs(availableHours).toFixed(1)}h over`}
-                                                            </span>
-                                                        </div>
-                                                        <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden relative">
-                                                            {/* Occupied time bar */}
-                                                            <div
-                                                                className={`absolute top-0 left-0 h-full transition-all rounded-full ${utilizationPercent > 100
-                                                                        ? 'bg-red-500'
-                                                                        : utilizationPercent > 80
-                                                                            ? 'bg-orange-500'
-                                                                            : 'bg-blue-500'
-                                                                    }`}
-                                                                style={{
-                                                                    width: utilizationPercent > 100
-                                                                        ? '100%'
-                                                                        : `${utilizationPercent}%`
-                                                                }}
-                                                            />
-                                                            {/* Warning stripe pattern if over capacity */}
-                                                            {utilizationPercent > 100 && (
-                                                                <div
-                                                                    className="absolute top-0 left-0 w-full h-full bg-red-600 opacity-20"
-                                                                    style={{
-                                                                        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.1) 2px, rgba(255,255,255,0.1) 4px)'
-                                                                    }}
-                                                                />
-                                                            )}
+                                            {/* BANNER: month image from app + overlay. Today=#3DD57A, others=#193434. Date top-left, day name large bold white. */}
+                                            {(() => {
+                                                const MONTH_IMGS = ['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov','dec'] as const
+                                                const monthSlug = MONTH_IMGS[day.getMonth()]
+                                                return (
+                                                    <div
+                                                        className="relative h-16 overflow-hidden rounded-xl bg-center"
+                                                        style={{
+                                                            backgroundImage: `url(/images/${monthSlug}.jpg)`,
+                                                            backgroundColor: isTodayBanner ? '#3DD57A' : '#193434',
+                                                            backgroundSize: 'cover',
+                                                            backgroundRepeat: 'no-repeat',
+                                                        }}
+                                                    >
+                                                        {/* Overlay: today=green tint, others=dark tint so text is readable */}
+                                                        <div
+                                                            className="absolute inset-0"
+                                                            style={{ backgroundColor: isTodayBanner ? 'rgba(61,213,122,0.72)' : 'rgba(25,52,52,0.78)' }}
+                                                        />
+                                                        {/* Subtle landscape + blossoms on non-today (lighter silhouette, pink/purple blossoms) */}
+                                                        {!isTodayBanner && (
+                                                            <svg className="absolute inset-0 w-full h-full opacity-30" viewBox="0 0 320 96" preserveAspectRatio="xMidYMax slice" aria-hidden>
+                                                                <ellipse cx="80" cy="130" rx="180" ry="60" fill="rgba(255,255,255,0.12)" />
+                                                                <ellipse cx="200" cy="125" rx="200" ry="65" fill="rgba(255,255,255,0.08)" />
+                                                                <path d="M 45 96 L 52 48 Q 59 30 66 48 L 73 96 Z" fill="rgba(255,255,255,0.14)" />
+                                                                <path d="M 125 96 L 134 42 Q 143 22 152 42 L 161 96 Z" fill="rgba(255,255,255,0.1)" />
+                                                                <circle cx="54" cy="44" r="2.5" fill="rgba(240,210,230,0.5)" />
+                                                                <circle cx="136" cy="38" r="2" fill="rgba(230,200,220,0.45)" />
+                                                            </svg>
+                                                        )}
+                                                        {isTodayBanner && (
+                                                            <svg className="absolute inset-0 w-full h-full opacity-35" viewBox="0 0 320 96" preserveAspectRatio="xMidYMax slice" aria-hidden>
+                                                                <ellipse cx="80" cy="130" rx="180" ry="60" fill="rgba(0,50,40,0.5)" />
+                                                                <ellipse cx="200" cy="125" rx="200" ry="65" fill="rgba(0,55,45,0.45)" />
+                                                                <path d="M 45 96 L 52 48 Q 59 30 66 48 L 73 96 Z" fill="rgba(0,55,45,0.55)" />
+                                                                <path d="M 125 96 L 134 42 Q 143 22 152 42 L 161 96 Z" fill="rgba(0,50,40,0.5)" />
+                                                            </svg>
+                                                        )}
+                                                        <div className="relative z-10 px-3 py-3 h-full flex flex-col justify-between">
+                                                            <div className={`text-[11px] ${isTodayBanner ? 'text-white/90' : 'text-white/80'}`}>
+                                                                {day.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                            </div>
+                                                            <div className="text-lg font-bold text-white">
+                                                                {formatWeekday(day)}
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                )}
+                                                )
+                                            })()}
+
+                                            {/* Total hour: "Total hour:" above left, "X / Y" above right; bar 100% width below. No bottom border. */}
+                                            <div className="pt-2.5 pb-2.5">
+                                                <div className="flex items-center justify-between mb-1.5">
+                                                    <span className="text-[11px] font-medium text-gray-700">Total hour:</span>
+                                                    <span className="text-[11px] font-medium text-gray-700 tabular-nums">{occupiedHours.toFixed(1)} / {workHoursNum.toFixed(1)}</span>
+                                                </div>
+                                                <div className="w-full h-2 bg-primary-500/30 rounded-full relative" style={{ overflow: 'visible' }}>
+                                                    {/* Green bar - shows capacity up to 100% */}
+                                                    {greenPercent > 0 && (
+                                                        <div
+                                                            className="h-full rounded-full transition-all absolute left-0 top-0 z-10"
+                                                            style={{ width: `${greenPercent}%`, backgroundColor: '#3DD57A' }}
+                                                        />
+                                                    )}
+                                                    {/* Overflow bar - shows overflow above 100%, overlays green from left */}
+                                                    {amberPercent > 0 && (
+                                                        <div
+                                                            className="h-full rounded-full transition-all absolute left-0 top-0 z-20"
+                                                            style={{ 
+                                                                width: `${amberPercent}%`, 
+                                                                backgroundColor: overflowColor
+                                                            }}
+                                                        />
+                                                    )}
+                                                </div>
                                             </div>
 
-                                            {/* Day Content */}
-                                            <div className="flex-1 p-2 overflow-y-auto" style={{ maxHeight: 'calc(600px - 100px)' }}>
+                                            {/* Job cards — items bg #fff, border #F1F8F4; column has p-[10px] so no extra padding here */}
+                                            <div className="flex-1 overflow-y-auto">
                                                 {loading ? (
                                                     <div className="flex items-center justify-center h-32">
-                                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                                                        <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-500 border-t-transparent" />
                                                     </div>
-                                                ) : dayJobs.length > 0 ? (
-                                                    <div className="space-y-1.5">
-                                                        {dayJobs.map((job) => {
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {/* Top drop zone — drop at start of list */}
+                                                        <div
+                                                            className="relative min-h-[12px] -mt-1"
+                                                            onDragOver={(e) => {
+                                                                e.preventDefault()
+                                                                e.stopPropagation()
+                                                                e.dataTransfer.dropEffect = 'move'
+                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
+                                                                    setDragOverJobId('top')
+                                                                    setDragOverPosition('above')
+                                                                    setDragOverDate(dateString)
+                                                                }
+                                                            }}
+                                                            onDragLeave={() => { setDragOverJobId(null); setDragOverPosition(null) }}
+                                                            onDrop={(e) => {
+                                                                e.preventDefault()
+                                                                e.stopPropagation()
+                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
+                                                                    handleDrop(e, dateString, 'top')
+                                                                }
+                                                                setDragOverJobId(null)
+                                                                setDragOverPosition(null)
+                                                            }}
+                                                        >
+                                                            {draggedJob && dragOverJobId === 'top' && (
+                                                                <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
+                                                            )}
+                                                        </div>
+                                                        {dayJobs.length > 0 ? (
+                                                        <>
+                                                        {dayJobs.map((job, jobIndex) => {
                                                             const hasTime = job.scheduled_time_from || job.scheduled_time_to
-                                                            const hasNote = job.note && job.note.trim() !== ''
                                                             const addressDisplay = getAddressDisplay(job)
-
                                                             const isJobCompleted = job.status === 'completed'
+                                                            const isJobCancelled = job.status === 'cancelled'
+                                                            const taskCount = (job.job_services || job.services || []).length || 1
+                                                            const showDividerAbove = draggedJob && draggedJob.id !== job.id && dragOverJobId === job.id && dragOverPosition === 'above'
+                                                            const showDividerBelow = draggedJob && draggedJob.id !== job.id && dragOverJobId === job.id && dragOverPosition === 'below'
+
                                                             return (
-                                                                <div
-                                                                    key={job.id}
-                                                                    draggable
-                                                                    onDragStart={(e) => handleDragStart(e, job)}
-                                                                    onDragEnd={handleDragEnd}
-                                                                    onClick={() => handleJobClick(job)}
-                                                                    className={`bg-white border border-gray-200 rounded-md p-2 hover:border-blue-300 hover:shadow-sm transition-all cursor-move group ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
-                                                                >
-                                                                    {/* Top row: Client Name + completion icon */}
-                                                                    <div className="flex items-start justify-between mb-0.5">
-                                                                        <div className="font-semibold text-gray-900 text-[13px] leading-tight">
-                                                                            {job.first_name} {job.last_name}
-                                                                        </div>
-                                                                        {typeof job.status !== 'undefined' && (
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation()
-                                                                                    handleToggleJobCompletion(job)
-                                                                                }}
-                                                                                className={`w-5 h-5 rounded-full flex items-center justify-center border text-[0] ${
-                                                                                  isJobCompleted
-                                                                                    ? 'bg-green-50 border-green-300 text-green-600 hover:bg-green-100'
-                                                                                    : 'bg-white border-gray-200 text-gray-300 hover:bg-gray-100 hover:text-gray-500'
-                                                                                }`}
-                                                                                title={isJobCompleted ? 'Mark job as not completed' : 'Mark job as completed'}
-                                                                            >
-                                                                                <CheckCircleIcon className="w-3.5 h-3.5" />
-                                                                            </button>
+                                                                <div key={job.id} className="relative">
+                                                                    {/* Green divider above job - absolutely positioned overlay */}
+                                                                    {showDividerAbove && (
+                                                                        <div className="absolute -top-1 left-0 right-0 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
+                                                                    )}
+                                                                    <div
+                                                                        draggable={!isJobCancelled}
+                                                                        onDragStart={(e) => !isJobCancelled && handleDragStart(e, job)}
+                                                                        onDragEnd={handleDragEnd}
+                                                                        onDragOver={(e) => {
+                                                                            if (!isJobCancelled && draggedJob && draggedJob.id !== job.id) {
+                                                                                const rect = e.currentTarget.getBoundingClientRect()
+                                                                                const y = e.clientY - rect.top
+                                                                                const position = y < rect.height / 2 ? 'above' : 'below'
+                                                                                handleDragOverJob(e, job, position)
+                                                                            }
+                                                                        }}
+                                                                        onDragLeave={handleDragLeaveJob}
+                                                                        onDrop={(e) => {
+                                                                            if (!isJobCancelled && draggedJob && draggedJob.id !== job.id) {
+                                                                                const rect = e.currentTarget.getBoundingClientRect()
+                                                                                const y = e.clientY - rect.top
+                                                                                const position = y < rect.height / 2 ? 'above' : 'below'
+                                                                                handleDrop(e, job.scheduled_date, job.id, position)
+                                                                            }
+                                                                        }}
+                                                                        onClick={() => handleJobClick(job)}
+                                                                        className={`rounded-xl p-3 transition-all border ${
+                                                                            isJobCancelled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
+                                                                        } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
+                                                                    >
+                                                                    {/* Row 1: Client (left) + orange circle (right) */}
+                                                                    <div className="flex items-start justify-between gap-2 mb-1">
+                                                                        <Link href={`/clients/${job.client_id}`} className="font-semibold text-sm text-gray-800 truncate hover:text-accent-600 min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
+                                                                            {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
+                                                                        </Link>
+                                                                        {taskCount > 0 && (
+                                                                            <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-orange-500">
+                                                                                {taskCount}
+                                                                            </span>
                                                                         )}
                                                                     </div>
 
-                                                                    {/* Address - City • Address (clickable to copy) */}
                                                                     {addressDisplay && (
-                                                                        <div
-                                                                            onClick={(e) => copyAddressToClipboard(job, e)}
-                                                                            className="text-[11px] text-gray-600 mb-1 font-medium truncate hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                                                                            title="Click to copy address"
-                                                                        >
+                                                                        <div onClick={(e) => copyAddressToClipboard(job, e)} className="text-xs text-gray-600 truncate mb-1 cursor-pointer hover:text-accent-600" title="Copy address">
                                                                             {addressDisplay}
                                                                         </div>
                                                                     )}
 
-                                                                    {/* Time - Only if exists */}
+                                                                    {/* Clock icon + time (e.g. 12:00 - 14:00) */}
                                                                     {hasTime && (
-                                                                        <div className="flex items-center mb-1">
-                                                                            <svg className="w-3 h-3 text-gray-400 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                                                            </svg>
-                                                                            <span className="text-[11px] text-gray-600">
-                                                                                {job.scheduled_time_from && job.scheduled_time_to
-                                                                                    ? `${job.scheduled_time_from.substring(0, 5)} - ${job.scheduled_time_to.substring(0, 5)}`
-                                                                                    : job.scheduled_time_from
-                                                                                        ? `${job.scheduled_time_from.substring(0, 5)}`
-                                                                                        : ''
-                                                                                }
+                                                                        <div className="flex items-center gap-1.5 text-xs text-gray-600 mb-1.5">
+                                                                            <ClockIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                                                                            {job.scheduled_time_from && job.scheduled_time_to
+                                                                                ? `${(job.scheduled_time_from+'').substring(0,5)} - ${(job.scheduled_time_to+'').substring(0,5)}`
+                                                                                : (job.scheduled_time_from+'').substring(0,5) || ''}
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Under border: tasks, time, price (left, same style) | completed button (right) */}
+                                                                    <div className="mt-1.5 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2">
+                                                                        <div className="flex items-center gap-3 text-[11px] text-gray-500 min-w-0">
+                                                                            <span className="flex items-center gap-1 flex-shrink-0">
+                                                                                <DocumentTextIcon className="w-3.5 h-3.5" />
+                                                                                {taskCount} task{taskCount !== 1 ? 's' : ''}
                                                                             </span>
-                                                                        </div>
-                                                                    )}
-
-                                                                    {/* Note Indicator - Only if exists */}
-                                                                    {hasNote && (
-                                                                        <div className="flex items-center mb-1">
-                                                                            <svg className="w-3 h-3 text-yellow-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                                                                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
-                                                                            </svg>
-                                                                            <span className="text-[11px] text-gray-500 italic">Has note</span>
-                                                                        </div>
-                                                                    )}
-
-                                                                    {/* Time and Value - Subtle */}
-                                                                    {(job.total_duration || job.total_price) && (
-                                                                        <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-gray-100">
-                                                                            {job.total_duration && (
-                                                                                <span className="text-[11px] text-gray-500">
+                                                                            {job.total_duration != null && (
+                                                                                <span className="flex items-center gap-1 flex-shrink-0">
+                                                                                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/></svg>
                                                                                     {formatDuration(job.total_duration)}
                                                                                 </span>
                                                                             )}
-                                                                            {job.total_price && (
-                                                                                <span className="text-[11px] font-medium text-green-600">
-                                                                                    {formatPrice(job.total_price)}
-                                                                                </span>
+                                                                            {job.total_price != null && job.total_price > 0 && (
+                                                                                <span className="text-[11px] text-gray-500 flex-shrink-0">{formatPrice(job.total_price)}</span>
                                                                             )}
                                                                         </div>
+                                                                        {isJobCancelled ? (
+                                                                            <span className="text-[10px] font-medium text-red-600 px-1.5 py-0.5 rounded bg-red-100 flex-shrink-0">Cancelled</span>
+                                                                        ) : typeof job.status !== 'undefined' && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={(e) => { e.stopPropagation(); handleToggleJobCompletion(job) }}
+                                                                                className={`w-5 h-5 rounded-full flex items-center justify-center border-2 flex-shrink-0 ${
+                                                                                    isJobCompleted ? 'bg-accent-500 border-accent-500 text-white' : 'border-gray-300 bg-white'
+                                                                                }`}
+                                                                                title={isJobCompleted ? 'Mark not completed' : 'Mark completed'}
+                                                                            >
+                                                                                <CheckIcon className={`w-3 h-3 ${!isJobCompleted ? 'text-gray-400' : ''}`} />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    </div>
+                                                                    {/* Green divider below job - absolutely positioned overlay */}
+                                                                    {showDividerBelow && (
+                                                                        <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
                                                                     )}
                                                                 </div>
                                                             )
                                                         })}
-                                                    </div>
-                                                ) : (
-                                                    <div className="text-center text-gray-400 text-[11px] mt-8">
-                                                        No jobs
+                                                        {/* Bottom drop zone — drop at end of list */}
+                                                        <div
+                                                            className="relative min-h-[12px] -mb-1"
+                                                            onDragOver={(e) => {
+                                                                e.preventDefault()
+                                                                e.stopPropagation()
+                                                                e.dataTransfer.dropEffect = 'move'
+                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
+                                                                    setDragOverJobId('bottom')
+                                                                    setDragOverPosition('below')
+                                                                    setDragOverDate(dateString)
+                                                                }
+                                                            }}
+                                                            onDragLeave={() => { setDragOverJobId(null); setDragOverPosition(null) }}
+                                                            onDrop={(e) => {
+                                                                e.preventDefault()
+                                                                e.stopPropagation()
+                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
+                                                                    handleDrop(e, dateString, 'bottom')
+                                                                }
+                                                                setDragOverJobId(null)
+                                                                setDragOverPosition(null)
+                                                            }}
+                                                        >
+                                                            {draggedJob && dragOverJobId === 'bottom' && (
+                                                                <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
+                                                            )}
+                                                        </div>
+                                                        </>
+                                                        ) : (
+                                                            <div className="text-center text-gray-400 text-xs mt-8">No jobs</div>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
 
-                                            {/* Add job quick action */}
                                             <button
                                                 type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    openCreateJobForDate(dateString)
-                                                }}
-                                                className="absolute bottom-2 right-2 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+                                                onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
+                                                className="absolute bottom-2 right-2 inline-flex items-center gap-1 text-xs font-medium text-accent-600 hover:text-accent-700"
                                                 title="Add job"
                                             >
-                                                <PlusIcon className="w-3.5 h-3.5" />
-                                                <span>Add job</span>
+                                                <PlusIcon className="w-4 h-4" />
+                                                Add job
                                             </button>
                                         </div>
                                     )
                                 })}
                         </div>
                     </div>
+                )}
                 </div>
+
             </div>
 
             {/* Floating Create Button with Menu */}
             <div className="fixed bottom-6 right-6 z-40" data-create-menu>
                 {/* Dropdown Menu */}
                 {showCreateMenu && (
-                    <div className="absolute bottom-full right-0 mb-2 bg-white rounded-lg shadow-lg border border-gray-200 py-2 min-w-[160px]">
-                        <button
-                            onClick={() => {
-                                setShowCreateMenu(false)
-                                setIsCreateModalOpen(true)
-                            }}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                        >
+                    <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[180px]">
+                        <button onClick={() => { setShowCreateMenu(false); setIsCreateModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
                             Create Job
                         </button>
-                        <button
-                            onClick={() => {
-                                setShowCreateMenu(false)
-                                setIsCreateClientModalOpen(true)
-                            }}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                        >
+                        <button onClick={() => { setShowCreateMenu(false); setIsSubscriptionModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
+                            Create Subscription
+                        </button>
+                        <button onClick={() => { setShowCreateMenu(false); setIsCreateClientModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
                             Create Client
                         </button>
                     </div>
@@ -1079,7 +1744,7 @@ function JobsPageContent() {
                 {/* Create Button */}
                 <button
                     onClick={() => setShowCreateMenu(!showCreateMenu)}
-                    className="bg-white text-blue-600 px-4 py-2 rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow flex items-center space-x-2 font-medium"
+                    className="bg-accent-500 text-white px-4 py-2.5 rounded-xl shadow-md hover:shadow-lg hover:bg-accent-600 transition-all flex items-center space-x-2 font-medium"
                     title="Create"
                 >
                     <span>create +</span>
@@ -1103,6 +1768,24 @@ function JobsPageContent() {
                 }}
                 initialDate={createJobPrefillDate || undefined}
                 initialAssignedUserId={createJobPrefillUserId}
+                mode="job"
+            />
+
+            {/* Create Subscription Modal */}
+            <CreateSubscription
+                isOpen={isSubscriptionModalOpen}
+                onClose={() => {
+                    setIsSubscriptionModalOpen(false)
+                    setCreateJobPrefillDate(null)
+                    setCreateJobPrefillUserId(null)
+                }}
+                onSubscriptionCreated={() => {
+                    setIsSubscriptionModalOpen(false)
+                    setShowCreateMenu(false)
+                    setCreateJobPrefillDate(null)
+                    setCreateJobPrefillUserId(null)
+                    fetchJobsForWeek()
+                }}
             />
 
             {/* Create Client Modal */}
@@ -1208,10 +1891,10 @@ function JobsPageContent() {
 export default function JobsPage() {
     return (
         <Suspense fallback={
-            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="min-h-screen bg-page flex items-center justify-center">
                 <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="mt-2 text-gray-600">Loading...</p>
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-500 border-t-transparent"></div>
+                    <p className="mt-2 text-primary-500">Loading...</p>
                 </div>
             </div>
         }>

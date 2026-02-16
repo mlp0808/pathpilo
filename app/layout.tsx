@@ -1,9 +1,10 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { ClientI18nProvider } from './components/I18nProvider'
 
 export const metadata: Metadata = {
-  title: 'Vevago - Client Management for Service Companies',
-  description: 'Streamline your service business with Vevago. Manage clients, jobs, and recurring tasks all in one place.',
+  title: 'PathPilo - Client Management for Service Companies',
+  description: 'Streamline your service business with PathPilo. Manage clients, jobs, and recurring tasks all in one place.',
 }
 
 export default function RootLayout({
@@ -14,7 +15,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
-        {children}
+        <ClientI18nProvider>
+          {children}
+        </ClientI18nProvider>
       </body>
     </html>
   )

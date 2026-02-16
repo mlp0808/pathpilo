@@ -143,7 +143,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               value={currentService.title}
               onChange={handleInputChange}
               required
-              className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+              className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
               placeholder="e.g. Window Cleaning"
             />
           </div>
@@ -162,7 +162,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               required
               min="0"
               step="0.01"
-              className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+              className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
               placeholder="e.g. 150"
             />
           </div>
@@ -181,7 +181,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
                 onChange={handleInputChange}
                 required
                 min="0"
-                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="e.g. 1"
               />
             </div>
@@ -198,7 +198,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
                 required
                 min="0"
                 max="59"
-                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
                 placeholder="e.g. 30"
               />
             </div>
@@ -223,7 +223,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-lg text-sm font-semibold hover:from-blue-700 hover:to-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:shadow-blue-500/25"
+              className="flex-1 bg-gradient-to-r from-accent-500 to-accent-600 text-white py-3 px-6 rounded-lg text-sm font-semibold hover:from-accent-600 hover:to-accent-700 focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:shadow-accent-500/25"
             >
               {isSubmitting ? (
                 <span className="flex items-center justify-center space-x-2">
