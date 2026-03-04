@@ -69,7 +69,7 @@ export default function BusinessSettingsPage() {
     const fetchCompanyProfile = async () => {
       try {
         const token = localStorage.getItem('token')
-        const response = await fetch(apiUrl('/company/profile'), {
+        const response = await fetch(apiUrl('/companies/profile'), {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -182,7 +182,7 @@ export default function BusinessSettingsPage() {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl('/company/profile'), {
+      const response = await fetch(apiUrl('/companies/profile'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -192,8 +192,14 @@ export default function BusinessSettingsPage() {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to update company profile')
+        let errorMessage = 'Failed to update company profile'
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || errorMessage
+        } catch {
+          if (response.status === 404) errorMessage = 'API endpoint not found. Check that the API server is running.'
+        }
+        throw new Error(errorMessage)
       }
 
       setSuccess('Company profile updated successfully!')

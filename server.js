@@ -2636,6 +2636,8 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
         c.name,
         c.last_name,
         c.email as client_email,
+        c.billing_email as client_billing_email,
+        c.personal_email as client_personal_email,
         c.phone as client_phone,
         c.address,
         c.zip_code,
@@ -2658,7 +2660,7 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     }
     
     query += `
-      GROUP BY j.id, c.name, c.last_name, c.email, c.phone, c.address, c.zip_code, c.city
+      GROUP BY j.id, c.name, c.last_name, c.email, c.billing_email, c.personal_email, c.phone, c.address, c.zip_code, c.city
       ORDER BY j.scheduled_date ASC, j.created_at ASC
     `
 
@@ -3024,14 +3026,17 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Verify job belongs to user's company
+    // Verify job belongs to user's company and is not already invoiced
     const jobCheck = await pool.query(
-      'SELECT id FROM jobs WHERE id = $1 AND company_id = $2',
+      'SELECT id, invoice_id FROM jobs WHERE id = $1 AND company_id = $2',
       [jobId, companyId]
     );
 
     if (jobCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    if (jobCheck.rows[0].invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and cannot be edited.' });
     }
 
     // Validate input
@@ -3190,17 +3195,19 @@ app.put('/api/jobs/:jobId/status', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Verify job belongs to user's company
+    // Verify job belongs to user's company and is not already invoiced
     const jobCheck = await pool.query(
-      'SELECT id, status, scheduled_date FROM jobs WHERE id = $1 AND company_id = $2',
+      'SELECT id, status, scheduled_date, invoice_id FROM jobs WHERE id = $1 AND company_id = $2',
       [jobId, companyId]
     );
 
     if (jobCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
-
     const currentJob = jobCheck.rows[0];
+    if (currentJob.invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and its status cannot be changed.' });
+    }
     const oldStatus = currentJob.status;
 
     // Start transaction
@@ -3330,9 +3337,9 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
     
-    // Fetch existing job to compute "from -> to" log and verify company
+    // Fetch existing job to compute "from -> to" log, verify company, and ensure not invoiced
     const jobResult = await pool.query(
-      'SELECT id, company_id, scheduled_time_from, scheduled_time_to, client_id FROM jobs WHERE id = $1',
+      'SELECT id, company_id, scheduled_time_from, scheduled_time_to, client_id, invoice_id FROM jobs WHERE id = $1',
       [jobId]
     );
     if (jobResult.rows.length === 0) {
@@ -3341,6 +3348,9 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
     const job = jobResult.rows[0];
     if (job.company_id !== companyId) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (job.invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and its time cannot be changed.' });
     }
     
     const oldFrom = job.scheduled_time_from;
@@ -3443,6 +3453,128 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
   }
 });
 
+// Update a single job service status (scheduled | completed | cancelled) and recompute overall job status, with logging
+app.put('/api/jobs/:jobId/services/:serviceId/status', authenticateToken, async (req, res) => {
+  try {
+    const { jobId, serviceId } = req.params;
+    const { status } = req.body;
+    const userId = req.user.userId;
+
+    if (!status || !['scheduled', 'completed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Status must be scheduled, completed, or cancelled' });
+    }
+
+    // Company access + job ownership
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const jobCheck = await pool.query(
+      'SELECT id, invoice_id FROM jobs WHERE id = $1 AND company_id = $2',
+      [jobId, companyId]
+    );
+    if (jobCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    if (jobCheck.rows[0].invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and its tasks cannot be changed.' });
+    }
+
+    // Update the single job_services row
+    if (status === 'completed') {
+      await pool.query(
+        `UPDATE job_services SET status = 'completed', completed_at = COALESCE(completed_at, NOW()) WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    } else if (status === 'cancelled') {
+      await pool.query(
+        `UPDATE job_services SET status = 'cancelled', completed_at = NULL WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE job_services SET status = 'scheduled', completed_at = NULL WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    }
+
+    const updated = await pool.query(
+      'SELECT * FROM job_services WHERE id = $1 AND job_id = $2',
+      [serviceId, jobId]
+    );
+    if (updated.rows.length === 0) {
+      return res.status(404).json({ error: 'Job service not found' });
+    }
+
+    // Compute overall job status from all services, using same rules as api-server
+    const r = await pool.query(
+      `SELECT status FROM job_services WHERE job_id = $1`,
+      [jobId]
+    );
+    const statuses = (r.rows || []).map((row) => row.status);
+    let jobStatus = 'scheduled';
+    if (statuses.length === 0) {
+      jobStatus = 'scheduled';
+    } else {
+      const allCompleted = statuses.every((s) => s === 'completed');
+      const allCancelled = statuses.every((s) => s === 'cancelled');
+      const hasCompleted = statuses.some((s) => s === 'completed');
+      const hasCancelled = statuses.some((s) => s === 'cancelled');
+
+      if (allCompleted) jobStatus = 'completed';
+      else if (allCancelled) jobStatus = 'cancelled';
+      else if (hasCompleted && hasCancelled) jobStatus = 'sub_completed';
+      else jobStatus = 'scheduled';
+    }
+
+    await pool.query(
+      'UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2',
+      [jobStatus, jobId]
+    );
+
+    // Log the service status change
+    try {
+      const svcInfo = await pool.query(
+        `SELECT 
+           COALESCE(js.custom_title, s.title) AS title
+         FROM job_services js
+         LEFT JOIN services s ON js.service_id = s.id
+         WHERE js.id = $1 AND js.job_id = $2`,
+        [serviceId, jobId]
+      );
+      const svc = svcInfo.rows[0] || {};
+      const title = svc.title || 'Service';
+      let statusLabel = 'scheduled';
+      if (status === 'completed') statusLabel = 'completed';
+      else if (status === 'cancelled') statusLabel = 'cancelled';
+
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [
+          jobId,
+          userId,
+          'service-status-change',
+          `${title} -> ${statusLabel}`,
+        ]
+      );
+    } catch (logErr) {
+      console.error('Failed to log service status change (root server)', { jobId, serviceId, error: logErr.message });
+    }
+
+    const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+    res.json({
+      message: 'Service status updated',
+      service: updated.rows[0],
+      job: jobResult.rows[0] || null,
+    });
+  } catch (error) {
+    console.error('Error updating job service status:', error);
+    res.status(500).json({ error: 'Failed to update service status' });
+  }
+});
+
 // Update assigned user with validation, optional customer notification, and logging
 app.put('/api/jobs/:jobId/assignee', authenticateToken, async (req, res) => {
   try {
@@ -3457,9 +3589,9 @@ app.put('/api/jobs/:jobId/assignee', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
     
-    // Fetch existing job
+    // Fetch existing job and ensure not invoiced
     const jobResult = await pool.query(
-      'SELECT id, company_id, assigned_user_id, client_id FROM jobs WHERE id = $1',
+      'SELECT id, company_id, assigned_user_id, client_id, invoice_id FROM jobs WHERE id = $1',
       [jobId]
     );
     if (jobResult.rows.length === 0) {
@@ -3468,6 +3600,9 @@ app.put('/api/jobs/:jobId/assignee', authenticateToken, async (req, res) => {
     const job = jobResult.rows[0];
     if (job.company_id !== companyId) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (job.invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and its assignee cannot be changed.' });
     }
     
     // Validate new assignee is part of company
@@ -3534,7 +3669,7 @@ app.put('/api/jobs/:jobId/assignee', authenticateToken, async (req, res) => {
 app.put('/api/jobs/:jobId/move', authenticateToken, async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { new_date, notify_customer, notification_message, notification_subject } = req.body;
+    const { new_date, notify_customer, notification_message, notification_subject, notification_email: bodyNotificationEmail } = req.body;
     const userId = req.user.userId;
 
     console.log('Moving job:', { jobId, new_date, userId, notify_customer });
@@ -3550,9 +3685,17 @@ app.put('/api/jobs/:jobId/move', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Verify job belongs to user's company and get current date with client info
+    // Verify job belongs to user's company, is not invoiced, and get current date with client info
     const jobCheck = await pool.query(
-      `SELECT j.id, j.scheduled_date, c.personal_email, c.first_name, c.last_name
+      `SELECT 
+         j.id, 
+         j.scheduled_date, 
+         j.invoice_id, 
+         c.personal_email,
+         c.billing_email,
+         c.email,
+         c.first_name, 
+         c.last_name
        FROM jobs j
        JOIN clients c ON j.client_id = c.id
        WHERE j.id = $1 AND j.company_id = $2`,
@@ -3564,8 +3707,18 @@ app.put('/api/jobs/:jobId/move', authenticateToken, async (req, res) => {
     }
 
     const currentJob = jobCheck.rows[0];
+    if (currentJob.invoice_id) {
+      return res.status(400).json({ error: 'Job is already included on an invoice and cannot be moved.' });
+    }
     const oldDate = currentJob.scheduled_date;
-    const clientEmail = currentJob.personal_email;
+    // Prefer body-provided email (user can override), then billing_email, personal_email, main email
+    const clientEmail =
+      (bodyNotificationEmail && String(bodyNotificationEmail).trim() && String(bodyNotificationEmail).includes('@'))
+        ? String(bodyNotificationEmail).trim()
+        : currentJob.billing_email ||
+          currentJob.personal_email ||
+          currentJob.email ||
+          null;
 
     // Start transaction
     const dbClient = await pool.connect();
@@ -3599,13 +3752,31 @@ app.put('/api/jobs/:jobId/move', authenticateToken, async (req, res) => {
       let logDescription = `Job moved to ${newFormattedDate}`;
       if (notify_customer && notification_message) {
         logDescription += ' (customer notified)';
-        // TODO: Send email when email functionality is implemented
-        // For now, just log it
-        console.log('Email notification would be sent:', {
-          to: clientEmail,
-          subject: notification_subject || 'Appointment Date Changed',
-          message: notification_message
-        });
+
+        // Try to send real email to the client (if we have an email)
+        if (clientEmail && clientEmail.includes('@')) {
+          try {
+            const subject = notification_subject || 'Appointment Date Changed';
+            const plainText = notification_message;
+            const html = notification_message.replace(/\n/g, '<br>');
+
+            await sendEmail({
+              to: clientEmail,
+              from: process.env.EMAIL_FROM || 'no-reply@vevago.com',
+              subject,
+              text: plainText,
+              html
+            });
+          } catch (emailErr) {
+            console.error('❌ Failed to send move notification email:', emailErr);
+            // We still keep the job moved + log entry even if email fails.
+          }
+        } else {
+          console.warn('⚠️ No valid client email found for move notification', {
+            jobId,
+            clientEmail
+          });
+        }
       }
       
       // Check if user_id and notification_message columns exist in job_logs table
@@ -5399,6 +5570,10 @@ app.post('/api/clients/:clientId/invoices', authenticateToken, async (req, res) 
     const taxAmount = subtotal * (tax_rate / 100);
     const total = subtotal + taxAmount;
 
+    // Look up company slug for building invoice links in job logs
+    const companySlugResult = await client.query('SELECT slug FROM companies WHERE id = $1', [companyId]);
+    const companySlug = companySlugResult.rows[0]?.slug || null;
+
     // Create invoice
     const invoiceResult = await client.query(`
       INSERT INTO invoices (
@@ -5431,6 +5606,24 @@ app.post('/api/clients/:clientId/invoices', authenticateToken, async (req, res) 
       `UPDATE jobs SET invoice_id = $1 WHERE id = ANY($2::int[])`,
       [invoice.id, invoicedJobIds]
     );
+
+    // Add a log entry on each job that it was added to an invoice draft
+    const invoiceLinkPath = companySlug ? `/${companySlug}/invoices/${invoice.id}` : `/invoices/${invoice.id}`;
+    for (const jid of invoicedJobIds) {
+      try {
+        await client.query(
+          'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+          [
+            jid,
+            userId,
+            'invoice-draft',
+            `Job added to invoice draft #${invoice.invoice_number || invoice.id} (${invoiceLinkPath})`
+          ]
+        );
+      } catch (e) {
+        console.error('Failed to log invoice draft on job', { jobId: jid, invoiceId: invoice.id, error: e.message });
+      }
+    }
 
     await client.query('COMMIT');
 
@@ -5489,6 +5682,36 @@ app.get('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
       ORDER BY ii.created_at
     `, [invoiceId]);
 
+    let transactions = [];
+    let balance = Number(invoice.total) || 0;
+    try {
+      const txResult = await pool.query(`
+        SELECT id, type, amount, description, payment_source, transaction_date, created_at
+        FROM invoice_transactions
+        WHERE invoice_id = $1
+        ORDER BY transaction_date ASC, id ASC
+      `, [invoiceId]);
+      let sumCharges = 0;
+      let sumPayments = 0;
+      transactions = (txResult.rows || []).map((t) => {
+        const amount = Number(t.amount) || 0;
+        if (t.type === 'charge') sumCharges += amount;
+        else if (t.type === 'payment') sumPayments += amount;
+        return {
+          id: t.id,
+          type: t.type,
+          amount,
+          description: t.description || '',
+          payment_source: t.payment_source || null,
+          transaction_date: t.transaction_date,
+          created_at: t.created_at
+        };
+      });
+      balance = Math.round(((Number(invoice.total) || 0) + sumCharges - sumPayments) * 100) / 100;
+    } catch (_) {
+      // invoice_transactions table may not exist yet
+    }
+
     res.json({
       invoice: {
         ...invoice,
@@ -5496,7 +5719,9 @@ app.get('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
         created_by_name: invoice.created_by_first_name && invoice.created_by_last_name
           ? `${invoice.created_by_first_name} ${invoice.created_by_last_name}`
           : null,
-        items: itemsResult.rows
+        items: itemsResult.rows,
+        transactions,
+        balance
       }
     });
   } catch (error) {
@@ -5565,7 +5790,7 @@ app.put('/api/invoices/:invoiceId/status', authenticateToken, async (req, res) =
     const { invoiceId } = req.params;
     const { status } = req.body;
 
-    if (!['draft', 'sent', 'paid', 'overdue', 'cancelled'].includes(status)) {
+    if (!['draft', 'sent', 'paid', 'overdue', 'cancelled', 'overpaid'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
@@ -5593,6 +5818,99 @@ app.put('/api/invoices/:invoiceId/status', authenticateToken, async (req, res) =
   } catch (error) {
     console.error('Error updating invoice status:', error);
     res.status(500).json({ error: 'Failed to update invoice status', details: error.message });
+  }
+});
+
+// Add payment (or charge) – bookkeeping timeline
+app.post('/api/invoices/:invoiceId/transactions', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+    const { type, amount, description, payment_source, transaction_date } = req.body;
+
+    if (!type || !['charge', 'payment'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid type. Use: charge or payment' });
+    }
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+    if (type === 'charge' && (!description || String(description).trim() === '')) {
+      return res.status(400).json({ error: 'Description is required for charges' });
+    }
+
+    const invResult = await pool.query(
+      'SELECT id, total, status FROM invoices WHERE id = $1 AND company_id = $2',
+      [invoiceId, companyId]
+    );
+    if (invResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const transactionDate = transaction_date && String(transaction_date).trim()
+      ? new Date(transaction_date.trim())
+      : new Date();
+    const desc = type === 'charge' ? String(description || '').trim() : (description ? String(description).trim() : 'Payment');
+    const source = type === 'payment' && payment_source != null ? String(payment_source).trim() : null;
+
+    const insertResult = await pool.query(`
+      INSERT INTO invoice_transactions (invoice_id, type, amount, description, payment_source, transaction_date)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [invoiceId, type, numAmount, desc || 'Payment', source, transactionDate]);
+
+    const newRow = insertResult.rows[0];
+
+    const sumResult = await pool.query(`
+      SELECT type, SUM(amount::numeric) as total
+      FROM invoice_transactions
+      WHERE invoice_id = $1
+      GROUP BY type
+    `, [invoiceId]);
+
+    const invoiceTotal = Number(invResult.rows[0].total) || 0;
+    let charges = 0;
+    let payments = 0;
+    (sumResult.rows || []).forEach((r) => {
+      const val = Number(r.total) || 0;
+      if (r.type === 'charge') charges += val;
+      else if (r.type === 'payment') payments += val;
+    });
+    const balance = Math.round((invoiceTotal + charges - payments) * 100) / 100;
+
+    let newStatus = invResult.rows[0].status;
+    if (type === 'payment') {
+      if (balance <= 0) {
+        newStatus = balance < 0 ? 'overpaid' : 'paid';
+        await pool.query(
+          `UPDATE invoices SET status = $1, paid_at = COALESCE(paid_at, $2), updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND company_id = $4`,
+          [newStatus, transactionDate, invoiceId, companyId]
+        );
+      }
+    }
+
+    const transaction = {
+      id: newRow.id,
+      type: newRow.type,
+      amount: numAmount,
+      description: newRow.description || '',
+      payment_source: newRow.payment_source || null,
+      transaction_date: newRow.transaction_date,
+      created_at: newRow.created_at
+    };
+
+    res.status(201).json({
+      transaction,
+      balance,
+      status: newStatus
+    });
+  } catch (error) {
+    console.error('Error adding invoice transaction:', error);
+    res.status(500).json({ error: 'Failed to add transaction', details: error.message });
   }
 });
 
@@ -5698,6 +6016,35 @@ app.post('/api/invoices/:invoiceId/send-email', authenticateToken, async (req, r
        RETURNING *`,
       [invoiceId, companyId]
     );
+
+    // Log on each related job that its invoice was sent
+    try {
+      const itemJobs = await client.query(
+        'SELECT DISTINCT job_id FROM invoice_items WHERE invoice_id = $1',
+        [invoiceId]
+      );
+      const jobIds = itemJobs.rows.map(r => r.job_id).filter(Boolean);
+
+      // Build invoice link path (no company slug here, but the frontend can still use the ID)
+      const invoiceLink = `/invoices/${invoiceId}`;
+      for (const jid of jobIds) {
+        try {
+          await client.query(
+            'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+            [
+              jid,
+              req.user.userId,
+              'invoice-sent',
+              `Invoice #${invoice.invoice_number || invoiceId} sent to client (${invoiceLink})`
+            ]
+          );
+        } catch (logErr) {
+          console.error('Failed to log invoice sent on job', { jobId: jid, invoiceId, error: logErr.message });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to log invoice sent on related jobs', { invoiceId, error: e.message });
+    }
 
     await client.query('COMMIT');
     res.json({ message: 'Invoice sent', invoice: updated.rows[0] });

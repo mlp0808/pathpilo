@@ -336,13 +336,13 @@ router.post('/', authenticateToken, async (req, res) => {
           for (const service of services) {
             if (service.service_id) {
               await dbClient.query(`
-                INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
+                VALUES ($1, $2, $3, $4, 'scheduled')
               `, [firstJob.id, service.service_id, service.custom_price, service.custom_duration]);
             } else if (service.custom_title) {
               await dbClient.query(`
-                INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, status)
+                VALUES ($1, $2, $3, $4, 'scheduled')
               `, [firstJob.id, service.custom_title, service.custom_price, service.custom_duration]);
             }
           }
@@ -642,8 +642,8 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     for (const s of subServices) {
       await dbClient.query(
-        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes)
-         VALUES ($1,$2,$3,$4)
+        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
+         VALUES ($1,$2,$3,$4,'scheduled')
          ON CONFLICT (job_id, service_id) DO NOTHING`,
         [jobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null]
       );

@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
 import { apiUrl } from '@/app/utils/api'
-import { EyeIcon, ChevronDownIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
+import { EyeIcon, ChevronDownIcon, DocumentTextIcon, XMarkIcon } from '@heroicons/react/24/outline'
 
 interface CompletedJob {
   id: number
@@ -13,6 +13,7 @@ interface CompletedJob {
   title: string
   name?: string
   last_name?: string
+  status?: 'scheduled' | 'completed' | 'sub_completed' | 'cancelled'
   service_count: number
   total_price: number
   recurring_job_id?: number | null
@@ -71,6 +72,10 @@ export default function CompletedJobsPage() {
   // Only show completed jobs that are not yet invoiced (invoiced jobs "go away" from this list)
   const jobsNotInvoiced = jobs.filter((j) => !(j as any).invoice_id)
 
+  // Jobs that can be added to an invoice: completed or sub_completed only (cancelled appear in list but not on invoice)
+  const isJobInvoiceable = (job: CompletedJob) =>
+    job.status === 'completed' || job.status === 'sub_completed'
+
   // Unique clients that have completed, not-yet-invoiced jobs
   const clientsWithCompletedJobs: ClientOption[] = (() => {
     const seen = new Set<number>()
@@ -102,6 +107,11 @@ export default function CompletedJobsPage() {
     ? jobsNotInvoiced
     : jobsNotInvoiced.filter((j) => j.client_id === selectedClientId)
 
+  // Only completed and sub_completed jobs can be selected for invoice; cancelled appear in list but are not on the final invoice
+  const displayedInvoiceable = displayedJobs.filter(
+    (j) => j.status === 'completed' || j.status === 'sub_completed'
+  )
+
   // Selected job objects (from not-invoiced jobs list)
   const selectedJobObjects = jobsNotInvoiced.filter((j) => selectedIds.has(j.id))
   const selectedClientIds = new Set(selectedJobObjects.map((j) => j.client_id).filter((id): id is number => id != null))
@@ -126,6 +136,8 @@ export default function CompletedJobsPage() {
   }, [clientFilterOpen])
 
   const toggleSelect = (id: number) => {
+    const job = jobsNotInvoiced.find((j) => j.id === id)
+    if (job && !isJobInvoiceable(job)) return
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -135,10 +147,10 @@ export default function CompletedJobsPage() {
   }
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === displayedJobs.length) {
+    if (selectedIds.size === displayedInvoiceable.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(displayedJobs.map((j) => j.id)))
+      setSelectedIds(new Set(displayedInvoiceable.map((j) => j.id)))
     }
   }
 
@@ -220,76 +232,82 @@ export default function CompletedJobsPage() {
           <>
             {/* Top bar: client filter (left) + Create Invoice (right) */}
             <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-              {/* Client filter: searchable dropdown - only clients with completed jobs */}
+              {/* Client filter: search field – type to see matching clients (no full list, works with 1000s) */}
               {clientsWithCompletedJobs.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="text-sm font-medium text-gray-700">Client</label>
-                  <div className="relative w-full min-w-[200px] max-w-xs" ref={clientFilterRef}>
-                  <button
-                    type="button"
-                    onClick={() => setClientFilterOpen((o) => !o)}
-                    className="flex w-full items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2 text-left text-sm text-gray-900 shadow-sm transition-colors hover:border-gray-300 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
-                  >
-                    <span className="truncate">
-                      {selectedClient ? selectedClient.name : 'All clients'}
-                    </span>
-                    <ChevronDownIcon
-                      className={`h-4 w-4 flex-shrink-0 text-gray-500 transition-transform ${clientFilterOpen ? 'rotate-180' : ''}`}
-                    />
-                  </button>
-                  {clientFilterOpen && (
-                    <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
-                      <div className="border-b border-gray-100 px-2 pb-2">
+                  <div className="relative w-full min-w-[220px] max-w-sm" ref={clientFilterRef}>
+                    {selectedClientId != null ? (
+                      <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 shadow-sm">
+                        <span className="flex-1 truncate text-sm text-gray-900">{selectedClient?.name ?? 'Client'}</span>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedClientId(null); setClientSearchQuery(''); setClientFilterOpen(false) }}
+                          className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                          title="Show all clients"
+                        >
+                          <XMarkIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
                         <input
                           type="text"
                           value={clientSearchQuery}
-                          onChange={(e) => setClientSearchQuery(e.target.value)}
-                          placeholder="Search clients..."
-                          className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                          onChange={(e) => { setClientSearchQuery(e.target.value); setClientFilterOpen(true) }}
+                          onFocus={() => setClientFilterOpen(true)}
+                          placeholder="Search by client name..."
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 pr-9 text-sm text-gray-900 shadow-sm transition-colors placeholder-gray-400 hover:border-gray-300 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
                         />
-                      </div>
-                      <ul className="max-h-48 overflow-y-auto py-1">
-                        <li>
+                        {clientSearchQuery && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setSelectedClientId(null)
-                              setClientFilterOpen(false)
-                              setClientSearchQuery('')
-                            }}
-                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                              selectedClientId === null ? 'bg-accent-50 font-medium text-accent-700' : 'text-gray-700'
-                            }`}
+                            onClick={() => { setClientSearchQuery(''); setClientFilterOpen(true) }}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                           >
-                            All clients
+                            <XMarkIcon className="h-4 w-4" />
                           </button>
-                        </li>
-                        {filteredClientOptions.length === 0 ? (
-                          <li className="px-3 py-2 text-sm text-gray-500">No matches</li>
-                        ) : (
-                          filteredClientOptions.map((c) => (
-                            <li key={c.client_id}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedClientId(c.client_id)
-                                  setClientFilterOpen(false)
-                                  setClientSearchQuery('')
-                                }}
-                                className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                                  selectedClientId === c.client_id ? 'bg-accent-50 font-medium text-accent-700' : 'text-gray-700'
-                                }`}
-                              >
-                                {c.name}
-                              </button>
-                            </li>
-                          ))
                         )}
-                      </ul>
-                    </div>
-                  )}
+                      </>
+                    )}
+                    {clientFilterOpen && selectedClientId == null && (
+                      <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+                        <ul className="max-h-52 overflow-y-auto py-1">
+                          <li>
+                            <button
+                              type="button"
+                              onClick={() => { setClientFilterOpen(false); setClientSearchQuery('') }}
+                              className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                            >
+                              All clients
+                            </button>
+                          </li>
+                          {clientSearchQuery.trim().length < 2 ? (
+                            <li className="px-3 py-2 text-sm text-gray-500">Type at least 2 characters to search for a client</li>
+                          ) : filteredClientOptions.length === 0 ? (
+                            <li className="px-3 py-2 text-sm text-gray-500">No matching clients</li>
+                          ) : (
+                            filteredClientOptions.slice(0, 50).map((c) => (
+                              <li key={c.client_id}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedClientId(c.client_id)
+                                    setClientFilterOpen(false)
+                                    setClientSearchQuery('')
+                                  }}
+                                  className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-accent-50 hover:text-accent-800"
+                                >
+                                  {c.name}
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
               ) : (
                 <div />
               )}
@@ -321,7 +339,7 @@ export default function CompletedJobsPage() {
                     <th scope="col" className="w-10 px-4 py-3.5 text-left">
                       <input
                         type="checkbox"
-                        checked={displayedJobs.length > 0 && selectedIds.size === displayedJobs.length}
+                        checked={displayedInvoiceable.length > 0 && selectedIds.size === displayedInvoiceable.length}
                         onChange={toggleSelectAll}
                         className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
                       />
@@ -331,6 +349,9 @@ export default function CompletedJobsPage() {
                     </th>
                     <th scope="col" className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-600">
                       Client name
+                    </th>
+                    <th scope="col" className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-600">
+                      Status
                     </th>
                     <th scope="col" className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-600">
                       Type
@@ -349,29 +370,52 @@ export default function CompletedJobsPage() {
                 <tbody className="divide-y divide-gray-200 bg-white">
                   {displayedJobs.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-500">
+                      <td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-500">
                         {jobs.length === 0 ? 'No completed jobs yet.' : 'No completed jobs for this client.'}
                       </td>
                     </tr>
                   ) : (
-                    displayedJobs.map((job) => (
+                    displayedJobs.map((job) => {
+                      const invoiceable = isJobInvoiceable(job)
+                      return (
                       <tr
                         key={job.id}
-                        className="transition-colors hover:bg-gray-50/50"
+                        className={`transition-colors hover:bg-gray-50/50 ${!invoiceable ? 'bg-gray-50/50' : ''}`}
                       >
                         <td className="w-10 whitespace-nowrap px-4 py-3.5">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(job.id)}
-                            onChange={() => toggleSelect(job.id)}
-                            className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
-                          />
+                          {invoiceable ? (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(job.id)}
+                              onChange={() => toggleSelect(job.id)}
+                              className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                            />
+                          ) : (
+                            <span className="text-xs text-gray-400" title="Cancelled jobs are not included on the invoice">—</span>
+                          )}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3.5 text-sm font-medium text-gray-900">
                           {job.title || 'Untitled job'}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">
                           {clientName(job)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3.5">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                              job.status === 'cancelled'
+                                ? 'bg-gray-200 text-gray-700'
+                                : job.status === 'sub_completed'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-accent-100 text-accent-800'
+                            }`}
+                          >
+                            {job.status === 'cancelled'
+                              ? 'Cancelled'
+                              : job.status === 'sub_completed'
+                              ? 'Sub-completed'
+                              : 'Completed'}
+                          </span>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3.5">
                           <span
@@ -406,7 +450,7 @@ export default function CompletedJobsPage() {
                           </div>
                         </td>
                       </tr>
-                    ))
+                    )})
                   )}
                 </tbody>
               </table>

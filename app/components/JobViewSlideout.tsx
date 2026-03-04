@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon } from '@heroicons/react/24/outline'
+import { useRouter, useParams } from 'next/navigation'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import ConfirmModal from './ConfirmModal'
 import { getEmailTemplate } from '../utils/emailTemplates'
@@ -111,7 +111,7 @@ interface JobLog {
 interface MoveJobModalProps {
   isOpen: boolean
   onClose: () => void
-  onConfirm: (opts: { newDate: string, notify: boolean, subject?: string, message?: string }) => void
+  onConfirm: (opts: { newDate: string, notify: boolean, subject?: string, message?: string, email?: string }) => void
   oldDate: string
   newDate: string
   customerName: string
@@ -123,6 +123,7 @@ function MoveJobModal({ isOpen, onClose, onConfirm, oldDate, newDate, customerNa
   const [message, setMessage] = useState('')
   const [selectedDate, setSelectedDate] = useState<string>('')
   const [subject, setSubject] = useState('')
+  const [email, setEmail] = useState(customerEmail || '')
 
   useEffect(() => {
     if (isOpen) {
@@ -172,8 +173,9 @@ ${userName}`
 
       setMessage(defaultMessage)
       setNotifyCustomer(false)
+      setEmail(customerEmail || '')
     }
-  }, [isOpen, oldDate, newDate, customerName])
+  }, [isOpen, oldDate, newDate, customerName, customerEmail])
 
   if (!isOpen) return null
 
@@ -227,14 +229,19 @@ ${userName}`
                 />
                 <div>
                   <span className="text-sm font-medium text-gray-900">Notify customer</span>
-                  {customerEmail && (
-                    <span className="text-xs text-gray-500 ml-2">({customerEmail})</span>
-                  )}
                 </div>
               </label>
 
               {notifyCustomer && (
                 <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700">Send to</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="client@example.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900"
+                  />
                   <label className="block text-sm font-medium text-gray-700">
                     Email Subject
                   </label>
@@ -268,7 +275,7 @@ ${userName}`
               Cancel
             </button>
             <button
-              onClick={() => onConfirm({ newDate: selectedDate || oldDate, notify: notifyCustomer, subject: notifyCustomer ? subject : undefined, message: notifyCustomer ? message : undefined })}
+              onClick={() => onConfirm({ newDate: selectedDate || oldDate, notify: notifyCustomer, subject: notifyCustomer ? subject : undefined, message: notifyCustomer ? message : undefined, email: notifyCustomer ? email : undefined })}
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
             >
               {notifyCustomer ? 'Send and move job' : 'Proceed with move'}
@@ -284,6 +291,8 @@ ${userName}`
 
 export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: JobViewSlideoutProps) {
   const router = useRouter()
+  const params = useParams()
+  const companySlugFromRoute = (params as any)?.company as string | undefined
   const [jobDetails, setJobDetails] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
@@ -305,9 +314,43 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
   const [isDeleting, setIsDeleting] = useState(false)
   const [cancelTemplate, setCancelTemplate] = useState<{ subject: string; message: string }>({ subject: '', message: '' })
   const [showOptionsMenu, setShowOptionsMenu] = useState(false)
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<number>>(new Set())
   const [slideEntered, setSlideEntered] = useState(false)
   const [clientContact, setClientContact] = useState<{ email?: string; phone?: string } | null>(null)
   const [showNoteInput, setShowNoteInput] = useState(false)
+  const [updatingServiceId, setUpdatingServiceId] = useState<number | null>(null)
+  const [invoiceSummary, setInvoiceSummary] = useState<{ id: number; status: string; invoice_number?: string | null } | null>(null)
+
+  const updateServiceStatus = async (jobId: number, serviceId: number, status: 'scheduled' | 'completed' | 'cancelled') => {
+    setUpdatingServiceId(serviceId)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/jobs/${jobId}/services/${serviceId}/status`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to update')
+      setJobDetails((prev: any) => {
+        if (!prev || prev.id !== jobId) return prev
+        const nextStatus = data.job?.status ?? prev.status
+        const nextServices = (prev.services || []).map((s: any) =>
+          s.id === serviceId
+            ? { ...s, status: data.service?.status ?? status, completed_at: data.service?.completed_at ?? (status === 'completed' ? new Date().toISOString() : null), is_completed: (data.service?.status ?? status) === 'completed' }
+            : s
+        )
+        return { ...prev, status: nextStatus, services: nextServices }
+      })
+      // Refresh logs so the change appears in the activity log
+      fetchJobLogs(jobId)
+      onJobUpdated?.()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to update service status')
+    } finally {
+      setUpdatingServiceId(null)
+    }
+  }
 
   // Slide-in animation: start off-screen, then translate in
   useEffect(() => {
@@ -418,8 +461,95 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
   }
 
   const currentJob = jobDetails || job
-  const isCompleted = currentJob?.status === 'completed'
+  const isCompleted = currentJob?.status === 'completed' || currentJob?.status === 'sub_completed'
+  const isSubCompleted = currentJob?.status === 'sub_completed'
   const isProjectedJob = !!(currentJob?.is_projected || (typeof currentJob?.id === 'string' && currentJob.id.startsWith('subscription-')))
+  const invoiceIdOnJob = typeof currentJob?.invoice_id === 'number' ? (currentJob.invoice_id as number) : null
+  const isLocked = !!invoiceIdOnJob
+
+  // Fetch invoice summary when job is linked to an invoice
+  useEffect(() => {
+    if (!invoiceIdOnJob) {
+      setInvoiceSummary(null)
+      return
+    }
+    let cancelled = false
+    const run = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl(`/invoices/${invoiceIdOnJob}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || cancelled) return
+        const inv = data.invoice || data
+        if (!inv) return
+        setInvoiceSummary({
+          id: inv.id,
+          status: inv.status,
+          invoice_number: inv.invoice_number ?? null,
+        })
+      } catch {
+        if (!cancelled) setInvoiceSummary(null)
+      }
+    }
+    run()
+    return () => {
+      cancelled = true
+    }
+  }, [invoiceIdOnJob])
+
+  // Derived job status for display (scheduled, completed, cancelled, sub completed, invoice draft, invoiced)
+  const computeStatusMeta = () => {
+    if (!currentJob) return null
+    const baseStatus = (currentJob.status as string) || 'scheduled'
+    const hasInvoice = !!invoiceIdOnJob
+
+    if (hasInvoice) {
+      const invStatus = invoiceSummary?.status || 'draft'
+      if (invStatus === 'draft') {
+        return {
+          key: 'invoice-draft',
+          label: 'Invoice draft',
+          className: 'bg-purple-100 text-purple-800 border border-purple-200',
+        }
+      }
+      return {
+        key: 'invoiced',
+        label: 'Invoiced',
+        className: 'bg-blue-100 text-blue-800 border border-blue-200',
+      }
+    }
+
+    if (baseStatus === 'cancelled') {
+      return {
+        key: 'cancelled',
+        label: 'Cancelled',
+        className: 'bg-red-100 text-red-800 border border-red-200',
+      }
+    }
+    if (isSubCompleted) {
+      return {
+        key: 'sub_completed',
+        label: 'Sub completed',
+        className: 'bg-amber-100 text-amber-800 border border-amber-200',
+      }
+    }
+    if (baseStatus === 'completed') {
+      return {
+        key: 'completed',
+        label: 'Completed',
+        className: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+      }
+    }
+
+    return {
+      key: 'scheduled',
+      label: 'Scheduled',
+      className: 'bg-gray-100 text-gray-700 border border-gray-200',
+    }
+  }
+  const statusMeta = computeStatusMeta()
 
   // Close options menu when clicking outside
   useEffect(() => {
@@ -526,6 +656,10 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
   }
 
   const toggleCompletion = async () => {
+    if (isLocked) {
+      alert('This job is already part of an invoice and cannot be changed.')
+      return
+    }
     const jobId = await ensureRealJobId()
     if (!jobId) return
     try {
@@ -914,40 +1048,24 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
     }
   }
 
-  // Fetch job details for real jobs
+  // Fetch job details for real jobs (use GET /jobs/:id to get full job with service statuses)
   const fetchJobDetails = async (jobData: any) => {
-    if (!jobData?.client_id || !jobData?.id || typeof jobData.id !== 'number') {
-      // If we don't have valid client_id or id, keep existing data
-      return
-    }
+    if (!jobData?.id || typeof jobData.id !== 'number') return
 
     try {
       setLoading(true)
       const token = localStorage.getItem('token')
-      
-      // Fetch the full job details with services
-      const response = await fetch(apiUrl(`/clients/${jobData.client_id}/jobs`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      const response = await fetch(apiUrl(`/jobs/${jobData.id}`), {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      
       const data = await response.json()
-      
-      if (response.ok && data.jobs) {
-        // Find the specific job with its services
-        const fullJob = data.jobs.find((j: any) => j.id === jobData.id)
-        if (fullJob) {
-          setJobDetails(fullJob)
-          // Fetch logs for this job
-          fetchJobLogs(fullJob.id)
-        }
-        // If job not found, keep existing data
+
+      if (response.ok && data.job) {
+        setJobDetails(data.job)
+        fetchJobLogs(data.job.id)
       }
-      // If fetch fails, keep existing data
     } catch (error) {
-      // If there's an error, keep existing data
-      console.error('Network error: Failed to fetch job details, using existing data', error)
+      console.error('Failed to fetch job details', error)
     } finally {
       setLoading(false)
     }
@@ -971,13 +1089,9 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
       if (isProjectedJob && job.recurring_job_id) {
         // For projected jobs, fetch subscription services and assigned user
         fetchProjectedJobDetails(initialJobData)
-      } else if (job.client_id && typeof job.id === 'number') {
-        // For real jobs, try to fetch full details with services
-        fetchJobDetails(initialJobData)
       } else if (typeof job.id === 'number') {
-        // If we have a job ID but no client_id, still try to fetch logs
-        fetchJobLogs(job.id)
-        setLoading(false)
+        // For real jobs, fetch full details with service statuses from GET /jobs/:id
+        fetchJobDetails(initialJobData)
       } else {
         // If we can't fetch, we already have the data set above
         setLoading(false)
@@ -1049,6 +1163,15 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
     }).format(price || 0)
   }
 
+  const formatLogTime = (dateString: string) => {
+    const date = new Date(dateString)
+    return date.toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    })
+  }
+
   const formatLogDateTime = (dateString: string) => {
     const date = new Date(dateString)
     const time = date.toLocaleTimeString('en-GB', {
@@ -1108,8 +1231,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
     setShowMoveModal(true)
   }
 
-  const handleConfirmMove = async (opts: { notify: boolean, subject: string, message: string }) => {
-    const { notify, subject, message } = opts
+  const handleConfirmMove = async (opts: { notify: boolean, subject: string, message: string, email?: string }) => {
+    const { notify, subject, message, email: notificationEmail } = opts
     // Get newDate from pendingNewDate state (set when date input changes)
     const newDate = pendingNewDate || (jobDetails || job)?.scheduled_date
     const jobId = await ensureRealJobId()
@@ -1127,7 +1250,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
           new_date: newDate,
           notify_customer: notify,
           notification_message: notify ? message : null,
-          notification_subject: notify ? subject : null
+          notification_subject: notify ? subject : null,
+          notification_email: notify && notificationEmail ? notificationEmail : null
         })
       })
 
@@ -1189,45 +1313,114 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
               <strong>Subscription preview:</strong> This job is generated from a subscription and hasn’t been created yet. Edit will create a real job for this occurrence.
             </div>
           )}
-          {/* Row 1: Person/Company (left, #BFD1C5) | 4 buttons top right: Employee, Complete, Options, Exit. Icons #BFD1C5. */}
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <span className="text-sm font-medium" style={{ color: '#BFD1C5' }}>{(jobDetails || job)?.is_company ? 'Company' : 'Person'}</span>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {/* 1. Employee dropdown — light grey bg, opens assignee modal */}
-              <button onClick={() => { if (users.length === 0) fetchUsers(); openAssigneeModal() }} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors min-w-0 max-w-[140px]">
-                <UserIcon className="w-4 h-4 flex-shrink-0 text-gray-600" />
-                <span className="truncate text-sm font-medium">
-                  {((jobDetails || job)?.assigned_user_first_name || (jobDetails || job)?.assigned_user_last_name) ? `${(jobDetails || job).assigned_user_first_name || ''} ${(jobDetails || job).assigned_user_last_name || ''}`.trim() || 'Unassigned' : 'Unassigned'}
+          {/* Row 1: Person/Company (left, #BFD1C5) | Status pill + Options + Exit on the right. */}
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <span className="text-sm font-medium" style={{ color: '#BFD1C5' }}>
+              {(jobDetails || job)?.is_company ? 'Company' : 'Person'}
+            </span>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {statusMeta && (
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusMeta.className}`}>
+                  {statusMeta.label}
                 </span>
-                <ChevronDownIcon className="w-4 h-4 flex-shrink-0 text-gray-600" />
-              </button>
-              {/* 2. Complete — circular, outline #BFD1C5; when completed: green fill, white check */}
-              {currentJob && (
-                <button type="button" onClick={toggleCompletion} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors flex-shrink-0 ${isCompleted ? 'bg-accent-500 border-accent-500 text-white' : 'border-[#BFD1C5] bg-transparent'}`} title={isCompleted ? 'Mark not completed' : 'Mark completed'}>
-                  <CheckIcon className={`w-4 h-4 ${!isCompleted ? 'text-[#BFD1C5]' : ''}`} />
-                </button>
               )}
-              {/* 3. Options — circular, outline, 3 dots #BFD1C5 */}
-              <div className="relative options-menu">
-                <button onClick={() => setShowOptionsMenu(!showOptionsMenu)} className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0" title="Options">
-                  <EllipsisVerticalIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
+              <div className="flex items-center gap-2">
+                {/* Options — circular, outline, 3 dots #BFD1C5 */}
+                <div className="relative options-menu">
+                  <button
+                    onClick={() => setShowOptionsMenu(!showOptionsMenu)}
+                    className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0"
+                    title="Options"
+                  >
+                    <EllipsisVerticalIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
+                  </button>
+                  {showOptionsMenu && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setShowOptionsMenu(false)} aria-hidden />
+                      <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                        {!isLocked && !isProjectedJob && (
+                          <>
+                            <button
+                              onClick={() => {
+                                setShowOptionsMenu(false)
+                                toggleCompletion()
+                              }}
+                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                            >
+                              {isCompleted ? 'Mark as scheduled' : 'Mark as completed'}
+                            </button>
+                            <div className="my-1 border-t border-gray-100" />
+                          </>
+                        )}
+                        <button
+                          onClick={() => {
+                            setShowOptionsMenu(false)
+                            if (!isLocked) handleCancelJob()
+                          }}
+                          disabled={isDeleting || isLocked}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                        >
+                          Cancel job
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowOptionsMenu(false)
+                            if (!isLocked) handleDeleteJob()
+                          }}
+                          disabled={isDeleting || isLocked}
+                          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Delete job
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+                {/* Exit — circular, outline, X #BFD1C5 */}
+                <button
+                  onClick={onClose}
+                  className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0"
+                  aria-label="Close"
+                >
+                  <XMarkIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
                 </button>
-                {showOptionsMenu && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowOptionsMenu(false)} aria-hidden />
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                      <button onClick={() => { setShowOptionsMenu(false); handleCancelJob() }} disabled={isDeleting} className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50">Cancel job</button>
-                      <button onClick={() => { setShowOptionsMenu(false); handleDeleteJob() }} disabled={isDeleting} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50">Delete job</button>
-                    </div>
-                  </>
-                )}
               </div>
-              {/* 4. Exit — circular, outline, X #BFD1C5 */}
-              <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0" aria-label="Close">
-                <XMarkIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
-              </button>
             </div>
           </div>
+
+          {/* Lock banner when job is on an invoice */}
+          {isLocked && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+              <LockClosedIcon className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
+              <div className="text-xs">
+                <div className="font-semibold text-amber-800">Job is locked</div>
+                <div className="text-amber-700">
+                  This job is part of an invoice and cannot be changed here.
+                  {invoiceSummary && (
+                    <>
+                      {' '}
+                      View it on{' '}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const slug = companySlugFromRoute || ''
+                          if (slug) {
+                            router.push(`/${slug}/invoices/${invoiceSummary.id}`)
+                          } else {
+                            router.push(`/invoices/${invoiceSummary.id}`)
+                          }
+                        }}
+                        className="underline font-semibold"
+                      >
+                        invoice {invoiceSummary.invoice_number || `#${invoiceSummary.id}`}
+                      </button>
+                      .
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {/* Client name — large, bold, white */}
           <button onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-2xl font-bold text-white hover:opacity-90 transition-opacity text-left block w-full">
             {[(jobDetails || job)?.first_name || (jobDetails || job)?.name, (jobDetails || job)?.last_name].filter(Boolean).join(' ') || 'Unknown'}
@@ -1270,29 +1463,83 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                       <span className="text-sm text-primary-500">{formatAddress(jobDetails || job)}</span>
                     </div>
                   )}
-                  <button onClick={openTimeModal} className="flex items-start gap-2 w-full text-left hover:opacity-80 transition-opacity">
+                  <button
+                    onClick={isLocked ? undefined : openTimeModal}
+                    className={`flex items-start gap-2 w-full text-left transition-opacity ${
+                      isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
+                    }`}
+                  >
                     <ClockIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-                    <span className="text-sm text-primary-500">{formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'Not set'}</span>
+                    <span className="text-sm text-primary-500">
+                      {formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'Not set'}
+                    </span>
                   </button>
-                  <button onClick={() => { const d = (jobDetails || job)?.scheduled_date; if (d) handleDateChange(d) }} className="flex items-start gap-2 w-full text-left hover:opacity-80 transition-opacity">
+                  <button
+                    onClick={() => {
+                      if (isLocked) return
+                      const d = (jobDetails || job)?.scheduled_date
+                      if (d) handleDateChange(d)
+                    }}
+                    className={`flex items-start gap-2 w-full text-left transition-opacity ${
+                      isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
+                    }`}
+                  >
                     <CalendarIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-                    <span className="text-sm text-primary-500">{(jobDetails || job)?.scheduled_date ? formatFullDate((jobDetails || job).scheduled_date) : 'No date'}</span>
+                    <span className="text-sm text-primary-500">
+                      {(jobDetails || job)?.scheduled_date ? formatFullDate((jobDetails || job).scheduled_date) : 'No date'}
+                    </span>
                   </button>
+                  {/* Assigned user moved here, below date/time */}
+                  <div className="flex items-start gap-2">
+                    <UserIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isLocked) return
+                        openAssigneeModal()
+                      }}
+                      className={`flex w-full items-center justify-between text-left transition-opacity ${
+                        isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
+                      }`}
+                    >
+                      <span className="text-sm text-primary-500 truncate">
+                        {((jobDetails || job)?.assigned_user_first_name || (jobDetails || job)?.assigned_user_last_name)
+                          ? `${(jobDetails || job).assigned_user_first_name || ''} ${(jobDetails || job).assigned_user_last_name || ''}`.trim() ||
+                            'Unassigned'
+                          : 'Unassigned'}
+                      </span>
+                      {!isLocked && <ChevronDownIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="border-t border-gray-200 mt-4" />
               </div>
 
-              {/* Tasks — green DocumentTextIcon, "X of Y complete", task rows, then Total bar #3DD57A */}
+              {/* Tasks — compact rows: [check] title + duration | price | Cancel. Check = complete; Cancel = cancel row (red + cross). */}
               <div>
                 {(() => {
                   const svcs = (jobDetails || job)?.services || (jobDetails || job)?.job_services || []
-                  const totalTasks = ((jobDetails || job)?.total_tasks) ?? (svcs.length || 0)
-                  const completedCount = ((jobDetails || job)?.completed_tasks) ?? (svcs.filter((s: any) => s.is_completed).length ?? 0)
-                  const totalDuration = (jobDetails || job)?.total_duration || 0
-                  const totalPrice = (jobDetails || job)?.total_price || 0
+                  const totalTasks = svcs.length
+                  const completedCount = svcs.filter((s: any) => s.status === 'completed').length
+                  const totalDuration =
+                    (jobDetails || job)?.total_duration ??
+                    svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_duration_minutes ?? s.duration_minutes) || 0), 0)
+                  const totalPrice =
+                    (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
+                  const canEditServices = typeof currentJob?.id === 'number' && !isProjectedJob && !isLocked
+                  const handleCheckClick = (s: any) => {
+                    if (!canEditServices || !currentJob?.id || !s.id) return
+                    const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
+                    updateServiceStatus(currentJob.id, s.id, next)
+                  }
+                  const handleCancelClick = (s: any) => {
+                    if (!canEditServices || !currentJob?.id || !s.id) return
+                    const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
+                    updateServiceStatus(currentJob.id, s.id, next)
+                  }
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center justify-between mb-3">
                         <h3 className="text-base font-semibold text-primary-500 flex items-center gap-2">
                           <DocumentTextIcon className="w-5 h-5 text-accent-500" />
                           Tasks
@@ -1300,29 +1547,58 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                         <span className="text-sm text-gray-500">{completedCount} of {totalTasks || 0} complete</span>
                       </div>
                       {svcs.length > 0 ? (
-                        <div className="space-y-2">
-                          {svcs.map((s: any, i: number) => (
-                            <div key={s.service_id || s.id || i} className="bg-white rounded-lg px-3 py-3">
-                              <div className="flex items-start gap-3">
-                                <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 border-2 ${s.is_completed ? 'bg-accent-500 border-accent-500 text-white' : 'border-gray-300'}`}>
-                                  <CheckIcon className={`w-3 h-3 ${!s.is_completed ? 'text-gray-400' : ''}`} />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-medium text-primary-500">{s.title || s.service_title || s.service_name || 'Task'}</div>
-                                  <div className="flex items-center gap-1.5 mt-1 text-xs text-gray-500">
-                                    <ClockIcon className="w-3.5 h-3.5" />
+                        <div className="space-y-1">
+                          {svcs.map((s: any, i: number) => {
+                            const serviceStatus = (s.status || (s.is_completed ? 'completed' : 'scheduled')) as string
+                            const isServiceCompleted = serviceStatus === 'completed'
+                            const isServiceCancelled = serviceStatus === 'cancelled'
+                            const isUpdating = updatingServiceId === s.id
+                            return (
+                              <div
+                                key={s.service_id || s.id || i}
+                                className={`flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors ${isServiceCancelled ? 'bg-red-50' : 'bg-white'}`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleCheckClick(s)}
+                                  disabled={!canEditServices || isUpdating}
+                                  className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-colors disabled:opacity-50 ${isServiceCancelled ? 'border-red-300 bg-red-100 text-red-500' : isServiceCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white hover:border-accent-400'}`}
+                                  title={isServiceCancelled ? 'Undo cancel' : isServiceCompleted ? 'Mark not completed' : 'Mark completed'}
+                                >
+                                  {isServiceCancelled ? (
+                                    <XMarkIcon className="w-3 h-3" strokeWidth={2.5} />
+                                  ) : (
+                                    <CheckIcon className={`w-3 h-3 ${isServiceCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
+                                  )}
+                                </button>
+                                <div className="flex-1 min-w-0 flex items-center gap-2">
+                                  <span className={`text-sm font-medium truncate ${isServiceCancelled ? 'text-red-700 line-through' : 'text-primary-500'}`}>
+                                    {s.title || s.service_title || s.service_name || 'Task'}
+                                  </span>
+                                  <span className="text-xs text-gray-500 flex-shrink-0">
                                     {formatDuration(s.custom_duration_minutes ?? s.duration_minutes ?? 0)}
-                                  </div>
+                                  </span>
                                 </div>
-                                <div className="text-sm font-medium text-primary-500 flex-shrink-0">{formatPrice(s.custom_price ?? s.price ?? 0)}</div>
+                                <div className={`text-sm font-medium flex-shrink-0 ${isServiceCancelled ? 'text-red-600' : 'text-primary-500'}`}>
+                                  {formatPrice(s.custom_price ?? s.price ?? 0)}
+                                </div>
+                                {canEditServices && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCancelClick(s)}
+                                    disabled={isUpdating}
+                                    className="flex-shrink-0 text-xs font-medium px-2 py-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
+                                  >
+                                    {isServiceCancelled ? 'Undo' : 'Cancel'}
+                                  </button>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       ) : (
                         <p className="text-sm text-gray-500 py-4 text-center">No tasks assigned</p>
                       )}
-                      {/* Total — small text, right-aligned, under last task */}
                       {svcs.length > 0 && (
                         <div className="flex flex-col items-end gap-0.5 mt-2">
                           <div className="text-sm text-gray-500">Time: {formatDuration(totalDuration)}</div>
@@ -1355,6 +1631,18 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                         (log.notification_subject ? 'Notification: ' + log.notification_subject : null) ||
                         (log.notification_email ? 'Notification sent' : null) ||
                         'Update'
+                      const isInvoiceLog = log.action === 'invoice-draft' || log.action === 'invoice-sent'
+                      let invoiceIdFromDescription: number | null = null
+                      if (isInvoiceLog && typeof log.description === 'string') {
+                        const match = log.description.match(/\/invoices\/(\d+)/)
+                        if (match) {
+                          const parsed = parseInt(match[1], 10)
+                          if (Number.isFinite(parsed)) invoiceIdFromDescription = parsed
+                        }
+                      }
+                      const baseText = isInvoiceLog
+                        ? (log.action === 'invoice-draft' ? 'Invoice draft created' : 'Invoice sent')
+                        : mainText
                       return (
                         <div key={log.id} className="flex gap-4 mb-4 relative z-10">
                           {/* Left: dot (centered on the line) */}
@@ -1366,15 +1654,58 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                           </div>
                           {/* Right: white box (like mobile timelineContent) */}
                           <div className="flex-1 min-w-0 bg-white rounded-xl p-4 -mt-0.5">
-                            <div className="text-sm text-primary-500 leading-relaxed whitespace-pre-wrap">{mainText}</div>
-                            <div className="text-xs text-primary-500/60 mt-1">
-                              {formatLogDateTime(log.created_at)}
+                            <div className="text-[11px] text-gray-400 font-mono">
+                              {formatLogTime(log.created_at)}
                               {getUserDisplayName(log) && ` · ${getUserDisplayName(log)}`}
                             </div>
-                            {!log.description && !log.note_content && (log.notification_message || log.notification_email) && (
-                              <div className="mt-2 text-xs text-gray-500 space-y-0.5">
-                                {log.notification_email && <div>To: {log.notification_email}</div>}
-                                {log.notification_message && <div className="whitespace-pre-wrap">{log.notification_message}</div>}
+                            <div className="mt-1 text-sm text-primary-500 leading-relaxed whitespace-pre-wrap">
+                              {baseText}
+                              {isInvoiceLog && invoiceIdFromDescription && (
+                                <>
+                                  {' '}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const slug = companySlugFromRoute || ''
+                                      if (slug) {
+                                        router.push(`/${slug}/invoices/${invoiceIdFromDescription}`)
+                                      } else {
+                                        router.push(`/invoices/${invoiceIdFromDescription}`)
+                                      }
+                                    }}
+                                    className="text-accent-600 underline font-semibold"
+                                  >
+                                    Open invoice
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                            {!log.description && !log.note_content && (log.notification_message || log.notification_email || log.notification_subject) && (
+                              <div
+                                className="mt-2 text-xs text-gray-600 space-y-1 cursor-pointer select-none"
+                                onClick={() => setExpandedLogIds((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(log.id)) next.delete(log.id)
+                                  else next.add(log.id)
+                                  return next
+                                })}
+                              >
+                                {log.notification_email && <div><span className="text-gray-400">To:</span> {log.notification_email}</div>}
+                                {log.notification_subject && <div><span className="text-gray-400">Subject:</span> {log.notification_subject}</div>}
+                                {log.notification_message && (
+                                  <div
+                                    className={`relative overflow-hidden whitespace-pre-wrap rounded bg-gray-50 p-2 border border-gray-100 ${expandedLogIds.has(log.id) ? '' : 'max-h-[130px]'}`}
+                                    style={expandedLogIds.has(log.id) ? {} : { maskImage: 'linear-gradient(to bottom, black 0%, black 75%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 75%, transparent 100%)' }}
+                                  >
+                                    {log.notification_message}
+                                    {!expandedLogIds.has(log.id) && (
+                                      <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-gray-50 to-transparent pointer-events-none" />
+                                    )}
+                                  </div>
+                                )}
+                                {!expandedLogIds.has(log.id) && (log.notification_message || log.notification_subject) && (
+                                  <div className="text-[10px] text-gray-400 mt-0.5">Click to show full message</div>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1458,7 +1789,6 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
           {isProjectedJob && <span className="text-amber-700">Subscription preview</span>}
         </div>
       </div>
-
       {/* Move Job Confirmation Modal (Unified) */}
       <ConfirmModal
         isOpen={showMoveModal && !!(jobDetails || job)}
@@ -1470,6 +1800,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
         title="Move Job"
         description="Select a new date for this job"
         confirmLabel="Save"
+        enableNotification={true}
+        defaultEmail={(jobDetails || job) ? ((jobDetails || job) as any).client_billing_email || ((jobDetails || job) as any).client_personal_email || ((jobDetails || job) as any).client_email || '' : ''}
         defaultSubject={moveTemplate.subject || (() => {
           if (!(jobDetails || job)) return 'Appointment Date Changed'
           const oldDate = new Date(((jobDetails || job) as any).scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })

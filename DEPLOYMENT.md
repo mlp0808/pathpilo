@@ -4,6 +4,28 @@ This guide covers getting the whole project onto Git and deploying the **marketi
 
 ---
 
+## Quick: get online and update
+
+**First time on the server (one-time setup):**  
+See [First-time server setup](#first-time-server-setup) below: install Node, Git, PM2, Nginx, PostgreSQL → clone repo → create `.env` → install & build → start PM2 → configure Nginx.
+
+**Every time you want to update the live site:**
+
+1. **On your PC:** push your changes to GitHub.
+   ```powershell
+   git add .
+   git commit -m "Describe your change"
+   git push
+   ```
+2. **On the server (SSH):** go to the project and run the deploy script.
+   ```bash
+   cd /var/www/pathpilo   # or wherever you cloned the repo
+   ./scripts/deploy.sh
+   ```
+   The script pulls the latest code, installs dependencies, builds the app, and restarts PM2. If you prefer to do it by hand, see [Part 5: Updates](#part-5-updates-after-first-deployment).
+
+---
+
 ## What’s in this repo
 
 | Part | Path | Tech | Purpose |
@@ -97,31 +119,71 @@ api.pathpilo.com (or /api) → API server (VPS, reverse-proxied)
 - **Option A – All on one VPS**  
   - Nginx (or Caddy) serves:  
     - `pathpilo.com` → marketing (or static export).  
-    - `app.pathpilo.com` → Next.js (e.g. port 3002).  
+    - `app.pathpilo.com` → Next.js (e.g. port 3005).  
     - `api.pathpilo.com` or `app.pathpilo.com/api` → API (e.g. port 3003).
 
 - **Option B – Marketing on Vercel**  
   - `pathpilo.com` → Vercel (from `marketing/`).  
   - VPS only runs app + API as above.
 
-### 2.2 One-time server setup (VPS)
+### 2.2 First-time server setup (VPS)
 
-SSH in, then:
+Do this **once** per server. SSH in (e.g. `ssh user@your-server-ip`), then follow in order:
 
-```bash
-# Node 18+ (example for Ubuntu/Debian)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+1. **Install Node 18+** (Ubuntu/Debian example):
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   node -v   # should show v18 or v20
+   ```
 
-# Git, PM2, Nginx
-sudo apt-get install -y git nginx
-sudo npm install -g pm2
+2. **Install Git, PM2, Nginx:**
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y git nginx
+   sudo npm install -g pm2
+   ```
 
-# PostgreSQL (if not already installed)
-sudo apt-get install -y postgresql postgresql-contrib
-```
+3. **Install PostgreSQL** (if not already installed):
+   ```bash
+   sudo apt-get install -y postgresql postgresql-contrib
+   ```
+   Create a database and user for PathPilo, then run your schema (e.g. from the project root: `node setup-database.js` with production `.env`).
 
-Create a DB and user for PathPilo, then run your schema (e.g. `node setup-database.js` with production `.env`).
+4. **Clone the repo** (pick a folder you use for web apps, e.g. `/var/www`):
+   ```bash
+   sudo mkdir -p /var/www
+   cd /var/www
+   sudo git clone https://github.com/mlp0808/pathpilo.git
+   sudo chown -R $USER:$USER pathpilo
+   cd pathpilo
+   ```
+
+5. **Create `.env`** (never commit this):
+   ```bash
+   cp env.example .env
+   cp api-server/env.example api-server/.env
+   nano .env   # set DB_*, JWT_SECRET, NODE_ENV=production, FRONTEND_URL, ALLOWED_ORIGINS, etc.
+   nano api-server/.env   # same DB and JWT_SECRET; API_PORT=3003
+   ```
+
+6. **Install, build, and create logs dir:**
+   ```bash
+   npm install
+   npm run build
+   cd api-server && npm install && cd ..
+   mkdir -p logs
+   chmod +x scripts/deploy.sh
+   ```
+
+7. **Start the app with PM2:**
+   ```bash
+   pm2 start ecosystem.config.js
+   pm2 save
+   pm2 startup   # run the command it prints so the app starts on reboot
+   ```
+
+8. **Configure Nginx** so your domain points to the app (see [2.5 Nginx reverse proxy](#25-nginx-reverse-proxy-example)), then enable HTTPS with Certbot: `sudo certbot --nginx -d app.yourdomain.com`.
 
 ### 2.3 Clone and build on the server
 
@@ -157,7 +219,7 @@ cd marketing && npm install && npm run build && cd ..
 
 Use the project’s `ecosystem.config.js` (see below). It starts:
 
-1. **Next.js web app** (e.g. port 3002).  
+1. **Next.js web app** (e.g. port 3005).  
 2. **API server** from `api-server` (e.g. port 3003).
 
 From repo root:
@@ -170,7 +232,7 @@ pm2 startup   # enable start on reboot
 
 ### 2.5 Nginx reverse proxy (example)
 
-- **app.pathpilo.com** → `http://127.0.0.1:3002`  
+- **app.pathpilo.com** → `http://127.0.0.1:3005`  
 - **api.pathpilo.com** or **app.pathpilo.com/api** → `http://127.0.0.1:3003`
 
 Example for app + API on same domain:
@@ -181,7 +243,7 @@ server {
     server_name app.pathpilo.com;
 
     location / {
-        proxy_pass http://127.0.0.1:3002;
+        proxy_pass http://127.0.0.1:3005;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -239,9 +301,15 @@ pm2 restart vevago-frontend
 
 ## Part 5: Updates (after first deployment)
 
-1. **Local:**  
-   `git add .` → `git commit -m "..."` → `git push origin main`
-2. **Server:**  
+1. **On your PC:**  
+   `git add .` → `git commit -m "..."` → `git push`
+2. **On the server (easy way):**  
+   ```bash
+   cd /var/www/pathpilo   # or your project path
+   ./scripts/deploy.sh
+   ```
+   The script runs: `git pull` → `npm install` → `npm run build` → `api-server npm install` → `pm2 restart`.
+3. **On the server (by hand):**  
    ```bash
    cd /var/www/pathpilo
    git pull origin main

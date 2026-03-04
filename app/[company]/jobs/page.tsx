@@ -972,7 +972,7 @@ function JobsPageContent() {
     }
     
     // Handle move job confirmation
-    const handleMoveJob = async ({ notify, message, subject }: { notify: boolean, message: string, subject: string }) => {
+    const handleMoveJob = async ({ notify, message, subject, email: notificationEmail }: { notify: boolean, message: string, subject: string, email?: string }) => {
         // Use the pendingMoveJob (stored at drop time) instead of draggedJob
         const jobToMove = pendingMoveJob
         const targetDate = pendingMoveDate
@@ -1041,7 +1041,8 @@ function JobsPageContent() {
                     new_date: targetDate,
                     notify_customer: notify,
                     notification_message: notify ? message : null,
-                    notification_subject: notify ? subject : null
+                    notification_subject: notify ? subject : null,
+                    notification_email: notify && notificationEmail ? notificationEmail : null
                 })
             })
             
@@ -1121,7 +1122,7 @@ function JobsPageContent() {
       const token = localStorage.getItem('token')
       if (!token) return
       const jobId = job.id
-      const newStatus = job.status === 'completed' ? 'scheduled' : 'completed'
+      const newStatus = (job.status === 'completed' || job.status === 'sub_completed') ? 'scheduled' : 'completed'
 
       const response = await fetch(apiUrl(`/jobs/${jobId}/status`), {
         method: 'PUT',
@@ -1346,7 +1347,7 @@ function JobsPageContent() {
                                                 </div>
                                             ) : dayJobs.length > 0 ? (
                                                 dayJobs.slice(0, 3).map((job) => {
-                                                    const isJobCompleted = job.status === 'completed'
+                                                    const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                     const isJobCancelled = job.status === 'cancelled'
                                                     
                                                     return (
@@ -1560,10 +1561,57 @@ function JobsPageContent() {
                                                         </div>
                                                         {dayJobs.length > 0 ? (
                                                         <>
-                                                        {dayJobs.map((job, jobIndex) => {
+                                                        {selectedUserId === 'all'
+                                                          ? (
+                                                            // All team view: show one card per employee with jobs on this day
+                                                            <>
+                                                              {users
+                                                                .filter((u) => dayJobs.some((job: any) => Number(job.assigned_user_id) === Number(u.id)))
+                                                                .map((u) => {
+                                                                  const userJobsForDay = dayJobs.filter((job: any) => Number(job.assigned_user_id) === Number(u.id))
+                                                                  const totalMinutes = userJobsForDay.reduce((total: number, job: any) => {
+                                                                    const duration = job.total_duration
+                                                                    const minutes = duration != null && duration !== '' ? parseFloat(String(duration)) : 0
+                                                                    return total + (isNaN(minutes) ? 0 : minutes)
+                                                                  }, 0)
+                                                                  const totalHours = totalMinutes / 60
+                                                                  const maxHours = 8 // simple reference for bar
+                                                                  const percent = Math.min(100, maxHours > 0 ? (totalHours / maxHours) * 100 : 0)
+                                                                  return (
+                                                                    <button
+                                                                      key={u.id}
+                                                                      type="button"
+                                                                      onClick={() => {
+                                                                        isUserActionRef.current = true
+                                                                        setSelectedUserId(u.id)
+                                                                      }}
+                                                                      className="w-full text-left rounded-xl p-3 transition-all border bg-white border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer"
+                                                                    >
+                                                                      <div className="flex items-center justify-between mb-1.5">
+                                                                        <span className="font-semibold text-sm text-gray-800 truncate">
+                                                                          {u.first_name} {u.last_name}
+                                                                        </span>
+                                                                        <span className="text-[11px] font-medium text-gray-700 tabular-nums">
+                                                                          {totalHours.toFixed(1)} h
+                                                                        </span>
+                                                                      </div>
+                                                                      <div className="w-full h-1.5 bg-primary-500/10 rounded-full overflow-hidden">
+                                                                        {percent > 0 && (
+                                                                          <div
+                                                                            className="h-full rounded-full bg-accent-500 transition-all"
+                                                                            style={{ width: `${percent}%` }}
+                                                                          />
+                                                                        )}
+                                                                      </div>
+                                                                    </button>
+                                                                  )
+                                                                })}
+                                                            </>
+                                                          )
+                                                          : dayJobs.map((job, jobIndex) => {
                                                             const hasTime = job.scheduled_time_from || job.scheduled_time_to
                                                             const addressDisplay = getAddressDisplay(job)
-                                                            const isJobCompleted = job.status === 'completed'
+                                                            const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                             const isJobCancelled = job.status === 'cancelled'
                                                             const taskCount = (job.job_services || job.services || []).length || 1
                                                             const showDividerAbove = draggedJob && draggedJob.id !== job.id && dragOverJobId === job.id && dragOverPosition === 'above'
@@ -1653,11 +1701,11 @@ function JobsPageContent() {
                                                                                 type="button"
                                                                                 onClick={(e) => { e.stopPropagation(); handleToggleJobCompletion(job) }}
                                                                                 className={`w-5 h-5 rounded-full flex items-center justify-center border-2 flex-shrink-0 ${
-                                                                                    isJobCompleted ? 'bg-accent-500 border-accent-500 text-white' : 'border-gray-300 bg-white'
+                                                                                    isJobCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white'
                                                                                 }`}
                                                                                 title={isJobCompleted ? 'Mark not completed' : 'Mark completed'}
                                                                             >
-                                                                                <CheckIcon className={`w-3 h-3 ${!isJobCompleted ? 'text-gray-400' : ''}`} />
+                                                                                <CheckIcon className={`w-3 h-3 ${isJobCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
                                                                             </button>
                                                                         )}
                                                                     </div>
@@ -1825,6 +1873,7 @@ function JobsPageContent() {
                 cancelLabel="Cancel"
                 enableNotification={true}
                 isSubmitting={isMovingJob}
+                defaultEmail={pendingMoveJob ? (pendingMoveJob.client_billing_email || pendingMoveJob.client_personal_email || pendingMoveJob.client_email || '') : ''}
                 defaultMessage={moveTemplate.message || (() => {
                     if (!pendingMoveJob || !pendingMoveDate) return ''
                     const oldDate = new Date(pendingMoveJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })

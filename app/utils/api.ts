@@ -39,29 +39,27 @@ export const API_BASE_URL = getApiBaseUrl()
 
 /**
  * Helper function to build API URLs
+ * In development (localhost / 127.0.0.1 / IP), uses full URL to api-server (port 8000) so requests go directly to the backend.
+ * Otherwise uses relative /api paths (e.g. for production behind a reverse proxy).
  * @param endpoint - API endpoint (e.g., '/api/clients' or 'clients')
- * @returns Full API URL
+ * @returns Full or relative API URL
  */
 export const apiUrl = (endpoint: string): string => {
-  // Ensure endpoint starts with /api
   const cleanEndpoint = endpoint.startsWith('/api')
     ? endpoint
     : endpoint.startsWith('/')
       ? `/api${endpoint}`
       : `/api/${endpoint}`
 
-  // Always use full backend URL in development
+  // In the browser: use full URL to api-server in dev so we don't rely on Next.js rewrite
   if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname
-    const port = window.location.port
-
-    // If accessing from any port (3000, 3002, etc.), use localhost api-server (port 8000)
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-      return `http://localhost:8000${cleanEndpoint}`
-    }
+    const base = getApiBaseUrl()
+    if (base) return base.replace(/\/$/, '') + cleanEndpoint
+    return cleanEndpoint
   }
 
-  // Production domain: use relative path (works with reverse proxy)
-  return cleanEndpoint
+  // Server-side: use full URL for fetch
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  return base.replace(/\/$/, '') + cleanEndpoint
 }
 

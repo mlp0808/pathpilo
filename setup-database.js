@@ -401,6 +401,43 @@ async function createSchema() {
     END $$;
   `);
 
+  // --- Service-level status: job_services can be scheduled | completed | cancelled ---
+  // Job status is derived: all completed -> job completed; all cancelled -> job cancelled; mix -> sub_completed
+  await safeQuery(`
+    ALTER TABLE job_services
+    ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'scheduled'
+  `);
+  await safeQuery(`
+    ALTER TABLE job_services
+    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
+  `);
+  await safeQuery(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'job_services' AND column_name = 'status') THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'job_services_status_check') THEN
+          ALTER TABLE job_services ADD CONSTRAINT job_services_status_check CHECK (status IN ('scheduled', 'completed', 'cancelled'));
+        END IF;
+      END IF;
+    END $$;
+  `);
+
+  // Backfill job_services.status from jobs.status for existing rows (so legacy data is consistent)
+  await safeQuery(`
+    UPDATE job_services js
+    SET status = 'completed', completed_at = COALESCE(j.updated_at, j.created_at)
+    FROM jobs j
+    WHERE js.job_id = j.id AND j.status = 'completed'
+      AND (js.status IS NULL OR js.status = 'scheduled');
+  `);
+  await safeQuery(`
+    UPDATE job_services js
+    SET status = 'cancelled', completed_at = NULL
+    FROM jobs j
+    WHERE js.job_id = j.id AND j.status = 'cancelled'
+      AND (js.status IS NULL OR js.status = 'scheduled');
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_notes (
       id SERIAL PRIMARY KEY,
@@ -452,9 +489,11 @@ async function createSchema() {
   `);
 
   await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS title VARCHAR(50) DEFAULT ''`);
+  await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS paid_amount DECIMAL(10,2)`);
+  await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_source VARCHAR(50)`);
 
   await safeQuery(`ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_status_check`);
-  await safeQuery(`ALTER TABLE invoices ADD CONSTRAINT invoices_status_check CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited'))`);
+  await safeQuery(`ALTER TABLE invoices ADD CONSTRAINT invoices_status_check CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited', 'overpaid'))`);
 
   await safeQuery(`
     ALTER TABLE jobs
@@ -462,6 +501,29 @@ async function createSchema() {
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_jobs_invoice_id ON jobs(invoice_id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_transactions (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      type VARCHAR(20) NOT NULL CHECK (type IN ('charge', 'payment')),
+      amount DECIMAL(10,2) NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      payment_source VARCHAR(50),
+      transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_invoice_transactions_invoice_id ON invoice_transactions(invoice_id);`);
+
+  // Backfill: one payment transaction for invoices that have paid_at/paid_amount but no transactions yet
+  await safeQuery(`
+    INSERT INTO invoice_transactions (invoice_id, type, amount, description, payment_source, transaction_date)
+    SELECT id, 'payment', COALESCE(paid_amount, total), 'Payment', payment_source, COALESCE(paid_at, CURRENT_TIMESTAMP)
+    FROM invoices
+    WHERE paid_at IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM invoice_transactions it WHERE it.invoice_id = invoices.id)
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS invoice_items (
@@ -573,6 +635,20 @@ async function createSchema() {
   await pool.query('CREATE INDEX IF NOT EXISTS idx_jobs_assigned_user_id ON jobs(assigned_user_id);');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_recurring_jobs_company_id ON recurring_jobs(company_id);');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_recurring_jobs_client_id ON recurring_jobs(client_id);');
+
+  // Backfill job_services.status from job.status (one-time migration for service-level status)
+  await safeQuery(`
+    UPDATE job_services js
+    SET
+      status = CASE
+        WHEN j.status = 'completed' THEN 'completed'::varchar
+        WHEN j.status = 'cancelled' THEN 'cancelled'::varchar
+        ELSE 'scheduled'::varchar
+      END,
+      completed_at = CASE WHEN j.status = 'completed' THEN COALESCE(j.updated_at, j.created_at) ELSE NULL END
+    FROM jobs j
+    WHERE js.job_id = j.id
+  `);
 }
 
 async function resetDatabase() {

@@ -14,7 +14,7 @@ module.exports = {
       cwd: root,
       env: {
         NODE_ENV: 'production',
-        PORT: 3002
+        PORT: 3005
       },
       error_file: path.join(root, 'logs', 'frontend-error.log'),
       out_file: path.join(root, 'logs', 'frontend-out.log'),
@@ -34,6 +34,23 @@ module.exports = {
       },
       error_file: path.join(root, 'logs', 'api-error.log'),
       out_file: path.join(root, 'logs', 'api-out.log'),
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '1G'
+    },
+    {
+      name: 'pathpilo-marketing',
+      script: 'npm',
+      args: 'run start -- -p 3004',
+      cwd: path.join(root, 'marketing'),
+      env: {
+        NODE_ENV: 'production',
+        PORT: 3004
+      },
+      error_file: path.join(root, 'logs', 'marketing-error.log'),
+      out_file: path.join(root, 'logs', 'marketing-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       autorestart: true,

@@ -40,7 +40,6 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Get user's active company from JWT token
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
@@ -422,6 +421,12 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
     await dbClient.query(`
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS title VARCHAR(50) DEFAULT ''
     `).catch(() => {});
+    await dbClient.query(`
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''
+    `).catch(() => {});
+    await dbClient.query(`
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS show_completed_date BOOLEAN DEFAULT false
+    `).catch(() => {});
 
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
@@ -435,13 +440,25 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       job_ids,
       title: titleInput,
       issue_date,
-      due_date,
+      due_date: dueDateBody,
+      due_days,
       tax_rate = 0,
       currency = 'DKK',
       notes,
       payment_terms,
-      discounts = {}
+      discounts = {},
+      description: descriptionInput = '',
+      show_completed_date: showCompletedDate = false
     } = req.body;
+
+    let due_date = dueDateBody;
+    if (due_days != null && due_days !== '' && issue_date) {
+      const d = new Date(issue_date);
+      if (!isNaN(d.getTime())) {
+        d.setDate(d.getDate() + Number(due_days));
+        due_date = d.toISOString().split('T')[0];
+      }
+    }
 
     if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
       return res.status(400).json({ error: 'At least one job must be selected' });
@@ -461,19 +478,15 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
     }
 
     const jobCheck = await dbClient.query(`
-      SELECT j.id, j.title, j.status,
-             COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) as total_price,
-             COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes)), 0) as total_duration,
-             array_agg(DISTINCT COALESCE(s.title, js.custom_title)) FILTER (WHERE COALESCE(s.title, js.custom_title) IS NOT NULL) as services
+      SELECT j.id, j.title, j.status
       FROM jobs j
-      LEFT JOIN job_services js ON j.id = js.job_id
-      LEFT JOIN services s ON js.service_id = s.id
-      WHERE j.id = ANY($1) AND j.client_id = $2 AND j.status = 'completed' AND j.invoice_id IS NULL
-      GROUP BY j.id
+      WHERE j.id = ANY($1) AND j.client_id = $2
+        AND (j.status = 'completed' OR j.status = 'sub_completed')
+        AND j.invoice_id IS NULL
     `, [job_ids, clientId]);
 
     if (jobCheck.rows.length !== job_ids.length) {
-      return res.status(400).json({ error: 'Some jobs not found or not completed' });
+      return res.status(400).json({ error: 'Some jobs not found or not invoiceable (must be completed/sub-completed and not already invoiced)' });
     }
 
     // Invoice title: default "Invoice", max 30 chars + "..." if over
@@ -506,7 +519,7 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
           s.duration_minutes
         FROM job_services js
         LEFT JOIN services s ON js.service_id = s.id
-        WHERE js.job_id = $1
+        WHERE js.job_id = $1 AND js.status = 'completed'
       `, [job.id]);
 
       if (jobServices.rows.length === 0) {
@@ -547,7 +560,7 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
     }
 
     if (invoiceItems.length === 0) {
-      return res.status(400).json({ error: 'No services found for the selected jobs. Make sure jobs have services assigned.' });
+      return res.status(400).json({ error: 'No completed services found for the selected jobs. Only completed services are invoiced.' });
     }
 
     const taxAmount = subtotal * (tax_rate / 100);
@@ -556,12 +569,14 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
     const invoiceResult = await dbClient.query(`
       INSERT INTO invoices (
         company_id, client_id, invoice_number, title, issue_date, due_date,
-        subtotal, tax_rate, tax_amount, total, currency, notes, payment_terms, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        subtotal, tax_rate, tax_amount, total, currency, notes, payment_terms, created_by,
+        description, show_completed_date, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft')
       RETURNING *
     `, [
       companyId, clientId, invoiceNumber, invoiceTitle || '', issue_date, due_date,
-      subtotal, tax_rate, taxAmount, total, currency, notes, payment_terms, userId
+      subtotal, tax_rate, taxAmount, total, currency, notes, payment_terms, userId,
+      (descriptionInput && String(descriptionInput).trim()) || '', !!showCompletedDate
     ]);
 
     const invoice = invoiceResult.rows[0];

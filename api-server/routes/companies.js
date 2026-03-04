@@ -268,6 +268,107 @@ router.post('/switch', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/companies/profile - Get company profile (uses active company from token when available)
+// Must be defined BEFORE /:companyId so "profile" is not interpreted as a company ID
+router.get('/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const activeCompanyId = req.user.activeCompanyId;
+    const { pool } = require('../utils/database');
+
+    let companyId = activeCompanyId;
+    if (!companyId) {
+      const result = await pool.query(`
+        SELECT uc.company_id
+        FROM user_companies uc
+        WHERE uc.user_id = $1
+        LIMIT 1
+      `, [userId]);
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'No active company found' });
+      }
+      companyId = result.rows[0].company_id;
+    } else {
+      const member = await pool.query(
+        'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [userId, companyId]
+      );
+      if (member.rows.length === 0) {
+        return res.status(403).json({ error: 'Not a member of the active company' });
+      }
+    }
+
+    const companyResult = await pool.query(
+      'SELECT * FROM companies WHERE id = $1',
+      [companyId]
+    );
+
+    if (companyResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const company = companyResult.rows[0];
+    res.json({
+      company: {
+        id: company.id,
+        name: company.name,
+        country: company.country,
+        cvrNumber: company.cvr_number,
+        address: company.address,
+        city: company.city,
+        zipCode: company.zip_code
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching company profile:', error);
+    res.status(500).json({ error: 'Failed to fetch company profile' });
+  }
+});
+
+// PUT /api/companies/profile - Update company profile (uses active company from token when available)
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    const { name, country, cvrNumber, address, city, zipCode } = req.body;
+    const userId = req.user.userId;
+    const activeCompanyId = req.user.activeCompanyId;
+    const { pool } = require('../utils/database');
+
+    let companyId = activeCompanyId;
+    if (!companyId) {
+      const result = await pool.query(`
+        SELECT uc.company_id
+        FROM user_companies uc
+        WHERE uc.user_id = $1
+        LIMIT 1
+      `, [userId]);
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'No active company found' });
+      }
+      companyId = result.rows[0].company_id;
+    } else {
+      const member = await pool.query(
+        'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [userId, companyId]
+      );
+      if (member.rows.length === 0) {
+        return res.status(403).json({ error: 'Not a member of the active company' });
+      }
+    }
+
+    await pool.query(
+      'UPDATE companies SET name = $1, country = $2, cvr_number = $3, address = $4, city = $5, zip_code = $6, updated_at = CURRENT_TIMESTAMP WHERE id = $7',
+      [name != null ? String(name).trim() : null, country != null ? String(country).trim() : null, cvrNumber != null ? String(cvrNumber).trim() : null, address != null ? String(address).trim() : null, city != null ? String(city).trim() : null, zipCode != null ? String(zipCode).trim() : null, companyId]
+    );
+
+    res.json({
+      message: 'Company profile updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating company profile:', error);
+    res.status(500).json({ error: 'Failed to update company profile' });
+  }
+});
+
 // PUT /api/companies/:companyId - Update company (setup wizard; owner only)
 router.put('/:companyId', authenticateToken, async (req, res) => {
   try {
@@ -412,85 +513,6 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error creating company:', error);
     res.status(500).json({ error: 'Failed to create company' });
-  }
-});
-
-// GET /api/companies/profile - Get company profile
-router.get('/profile', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { pool } = require('../utils/database');
-
-    const result = await pool.query(`
-      SELECT uc.company_id, c.name as company_name
-      FROM user_companies uc
-      JOIN companies c ON uc.company_id = c.id
-      WHERE uc.user_id = $1
-      LIMIT 1
-    `, [userId]);
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'No active company found' });
-    }
-    const companyId = result.rows[0].company_id;
-
-    const companyResult = await pool.query(
-      'SELECT * FROM companies WHERE id = $1',
-      [companyId]
-    );
-
-    if (companyResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Company not found' });
-    }
-
-    const company = companyResult.rows[0];
-    res.json({
-      company: {
-        id: company.id,
-        name: company.name,
-        country: company.country,
-        cvrNumber: company.cvr_number,
-        address: company.address,
-        city: company.city,
-        zipCode: company.zip_code
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching company profile:', error);
-    res.status(500).json({ error: 'Failed to fetch company profile' });
-  }
-});
-
-// PUT /api/companies/profile - Update company profile
-router.put('/profile', authenticateToken, async (req, res) => {
-  try {
-    const { name, country, cvrNumber, address, city, zipCode } = req.body;
-    const userId = req.user.userId;
-    const { pool } = require('../utils/database');
-
-    const result = await pool.query(`
-      SELECT uc.company_id
-      FROM user_companies uc
-      WHERE uc.user_id = $1
-      LIMIT 1
-    `, [userId]);
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'No active company found' });
-    }
-    const companyId = result.rows[0].company_id;
-
-    await pool.query(
-      'UPDATE companies SET name = $1, country = $2, cvr_number = $3, address = $4, city = $5, zip_code = $6, updated_at = CURRENT_TIMESTAMP WHERE id = $7',
-      [name, country, cvrNumber, address, city, zipCode, companyId]
-    );
-
-    res.json({
-      message: 'Company profile updated successfully'
-    });
-  } catch (error) {
-    console.error('Error updating company profile:', error);
-    res.status(500).json({ error: 'Failed to update company profile' });
   }
 });
 

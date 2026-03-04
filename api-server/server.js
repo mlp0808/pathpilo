@@ -1,4 +1,9 @@
 require('dotenv').config();
+const path = require('path');
+// If no email config in api-server/.env, try parent .env (e.g. single .env at project root)
+if (!process.env.RESEND_API_KEY && !process.env.EMAIL_HOST) {
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+}
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
@@ -149,6 +154,7 @@ const futureRoutes = require('./routes/future');
 const workHoursRoutes = require('./routes/work-hours');
 const adminRoutes = require('./routes/admin');
 const companyUsersRoutes = require('./routes/company-users');
+const emailTemplateRoutes = require('./routes/email-templates');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -166,6 +172,7 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/work-hours', workHoursRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
 
 // Health check endpoint

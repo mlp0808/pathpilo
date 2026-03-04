@@ -20,6 +20,7 @@ module.exports = {
           900: '#193434',
         },
         accent: {
+          50: '#ecfdf3',   // Light mint / off-white green
           400: '#3DD57A',   // Green
           500: '#3DD57A',
           600: '#35c06e',

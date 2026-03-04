@@ -9,6 +9,25 @@ import { ArrowLeftIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 
 const MAX_TITLE_LEN = 30
 
+const PAYMENT_TERMS_PLACEHOLDERS = [
+  '{due_date}',
+  '{overdue_days}',
+  '{invoice_date}',
+  '{invoice_number}',
+] as const
+
+function replacePaymentTermsPlaceholders(
+  template: string,
+  values: { due_date: string; overdue_days: number; invoice_date: string; invoice_number: string }
+): string {
+  let out = template
+  out = out.replace(/\{due_date\}/g, values.due_date)
+  out = out.replace(/\{overdue_days\}/g, String(values.overdue_days))
+  out = out.replace(/\{invoice_date\}/g, values.invoice_date)
+  out = out.replace(/\{invoice_number\}/g, values.invoice_number)
+  return out
+}
+
 function formatDate(value: string): string {
   if (!value) return '—'
   const d = new Date(value)
@@ -39,13 +58,22 @@ function NewInvoicePageContent() {
   const [form, setForm] = useState({
     title: 'Invoice',
     issue_date: new Date().toISOString().split('T')[0],
-    due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    due_days: 30,
     tax_rate: 25,
     currency: 'DKK',
-    payment_terms: 'Payment due within 30 days',
+    payment_terms: 'Payment terms: Net {overdue_days} days - Due date: {due_date}\n\nThe amount is to be paid to bank account:\nBank / Reg.nr. 5332 / Kontonr. 0254888\nInvoice no. {invoice_number} must be stated for bank transfer\n\nInterest of 0.81% per commenced month plus a fee of 100.00 DKK will be charged for payment after due date.',
     notes: '',
+    description: '',
+    show_completed_date: false,
     discounts: {} as Record<string, number>,
   })
+
+  const due_date = useMemo(() => {
+    const d = new Date(form.issue_date)
+    if (isNaN(d.getTime())) return form.issue_date
+    d.setDate(d.getDate() + form.due_days)
+    return d.toISOString().split('T')[0]
+  }, [form.issue_date, form.due_days])
 
   const selectedJobs = useMemo(() => {
     if (jobIds.length === 0) return []
@@ -113,11 +141,14 @@ function NewInvoicePageContent() {
           job_ids: selectedJobs.map((j) => j.id),
           title: form.title.slice(0, MAX_TITLE_LEN),
           issue_date: form.issue_date,
-          due_date: form.due_date,
+          due_date,
+          due_days: form.due_days,
           tax_rate: form.tax_rate,
           currency: form.currency,
           payment_terms: form.payment_terms,
           notes: form.notes,
+          description: form.description.trim() || '',
+          show_completed_date: form.show_completed_date,
           discounts: form.discounts,
         }),
       })
@@ -216,14 +247,28 @@ function NewInvoicePageContent() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">Due date</label>
+                      <label className="mb-1.5 block text-sm font-medium text-gray-700">Days until due</label>
                       <input
-                        type="date"
-                        value={form.due_date}
-                        onChange={(e) => setForm((p) => ({ ...p, due_date: e.target.value }))}
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={form.due_days}
+                        onChange={(e) => setForm((p) => ({ ...p, due_days: Math.max(1, parseInt(e.target.value, 10) || 30) }))}
                         className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
                       />
                     </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="show-completed-date"
+                      checked={form.show_completed_date}
+                      onChange={(e) => setForm((p) => ({ ...p, show_completed_date: e.target.checked }))}
+                      className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                    />
+                    <label htmlFor="show-completed-date" className="text-sm font-medium text-gray-700">
+                      Show completed date under each job title on invoice
+                    </label>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -269,7 +314,10 @@ function NewInvoicePageContent() {
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 truncate">{job.title || 'Untitled job'}</p>
                           <p className="text-xs text-gray-500">
-                            {formatMoney(job.total_price ?? 0, form.currency)} before discount
+                            {form.show_completed_date
+                              ? `Completed ${formatDate(job.updated_at || job.created_at || '')}`
+                              : `${formatMoney(job.total_price ?? 0, form.currency)} before discount`
+                            }
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -296,23 +344,36 @@ function NewInvoicePageContent() {
                 <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Payment & notes</h2>
                 <div className="space-y-4">
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Payment terms</label>
-                    <input
-                      type="text"
-                      value={form.payment_terms}
-                      onChange={(e) => setForm((p) => ({ ...p, payment_terms: e.target.value }))}
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Description (on invoice, above table)</label>
+                    <textarea
+                      value={form.description}
+                      onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                      rows={3}
                       className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder="e.g. Payment due within 30 days"
+                      placeholder="Optional description shown on the invoice above the line items..."
                     />
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Notes (optional)</label>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Payment terms</label>
+                    <textarea
+                      value={form.payment_terms}
+                      onChange={(e) => setForm((p) => ({ ...p, payment_terms: e.target.value }))}
+                      rows={6}
+                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 font-mono text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+                      placeholder="Use {due_date}, {overdue_days}, {invoice_date}, {invoice_number} as placeholders"
+                    />
+                    <p className="mt-1.5 text-xs text-gray-500">
+                      Placeholders: {PAYMENT_TERMS_PLACEHOLDERS.join(', ')}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Internal notes (not shown on invoice)</label>
                     <textarea
                       value={form.notes}
                       onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
                       rows={3}
                       className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder="Additional notes..."
+                      placeholder="For your reference only..."
                     />
                   </div>
                 </div>
@@ -351,12 +412,12 @@ function NewInvoicePageContent() {
                     )}
                     <div className="mt-3 flex flex-wrap gap-4 text-xs">
                       <div>
-                        <span className="text-gray-500">Issue</span>
+                        <span className="text-gray-500">Invoice date</span>
                         <p className="font-medium text-gray-900">{formatDate(form.issue_date)}</p>
                       </div>
                       <div>
-                        <span className="text-gray-500">Due</span>
-                        <p className="font-medium text-gray-900">{formatDate(form.due_date)}</p>
+                        <span className="text-gray-500">Due date</span>
+                        <p className="font-medium text-gray-900">{formatDate(due_date)}</p>
                       </div>
                     </div>
                   </div>
@@ -364,6 +425,11 @@ function NewInvoicePageContent() {
                     <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Bill to</p>
                     <p className="mt-1 font-medium text-gray-900">{clientName}</p>
                   </div>
+                  {form.description.trim() && (
+                    <div className="border-b border-gray-200/80 bg-white px-5 py-3">
+                      <p className="text-sm text-gray-600 whitespace-pre-wrap">{form.description.trim()}</p>
+                    </div>
+                  )}
                   <div className="border-b border-gray-200/80 bg-white">
                     <table className="min-w-full text-sm">
                       <thead>
@@ -378,7 +444,14 @@ function NewInvoicePageContent() {
                           const lineTotal = Math.max(0, (job.total_price || 0) - discount)
                           return (
                             <tr key={job.id} className="border-b border-gray-100">
-                              <td className="px-4 py-2.5 text-gray-900">{job.title || 'Untitled job'}</td>
+                              <td className="px-4 py-2.5 text-gray-900">
+                                <span>{job.title || 'Untitled job'}</span>
+                                {form.show_completed_date && (job.updated_at || job.created_at) && (
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                    Completed {formatDate(job.updated_at || job.created_at)}
+                                  </p>
+                                )}
+                              </td>
                               <td className="px-4 py-2.5 text-right font-medium text-gray-900">
                                 {formatMoney(lineTotal, form.currency)}
                               </td>
@@ -406,8 +479,16 @@ function NewInvoicePageContent() {
                       </div>
                     </div>
                     {form.payment_terms && (
-                      <p className="mt-3 text-xs text-gray-500">{form.payment_terms}</p>
+                      <div className="mt-3 text-xs text-gray-600 whitespace-pre-wrap">
+                        {replacePaymentTermsPlaceholders(form.payment_terms, {
+                          due_date: formatDate(due_date),
+                          overdue_days: form.due_days,
+                          invoice_date: formatDate(form.issue_date),
+                          invoice_number: '[Invoice number]',
+                        })}
+                      </div>
                     )}
+                    {/* Internal notes are not shown on invoice */}
                   </div>
                 </div>
               </div>

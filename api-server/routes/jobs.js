@@ -39,6 +39,55 @@ const getActiveCompanyId = (req) => {
   return { companyId: activeCompanyId };
 };
 
+// Compute job status from its job_services and update jobs.status.
+// Rules:
+// - All services completed            -> completed
+// - All services cancelled            -> cancelled
+// - Mix of completed and cancelled    -> sub_completed
+// - Any service still without status
+//   (scheduled / null / anything else)-> scheduled
+async function computeAndUpdateJobStatus(jobId) {
+  const r = await pool.query(
+    `SELECT status FROM job_services WHERE job_id = $1`,
+    [jobId]
+  );
+  const statuses = (r.rows || []).map((row) => row.status);
+  if (statuses.length === 0) {
+    await pool.query(
+      `UPDATE jobs SET status = 'scheduled', updated_at = NOW() WHERE id = $1`,
+      [jobId]
+    );
+    return 'scheduled';
+  }
+  const allCompleted = statuses.every((s) => s === 'completed');
+  const allCancelled = statuses.every((s) => s === 'cancelled');
+  const hasCompleted = statuses.some((s) => s === 'completed');
+  const hasCancelled = statuses.some((s) => s === 'cancelled');
+
+  let jobStatus = 'scheduled';
+
+  if (allCompleted) {
+    // Every task explicitly completed
+    jobStatus = 'completed';
+  } else if (allCancelled) {
+    // Every task explicitly cancelled
+    jobStatus = 'cancelled';
+  } else if (hasCompleted && hasCancelled) {
+    // All tasks have an explicit status (completed/cancelled), and there is a mix
+    // This represents a partially done job where some tasks were cancelled.
+    jobStatus = 'sub_completed';
+  } else {
+    // At least one task is still "blank"/scheduled (no explicit completed/cancelled),
+    // so the overall job should NOT be treated as completed yet.
+    jobStatus = 'scheduled';
+  }
+  await pool.query(
+    `UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2`,
+    [jobStatus, jobId]
+  );
+  return jobStatus;
+}
+
 // GET /api/jobs/:jobId - Get single job with full details (MUST come before GET /)
 // Note: authenticateToken is already applied via router.use() above
 router.get('/:jobId', async (req, res) => {
@@ -92,7 +141,7 @@ router.get('/:jobId', async (req, res) => {
 
     // Get all services for this job
     // Note: job_services can have either service_id (references services table) or custom_title (custom service)
-    // We use custom_title if available, otherwise we'll need to fetch service name separately
+    // Each service has status: scheduled | completed | cancelled; job status is derived from these.
     const servicesQuery = `
       SELECT
         js.id,
@@ -101,11 +150,13 @@ router.get('/:jobId', async (req, res) => {
         js.custom_title,
         js.custom_price,
         js.custom_duration_minutes,
+        COALESCE(js.status, 'scheduled') as status,
+        js.completed_at,
         js.custom_title as service_name,
         NULL as service_description,
         COALESCE(js.custom_price, s.price) as price,
         COALESCE(js.custom_duration_minutes, s.duration_minutes) as duration_minutes,
-        (j.status = 'completed') as is_completed
+        (COALESCE(js.status, 'scheduled') = 'completed') as is_completed
       FROM job_services js
       LEFT JOIN jobs j ON js.job_id = j.id
       LEFT JOIN services s ON js.service_id = s.id
@@ -141,9 +192,8 @@ router.get('/:jobId', async (req, res) => {
     // Calculate totals
     const totalPrice = services.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
     const totalDuration = services.reduce((sum, s) => sum + (parseInt(s.duration_minutes) || 0), 0);
-    // Note: job_services doesn't have is_completed, so we use the job status
-    const isJobCompleted = job.status === 'completed';
-    const completedCount = isJobCompleted ? services.length : 0;
+    const completedCount = services.filter((s) => s.status === 'completed').length;
+    const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed';
 
     // Get timeline (job_logs) for this job
     let timeline = [];
@@ -213,8 +263,7 @@ router.get('/', async (req, res) => {
 
     const onlyCompleted = statusFilter === 'completed';
 
-    // Get all jobs (optionally filter by status)
-    // Use subquery to calculate totals from job_services, then join back to jobs
+    // Use subquery: totals only from completed services (so invoice preview matches)
     let query = `
       SELECT
         j.*,
@@ -238,6 +287,7 @@ router.get('/', async (req, res) => {
           SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as calculated_duration
         FROM job_services js
         LEFT JOIN services s ON js.service_id = s.id
+        WHERE js.status = 'completed'
         GROUP BY js.job_id
       ) js_totals ON j.id = js_totals.job_id
       WHERE j.company_id = $1
@@ -246,7 +296,7 @@ router.get('/', async (req, res) => {
     const params = [companyId];
 
     if (onlyCompleted) {
-      query += " AND j.status = 'completed'";
+      query += " AND (j.status = 'completed' OR j.status = 'sub_completed' OR j.status = 'cancelled')";
     }
 
     if (start_date && end_date && !onlyCompleted) {
@@ -758,15 +808,15 @@ router.post('/', async (req, res) => {
           if (service.service_id) {
             // Existing service
             await dbClient.query(
-              `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes)
-               VALUES ($1, $2, $3, $4)`,
+              `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
+               VALUES ($1, $2, $3, $4, 'scheduled')`,
               [job.id, service.service_id, service.custom_price, service.custom_duration]
             );
           } else if (service.custom_title) {
             // Custom/ad-hoc service
             await dbClient.query(
-              `INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes)
-               VALUES ($1, $2, $3, $4)`,
+              `INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, status)
+               VALUES ($1, $2, $3, $4, 'scheduled')`,
               [job.id, service.custom_title, service.custom_price, service.custom_duration]
             );
           }
@@ -974,6 +1024,102 @@ router.put('/:jobId', async (req, res) => {
   }
 });
 
+// PUT /api/jobs/:jobId/services/:serviceId/status - Update a single job service status (scheduled | completed | cancelled). Job status is then recomputed.
+router.put('/:jobId/services/:serviceId/status', async (req, res) => {
+  try {
+    const { jobId, serviceId } = req.params;
+    const { status } = req.body;
+
+    if (!status || !['scheduled', 'completed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Status must be scheduled, completed, or cancelled' });
+    }
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const jobCheck = await pool.query(
+      'SELECT id FROM jobs WHERE id = $1 AND company_id = $2',
+      [jobId, companyId]
+    );
+    if (jobCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+
+    if (status === 'completed') {
+      await pool.query(
+        `UPDATE job_services SET status = 'completed', completed_at = COALESCE(completed_at, NOW()) WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    } else if (status === 'cancelled') {
+      await pool.query(
+        `UPDATE job_services SET status = 'cancelled', completed_at = NULL WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE job_services SET status = 'scheduled', completed_at = NULL WHERE id = $1 AND job_id = $2`,
+        [serviceId, jobId]
+      );
+    }
+
+    const updated = await pool.query(
+      'SELECT * FROM job_services WHERE id = $1 AND job_id = $2',
+      [serviceId, jobId]
+    );
+    if (updated.rows.length === 0) {
+      return res.status(404).json({ error: 'Job service not found' });
+    }
+
+    // Recompute overall job status based on all services
+    const newJobStatus = await computeAndUpdateJobStatus(parseInt(jobId, 10));
+
+    // Log this service status change in job_logs (timeline)
+    try {
+      const userId = req.user?.userId || null;
+      const svcInfo = await pool.query(
+        `SELECT 
+           COALESCE(js.custom_title, s.title) AS title, 
+           js.status
+         FROM job_services js
+         LEFT JOIN services s ON js.service_id = s.id
+         WHERE js.id = $1 AND js.job_id = $2`,
+        [serviceId, jobId]
+      );
+      const svc = svcInfo.rows[0] || {};
+      const title = svc.title || 'Service';
+      let statusLabel = 'scheduled';
+      if (status === 'completed') statusLabel = 'completed';
+      else if (status === 'cancelled') statusLabel = 'cancelled';
+
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [
+          jobId,
+          userId,
+          'service-status-change',
+          `${title} -> ${statusLabel}`,
+        ]
+      );
+    } catch (logError) {
+      console.error('Failed to log service status change', { jobId, serviceId, error: logError.message });
+      // Do not fail the main request if logging fails
+    }
+
+    const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+    res.json({
+      message: 'Service status updated',
+      service: updated.rows[0],
+      job: jobResult.rows[0] || null,
+    });
+  } catch (error) {
+    console.error('Error updating job service status:', error);
+    res.status(500).json({ error: 'Failed to update service status: ' + error.message });
+  }
+});
+
 // PUT /api/jobs/:jobId/status - Update job status
 router.put('/:jobId/status', async (req, res) => {
   try {
@@ -1002,10 +1148,34 @@ router.put('/:jobId/status', async (req, res) => {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
-    // Update job status
+    const validStatuses = ['scheduled', 'completed', 'cancelled'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Status must be scheduled, completed, or cancelled' });
+    }
+
+    // Update all job_services for this job to the new status; then derive job.status
+    if (status === 'completed') {
+      await pool.query(
+        `UPDATE job_services SET status = 'completed', completed_at = COALESCE(completed_at, NOW()) WHERE job_id = $1`,
+        [jobId]
+      );
+    } else if (status === 'cancelled') {
+      await pool.query(
+        `UPDATE job_services SET status = 'cancelled', completed_at = NULL WHERE job_id = $1`,
+        [jobId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE job_services SET status = 'scheduled', completed_at = NULL WHERE job_id = $1`,
+        [jobId]
+      );
+    }
+
+    await computeAndUpdateJobStatus(jobId);
+
     const result = await pool.query(
-      'UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-      [status, jobId]
+      'SELECT * FROM jobs WHERE id = $1',
+      [jobId]
     );
 
     res.json({

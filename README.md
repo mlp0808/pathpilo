@@ -43,6 +43,6 @@ npm run db:reset
 ```
 
 ## Production
-See `DEPLOYMENT.md` (ports: Next.js 3002, API 3003).
+See `DEPLOYMENT.md` (ports: Next.js 3005, API 3003).
 
 

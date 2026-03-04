@@ -9,9 +9,10 @@ interface ConfirmModalProps {
   confirmLabel?: string
   cancelLabel?: string
   onClose: () => void
-  onConfirm: (opts: { notify: boolean, message: string, subject: string }) => void
+  onConfirm: (opts: { notify: boolean, message: string, subject: string, email?: string }) => void
   defaultMessage?: string | (() => string)
   defaultSubject?: string | (() => string)
+  defaultEmail?: string
   enableNotification?: boolean
   isSubmitting?: boolean
   children?: React.ReactNode
@@ -27,6 +28,7 @@ export default function ConfirmModal({
   onConfirm,
   defaultMessage = '',
   defaultSubject = '',
+  defaultEmail = '',
   enableNotification = true,
   isSubmitting = false,
   children
@@ -34,14 +36,16 @@ export default function ConfirmModal({
   const [notify, setNotify] = useState(false)
   const [message, setMessage] = useState(typeof defaultMessage === 'function' ? (defaultMessage as () => string)() : defaultMessage)
   const [subject, setSubject] = useState(typeof defaultSubject === 'function' ? (defaultSubject as () => string)() : defaultSubject)
+  const [email, setEmail] = useState(defaultEmail)
 
   useEffect(() => {
     if (isOpen) {
       setNotify(false)
       setMessage(typeof defaultMessage === 'function' ? (defaultMessage as () => string)() : (defaultMessage || ''))
       setSubject(typeof defaultSubject === 'function' ? (defaultSubject as () => string)() : (defaultSubject || ''))
+      setEmail(defaultEmail || '')
     }
-  }, [isOpen, defaultMessage])
+  }, [isOpen, defaultMessage, defaultSubject, defaultEmail])
 
   if (!isOpen) return null
 
@@ -71,6 +75,15 @@ export default function ConfirmModal({
                 </label>
                 {notify && (
                   <>
+                    <label className="block text-xs font-medium text-gray-500">Send to</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="client@example.com"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md hover:border-gray-300"
+                    />
+                    <label className="block text-xs font-medium text-gray-500">Subject</label>
                     <input
                       type="text"
                       value={subject}
@@ -78,6 +91,7 @@ export default function ConfirmModal({
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md hover:border-gray-300"
                       placeholder="Email subject..."
                     />
+                    <label className="block text-xs font-medium text-gray-500">Message</label>
                     <textarea
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
@@ -102,7 +116,7 @@ export default function ConfirmModal({
             </button>
             <button
               type="button"
-              onClick={() => onConfirm({ notify, message, subject })}
+              onClick={() => onConfirm({ notify, message, subject, email: notify ? email : undefined })}
               disabled={isSubmitting}
               className="px-6 py-2.5 text-sm font-semibold bg-accent-500 text-white rounded-xl hover:bg-accent-600 transition-all duration-200 ease-out disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/30 hover:scale-[1.02] active:scale-[0.98] transform"
             >
