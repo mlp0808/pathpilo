@@ -7,7 +7,7 @@
     "dev": "node scripts/dev.js",
     "dev:3002": "next dev -p 3002",
     "build": "next build",
-    "start": "next start -p 3002",
+    "start": "next start -p 3004",
     "lint": "next lint",
     "dev:server": "node server.js",
     "dev:marketing": "cd marketing && npm run dev",

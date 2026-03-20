@@ -1,0 +1,172 @@
+name: Deploy PathPilo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  APP_DIR: /home/pathpilo/htdocs/pathpilo.com
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            api-server/package-lock.json
+            marketing/package-lock.json
+
+      - name: Write .env for build
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          DB_HOST=${{ vars.DB_HOST }}
+          DB_PORT=${{ vars.DB_PORT }}
+          DB_NAME=${{ vars.DB_NAME }}
+          DB_USER=${{ vars.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          ADMIN_EMAIL=${{ vars.ADMIN_EMAIL }}
+          ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}
+          NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}
+          NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}
+          FROM_EMAIL=${{ vars.FROM_EMAIL }}
+          FROM_NAME=${{ vars.FROM_NAME }}
+          FRONTEND_URL=${{ vars.FRONTEND_URL }}
+          API_PORT=${{ vars.API_PORT }}
+          PORT=${{ vars.PORT }}
+          NODE_ENV=production
+          ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+          NEXT_PUBLIC_API_URL=
+          EOF
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install marketing dependencies
+        run: cd marketing && npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build marketing
+        run: cd marketing && npm run build
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy frontend build
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            .next/ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/.next/
+
+      - name: Deploy marketing build
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            marketing/.next/ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/marketing/.next/
+
+      - name: Deploy source files
+        run: |
+          rsync -az \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude=.next \
+            --exclude=marketing/.next \
+            --exclude=marketing/node_modules \
+            --exclude=api-server/node_modules \
+            --exclude=api-server/.env \
+            --exclude=logs \
+            --exclude=PathPiloMobile \
+            --exclude=pathpilo_web_OLD_DO_NOT_USE \
+            ./ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
+
+      - name: Install deps, write env, restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          command_timeout: 5m
+          script_stop: true
+          script: |
+            set -e
+            cd ${{ env.APP_DIR }}
+
+            echo "==> Writing .env files..."
+            cat > .env << ENVEOF
+            DATABASE_URL=postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+            DB_HOST=${{ vars.DB_HOST }}
+            DB_PORT=${{ vars.DB_PORT }}
+            DB_NAME=${{ vars.DB_NAME }}
+            DB_USER=${{ vars.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            ADMIN_EMAIL=${{ vars.ADMIN_EMAIL }}
+            ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}
+            NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}
+            NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}
+            FROM_EMAIL=${{ vars.FROM_EMAIL }}
+            FROM_NAME=${{ vars.FROM_NAME }}
+            FRONTEND_URL=${{ vars.FRONTEND_URL }}
+            API_PORT=${{ vars.API_PORT }}
+            PORT=${{ vars.PORT }}
+            NODE_ENV=production
+            ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+            NEXT_PUBLIC_API_URL=
+            ENVEOF
+
+            cat > api-server/.env << ENVEOF
+            DB_HOST=${{ vars.DB_HOST }}
+            DB_PORT=${{ vars.DB_PORT }}
+            DB_NAME=${{ vars.DB_NAME }}
+            DB_USER=${{ vars.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+            FROM_EMAIL=${{ vars.FROM_EMAIL }}
+            FRONTEND_URL=${{ vars.APP_URL }}
+            API_PORT=${{ vars.API_PORT }}
+            NODE_ENV=production
+            ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+            ENVEOF
+
+            echo "==> Installing production dependencies..."
+            npm ci --omit=dev
+            cd api-server && npm ci --omit=dev && cd ..
+            cd marketing && npm ci --omit=dev && cd ..
+
+            echo "==> Restarting services..."
+            pm2 restart pathpilo-frontend --update-env
+            pm2 restart pathpilo-api --update-env
+            pm2 restart pathpilo-marketing --update-env
+            pm2 save
+
+            echo "==> Deploy complete!"

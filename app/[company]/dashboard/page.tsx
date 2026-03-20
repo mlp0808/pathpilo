@@ -274,9 +274,9 @@ export default function DashboardPage() {
     try {
       const date = parseDate(key)
       if (chartGranularity === 'month') {
-        return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+        return date.toDate('UTC').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
       }
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      return date.toDate('UTC').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     } catch {
       return key
     }
