@@ -13,9 +13,11 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   BuildingOfficeIcon,
-  InboxIcon
+  InboxIcon,
+  RocketLaunchIcon
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import VideoGuideModal from './VideoGuideModal'
 
 interface Company {
   id: number
@@ -46,7 +48,20 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const pathname = usePathname()
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
+  const [isVideoGuideOpen, setIsVideoGuideOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Auto-open Get Started modal on login; stays closed once dismissed until next logout
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (sessionStorage.getItem('pathpilo_video_guide_dismissed')) return
+    setIsVideoGuideOpen(true)
+  }, [])
+
+  const handleVideoGuideClose = () => {
+    setIsVideoGuideOpen(false)
+    sessionStorage.setItem('pathpilo_video_guide_dismissed', 'true')
+  }
 
   // Jobs sub-nav: show Overview + Completed when we're on any jobs route (not an accordion)
   const isOnJobsSection = pathname.includes('/jobs')
@@ -71,6 +86,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const handleLogout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    sessionStorage.removeItem('pathpilo_video_guide_dismissed')
     window.location.href = '/'
   }
 
@@ -85,38 +101,38 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
         return
       }
 
-      const response = await fetch(apiUrl(`/companies/${companyId}/switch`), {
+      // Endpoint is POST /api/companies/switch with company_id in the body
+      const response = await fetch(apiUrl('/companies/switch'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify({ company_id: companyId })
       })
 
       const data = await response.json()
 
       if (response.ok) {
-        // Update token
+        // Store updated token (has new activeCompanyId baked in)
         localStorage.setItem('token', data.token)
-        
-        // Update user data in localStorage
-        const userData = localStorage.getItem('user')
-        if (userData) {
-          const userObj = JSON.parse(userData)
-          userObj.activeCompany = data.activeCompany
-          userObj.companyId = data.activeCompany.id
-          userObj.companyName = data.activeCompany.name
-          userObj.role = data.activeCompany.role
-          localStorage.setItem('user', JSON.stringify(userObj))
-        }
 
-        // Navigate to the new company's dashboard
-        const newCompanySlug = data.activeCompany?.slug
-        if (newCompanySlug) {
-          window.location.href = `/${newCompanySlug}/dashboard`
-        } else {
-          window.location.reload()
-        }
+        // Fully replace user object so every field is in sync
+        localStorage.setItem('user', JSON.stringify({
+          id: data.user.id,
+          firstName: data.user.firstName,
+          lastName: data.user.lastName,
+          email: data.user.email,
+          role: data.user.role,
+          companyId: data.user.companyId,
+          companyName: data.user.companyName,
+          companies: data.user.companies || [],
+          activeCompany: data.user.activeCompany || null,
+        }))
+
+        // Hard-navigate to the new company's dashboard
+        const newSlug = data.user.activeCompany?.slug
+        window.location.href = newSlug ? `/${newSlug}/dashboard` : '/select-company'
       } else {
         console.error('Failed to switch company:', data.error)
         alert('Failed to switch company: ' + (data.error || 'Unknown error'))
@@ -167,8 +183,8 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
         </Link>
       </div>
 
-      {/* Top bar: Logout | Help */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
+      {/* Top bar: Logout */}
+      <div className="flex items-center px-4 py-2 border-b border-white/10">
         <button
           onClick={handleLogout}
           className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
@@ -176,9 +192,6 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           <span className="text-xs font-medium">Logout</span>
         </button>
-        <Link href="#" className="text-gray-400 hover:text-white text-xs font-medium transition-colors">
-          Help
-        </Link>
       </div>
 
       {/* User */}
@@ -341,6 +354,21 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
         </div>
       )}
 
+      {/* Get Started - bottom left */}
+      <div className="px-4 py-3 border-t border-white/10">
+        <button
+          onClick={() => setIsVideoGuideOpen(true)}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold text-sm rounded-xl shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 transition-all duration-200"
+        >
+          <RocketLaunchIcon className="w-5 h-5" />
+          <span>Get started</span>
+        </button>
+      </div>
+
+      <VideoGuideModal
+        isOpen={isVideoGuideOpen}
+        onClose={handleVideoGuideClose}
+      />
     </div>
   )
 }

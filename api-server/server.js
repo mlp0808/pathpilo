@@ -155,6 +155,11 @@ const workHoursRoutes = require('./routes/work-hours');
 const adminRoutes = require('./routes/admin');
 const companyUsersRoutes = require('./routes/company-users');
 const emailTemplateRoutes = require('./routes/email-templates');
+const videoGuideRoutes = require('./routes/video-guides');
+const dailyRoutesRoutes = require('./routes/daily-routes');
+const employeeLeaveRoutes = require('./routes/employee-leave');
+const invitationRoutes = require('./routes/invitations');
+const trialRoutes = require('./routes/trial');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -162,7 +167,9 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/lead-form', leadFormRoutes);
 app.use('/api/public', publicLeadFormRoutes);
-app.use('/api/admin/users', userRoutes);
+// Admin routes must be mounted BEFORE /api/admin/users so that
+// GET /api/admin/users hits the admin list endpoint, not the company-users route.
+app.use('/api/admin', adminRoutes);
 app.use('/api/users', companyUsersRoutes); // Company users
 app.use('/api/user', companyUsersRoutes); // User profile (PUT /api/user/profile)
 app.use('/api/services', serviceRoutes);
@@ -171,8 +178,12 @@ app.use('/api/clients', clientRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/work-hours', workHoursRoutes);
-app.use('/api/admin', adminRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
+app.use('/api/video-guides', videoGuideRoutes);
+app.use('/api/daily-routes', dailyRoutesRoutes);
+app.use('/api/employee-leave', employeeLeaveRoutes);
+app.use('/api/invitations', invitationRoutes);
+app.use('/api/trial', trialRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
 
 // Health check endpoint

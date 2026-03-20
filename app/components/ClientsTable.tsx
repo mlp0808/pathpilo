@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useParams } from 'next/navigation'
 
 interface Client {
   id: number
@@ -24,6 +24,8 @@ interface ClientsTableProps {
 
 export default function ClientsTable({ clients, searchTerm, currentPage, onPageChange }: ClientsTableProps) {
   const router = useRouter()
+  const params = useParams() as any
+  const companySlug = params?.company as string | undefined
   const ITEMS_PER_PAGE = 50
 
   const filteredClients = useMemo(() => {
@@ -48,7 +50,8 @@ export default function ClientsTable({ clients, searchTerm, currentPage, onPageC
   }, [clients, searchTerm])
 
   const handleClientClick = (clientId: number) => {
-    router.push(`/clients/${clientId}`)
+    const href = companySlug ? `/${companySlug}/clients/${clientId}` : `/clients/${clientId}`
+    router.push(href)
   }
 
   const formatDate = (dateString: string) => {

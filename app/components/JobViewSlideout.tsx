@@ -2,9 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import ConfirmModal from './ConfirmModal'
+import TimePicker from './TimePicker'
+import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
 
 interface NoteInputProps {
@@ -93,6 +95,10 @@ interface JobViewSlideoutProps {
   onClose: () => void
   job: any
   onJobUpdated?: () => void
+  /** When true (e.g. route planner), assignee change is not sent to API; parent handles it on Save & apply */
+  deferAssigneeToParent?: boolean
+  /** Called when user confirms a new assignee and deferAssigneeToParent is true */
+  onAssigneeChange?: (jobId: number, newUserId: number) => void
 }
 
 interface JobLog {
@@ -289,12 +295,15 @@ ${userName}`
   )
 }
 
-export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: JobViewSlideoutProps) {
+export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange }: JobViewSlideoutProps) {
   const router = useRouter()
   const params = useParams()
   const companySlugFromRoute = (params as any)?.company as string | undefined
   const [jobDetails, setJobDetails] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [editingAddress, setEditingAddress] = useState(false)
+  const [addrDraft, setAddrDraft] = useState<{ address: string; zip_code: string; city: string; lat?: number | null; lng?: number | null }>({ address: '', zip_code: '', city: '' })
+  const [addrSaving, setAddrSaving] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [jobLogs, setJobLogs] = useState<JobLog[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
@@ -362,6 +371,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
       return () => cancelAnimationFrame(id)
     }
   }, [isOpen])
+
+  // Load users when slideout opens with an assigned job so we can show assignee name (list/single-job APIs don't return first/last name)
+  const assignedUserId = (jobDetails || job)?.assigned_user_id
+  useEffect(() => {
+    if (!isOpen || !job) return
+    if (assignedUserId && users.length === 0) fetchUsers()
+  }, [isOpen, job?.id, assignedUserId])
 
   // Fetch client email/phone when job has client_id but no contact on job
   useEffect(() => {
@@ -457,6 +473,48 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
       alert('Failed to delete job. Please try again.')
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleSaveAddress = async () => {
+    const cj = jobDetails || job
+    if (!cj?.client_id || !addrDraft.lat || !addrDraft.lng) return
+    setAddrSaving(true)
+    try {
+      const token = localStorage.getItem('token')
+      // Update client address + verified coordinates
+      await fetch(apiUrl(`/clients/${cj.client_id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          address: addrDraft.address,
+          zip_code: addrDraft.zip_code,
+          city: addrDraft.city,
+          lat: addrDraft.lat,
+          lng: addrDraft.lng,
+        }),
+      })
+      // Update job's cached coordinates for the route planner
+      await fetch(apiUrl(`/jobs/${cj.id}/coordinates`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ lat: addrDraft.lat, lng: addrDraft.lng }),
+      })
+      // Update local state immediately
+      setJobDetails((prev: any) => ({
+        ...(prev || cj),
+        address: addrDraft.address,
+        zip_code: addrDraft.zip_code,
+        city: addrDraft.city,
+        lat: addrDraft.lat,
+        lng: addrDraft.lng,
+      }))
+      setEditingAddress(false)
+      onJobUpdated?.()
+    } catch (e) {
+      console.error('Failed to save address', e)
+    } finally {
+      setAddrSaving(false)
     }
   }
 
@@ -1002,6 +1060,24 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
   const handleConfirmAssignee = async ({ notify, message, subject }: { notify: boolean, message: string, subject: string }) => {
     const jobId = await ensureRealJobId()
     if (!jobId || pendingAssignee === '') return
+    const newUserId = Number(pendingAssignee)
+
+    if (deferAssigneeToParent && onAssigneeChange) {
+      // Route planner: don't call API; parent will persist on Save & apply
+      const selectedUser = users.find(u => u.id === pendingAssignee)
+      if (jobDetails) {
+        setJobDetails({
+          ...jobDetails,
+          assigned_user_id: newUserId,
+          assigned_user_first_name: selectedUser?.first_name || jobDetails.assigned_user_first_name,
+          assigned_user_last_name: selectedUser?.last_name || jobDetails.assigned_user_last_name
+        })
+      }
+      setShowAssigneeModal(false)
+      onAssigneeChange(jobId, newUserId)
+      return
+    }
+
     try {
       const token = localStorage.getItem('token')
       let finalMessage = message
@@ -1071,6 +1147,53 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
     }
   }
 
+  // Materialize a projected job and then fetch full details (so completing/updating tasks works)
+  const materializeAndFetchProjectedJob = async (jobData: any) => {
+    let subId = typeof jobData?.recurring_job_id === 'number' ? jobData.recurring_job_id : null
+    let occ = typeof jobData?.recurring_occurrence === 'number' ? jobData.recurring_occurrence : null
+    if ((!subId || !occ) && typeof jobData?.id === 'string' && jobData.id.startsWith('subscription-')) {
+      const parts = jobData.id.split('-')
+      if (parts.length >= 3) {
+        const parsedSubId = parseInt(parts[1], 10)
+        const parsedOcc = parseInt(parts[2], 10)
+        if (Number.isFinite(parsedSubId) && Number.isFinite(parsedOcc)) {
+          subId = parsedSubId
+          occ = parsedOcc
+        }
+      }
+    }
+    const meta = subId && occ ? { subscriptionId: subId, occurrence: occ } : null
+    if (!meta) {
+      fetchProjectedJobDetails(jobData)
+      return
+    }
+    try {
+      setLoading(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch(
+        apiUrl(`/subscriptions/${meta.subscriptionId}/occurrences/${meta.occurrence}/materialize`),
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scheduled_date: jobData?.scheduled_date })
+        }
+      )
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.details || 'Failed to materialize')
+      const jobId = data.jobId
+      if (typeof jobId !== 'number') throw new Error('Invalid jobId returned')
+      setJobDetails({ ...jobData, id: jobId, is_projected: false, recurring_job_id: meta.subscriptionId, recurring_occurrence: meta.occurrence })
+      onJobUpdated?.()
+      fetchJobDetails({ ...jobData, id: jobId })
+      fetchJobLogs(jobId)
+    } catch (e) {
+      console.error('Failed to materialize subscription job:', e)
+      fetchProjectedJobDetails(jobData)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Initialize job details when modal opens
   useEffect(() => {
     if (isOpen && job) {
@@ -1086,14 +1209,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
       // Check if this is a projected job (from subscriptions)
       const isProjectedJob = job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))
       
-      if (isProjectedJob && job.recurring_job_id) {
-        // For projected jobs, fetch subscription services and assigned user
-        fetchProjectedJobDetails(initialJobData)
+      if (isProjectedJob) {
+        // Materialize immediately so completing/updating tasks works (job gets recurring_job_id preserved)
+        materializeAndFetchProjectedJob(initialJobData)
       } else if (typeof job.id === 'number') {
         // For real jobs, fetch full details with service statuses from GET /jobs/:id
         fetchJobDetails(initialJobData)
       } else {
-        // If we can't fetch, we already have the data set above
         setLoading(false)
       }
     } else if (!isOpen) {
@@ -1103,7 +1225,14 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
       setLoading(false)
       setLogsLoading(false)
     }
-  }, [isOpen, job])
+  }, [
+    isOpen,
+    job?.id,
+    job?.is_projected,
+    job?.recurring_job_id,
+    job?.recurring_occurrence,
+    job?.scheduled_date
+  ])
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'No date'
@@ -1457,10 +1586,66 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
               <div>
                 <h3 className="text-base font-semibold text-primary-500 mb-4">Schedule & Location</h3>
                 <div className="space-y-3">
-                  {formatAddress(jobDetails || job) !== 'No address' && (
-                    <div className="flex items-start gap-2">
+                  {/* Address row — display or inline edit */}
+                  {editingAddress ? (
+                    <div className="rounded-xl border border-gray-200 bg-white p-3 space-y-3">
+                      <AddressAutocomplete
+                        address={addrDraft.address}
+                        zip_code={addrDraft.zip_code}
+                        city={addrDraft.city}
+                        lat={addrDraft.lat}
+                        lng={addrDraft.lng}
+                        onChange={(d) => setAddrDraft(d)}
+                        placeholder="Search for address..."
+                      />
+                      {!addrDraft.lat && addrDraft.address.length > 0 && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1">
+                          <span>⚠</span> Select an address from the suggestions to confirm location
+                        </p>
+                      )}
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={handleSaveAddress}
+                          disabled={addrSaving || !addrDraft.lat || !addrDraft.lng}
+                          className="flex-1 py-2 px-3 bg-accent-500 text-white text-xs font-semibold rounded-lg hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {addrSaving ? 'Saving…' : 'Save address'}
+                        </button>
+                        <button
+                          onClick={() => setEditingAddress(false)}
+                          className="py-2 px-3 text-xs text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 group">
                       <MapPinIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-                      <span className="text-sm text-primary-500">{formatAddress(jobDetails || job)}</span>
+                      <span className="text-sm text-primary-500 flex-1">
+                        {formatAddress(jobDetails || job) !== 'No address'
+                          ? formatAddress(jobDetails || job)
+                          : <span className="text-gray-400 italic">No address set</span>}
+                      </span>
+                      {!isLocked && (
+                        <button
+                          onClick={() => {
+                            const cj = jobDetails || job
+                            setAddrDraft({
+                              address: cj?.address || '',
+                              zip_code: cj?.zip_code || '',
+                              city: cj?.city || '',
+                              lat: cj?.lat ?? null,
+                              lng: cj?.lng ?? null,
+                            })
+                            setEditingAddress(true)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex-shrink-0"
+                          title="Edit address"
+                        >
+                          <PencilIcon className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   )}
                   <button
@@ -1503,10 +1688,20 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                       }`}
                     >
                       <span className="text-sm text-primary-500 truncate">
-                        {((jobDetails || job)?.assigned_user_first_name || (jobDetails || job)?.assigned_user_last_name)
-                          ? `${(jobDetails || job).assigned_user_first_name || ''} ${(jobDetails || job).assigned_user_last_name || ''}`.trim() ||
-                            'Unassigned'
-                          : 'Unassigned'}
+                        {(() => {
+                          const j = jobDetails || job
+                          const firstName = j?.assigned_user_first_name
+                          const lastName = j?.assigned_user_last_name
+                          if (firstName || lastName) {
+                            return `${firstName || ''} ${lastName || ''}`.trim() || 'Unassigned'
+                          }
+                          const aid = j?.assigned_user_id
+                          if (aid && users.length > 0) {
+                            const u = users.find((u: any) => Number(u.id) === Number(aid))
+                            if (u) return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Unassigned'
+                          }
+                          return 'Unassigned'
+                        })()}
                       </span>
                       {!isLocked && <ChevronDownIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />}
                     </button>
@@ -1527,15 +1722,19 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                   const totalPrice =
                     (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
                   const canEditServices = typeof currentJob?.id === 'number' && !isProjectedJob && !isLocked
-                  const handleCheckClick = (s: any) => {
-                    if (!canEditServices || !currentJob?.id || !s.id) return
+                  const handleCheckClick = async (s: any) => {
+                    if (!canEditServices || !s.id) return
+                    const jobId = await ensureRealJobId()
+                    if (!jobId) return
                     const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
-                    updateServiceStatus(currentJob.id, s.id, next)
+                    updateServiceStatus(jobId, s.id, next)
                   }
-                  const handleCancelClick = (s: any) => {
-                    if (!canEditServices || !currentJob?.id || !s.id) return
+                  const handleCancelClick = async (s: any) => {
+                    if (!canEditServices || !s.id) return
+                    const jobId = await ensureRealJobId()
+                    if (!jobId) return
                     const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
-                    updateServiceStatus(currentJob.id, s.id, next)
+                    updateServiceStatus(jobId, s.id, next)
                   }
                   return (
                     <>
@@ -1632,6 +1831,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                         (log.notification_email ? 'Notification sent' : null) ||
                         'Update'
                       const isInvoiceLog = log.action === 'invoice-draft' || log.action === 'invoice-sent'
+                      const isMaterializedLog = log.action === 'materialized'
                       let invoiceIdFromDescription: number | null = null
                       if (isInvoiceLog && typeof log.description === 'string') {
                         const match = log.description.match(/\/invoices\/(\d+)/)
@@ -1640,9 +1840,14 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                           if (Number.isFinite(parsed)) invoiceIdFromDescription = parsed
                         }
                       }
-                      const baseText = isInvoiceLog
-                        ? (log.action === 'invoice-draft' ? 'Invoice draft created' : 'Invoice sent')
-                        : mainText
+                      const currentJobData = jobDetails || job
+                      const subId = typeof currentJobData?.recurring_job_id === 'number' ? currentJobData.recurring_job_id : null
+                      const clientIdForSub = typeof currentJobData?.client_id === 'number' ? currentJobData.client_id : null
+                      const baseText = isMaterializedLog
+                        ? 'Created by subscription'
+                        : isInvoiceLog
+                          ? (log.action === 'invoice-draft' ? 'Invoice draft created' : 'Invoice sent')
+                          : mainText
                       return (
                         <div key={log.id} className="flex gap-4 mb-4 relative z-10">
                           {/* Left: dot (centered on the line) */}
@@ -1660,6 +1865,20 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated }: 
                             </div>
                             <div className="mt-1 text-sm text-primary-500 leading-relaxed whitespace-pre-wrap">
                               {baseText}
+                              {isMaterializedLog && subId != null && (
+                                <>
+                                  {' '}(ID: {subId}){' '}
+                                  {clientIdForSub != null && (
+                                    <button
+                                      type="button"
+                                      onClick={() => router.push(`/clients/${clientIdForSub}?tab=subscriptions`)}
+                                      className="text-accent-600 underline font-semibold"
+                                    >
+                                      View subscription
+                                    </button>
+                                  )}
+                                </>
+                              )}
                               {isInvoiceLog && invoiceIdFromDescription && (
                                 <>
                                   {' '}
@@ -2031,50 +2250,36 @@ ${userName}`
           </div>
 
           {!isTimeRangeEdit ? (
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5">Time</label>
-              <input
-                type="time"
-                value={pendingTimeFrom}
-                onChange={async (e) => {
-                  setPendingTimeFrom(e.target.value)
-                  // Update template with new time
-                  if (jobDetails || job) {
-                    await updateTimeTemplate(e.target.value, pendingTimeTo, false)
-                  }
-                }}
-                className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
+            <TimePicker
+              label="Time"
+              value={pendingTimeFrom}
+              onChange={async (val) => {
+                setPendingTimeFrom(val)
+                if (jobDetails || job) await updateTimeTemplate(val, pendingTimeTo, false)
+              }}
+              placeholder="e.g. 09:00"
+            />
           ) : (
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5">Between</label>
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="time"
-                  value={pendingTimeFrom}
-                  onChange={async (e) => {
-                    setPendingTimeFrom(e.target.value)
-                    // Update template with new time
-                    if (jobDetails || job) {
-                      await updateTimeTemplate(e.target.value, pendingTimeTo, true)
-                    }
-                  }}
-                  className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                />
-                <input
-                  type="time"
-                  value={pendingTimeTo}
-                  onChange={async (e) => {
-                    setPendingTimeTo(e.target.value)
-                    // Update template with new time
-                    if (jobDetails || job) {
-                      await updateTimeTemplate(pendingTimeFrom, e.target.value, true)
-                    }
-                  }}
-                  className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
+            <div className="space-y-3">
+              <TimePicker
+                label="From"
+                value={pendingTimeFrom}
+                onChange={async (val) => {
+                  setPendingTimeFrom(val)
+                  if (jobDetails || job) await updateTimeTemplate(val, pendingTimeTo, true)
+                }}
+                placeholder="e.g. 09:00"
+              />
+              <TimePicker
+                label="To"
+                value={pendingTimeTo}
+                onChange={async (val) => {
+                  setPendingTimeTo(val)
+                  if (jobDetails || job) await updateTimeTemplate(pendingTimeFrom, val, true)
+                }}
+                disabled={!pendingTimeFrom}
+                placeholder="e.g. 17:00"
+              />
             </div>
           )}
         </div>

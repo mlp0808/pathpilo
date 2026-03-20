@@ -135,6 +135,12 @@ export default function AdminUsersPage() {
               <Link href="/admin/companies" className="text-gray-600 hover:text-gray-900">
                 Companies
               </Link>
+              <Link href="/admin/video-guides" className="text-gray-600 hover:text-gray-900">
+                Video Guides
+              </Link>
+              <Link href="/admin/trials" className="text-gray-600 hover:text-gray-900">
+                Trials
+              </Link>
               <button
                 onClick={() => {
                   localStorage.removeItem('token')

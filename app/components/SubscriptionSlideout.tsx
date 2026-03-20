@@ -1,8 +1,16 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, CalendarIcon } from '@heroicons/react/24/outline'
+import { useState, useEffect, useMemo } from 'react'
+import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import TimePicker from './TimePicker'
+import { SchedulePanel, ForecastPanel } from './SubscriptionPanels'
+import {
+  DAY_NAMES,
+  buildWeeklyForecast,
+  buildMonthlyForecast,
+  fmtMoney,
+} from '../utils/subscriptionHelpers'
 
 interface Service {
   id: number
@@ -32,21 +40,32 @@ interface SubscriptionSlideoutProps {
   isOpen: boolean
   onClose: () => void
   onSubscriptionCreated?: () => void
+  onPauseToggle?: (subscription: any, paused: boolean) => void
   clientId: number
-  subscription?: any // For editing
+  subscription?: any
 }
 
-export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCreated, clientId, subscription }: SubscriptionSlideoutProps) {
+
+export default function SubscriptionSlideout({
+  isOpen, onClose, onSubscriptionCreated, onPauseToggle, clientId, subscription
+}: SubscriptionSlideoutProps) {
+
+  const [activeTab, setActiveTab] = useState<'details' | 'schedule' | 'forecast'>('details')
   const [services, setServices] = useState<Service[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [existingJobs, setExistingJobs] = useState<any[]>([])
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [subscriptionTitle, setSubscriptionTitle] = useState('')
   const [startingDate, setStartingDate] = useState('')
-  const [dayOfWeek, setDayOfWeek] = useState<number>(1) // Default Monday
+  const [recurrenceType, setRecurrenceType] = useState<'weekly' | 'monthly'>('weekly')
+  const [dayOfWeek, setDayOfWeek] = useState<number>(1)
   const [intervalWeeks, setIntervalWeeks] = useState<number>(1)
+  const [customInterval, setCustomInterval] = useState<string>('')   // for custom week/month input
+  const [dayOfMonth, setDayOfMonth] = useState<number>(1)
+  const [intervalMonths, setIntervalMonths] = useState<number>(1)
   const [timeFrom, setTimeFrom] = useState('')
   const [timeTo, setTimeTo] = useState('')
   const [note, setNote] = useState('')
@@ -54,48 +73,100 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isTimeRangeMode, setIsTimeRangeMode] = useState(false)
   const [showTimePicker, setShowTimePicker] = useState(false)
-  
-  // Editing states for service values
+  const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [editingDuration, setEditingDuration] = useState<number | null>(null)
 
+  // ── computed values ──────────────────────────────────────────────────────────
+  const pricePerVisit = useMemo(
+    () => selectedServices.reduce((sum, s) => sum + (parseFloat(s.customPrice) || 0), 0),
+    [selectedServices]
+  )
+  const durationPerVisit = useMemo(
+    () => selectedServices.reduce((sum, s) => sum + (s.customDuration || 0), 0),
+    [selectedServices]
+  )
+  const visitsPerYear = recurrenceType === 'monthly'
+    ? Math.round(12 / intervalMonths)
+    : Math.round(52 / intervalWeeks)
+  const revenuePerYear = pricePerVisit * visitsPerYear
+
+  // forecast: next 16 upcoming dates
+  const forecastDates = useMemo(
+    () => recurrenceType === 'monthly'
+      ? buildMonthlyForecast(startingDate, dayOfMonth, intervalMonths, 16)
+      : buildWeeklyForecast(startingDate, dayOfWeek, intervalWeeks, 16),
+    [startingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths]
+  )
+
+  // original price per visit (from when modal opened) for change indicator
+  const [originalPricePerVisit, setOriginalPricePerVisit] = useState(0)
+
+  // ── effects ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
       fetchServices()
       fetchUsers()
+      setActiveTab('details')
       if (subscription) {
-        // Load subscription data for editing
         setSubscriptionTitle(subscription.title || '')
-        setStartingDate(subscription.starting_date || subscription.next_occurrence_date || '')
-        setDayOfWeek(subscription.day_of_week || 1)
-        setIntervalWeeks(subscription.interval_weeks || 1)
+        setStartingDate(subscription.starting_date?.split('T')[0] || subscription.next_occurrence_date?.split('T')[0] || '')
+        const rt = subscription.recurrence_type === 'monthly' ? 'monthly' : 'weekly'
+        setRecurrenceType(rt)
+        setDayOfWeek(subscription.day_of_week ?? 1)
+        setIntervalWeeks(subscription.interval_weeks || subscription.interval_value || 1)
+        setDayOfMonth(subscription.day_of_month || 1)
+        setIntervalMonths(subscription.recurrence_type === 'monthly' ? (subscription.interval_value || 1) : 1)
+        setCustomInterval('')
         setTimeFrom(subscription.scheduled_time_from || '')
         setTimeTo(subscription.scheduled_time_to || '')
         setNote(subscription.note || '')
-        setSelectedUserId(subscription.assigned_user_id || null)
+        setSelectedUserId(subscription.assigned_user_id ? Number(subscription.assigned_user_id) : null)
         setIsTimeRangeMode(!!(subscription.scheduled_time_from && subscription.scheduled_time_to))
-        // Load services from subscription
         if (subscription.services) {
-          setSelectedServices(subscription.services.map((s: any) => ({
+          const mapped = subscription.services.map((s: any) => ({
             id: s.service_id,
             title: s.title || '',
             price: s.custom_price || 0,
             duration_minutes: s.custom_duration_minutes || 0,
             customPrice: (s.custom_price || 0).toString(),
-            customDuration: s.custom_duration_minutes || 0
-          })))
+            customDuration: s.custom_duration_minutes || 0,
+          }))
+          setSelectedServices(mapped)
+          setOriginalPricePerVisit(mapped.reduce((sum: number, s: SelectedService) => sum + (parseFloat(s.customPrice) || 0), 0))
         }
+        // fetch past jobs for this subscription
+        if (subscription.id) fetchExistingJobs(subscription.id)
       } else {
         resetForm()
       }
     }
   }, [isOpen, subscription])
 
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Element
+      if (!t.closest('.dropdown-container') && !t.closest('[data-time-picker]')) {
+        setShowServiceDropdown(false)
+        setShowTimePicker(false)
+        setShowUserDropdown(false)
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handler)
+      return () => document.removeEventListener('mousedown', handler)
+    }
+  }, [isOpen])
+
   const resetForm = () => {
     setSubscriptionTitle('')
     setStartingDate('')
+    setRecurrenceType('weekly')
     setDayOfWeek(1)
     setIntervalWeeks(1)
+    setCustomInterval('')
+    setDayOfMonth(1)
+    setIntervalMonths(1)
     setTimeFrom('')
     setTimeTo('')
     setIsTimeRangeMode(false)
@@ -104,552 +175,421 @@ export default function SubscriptionSlideout({ isOpen, onClose, onSubscriptionCr
     setSelectedServices([])
     setSelectedUserId(null)
     setServiceSearch('')
+    setExistingJobs([])
+    setOriginalPricePerVisit(0)
   }
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Element
-      if (!target.closest('.dropdown-container') && !target.closest('[data-time-picker]')) {
-        setShowServiceDropdown(false)
-        setShowTimePicker(false)
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isOpen])
-
   const fetchServices = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl('/services'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const data = await response.json()
-      if (response.ok) {
-        setServices(data.services || [])
-      }
-    } catch (error) {
-      console.error('Error fetching services:', error)
-    }
+    const token = localStorage.getItem('token')
+    const res = await fetch(apiUrl('/services'), { headers: { Authorization: `Bearer ${token}` } })
+    const data = await res.json()
+    if (res.ok) setServices(data.services || [])
   }
 
   const fetchUsers = async () => {
+    const token = localStorage.getItem('token')
+    const res = await fetch(apiUrl('/users'), { headers: { Authorization: `Bearer ${token}` } })
+    const data = await res.json()
+    if (res.ok) setUsers(data.users || [])
+  }
+
+  const fetchExistingJobs = async (subscriptionId: number) => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl('/users'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const data = await response.json()
-      if (response.ok) {
-        setUsers(data.users || [])
-      }
-    } catch (error) {
-      console.error('Error fetching users:', error)
-    }
+      const res = await fetch(apiUrl(`/subscriptions/${subscriptionId}/jobs`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok) setExistingJobs(data.jobs || [])
+    } catch {}
   }
 
-  const handleServiceSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setServiceSearch(e.target.value)
-    setShowServiceDropdown(true)
-  }
+  // ── service helpers ──────────────────────────────────────────────────────────
+  const filteredServices = services.filter(s =>
+    s.title.toLowerCase().includes(serviceSearch.toLowerCase()) &&
+    !selectedServices.find(sel => sel.id === s.id)
+  )
 
   const addService = (service: Service) => {
-    const newSelectedService: SelectedService = {
-      ...service,
-      customPrice: service.price.toString(),
-      customDuration: service.duration_minutes
-    }
-    setSelectedServices([...selectedServices, newSelectedService])
+    setSelectedServices(prev => [...prev, { ...service, customPrice: service.price.toString(), customDuration: service.duration_minutes }])
     setServiceSearch('')
     setShowServiceDropdown(false)
   }
 
-  const removeService = (serviceId: number) => {
-    setSelectedServices(selectedServices.filter(s => s.id !== serviceId))
-  }
+  const removeService = (id: number) => setSelectedServices(prev => prev.filter(s => s.id !== id))
 
-  const updateServicePrice = (serviceId: number, price: string) => {
-    setSelectedServices(selectedServices.map(s => 
-      s.id === serviceId ? { ...s, customPrice: price } : s
-    ))
-  }
-
-  const updateServiceDuration = (serviceId: number, duration: number) => {
-    setSelectedServices(selectedServices.map(s => 
-      s.id === serviceId ? { ...s, customDuration: duration } : s
-    ))
-  }
-
-  const startEditingPrice = (serviceId: number) => {
-    setEditingPrice(serviceId)
-  }
-
-  const startEditingDuration = (serviceId: number) => {
-    setEditingDuration(serviceId)
-  }
-
-  const finishEditingPrice = (serviceId: number, value: string) => {
-    updateServicePrice(serviceId, value)
+  const finishEditingPrice = (id: number, val: string) => {
+    setSelectedServices(prev => prev.map(s => s.id === id ? { ...s, customPrice: val } : s))
     setEditingPrice(null)
   }
 
-  const finishEditingDuration = (serviceId: number, value: string) => {
-    updateServiceDuration(serviceId, parseInt(value) || 0)
+  const finishEditingDuration = (id: number, val: string) => {
+    setSelectedServices(prev => prev.map(s => s.id === id ? { ...s, customDuration: parseInt(val) || 0 } : s))
     setEditingDuration(null)
   }
 
+  // ── submit ───────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!subscriptionTitle.trim() || !startingDate || selectedServices.length === 0) {
-      return
-    }
-
+    if (!subscriptionTitle.trim() || !startingDate || selectedServices.length === 0) return
     try {
       setIsSubmitting(true)
       const token = localStorage.getItem('token')
-      
-      const subscriptionData = {
+      const body = {
         title: subscriptionTitle.trim(),
         client_id: clientId,
-        assigned_user_id: selectedUserId || null, // Explicitly set to null if not selected
-        services: selectedServices.map(service => ({
-          service_id: service.id,
-          custom_price: parseFloat(service.customPrice) || service.price,
-          custom_duration: service.customDuration
+        assigned_user_id: selectedUserId || null,
+        services: selectedServices.map(s => ({
+          service_id: s.id,
+          custom_price: parseFloat(s.customPrice) || s.price,
+          custom_duration: s.customDuration,
         })),
-        starting_date: startingDate && startingDate.trim() !== '' ? startingDate.trim() : null,
-        day_of_week: dayOfWeek,
-        interval_weeks: intervalWeeks,
-        scheduled_time_from: timeFrom && timeFrom.trim() !== '' ? timeFrom : null,
-        scheduled_time_to: timeTo && timeTo.trim() !== '' ? timeTo : null,
-        note: note.trim() || null
+        starting_date: startingDate || null,
+        recurrence_type: recurrenceType,
+        day_of_week: recurrenceType === 'weekly' ? dayOfWeek : new Date(startingDate).getDay(),
+        day_of_month: recurrenceType === 'monthly' ? dayOfMonth : null,
+        interval_value: recurrenceType === 'monthly' ? intervalMonths : intervalWeeks,
+        // also send interval_weeks for backwards compat with PUT handler
+        interval_weeks: recurrenceType === 'weekly' ? intervalWeeks : null,
+        scheduled_time_from: timeFrom || null,
+        scheduled_time_to: timeTo || null,
+        note: note.trim() || null,
       }
-
-      const url = subscription 
-        ? apiUrl(`/subscriptions/${subscription.id}`)
-        : apiUrl('/subscriptions')
-      
+      const url = subscription ? apiUrl(`/subscriptions/${subscription.id}`) : apiUrl('/subscriptions')
       const method = subscription ? 'PUT' : 'POST'
-
-      const response = await fetch(url, {
+      const res = await fetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(subscriptionData)
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        onSubscriptionCreated?.()
-        onClose()
-      } else {
-        console.error('Error creating subscription:', data.error)
-        alert(data.error || 'Failed to save subscription')
-      }
-    } catch (error) {
-      console.error('Error saving subscription:', error)
-      alert('Failed to save subscription')
-    } finally {
-      setIsSubmitting(false)
-    }
+      const data = await res.json()
+      if (res.ok) { onSubscriptionCreated?.(); onClose() }
+      else alert(data.error || 'Failed to save subscription')
+    } catch { alert('Failed to save subscription') }
+    finally { setIsSubmitting(false) }
   }
-
-  const filteredServices = services.filter(service =>
-    service.title.toLowerCase().includes(serviceSearch.toLowerCase())
-  )
 
   if (!isOpen) return null
 
+  const selectedUser = users.find(u => u.id === selectedUserId) ?? null
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+
+  // categorise existing jobs as past/completed vs upcoming
+  const pastJobs = existingJobs
+    .filter(j => j.status === 'completed' || (j.scheduled_date && new Date(j.scheduled_date) < today))
+    .sort((a, b) => new Date(b.scheduled_date).getTime() - new Date(a.scheduled_date).getTime())
+    .slice(0, 5) // last 5
+
+  // ── render ───────────────────────────────────────────────────────────────────
   return (
-    <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black bg-opacity-50 z-40" onClick={onClose} />
-      
-      {/* Slideout */}
-      <div className="fixed right-0 top-0 h-full w-[484px] bg-white shadow-xl z-50 flex flex-col">
-        {/* Header */}
-        <div className="relative bg-gray-50 border-b border-gray-200 p-4">
-          <button
-            onClick={onClose}
-            className="absolute top-4 right-4 w-8 h-8 bg-white rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors shadow-sm border"
-          >
-            <XMarkIcon className="w-4 h-4 text-gray-600" />
-          </button>
-          <h2 className="text-lg font-semibold text-gray-900 pr-12">
-            {subscription ? 'Edit Subscription' : 'Create Subscription'}
-          </h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+
+      <div className="relative bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200 animate-slideDown transform transition-all duration-300 ease-out">
+
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
+          <div>
+            <h2 className="text-2xl font-bold text-primary-800 tracking-tight">
+              {subscription ? 'Edit Subscription' : 'Create Subscription'}
+            </h2>
+            <p className="text-sm text-gray-500 font-medium mt-0.5">
+              {subscription
+                ? `${subscriptionTitle || subscription.title} · ${DAY_NAMES[dayOfWeek]} every ${intervalWeeks} week${intervalWeeks > 1 ? 's' : ''}`
+                : 'Set up a recurring job schedule'
+              }
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group"
+            >
+              <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Title */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Title</label>
-            <input
-              type="text"
-              value={subscriptionTitle}
-              onChange={(e) => setSubscriptionTitle(e.target.value)}
-              placeholder="Enter subscription title..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors text-sm"
-            />
-          </div>
+        {/* ── Tabs ───────────────────────────────────────────────────────── */}
+        <div className="flex items-center gap-1 px-6 py-3 border-b border-gray-100 bg-white">
+          {([
+            { id: 'details', label: 'Details', icon: DocumentTextIcon },
+            { id: 'schedule', label: 'Schedule', icon: CalendarDaysIcon },
+            { id: 'forecast', label: 'Forecast', icon: ArrowTrendingUpIcon },
+          ] as const).map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-primary-500 text-white'
+                  : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-          {/* Starting Date */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Starting Date</label>
-            <input
-              type="date"
-              value={startingDate}
-              onChange={(e) => setStartingDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors text-sm"
-            />
-            <p className="text-xs text-gray-500">All jobs will be scheduled after this date</p>
-          </div>
+        {/* ── Content ────────────────────────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-white to-gray-50/50">
 
-          {/* Services */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Services</label>
-            <div className="relative dropdown-container">
-              <input
-                type="text"
-                value={serviceSearch}
-                onChange={handleServiceSearch}
-                onFocus={() => setShowServiceDropdown(true)}
-                placeholder="Search for services..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-colors text-sm"
-              />
-              
-              {showServiceDropdown && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
-                  {filteredServices.length > 0 ? (
-                    filteredServices.map((service) => (
-                      <button
-                        key={service.id}
-                        onClick={() => addService(service)}
-                        className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
-                      >
-                        <div className="text-sm font-medium text-gray-900">
-                          {service.title}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {service.price} DKK • {service.duration_minutes}min
-                        </div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2 text-sm text-gray-500">
-                      No services found
+          {/* ──────────── DETAILS TAB ──────────── */}
+          {activeTab === 'details' && (
+            <div className="p-6 space-y-5">
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-semibold text-primary-700 mb-2">Subscription Title *</label>
+                <input
+                  type="text"
+                  value={subscriptionTitle}
+                  onChange={e => setSubscriptionTitle(e.target.value)}
+                  placeholder="e.g., Weekly Window Cleaning…"
+                  required
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
+                />
+              </div>
+
+              {/* Services */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-primary-700">Services</label>
+                <div className="relative dropdown-container">
+                  <input
+                    type="text"
+                    value={serviceSearch}
+                    onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
+                    onFocus={() => setShowServiceDropdown(true)}
+                    placeholder="Search services to add…"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
+                  />
+                  {showServiceDropdown && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl z-50 max-h-56 overflow-y-auto">
+                      {filteredServices.length > 0 ? filteredServices.map(s => (
+                        <button key={s.id} onClick={() => addService(s)}
+                          className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100 last:border-b-0 transition-colors">
+                          <div className="text-sm font-semibold text-primary-800">{s.title}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{s.price} DKK · {s.duration_minutes} min</div>
+                        </button>
+                      )) : (
+                        <div className="px-4 py-3 text-sm text-gray-400">No services found</div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Selected Services */}
-            {selectedServices.length > 0 && (
-              <div className="space-y-2 mt-3">
-                {selectedServices.map((service) => (
-                  <div key={service.id} className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm border border-gray-200">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-gray-900">
-                        {service.title}
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-4 ml-3">
-                      <div className="flex items-center space-x-1">
+                {selectedServices.map(service => (
+                  <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm hover:shadow-md transition-all duration-200 group">
+                    <div className="text-sm font-semibold text-primary-800 flex-1 min-w-0 truncate">{service.title}</div>
+                    <div className="flex items-center gap-3 ml-3 flex-shrink-0">
+                      <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
                         <span className="text-xs text-gray-500">Price:</span>
                         {editingPrice === service.id ? (
-                          <input
-                            type="number"
-                            defaultValue={service.customPrice}
-                            onBlur={(e) => finishEditingPrice(service.id, e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && finishEditingPrice(service.id, e.currentTarget.value)}
-                            className="text-xs text-blue-600 bg-white border border-blue-300 rounded px-1 py-0.5 w-16"
-                            autoFocus
+                          <input autoFocus type="number" defaultValue={service.customPrice}
+                            onBlur={e => finishEditingPrice(service.id, e.target.value)}
+                            onKeyPress={e => e.key === 'Enter' && finishEditingPrice(service.id, e.currentTarget.value)}
+                            className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-16 focus:outline-none"
                           />
                         ) : (
-                          <button
-                            onClick={() => startEditingPrice(service.id)}
-                            className="text-xs text-blue-600 underline cursor-pointer bg-transparent border-none hover:text-blue-700"
-                          >
+                          <button onClick={() => setEditingPrice(service.id)}
+                            className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline decoration-1 underline-offset-2">
                             {service.customPrice}kr.
                           </button>
                         )}
                       </div>
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
                         <span className="text-xs text-gray-500">Time:</span>
                         {editingDuration === service.id ? (
-                          <input
-                            type="number"
-                            defaultValue={service.customDuration}
-                            onBlur={(e) => finishEditingDuration(service.id, e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && finishEditingDuration(service.id, e.currentTarget.value)}
-                            className="text-xs text-blue-600 bg-white border border-blue-300 rounded px-1 py-0.5 w-12"
-                            autoFocus
+                          <input autoFocus type="number" defaultValue={service.customDuration}
+                            onBlur={e => finishEditingDuration(service.id, e.target.value)}
+                            onKeyPress={e => e.key === 'Enter' && finishEditingDuration(service.id, e.currentTarget.value)}
+                            className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-14 focus:outline-none"
                           />
                         ) : (
-                          <button
-                            onClick={() => startEditingDuration(service.id)}
-                            className="text-xs text-blue-600 underline cursor-pointer bg-transparent border-none hover:text-blue-700"
-                          >
+                          <button onClick={() => setEditingDuration(service.id)}
+                            className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline decoration-1 underline-offset-2">
                             {service.customDuration}min.
                           </button>
                         )}
                       </div>
-                      <button
-                        onClick={() => removeService(service.id)}
-                        className="text-red-600 hover:text-red-800 transition-colors ml-2"
-                      >
+                      <button onClick={() => removeService(service.id)}
+                        className="text-gray-400 hover:text-red-600 transition-all p-1.5 rounded-lg hover:bg-red-50">
                         <XMarkIcon className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
                 ))}
               </div>
-            )}
-          </div>
 
-          {/* Employee (Optional) */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Employee (Optional)</label>
-            <select
-              value={selectedUserId || ''}
-              onChange={(e) => setSelectedUserId(e.target.value ? parseInt(e.target.value) : null)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors text-sm"
-            >
-              <option value="">No employee assigned</option>
-              {users.map(user => (
-                <option key={user.id} value={user.id}>
-                  {user.first_name} {user.last_name} ({user.role})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Schedule */}
-          <div className="space-y-3">
-            <label className="text-sm font-medium text-gray-700">Schedule</label>
-            
-            {/* Day of Week */}
-            <div>
-              <label className="text-xs text-gray-600 mb-1 block">Day of Week</label>
-              <select
-                value={dayOfWeek}
-                onChange={(e) => setDayOfWeek(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors text-sm"
-              >
-                <option value={0}>Sunday</option>
-                <option value={1}>Monday</option>
-                <option value={2}>Tuesday</option>
-                <option value={3}>Wednesday</option>
-                <option value={4}>Thursday</option>
-                <option value={5}>Friday</option>
-                <option value={6}>Saturday</option>
-              </select>
-            </div>
-
-            {/* Frequency */}
-            <div>
-              <label className="text-xs text-gray-600 mb-1 block">Repeat Every</label>
-              <select
-                value={intervalWeeks}
-                onChange={(e) => setIntervalWeeks(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors text-sm"
-              >
-                <option value={1}>Every week</option>
-                <option value={2}>Every 2 weeks</option>
-                <option value={3}>Every 3 weeks</option>
-                <option value={4}>Every 4 weeks</option>
-                <option value={6}>Every 6 weeks</option>
-                <option value={8}>Every 8 weeks</option>
-              </select>
-            </div>
-
-            {/* Time (Optional) */}
-            <div className="relative">
-              <label className="text-xs text-gray-600 mb-1 block">Time (Optional)</label>
-              <button
-                type="button"
-                onClick={() => setShowTimePicker(!showTimePicker)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-left hover:bg-gray-50 transition-colors"
-              >
-                {timeFrom && timeTo 
-                  ? `${timeFrom} - ${timeTo}`
-                  : timeFrom 
-                    ? timeFrom
-                    : timeTo
-                      ? timeTo
-                      : 'No time set'
-                }
-              </button>
-              
-              {showTimePicker && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4" data-time-picker>
-                  <div className="mb-4">
-                    <div className="flex space-x-1 bg-gray-100 rounded-lg p-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTimeTo('')
-                          setIsTimeRangeMode(false)
-                        }}
-                        className={`flex-1 py-2 px-3 text-xs font-medium rounded-md transition-colors ${
-                          !isTimeRangeMode
-                            ? 'bg-white text-gray-900 shadow-sm'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        Single Time
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsTimeRangeMode(true)
-                          if (!timeTo && timeFrom) {
-                            setTimeTo(timeFrom)
-                          }
-                        }}
-                        className={`flex-1 py-2 px-3 text-xs font-medium rounded-md transition-colors ${
-                          isTimeRangeMode
-                            ? 'bg-white text-gray-900 shadow-sm'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        Time Range
-                      </button>
-                    </div>
+              {/* Chips: employee / time / note */}
+              {selectedServices.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {/* Employee */}
+                  <div className="relative dropdown-container">
+                    <button type="button"
+                      onClick={() => setShowUserDropdown(v => !v)}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02]">
+                      {selectedUser ? (
+                        <>
+                          <span className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 text-white text-xs font-bold flex items-center justify-center">
+                            {(selectedUser.first_name[0] || '') + (selectedUser.last_name[0] || '')}
+                          </span>
+                          <span>{selectedUser.first_name} {selectedUser.last_name}</span>
+                          <XMarkIcon className="w-3 h-3 text-gray-400" onClick={e => { e.stopPropagation(); setSelectedUserId(null) }} />
+                        </>
+                      ) : (
+                        <>
+                          <UserIcon className="w-4 h-4 text-gray-400" />
+                          <span>Assign employee</span>
+                          <PlusIcon className="w-3 h-3 text-gray-400" />
+                        </>
+                      )}
+                    </button>
+                    {showUserDropdown && !selectedUserId && (
+                      <div className="absolute top-full left-0 mt-1 w-56 bg-white border border-gray-200 rounded-2xl shadow-2xl z-50 max-h-48 overflow-y-auto">
+                        {users.map(u => (
+                          <button key={u.id} onClick={() => { setSelectedUserId(u.id); setShowUserDropdown(false) }}
+                            className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100 last:border-b-0 flex items-center gap-3 transition-colors">
+                            <span className="w-8 h-8 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                              {(u.first_name[0] || '') + (u.last_name[0] || '')}
+                            </span>
+                            <div>
+                              <div className="text-sm font-semibold text-primary-800">{u.first_name} {u.last_name}</div>
+                              <div className="text-xs text-gray-400 capitalize">{u.role}</div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="space-y-3">
-                    {!isTimeRangeMode ? (
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-2">Time</label>
-                        <input
-                          type="time"
-                          value={timeFrom}
-                          onChange={(e) => setTimeFrom(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                        />
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-2">Between</label>
-                        <div className="flex items-center space-x-3">
-                          <input
-                            type="time"
-                            value={timeFrom}
-                            onChange={(e) => setTimeFrom(e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                          />
-                          <span className="text-sm text-gray-500 font-medium">to</span>
-                          <input
-                            type="time"
-                            value={timeTo}
-                            onChange={(e) => setTimeTo(e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                          />
+                  {/* Time */}
+                  <div className="relative">
+                    <button type="button" onClick={() => setShowTimePicker(v => !v)}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02]">
+                      <ClockIcon className="w-4 h-4 text-gray-400" />
+                      {timeFrom
+                        ? <span>{timeFrom}{timeTo ? ` – ${timeTo}` : ''}</span>
+                        : <><span>Add time</span><PlusIcon className="w-3 h-3 text-gray-400" /></>
+                      }
+                    </button>
+                    {showTimePicker && (
+                      <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl z-50 p-4 w-72" data-time-picker>
+                        <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4">
+                          {[false, true].map(range => (
+                            <button key={String(range)} type="button"
+                              onClick={() => { setIsTimeRangeMode(range); if (!range) setTimeTo('') }}
+                              className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-colors ${isTimeRangeMode === range ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>
+                              {range ? 'Time range' : 'Single time'}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="space-y-3">
+                          <TimePicker label={isTimeRangeMode ? 'From' : 'Time'} value={timeFrom} onChange={setTimeFrom} placeholder="09:00" />
+                          {isTimeRangeMode && <TimePicker label="To" value={timeTo} onChange={setTimeTo} disabled={!timeFrom} placeholder="17:00" />}
+                        </div>
+                        <div className="flex gap-2 mt-4 pt-3 border-t border-gray-100">
+                          <button type="button" onClick={() => { setTimeFrom(''); setTimeTo(''); setShowTimePicker(false) }}
+                            className="flex-1 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors">Clear</button>
+                          <button type="button" onClick={() => setShowTimePicker(false)}
+                            className="flex-1 py-2 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">Done</button>
                         </div>
                       </div>
                     )}
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-gray-100">
-                    <div className="flex space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTimeFrom('')
-                          setTimeTo('')
-                          setShowTimePicker(false)
-                        }}
-                        className="flex-1 py-2 px-3 text-xs text-gray-600 hover:text-gray-800 transition-colors"
-                      >
-                        Clear
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowTimePicker(false)}
-                        className="flex-1 py-2 px-3 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                      >
-                        Done
-                      </button>
-                    </div>
+                  {/* Note */}
+                  <button type="button" onClick={() => setShowNoteInput(v => !v)}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02]">
+                    <DocumentTextIcon className="w-4 h-4 text-gray-400" />
+                    {note.trim() ? <span className="max-w-[120px] truncate">{note}</span> : <><span>Add note</span><PlusIcon className="w-3 h-3 text-gray-400" /></>}
+                  </button>
+                </div>
+              )}
+
+              {showNoteInput && (
+                <div className="space-y-2">
+                  <textarea value={note} onChange={e => setNote(e.target.value)}
+                    placeholder="Add a note for this subscription…"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm resize-none bg-white shadow-sm"
+                    rows={3}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => { setNote(''); setShowNoteInput(false) }}
+                      className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">Clear</button>
+                    <button type="button" onClick={() => setShowNoteInput(false)}
+                      className="px-4 py-1.5 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">Save note</button>
                   </div>
                 </div>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Notes */}
-          <div className="space-y-2">
-            {!showNoteInput ? (
-              <button
-                type="button"
-                onClick={() => setShowNoteInput(true)}
-                className="flex items-center space-x-2 px-3 py-2 bg-gray-50 text-black border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors text-sm"
-              >
-                <span>📝</span>
-                <span>add note +</span>
-              </button>
-            ) : (
-              <div className="space-y-2">
-                <textarea
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Add a note for this subscription..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors text-sm resize-none"
-                  rows={3}
-                  style={{ minHeight: '80px', maxHeight: '120px' }}
-                />
-                <div className="flex justify-end space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNote('')
-                      setShowNoteInput(false)
-                    }}
-                    className="px-3 py-1 text-xs text-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowNoteInput(false)}
-                    className="px-3 py-1 text-xs bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors"
-                  >
-                    Save Note
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* ──────────── SCHEDULE TAB ──────────── */}
+          {activeTab === 'schedule' && (
+            <div className="p-6">
+              <SchedulePanel
+                startingDate={startingDate}
+                onStartingDateChange={setStartingDate}
+                recurrenceType={recurrenceType}
+                onRecurrenceTypeChange={setRecurrenceType}
+                dayOfWeek={dayOfWeek}
+                onDayOfWeekChange={setDayOfWeek}
+                intervalWeeks={intervalWeeks}
+                onIntervalWeeksChange={setIntervalWeeks}
+                customInterval={customInterval}
+                onCustomIntervalChange={setCustomInterval}
+                dayOfMonth={dayOfMonth}
+                onDayOfMonthChange={setDayOfMonth}
+                intervalMonths={intervalMonths}
+                onIntervalMonthsChange={setIntervalMonths}
+                pricePerVisit={pricePerVisit}
+                durationPerVisit={durationPerVisit}
+                visitsPerYear={visitsPerYear}
+                revenuePerYear={revenuePerYear}
+              />
+            </div>
+          )}
+
+          {/* ──────────── FORECAST TAB ──────────── */}
+          {activeTab === 'forecast' && (
+            <div className="p-6">
+              <ForecastPanel
+                forecastDates={forecastDates}
+                pastJobs={pastJobs}
+                pricePerVisit={pricePerVisit}
+                durationPerVisit={durationPerVisit}
+                visitsPerYear={visitsPerYear}
+                revenuePerYear={revenuePerYear}
+                originalPricePerVisit={originalPricePerVisit}
+                subscriptionTitle={subscriptionTitle}
+                selectedUser={selectedUser}
+                timeFrom={timeFrom}
+                timeTo={timeTo}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Footer */}
-        <div className="border-t border-gray-100 p-6">
-          <div className="flex justify-end space-x-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors"
-            >
+        {/* ── Footer ─────────────────────────────────────────────────────── */}
+        <div className="border-t border-gray-100 px-6 py-4 bg-white flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-400">
+            {selectedServices.length > 0 && startingDate
+              ? `${fmtMoney(pricePerVisit)} per visit · ${fmtMoney(revenuePerYear)} / year`
+              : ''
+            }
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
               Cancel
             </button>
-            <button
-              onClick={handleSubmit}
+            <button onClick={handleSubmit}
               disabled={isSubmitting || !subscriptionTitle.trim() || !startingDate || selectedServices.length === 0}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isSubmitting ? 'Saving...' : subscription ? 'Update Subscription' : 'Create Subscription'}
+              className="px-6 py-2.5 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-accent-500/20 hover:shadow-lg hover:shadow-accent-500/30 hover:scale-[1.02] active:scale-[0.98]">
+              {isSubmitting ? 'Saving…' : subscription ? 'Save changes' : 'Create Subscription'}
             </button>
           </div>
         </div>
       </div>
-    </>
+    </div>
   )
 }
-

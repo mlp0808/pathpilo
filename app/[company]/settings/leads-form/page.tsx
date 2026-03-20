@@ -1,0 +1,1 @@
+export { default } from '../../../settings/leads-form/page'

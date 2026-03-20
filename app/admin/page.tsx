@@ -207,10 +207,7 @@ export default function AdminLoginPage() {
         {/* Admin Info */}
         <div className="mt-8 bg-blue-900/20 rounded-lg p-6 border border-blue-800">
           <h3 className="text-sm font-medium text-blue-300 mb-3">Admin Access</h3>
-          <p className="text-xs text-blue-200 mb-2">This area is restricted to PathPilo administrators and support staff.</p>
-          <div className="space-y-1 text-xs text-blue-300">
-            <p><strong>Demo Admin:</strong> admin@vevago.com / password123</p>
-          </div>
+          <p className="text-xs text-blue-200">This area is restricted to Vevago administrators only.</p>
         </div>
       </div>
     </div>

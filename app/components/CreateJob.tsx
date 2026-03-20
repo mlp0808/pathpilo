@@ -5,6 +5,8 @@ import { createPortal } from 'react-dom'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import ConfirmModal from './ConfirmModal'
+import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
+import TimePicker from './TimePicker'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -339,9 +341,11 @@ interface CreateJobProps {
   initialDate?: string
   initialAssignedUserId?: number | null
   mode?: 'job' | 'subscription'
+  initialClientId?: number
+  lockClient?: boolean
 }
 
-export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job' }: CreateJobProps) {
+export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false }: CreateJobProps) {
   const [services, setServices] = useState<Service[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -455,12 +459,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setJobNote('')
       setShowNoteInput(false)
       setSelectedServices([])
-      setSelectedClient(null)
+      setSelectedClient(null) // will be overridden by fetchClients if initialClientId is set
       setSelectedUserId(typeof initialAssignedUserId === 'number' ? initialAssignedUserId : null)
       setServiceSearch('')
       setClientSearch('')
       setCreatedJobId(null)
-      setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
+      setExpandedSections(initialClientId
+        ? { client: false, job: true, schedule: false, recurring: false }
+        : { client: true, job: false, schedule: false, recurring: false })
       setJobType('new')
       setSelectedPastJob(null)
       setEditingPrice(null)
@@ -560,7 +566,17 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
-      if (response.ok) setClients(data.clients || [])
+      if (response.ok) {
+        const fetched: Client[] = data.clients || []
+        setClients(fetched)
+        if (initialClientId) {
+          const match = fetched.find(c => c.id === initialClientId)
+          if (match) {
+            setSelectedClient(match)
+            setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
+          }
+        }
+      }
     } catch (error) {
       console.error('Error fetching clients:', error)
     }
@@ -641,8 +657,10 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       
       let clientId = selectedClient?.id
       
-      // Create new client if in "add new client" mode
-      if (isAddingNewClient) {
+      // Create new client if in "add new client" mode OR selectedClient has temp id from "Save & Select Client"
+      const needsClientCreation = isAddingNewClient || (selectedClient && (selectedClient.id === -1 || !selectedClient.id))
+        if (needsClientCreation) {
+        const dataToUse = isAddingNewClient ? newClientData : { ...newClientData, ...selectedClient }
         const clientResponse = await fetch(apiUrl('/clients'), {
           method: 'POST',
           headers: {
@@ -650,15 +668,15 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            client_type: newClientData.client_type,
-            name: newClientData.name,
-            last_name: newClientData.last_name || null,
-            company_number: newClientData.company_number || null,
-            address: newClientData.address || null,
-            zip_code: newClientData.zip_code || null,
-            city: newClientData.city || null,
-            email: newClientData.email || null,
-            phone: newClientData.phone || null
+            client_type: dataToUse.client_type,
+            name: dataToUse.name,
+            last_name: dataToUse.last_name || null,
+            company_number: dataToUse.company_number || null,
+            address: dataToUse.address || null,
+            zip_code: dataToUse.zip_code || null,
+            city: dataToUse.city || null,
+            email: dataToUse.email || null,
+            phone: dataToUse.phone || null
           })
         })
         
@@ -830,28 +848,26 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     </div>
                   </div>
                 ) : isAddingNewClient ? (
-                  <div className="space-y-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">New client</span>
-                      <button type="button" onClick={() => { setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }} className="text-gray-400 hover:text-gray-600"><XMarkIcon className="w-4 h-4" /></button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input type="text" value={newClientData.name} onChange={e => setNewClientData({ ...newClientData, name: e.target.value })} placeholder="Name *" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
-                      {newClientData.client_type === 'person' && <input type="text" value={newClientData.last_name} onChange={e => setNewClientData({ ...newClientData, last_name: e.target.value })} placeholder="Last name" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />}
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input type="text" value={newClientData.address} onChange={e => setNewClientData({ ...newClientData, address: e.target.value })} placeholder="Address" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
-                      <input type="text" value={newClientData.city} onChange={e => setNewClientData({ ...newClientData, city: e.target.value })} placeholder="City" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
-                    </div>
-                    <button type="button" onClick={async () => {
-                      if (!newClientData.name.trim()) return
-                      try {
-                        const token = localStorage.getItem('token')
-                        const res = await fetch(apiUrl('/clients'), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ client_type: newClientData.client_type, name: newClientData.name, last_name: newClientData.last_name || null, address: newClientData.address || null, zip_code: newClientData.zip_code || null, city: newClientData.city || null, email: newClientData.email || null, phone: newClientData.phone || null }) })
-                        const data = await res.json()
-                        if (res.ok && data.client) { setSelectedClient(data.client); setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }
-                      } catch (e) { console.error(e) }
-                    }} disabled={!newClientData.name.trim()} className="w-full px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-xl hover:bg-accent-600 disabled:opacity-50">Save & select</button>
+                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
+                    <AddClientInlineForm
+                      data={newClientData}
+                      onChange={setNewClientData}
+                      onSave={() => {
+                        if (newClientData.name.trim()) {
+                          setSelectedClient({
+                            id: -1,
+                            name: newClientData.name,
+                            last_name: newClientData.last_name,
+                            client_type: newClientData.client_type
+                          })
+                          setIsAddingNewClient(false)
+                        }
+                      }}
+                      onCancel={() => {
+                        setIsAddingNewClient(false)
+                        setNewClientData(initialNewClientData)
+                      }}
+                    />
                   </div>
                 ) : (
                   <>
@@ -866,7 +882,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="text-xs text-gray-500">{client.address ? `${client.address}, ${client.city}` : 'No address'}</div>
                           </button>
                         )) : null}
-                        <button type="button" onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }} className="w-full px-4 py-3 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 text-sm font-medium text-blue-600 flex items-center gap-2">
+                        <button type="button" onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }} className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 text-sm font-medium text-accent-600 flex items-center gap-2">
                           <PlusIcon className="w-4 h-4" /> Add new client
                         </button>
                       </div>,
@@ -1024,25 +1040,32 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             </div>
           </div>
         </div>
-        {/* Time modal (job-only) */}
-        <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title="Set Time" description="Set the scheduled time for this job" confirmLabel="Save Time">
-          <div className="space-y-3">
-            <div className="flex items-center space-x-1 bg-gray-100 rounded p-0.5">
-              <button type="button" onClick={() => { setIsTimeRangeMode(false); setPendingTimeTo('') }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${!isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Single Time</button>
-              <button type="button" onClick={() => { setIsTimeRangeMode(true); if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom) }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Time Range</button>
-            </div>
+        {/* Time modal — portal so it escapes the backdrop's onClick and the card's CSS transform stacking context */}
+        {typeof document !== 'undefined' && createPortal(
+          <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title="Set Time" description="Set the scheduled time for this job" confirmLabel="Save Time">
+            <div className="space-y-3">
+              <div className="flex items-center space-x-1 bg-gray-100 rounded p-0.5">
+                <button type="button" onClick={() => { setIsTimeRangeMode(false); setPendingTimeTo('') }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${!isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Single Time</button>
+                <button type="button" onClick={() => { setIsTimeRangeMode(true); if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom) }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Time Range</button>
+              </div>
             {!isTimeRangeMode ? (
-              <div><label className="block text-xs text-gray-500 mb-1.5">Time</label><input type="time" value={pendingTimeFrom} onChange={e => setPendingTimeFrom(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 bg-white" /></div>
+              <TimePicker label="Time" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
             ) : (
-              <div><label className="block text-xs text-gray-500 mb-1.5">Between</label><div className="flex items-center gap-2"><input type="time" value={pendingTimeFrom} onChange={e => setPendingTimeFrom(e.target.value)} className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm bg-white" /><span className="text-xs text-gray-500">to</span><input type="time" value={pendingTimeTo} onChange={e => setPendingTimeTo(e.target.value)} className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm bg-white" /></div></div>
+              <div className="space-y-3">
+                <TimePicker label="From" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
+                <TimePicker label="To" value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} placeholder="e.g. 17:00" />
+              </div>
             )}
-            <div className="pt-3 border-t border-gray-100"><button type="button" onClick={() => { setPendingTimeFrom(''); setPendingTimeTo(''); setShowTimeModal(false) }} className="w-full py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100">Clear</button></div>
-          </div>
-        </ConfirmModal>
-        {/* Note modal (job-only) */}
-        <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title="Add Note" description="Add a note to this job" confirmLabel="Save Note" enableNotification={false}>
-          <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">Note</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder="Enter a note for this job..." rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
-        </ConfirmModal>
+              <div className="pt-3 border-t border-gray-100"><button type="button" onClick={() => { setPendingTimeFrom(''); setPendingTimeTo(''); setShowTimeModal(false) }} className="w-full py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100">Clear</button></div>
+            </div>
+          </ConfirmModal>
+        , document.body)}
+        {/* Note modal — also via portal for the same reason */}
+        {typeof document !== 'undefined' && createPortal(
+          <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title="Add Note" description="Add a note to this job" confirmLabel="Save Note" enableNotification={false}>
+            <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">Note</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder="Enter a note for this job..." rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
+          </ConfirmModal>
+        , document.body)}
       </>
     )
   }
@@ -1070,8 +1093,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             {(selectedClient || (isAddingNewClient && newClientData.name.trim())) && !expandedSections.client && (
                 <button
                 type="button"
-                onClick={() => toggleSection('client')}
-                className="w-full flex items-center justify-between py-3 px-2 transition-colors duration-150 ease-out hover:bg-gray-50 rounded"
+                onClick={() => !lockClient && toggleSection('client')}
+                className={`w-full flex items-center justify-between py-3 px-2 transition-colors duration-150 ease-out rounded ${lockClient ? 'cursor-default' : 'hover:bg-gray-50'}`}
               >
                 <div className="flex-1 min-w-0 text-left">
                   <div className="text-sm font-medium text-gray-900 truncate">
@@ -1093,14 +1116,16 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     }
                   </div>
                 </div>
-                <svg className="w-4 h-4 text-gray-400 ml-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                {!lockClient && (
+                  <svg className="w-4 h-4 text-gray-400 ml-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
+                )}
                 </button>
               )}
               
-            {/* Expanded view */}
-            {expandedSections.client && (
+            {/* Expanded view — hidden when client is locked */}
+            {expandedSections.client && !lockClient && (
               <div>
                 <div className="py-3 space-y-4 animate-slideDown">
                   {selectedClient ? (
@@ -1361,212 +1386,29 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     </div>
                   ) : isAddingNewClient ? (
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between pb-2 border-b border-gray-100">
-                        <h3 className="text-sm font-medium text-gray-900">New Client Information</h3>
-                    <button
-                          onClick={() => { setIsAddingNewClient(false); setNewClientData({ client_type: 'person', name: '', last_name: '', company_number: '', address: '', zip_code: '', city: '', email: '', phone: '' }) }}
-                          className="text-gray-400 hover:text-gray-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-gray-100"
-                    >
-                      <XMarkIcon className="w-4 h-4" />
-                    </button>
-                      </div>
-
-                      {/* Client Type Selector */}
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1.5">Client Type</label>
-                        <div className="flex bg-gray-100 rounded p-0.5">
-                          <button
-                            type="button"
-                            onClick={() => setNewClientData({ ...newClientData, client_type: 'person' })}
-                            className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
-                              newClientData.client_type === 'person' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
-                            }`}
-                          >
-                            Private Person
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setNewClientData({ ...newClientData, client_type: 'company' })}
-                            className={`flex-1 py-1.5 px-3 text-xs font-medium rounded transition-colors duration-150 ease-out ${
-                              newClientData.client_type === 'company' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
-                            }`}
-                          >
-                            Company
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Company fields (only show for companies) */}
-                      {newClientData.client_type === 'company' && (
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Company Name *</label>
-                            <input
-                              type="text"
-                              value={newClientData.name}
-                              onChange={(e) => setNewClientData({ ...newClientData, name: e.target.value })}
-                              placeholder="Company name"
-                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Company Number</label>
-                            <input
-                              type="text"
-                              value={newClientData.company_number}
-                              onChange={(e) => setNewClientData({ ...newClientData, company_number: e.target.value })}
-                              placeholder="CVR number or similar"
-                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Person fields (only show for persons) */}
-                      {newClientData.client_type === 'person' && (
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">First Name *</label>
-                            <input
-                              type="text"
-                              value={newClientData.name}
-                              onChange={(e) => setNewClientData({ ...newClientData, name: e.target.value })}
-                              placeholder="First name"
-                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
-                            <input
-                              type="text"
-                              value={newClientData.last_name}
-                              onChange={(e) => setNewClientData({ ...newClientData, last_name: e.target.value })}
-                              placeholder="Last name"
-                              className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Address fields (common for both) */}
-                      <div>
-                        <label className="block text-xs text-gray-500 mb-1.5">Address</label>
-                        <input
-                          type="text"
-                          value={newClientData.address}
-                          onChange={(e) => setNewClientData({ ...newClientData, address: e.target.value })}
-                          placeholder={newClientData.client_type === 'company' ? "Company address" : "Street address"}
-                          className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Zip Code</label>
-                          <input
-                            type="text"
-                            value={newClientData.zip_code}
-                            onChange={(e) => setNewClientData({ ...newClientData, zip_code: e.target.value })}
-                            placeholder="Zip code"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">City</label>
-                          <input
-                            type="text"
-                            value={newClientData.city}
-                            onChange={(e) => setNewClientData({ ...newClientData, city: e.target.value })}
-                            placeholder="City"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Email</label>
-                          <input
-                            type="email"
-                            value={newClientData.email}
-                            onChange={(e) => setNewClientData({ ...newClientData, email: e.target.value })}
-                            placeholder="Email"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Phone</label>
-                          <input
-                            type="tel"
-                            value={newClientData.phone}
-                            onChange={(e) => setNewClientData({ ...newClientData, phone: e.target.value })}
-                            placeholder="Phone"
-                            className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-2">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            // Save the new client
-                            try {
-                              const token = localStorage.getItem('token')
-                              const response = await fetch(apiUrl('/clients'), {
-                                method: 'POST',
-                                headers: {
-                                  'Content-Type': 'application/json',
-                                  'Authorization': `Bearer ${token}`
-                                },
-                                body: JSON.stringify({
-                                  client_type: newClientData.client_type,
-                                  name: newClientData.name,
-                                  last_name: newClientData.last_name || null,
-                                  company_number: newClientData.company_number || null,
-                                  address: newClientData.address || null,
-                                  zip_code: newClientData.zip_code || null,
-                                  city: newClientData.city || null,
-                                  email: newClientData.email || null,
-                                  phone: newClientData.phone || null,
-                                })
-                              })
-
-                              const data = await response.json()
-
-                              if (response.ok) {
-                                // Set the newly created client as selected
-                                setSelectedClient(data.client)
-                                setIsAddingNewClient(false)
-                                // Reset form
-                                setNewClientData({
-                                  client_type: 'person',
-                                  name: '',
-                                  last_name: '',
-                                  company_number: '',
-                                  address: '',
-                                  zip_code: '',
-                                  city: '',
-                                  email: '',
-                                  phone: ''
-                                })
-                                // Move to next step (job details)
-                                setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
-                              } else {
-                                console.error('Failed to create client:', data.error)
-                              }
-                            } catch (error) {
-                              console.error('Error creating client:', error)
-                            }
-                          }}
-                          disabled={
-                            !newClientData.name.trim()
+                      <AddClientInlineForm
+                        data={newClientData}
+                        onChange={setNewClientData}
+                        onSave={() => {
+                          if (newClientData.name.trim()) {
+                            setSelectedClient({
+                              id: -1,
+                              name: newClientData.name,
+                              last_name: newClientData.last_name,
+                              client_type: newClientData.client_type
+                            })
+                            setIsAddingNewClient(false)
+                            setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
                           }
-                          className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
-                        >
-                          Save Client & Continue
-                        </button>
-                      </div>
-                  </div>
-                ) : (
+                        }}
+                        onCancel={() => {
+                          setIsAddingNewClient(false)
+                          setNewClientData(initialNewClientData)
+                        }}
+                        saveLabel="Save & Select Client"
+                      />
+                    </div>
+                  ) : (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-gray-900 pb-2 border-b border-gray-100">Select Client</h3>
                   <div className="relative dropdown-container">
@@ -1601,9 +1443,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 ))}
                                 <button
                                   onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
-                                  className="w-full px-3 py-2 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out sticky bottom-0"
+                                  className="w-full px-3 py-2 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out sticky bottom-0"
                                 >
-                                  <div className="text-sm font-medium text-blue-600 flex items-center">
+                                  <div className="text-sm font-medium text-accent-600 flex items-center">
                                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                                     </svg>
@@ -1616,9 +1458,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 <div className="px-3 py-2 text-sm text-gray-500">No clients found</div>
                                 <button
                                   onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
-                                  className="w-full px-3 py-2 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out"
+                                  className="w-full px-3 py-2 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out"
                                 >
-                                  <div className="text-sm font-medium text-blue-600 flex items-center">
+                                  <div className="text-sm font-medium text-accent-600 flex items-center">
                                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                                     </svg>
@@ -2043,33 +1885,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 />
               </div>
 
-              <div>
-                <label className="block text-xs text-gray-500 mb-1.5">Time</label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPendingTimeFrom(jobTimeFrom)
-                    setPendingTimeTo(jobTimeTo)
-                    setIsTimeRangeMode(!!jobTimeTo)
-                    setShowTimeModal(true)
-                  }}
-                  className={`w-full px-3 py-2 rounded flex items-center justify-between transition-colors duration-150 ease-out text-sm ${
-                    jobTimeFrom || jobTimeTo
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100'
-                  }`}
-                >
-                  <span>
-                    {jobTimeFrom && jobTimeTo ? `${jobTimeFrom} - ${jobTimeTo}`
-                    : jobTimeFrom ? jobTimeFrom
-                    : jobTimeTo ? jobTimeTo
-                    : 'Set time (optional)'}
-                  </span>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {(jobTimeFrom || jobTimeTo) && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-700">
+                  <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                </button>
-              </div>
+                  <span>{jobTimeFrom && jobTimeTo ? `${jobTimeFrom} – ${jobTimeTo}` : jobTimeFrom || jobTimeTo}</span>
+                </div>
+              )}
 
                   <div className="space-y-2 pt-2">
                 {!showNoteInput ? (
@@ -2325,7 +2148,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
           )}
         </div>
 
-        {/* Time Modal */}
+        {/* Time Modal — rendered via portal so it escapes the slideout's CSS transform stacking context */}
+        {typeof document !== 'undefined' && createPortal(
         <ConfirmModal
           isOpen={showTimeModal}
           onClose={() => setShowTimeModal(false)}
@@ -2366,36 +2190,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               </button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {!isTimeRangeMode ? (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1.5">Time</label>
-                  <input
-                    type="time"
-                    value={pendingTimeFrom}
-                    onChange={(e) => setPendingTimeFrom(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                  />
-                </div>
+                <TimePicker label="Time" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
               ) : (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1.5">Between</label>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="time"
-                      value={pendingTimeFrom}
-                      onChange={(e) => setPendingTimeFrom(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                    />
-                    <span className="text-xs text-gray-500">to</span>
-                    <input
-                      type="time"
-                      value={pendingTimeTo}
-                      onChange={(e) => setPendingTimeTo(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out bg-white"
-                    />
-                  </div>
-                </div>
+                <>
+                  <TimePicker label="From" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
+                  <TimePicker label="To" value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} placeholder="e.g. 17:00" />
+                </>
               )}
             </div>
 
@@ -2416,6 +2218,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             </div>
           </div>
         </ConfirmModal>
+        , document.body)}
 
       </div>
     </>

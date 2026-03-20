@@ -223,6 +223,20 @@ async function createSchema() {
       );
     `);
 
+    // Video guides (Get Started modal - admin-managed)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS video_guides (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        duration VARCHAR(20) NOT NULL DEFAULT '0:00',
+        video_id VARCHAR(100) NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS leads (
         id SERIAL PRIMARY KEY,
@@ -296,6 +310,46 @@ async function createSchema() {
        ON jobs(company_id, scheduled_date, assigned_user_id, sort_order)`
     );
 
+    // Route planner: geocode cache (lat/lng) and day-view route order
+    await safeQuery(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await safeQuery(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
+    await safeQuery(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS route_order INTEGER`);
+
+    // Daily route travel totals — persists route order, drive times, and leg minutes per user per day
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS daily_routes (
+        id              SERIAL PRIMARY KEY,
+        company_id      INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        user_id         INTEGER NOT NULL,
+        scheduled_date  DATE    NOT NULL,
+        total_minutes   INTEGER,
+        total_km        NUMERIC(8,1),
+        job_ids         INTEGER[],
+        created_at      TIMESTAMP DEFAULT NOW(),
+        updated_at      TIMESTAMP DEFAULT NOW(),
+        UNIQUE (company_id, user_id, scheduled_date)
+      )
+    `);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_daily_routes_company_date ON daily_routes(company_id, scheduled_date)`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS leg_minutes REAL[]`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS total_job_minutes INTEGER`);
+    // Ensure job_ids is INTEGER[] (early installs may have created it as JSONB)
+    await safeQuery(`
+      DO $$ BEGIN
+        IF (SELECT data_type FROM information_schema.columns
+            WHERE table_name='daily_routes' AND column_name='job_ids') = 'USER-DEFINED'
+           OR (SELECT udt_name FROM information_schema.columns
+               WHERE table_name='daily_routes' AND column_name='job_ids') = 'jsonb'
+        THEN
+          ALTER TABLE daily_routes ALTER COLUMN job_ids TYPE INTEGER[]
+          USING ARRAY(SELECT jsonb_array_elements_text(job_ids)::integer);
+        END IF;
+      END $$
+    `);
+    // Address autocomplete: store verified coordinates on clients
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
+
     // Backward-compatible: ensure deleted_at exists if clients table already existed.
     await safeQuery(
       `ALTER TABLE clients
@@ -336,6 +390,12 @@ async function createSchema() {
     await safeQuery(
       `ALTER TABLE recurring_jobs
        ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`
+    );
+
+    // Add paused_at for subscription pause feature (no future jobs from this date)
+    await safeQuery(
+      `ALTER TABLE recurring_jobs
+       ADD COLUMN IF NOT EXISTS paused_at DATE`
     );
 
   // Uniquely identify a subscription occurrence per company to prevent duplicate ghosts/materializations.
@@ -436,6 +496,17 @@ async function createSchema() {
     FROM jobs j
     WHERE js.job_id = j.id AND j.status = 'cancelled'
       AND (js.status IS NULL OR js.status = 'scheduled');
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) UNIQUE NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      used_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   await pool.query(`

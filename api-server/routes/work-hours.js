@@ -49,11 +49,22 @@ function authenticateToken(req, res, next) {
 
 router.use(authenticateToken);
 
-// GET /api/work-hours/:userId - Get work hours for a user
+// Auto-migrate: add location columns to user_company_work_hours if they don't exist
+async function ensureLocationColumns() {
+  try {
+    await pool.query('ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS start_address TEXT');
+    await pool.query('ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS end_address TEXT');
+    await pool.query('ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS use_company_default_location BOOLEAN DEFAULT TRUE');
+  } catch (e) {
+    // ignore
+  }
+}
+ensureLocationColumns();
+
+// GET /api/work-hours/:userId - Get work hours + location settings for a user
 router.get('/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const currentUserId = req.user.userId;
 
     const companyAccess = await getActiveCompanyId(req, res);
     if (companyAccess.error) {
@@ -76,18 +87,22 @@ router.get('/:userId', async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      const defaultHours = {
-        user_id: parseInt(userId),
-        company_id: companyId,
-        monday_hours: 7.5,
-        tuesday_hours: 7.5,
-        wednesday_hours: 7.5,
-        thursday_hours: 7.5,
-        friday_hours: 7.0,
-        saturday_hours: 0.0,
-        sunday_hours: 0.0
-      };
-      return res.json({ workHours: defaultHours });
+      return res.json({
+        workHours: {
+          user_id: parseInt(userId),
+          company_id: companyId,
+          monday_hours: 7.5,
+          tuesday_hours: 7.5,
+          wednesday_hours: 7.5,
+          thursday_hours: 7.5,
+          friday_hours: 7.0,
+          saturday_hours: 0.0,
+          sunday_hours: 0.0,
+          start_address: null,
+          end_address: null,
+          use_company_default_location: true,
+        }
+      });
     }
 
     res.json({ workHours: result.rows[0] });
@@ -100,7 +115,7 @@ router.get('/:userId', async (req, res) => {
 // PUT /api/work-hours/:userId - Update work hours for a user
 router.put('/:userId', async (req, res) => {
   try {
-    const { workHours } = req.body;
+    const workHours = req.body && req.body.workHours;
     const { userId } = req.params;
     const currentUserId = req.user.userId;
 
@@ -111,8 +126,10 @@ router.put('/:userId', async (req, res) => {
     const companyId = companyAccess.companyId;
     const currentUserRole = companyAccess.userRole;
 
-    if (currentUserRole !== 'owner' && currentUserRole !== 'admin') {
-      return res.status(403).json({ error: 'Access denied: Only owners and admins can edit work hours' });
+    const isOwnerOrAdmin = currentUserRole === 'owner' || currentUserRole === 'admin';
+    const isEditingSelf = String(userId) === String(currentUserId);
+    if (!isOwnerOrAdmin && !isEditingSelf) {
+      return res.status(403).json({ error: 'Access denied: Only owners and admins can edit other users, or you can edit your own' });
     }
 
     const targetUserCheck = await pool.query(
@@ -124,12 +141,33 @@ router.put('/:userId', async (req, res) => {
       return res.status(403).json({ error: 'Access denied: User not in same company' });
     }
 
-    const { monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours } = workHours;
+    // If only location is being updated, fetch existing work hours so we don't overwrite with undefined
+    let monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours;
+    if (workHours && typeof workHours === 'object') {
+      ({ monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours } = workHours);
+    } else {
+      const existing = await pool.query(
+        'SELECT monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours FROM user_company_work_hours WHERE user_id = $1 AND company_id = $2',
+        [userId, companyId]
+      );
+      if (existing.rows.length > 0) {
+        const r = existing.rows[0];
+        monday_hours = r.monday_hours; tuesday_hours = r.tuesday_hours; wednesday_hours = r.wednesday_hours;
+        thursday_hours = r.thursday_hours; friday_hours = r.friday_hours; saturday_hours = r.saturday_hours; sunday_hours = r.sunday_hours;
+      } else {
+        monday_hours = 7.5; tuesday_hours = 7.5; wednesday_hours = 7.5; thursday_hours = 7.5; friday_hours = 7; saturday_hours = 0; sunday_hours = 0;
+      }
+    }
+    const start_address = req.body.start_address !== undefined ? req.body.start_address : null;
+    const end_address = req.body.end_address !== undefined ? req.body.end_address : null;
+    const use_company_default_location = req.body.use_company_default_location !== undefined
+      ? Boolean(req.body.use_company_default_location)
+      : true;
 
     const result = await pool.query(`
-      INSERT INTO user_company_work_hours 
-      (user_id, company_id, monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO user_company_work_hours
+      (user_id, company_id, monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours, start_address, end_address, use_company_default_location)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       ON CONFLICT (user_id, company_id)
       DO UPDATE SET
         monday_hours = EXCLUDED.monday_hours,
@@ -139,9 +177,12 @@ router.put('/:userId', async (req, res) => {
         friday_hours = EXCLUDED.friday_hours,
         saturday_hours = EXCLUDED.saturday_hours,
         sunday_hours = EXCLUDED.sunday_hours,
+        start_address = EXCLUDED.start_address,
+        end_address = EXCLUDED.end_address,
+        use_company_default_location = EXCLUDED.use_company_default_location,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *
-    `, [userId, companyId, monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours]);
+    `, [userId, companyId, monday_hours, tuesday_hours, wednesday_hours, thursday_hours, friday_hours, saturday_hours, sunday_hours, start_address, end_address, use_company_default_location]);
 
     res.json({
       message: 'Work hours updated successfully',

@@ -10,6 +10,8 @@ function RegisterForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteToken = searchParams.get('invite')
+  const trialToken  = searchParams.get('trial')
+
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -22,6 +24,7 @@ function RegisterForm() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
+  const [trialDays, setTrialDays] = useState<number | null>(null)
   const [formError, setFormError] = useState('')
   const [emailError, setEmailError] = useState('')
 
@@ -33,16 +36,33 @@ function RegisterForm() {
         .then(data => {
           if (data.invitation) {
             setInvitationEmail(data.invitation.email)
-            // Pre-fill email if available
-            setFormData(prev => ({
-              ...prev,
-              email: data.invitation.email
-            }))
+            setFormData(prev => ({ ...prev, email: data.invitation.email }))
           }
         })
         .catch(err => console.error('Error loading invitation:', err))
     }
   }, [inviteToken])
+
+  // Load trial details if trial token exists
+  useEffect(() => {
+    if (trialToken) {
+      fetch(apiUrl(`/trial/${trialToken}`))
+        .then(res => res.json())
+        .then(data => {
+          if (data.trial) {
+            const t = data.trial
+            setTrialDays(t.trialDays)
+            setFormData(prev => ({
+              ...prev,
+              firstName:  prev.firstName  || t.firstName  || '',
+              lastName:   prev.lastName   || t.lastName   || '',
+              email:      prev.email      || t.email      || '',
+            }))
+          }
+        })
+        .catch(err => console.error('Error loading trial:', err))
+    }
+  }, [trialToken])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target
@@ -71,7 +91,8 @@ function RegisterForm() {
           lastName: formData.lastName,
           email: formData.email,
           password: formData.password,
-          ...(inviteToken && { invitationToken: inviteToken })
+          ...(inviteToken  && { invitationToken: inviteToken }),
+          ...(trialToken   && { trialToken }),
         }),
       })
 
@@ -100,29 +121,24 @@ function RegisterForm() {
         // (Optional UX) you can add a toast later; avoiding alert() for consistency
         console.log('User created and logged in:', data.user)
         
-        // If registered via invitation, go straight to company dashboard (or company picker)
-        if (inviteToken && userData && userData.companyId) {
-          const slug = userData.activeCompany?.slug || userData.companies?.[0]?.slug
+        if (inviteToken) {
+          // Invited employee: go straight to their company dashboard
+          const slug = userData?.activeCompany?.slug || userData?.companies?.[0]?.slug
           router.push(slug ? `/${slug}/dashboard` : '/select-company')
-        } else if (!inviteToken) {
-          // Normal registration: always go to setup wizard to configure company
-          router.push('/setup/company')
         } else {
-          // No company, go to setup
+          // Normal / trial registration: go to setup wizard to configure company
           router.push('/setup/company')
         }
       } else {
-        const msg = (data?.error ? String(data.error) : 'Registration failed')
+        // Existing account + invitation → redirect to login so they can accept there
+        if (data?.error === 'account_exists' && data?.loginUrl) {
+          router.push(data.loginUrl)
+          return
+        }
+        const msg = data?.message || data?.error || 'Registration failed'
         const lower = msg.toLowerCase()
-
-        // Field-level handling for the common "email already exists" case
-        if (lower.includes('email') && (lower.includes('already exists') || lower.includes('already in use'))) {
-          setEmailError('Email is already in use. Try logging in instead.')
-        } else if (lower.includes('already exists') && lower.includes('email')) {
-          setEmailError('Email is already in use. Try logging in instead.')
-        } else if (lower.includes('already exists')) {
-          // Backend currently returns: "User with this email already exists"
-          setEmailError('Email is already in use. Try logging in instead.')
+        if (lower.includes('email') || lower.includes('already')) {
+          setEmailError(msg)
         } else {
           setFormError(msg)
         }
@@ -151,7 +167,21 @@ function RegisterForm() {
             <span className="text-xl font-bold text-primary-800 tracking-tight">PathPilo</span>
           </Link>
           <h1 className="text-3xl font-bold text-primary-800 tracking-tight mb-2">Create your account</h1>
-          <p className="text-gray-600 font-medium">Start managing your service business today</p>
+          <p className="text-gray-600 font-medium">
+            {inviteToken
+              ? 'Set up your account to join your team'
+              : trialToken && trialDays
+                ? `You've been invited for a ${trialDays}-day free trial`
+                : 'Start managing your service business today'}
+          </p>
+          {trialToken && trialDays && (
+            <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-accent-50 border border-accent-200 rounded-full text-sm font-medium text-accent-700">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {trialDays} days free access
+            </div>
+          )}
         </div>
 
         {/* Registration Form */}
@@ -212,9 +242,9 @@ function RegisterForm() {
                 name="email"
                 value={formData.email}
                 onChange={handleInputChange}
-                readOnly={!!inviteToken}
+                readOnly={!!inviteToken || !!trialToken}
                 aria-invalid={!!emailError}
-                className={`input-field ${inviteToken ? 'bg-gray-100 cursor-not-allowed' : ''} ${emailError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}
+                className={`input-field ${(inviteToken || trialToken) ? 'bg-gray-100 cursor-not-allowed' : ''} ${emailError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}
                 placeholder="john@company.com"
                 required
               />
@@ -341,23 +371,25 @@ function RegisterForm() {
           </div>
         </div>
 
-        {/* Features Preview */}
-        <div className="mt-8 text-center">
-          <div className="flex items-center justify-center space-x-6 text-sm text-gray-600">
-            <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-accent-500" />
-              <span>Free 14-day trial</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-accent-500" />
-              <span>No credit card required</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <CheckIcon className="w-4 h-4 text-accent-500" />
-              <span>Cancel anytime</span>
+        {/* Features strip — only for non-invite registrations */}
+        {!inviteToken && (
+          <div className="mt-8 text-center">
+            <div className="flex items-center justify-center space-x-6 text-sm text-gray-600">
+              <div className="flex items-center space-x-1">
+                <CheckIcon className="w-4 h-4 text-accent-500" />
+                <span>{trialToken && trialDays ? `${trialDays}-day free trial` : 'Free 14-day trial'}</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <CheckIcon className="w-4 h-4 text-accent-500" />
+                <span>No credit card required</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <CheckIcon className="w-4 h-4 text-accent-500" />
+                <span>Cancel anytime</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

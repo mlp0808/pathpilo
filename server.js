@@ -342,6 +342,14 @@ const pool = new Pool({
     await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS recurrence_type VARCHAR(20) DEFAULT 'weekly'`);
     await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS day_of_month INTEGER`);
     await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS interval_value INTEGER DEFAULT 1`);
+    await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS paused_at DATE`);
+    // Route planner geocode cache + day-view route order
+    await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS route_order INTEGER`);
+    // Address autocomplete: store verified coordinates on clients
+    await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
     // Update existing records to have proper recurrence_type
     await pool.query(`UPDATE recurring_jobs SET recurrence_type = 'weekly' WHERE recurrence_type IS NULL`);
     await pool.query(`UPDATE recurring_jobs SET interval_value = interval_weeks WHERE interval_value IS NULL AND interval_weeks IS NOT NULL`);
@@ -2880,11 +2888,22 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
             }
           }
           
+          // Paused subscriptions: skip dates on or after paused_at
+          let pausedAtStr = null
+          if (subscription.paused_at) {
+            const p = subscription.paused_at
+            pausedAtStr = p instanceof Date ? formatDateString(p) : (typeof p === 'string' ? p.split('T')[0] : null)
+          }
+
           // Generate dates for this subscription
           while (currentDate <= endDateObj) {
             // Only generate if the date is >= first occurrence (subscription has started) and >= startDate
             if (currentDate >= firstOccurrenceDateObj && currentDate >= startDateObj) {
               const dateStr = formatDateString(currentDate)
+              if (pausedAtStr && dateStr >= pausedAtStr) {
+                // Skip this and all future dates (subscription paused from paused_at)
+                break
+              }
               
               // Compute occurrence index within subscription pattern (1-based)
               let occ;
@@ -5147,6 +5166,20 @@ app.post('/api/subscriptions/:subscriptionId/occurrences/:occurrence/materialize
 
     const jobDate = (typeof scheduled_date === 'string' && scheduled_date.length === 10) ? scheduled_date : computedDate;
 
+    // Block materialization if subscription is paused from this date
+    if (sub.paused_at) {
+      const pausedStr = sub.paused_at instanceof Date
+        ? formatDateString(sub.paused_at)
+        : (typeof sub.paused_at === 'string' ? sub.paused_at.split('T')[0] : String(sub.paused_at));
+      if (pausedStr && jobDate >= pausedStr) {
+        dbClient.release();
+        return res.status(400).json({
+          error: 'Subscription is paused. Future jobs from the pause date cannot be materialized.',
+          paused_at: pausedStr
+        });
+      }
+    }
+
     // Copy services from subscription
     const subServicesRes = await dbClient.query(
       `SELECT rjs.service_id, rjs.custom_price, rjs.custom_duration_minutes
@@ -5198,7 +5231,7 @@ app.post('/api/subscriptions/:subscriptionId/occurrences/:occurrence/materialize
 
     await dbClient.query(
       'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
-      [jobId, userId, 'materialized', `Subscription occurrence #${occurrence} created as a real job`]
+      [jobId, userId, 'materialized', 'Created by subscription']
     );
 
     await dbClient.query('COMMIT');

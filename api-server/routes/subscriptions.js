@@ -52,6 +52,14 @@ const getActiveCompanyId = async (req, res) => {
   }
 };
 
+// Helper to format date as local YYYY-MM-DD (no UTC shift)
+const toLocalYmd = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Helper function to calculate first occurrence
 const calculateFirstOccurrence = (startingDateStr, dayOfWeek) => {
   if (!startingDateStr) {
@@ -61,16 +69,16 @@ const calculateFirstOccurrence = (startingDateStr, dayOfWeek) => {
   const startingDate = new Date(startingDateStr + 'T00:00:00');
   const targetDayOfWeek = dayOfWeek;
 
-  // Find the next occurrence of the target day of week
+  // Find the first occurrence ON or AFTER the starting date.
+  // If starting_date already matches the chosen weekday, we keep that date.
   let daysToAdd = (targetDayOfWeek - startingDate.getDay() + 7) % 7;
-  if (daysToAdd === 0) {
-    daysToAdd = 7; // If it's already the target day, move to next week
-  }
 
   const firstOccurrence = new Date(startingDate);
   firstOccurrence.setDate(startingDate.getDate() + daysToAdd);
 
-  return firstOccurrence.toISOString().split('T')[0];
+  // IMPORTANT: use local date formatting to avoid timezone shifting to previous day
+  // (e.g. Monday local midnight becoming Sunday in UTC).
+  return toLocalYmd(firstOccurrence);
 };
 
 // Helper function to calculate first monthly occurrence
@@ -324,11 +332,11 @@ router.post('/', authenticateToken, async (req, res) => {
         const firstJobResult = await dbClient.query(`
           INSERT INTO jobs
           (company_id, client_id, assigned_user_id, title, note, scheduled_date,
-           scheduled_time_from, scheduled_time_to, recurring_job_id, is_generated, status, sort_order)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $9), 0))
+           scheduled_time_from, scheduled_time_to, recurring_job_id, recurring_occurrence, is_generated, status, sort_order)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $9), 0))
           RETURNING *
         `, [companyId, clientIdNum, assigned_user_id, title, note, firstOccurrence,
-            scheduled_time_from, scheduled_time_to, subscription.id, true, 'scheduled']);
+            scheduled_time_from, scheduled_time_to, subscription.id, 1, true, 'scheduled']);
 
         // Add services to the first job
         firstJob = firstJobResult.rows[0];
@@ -380,64 +388,131 @@ router.post('/', authenticateToken, async (req, res) => {
 
 // PUT /api/subscriptions/:subscriptionId - Update subscription
 router.put('/:subscriptionId', authenticateToken, async (req, res) => {
+  const dbClient = await pool.connect();
   try {
     const { subscriptionId } = req.params;
-    const updates = req.body;
-    const userId = req.user.userId;
+    const {
+      title,
+      assigned_user_id,
+      services,
+      starting_date,
+      recurrence_type,
+      day_of_week,
+      day_of_month,
+      interval_value,
+      interval_weeks,   // legacy field sent by frontend – maps to interval_value
+      scheduled_time_from,
+      scheduled_time_to,
+      note,
+    } = req.body;
 
     // Get user's company
     const companyAccess = await getActiveCompanyId(req, res);
     if (companyAccess.error) {
+      dbClient.release();
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
 
     // Verify subscription belongs to user's company
-    const subscriptionCheck = await pool.query(
+    const subscriptionCheck = await dbClient.query(
       'SELECT id FROM recurring_jobs WHERE id = $1 AND company_id = $2',
       [subscriptionId, companyId]
     );
-
     if (subscriptionCheck.rows.length === 0) {
+      dbClient.release();
       return res.status(404).json({ error: 'Subscription not found or access denied' });
     }
 
-    // Build update query
-    const fields = [];
-    const values = [];
-    let paramCount = 1;
+    // Resolve interval: prefer interval_value, fall back to interval_weeks
+    const resolvedInterval = (interval_value != null && interval_value > 0)
+      ? interval_value
+      : (interval_weeks != null && interval_weeks > 0 ? interval_weeks : null);
 
-    Object.keys(updates).forEach(key => {
-      if (updates[key] !== undefined && key !== 'id' && key !== 'company_id') {
-        fields.push(`${key} = $${paramCount}`);
-        values.push(updates[key]);
-        paramCount++;
+    // Recalculate next_occurrence_date if schedule changed
+    let nextOccurrenceDate = undefined;
+    if (starting_date && recurrence_type) {
+      try {
+        if (recurrence_type === 'monthly') {
+          nextOccurrenceDate = calculateFirstMonthlyOccurrence(starting_date, day_of_month);
+        } else {
+          nextOccurrenceDate = calculateFirstOccurrence(starting_date, day_of_week);
+        }
+      } catch (e) {
+        // non-fatal – just skip updating next_occurrence_date
       }
-    });
-
-    if (fields.length === 0) {
-      return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    values.push(subscriptionId);
+    // Build update for recurring_jobs (only real columns)
+    const fields = [];
+    const values = [];
+    let p = 1;
 
-    const updateQuery = `
-      UPDATE recurring_jobs
-      SET ${fields.join(', ')}, updated_at = NOW()
-      WHERE id = $${paramCount}
-      RETURNING *
-    `;
+    const addField = (col, val) => {
+      if (val !== undefined) {
+        fields.push(`${col} = $${p++}`);
+        values.push(val);
+      }
+    };
 
-    const result = await pool.query(updateQuery, values);
+    addField('title', title);
+    addField('assigned_user_id', assigned_user_id !== undefined ? (assigned_user_id || null) : undefined);
+    addField('starting_date', starting_date);
+    addField('recurrence_type', recurrence_type);
+    addField('day_of_week', day_of_week !== undefined ? day_of_week : undefined);
+    addField('day_of_month', day_of_month !== undefined ? (day_of_month || null) : undefined);
+    addField('interval_value', resolvedInterval);
+    addField('scheduled_time_from', scheduled_time_from !== undefined ? (scheduled_time_from || null) : undefined);
+    addField('scheduled_time_to', scheduled_time_to !== undefined ? (scheduled_time_to || null) : undefined);
+    addField('note', note !== undefined ? (note || null) : undefined);
+    if (nextOccurrenceDate) addField('next_occurrence_date', nextOccurrenceDate);
 
-    res.json({
-      message: 'Subscription updated successfully',
-      subscription: result.rows[0]
-    });
+    await dbClient.query('BEGIN');
+
+    let subscription = subscriptionCheck.rows[0];
+
+    if (fields.length > 0) {
+      values.push(subscriptionId);
+      const result = await dbClient.query(
+        `UPDATE recurring_jobs SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${p} RETURNING *`,
+        values
+      );
+      subscription = result.rows[0];
+    }
+
+    // Replace services if provided
+    if (Array.isArray(services) && services.length > 0) {
+      await dbClient.query(
+        'DELETE FROM recurring_job_services WHERE recurring_job_id = $1',
+        [subscriptionId]
+      );
+      for (const service of services) {
+        if (service.service_id) {
+          await dbClient.query(
+            `INSERT INTO recurring_job_services (recurring_job_id, service_id, custom_price, custom_duration_minutes)
+             VALUES ($1, $2, $3, $4)`,
+            [subscriptionId, service.service_id, service.custom_price ?? null, service.custom_duration ?? null]
+          );
+        } else if (service.custom_title) {
+          await dbClient.query(
+            `INSERT INTO recurring_job_services (recurring_job_id, custom_title, custom_price, custom_duration_minutes)
+             VALUES ($1, $2, $3, $4)`,
+            [subscriptionId, service.custom_title, service.custom_price ?? null, service.custom_duration ?? null]
+          );
+        }
+      }
+    }
+
+    await dbClient.query('COMMIT');
+
+    res.json({ message: 'Subscription updated successfully', subscription });
 
   } catch (error) {
+    try { await dbClient.query('ROLLBACK'); } catch {}
     console.error('Error updating subscription:', error);
     res.status(500).json({ error: 'Failed to update subscription: ' + error.message });
+  } finally {
+    dbClient.release();
   }
 });
 
@@ -477,6 +552,54 @@ router.delete('/:subscriptionId', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error deleting subscription:', error);
     res.status(500).json({ error: 'Failed to delete subscription: ' + error.message });
+  }
+});
+
+// PATCH /api/subscriptions/:subscriptionId/pause - Pause or resume subscription
+router.patch('/:subscriptionId/pause', authenticateToken, async (req, res) => {
+  try {
+    const subscriptionId = parseInt(req.params.subscriptionId, 10);
+    const { paused } = req.body || {};
+
+    if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) {
+      return res.status(400).json({ error: 'Invalid subscription ID' });
+    }
+
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const subCheck = await pool.query(
+      'SELECT id, paused_at FROM recurring_jobs WHERE id = $1 AND company_id = $2 AND is_active = true',
+      [subscriptionId, companyId]
+    );
+    if (subCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Subscription not found or access denied' });
+    }
+
+    if (paused === true) {
+      // Pause from today
+      const today = new Date().toISOString().split('T')[0];
+      await pool.query(
+        'UPDATE recurring_jobs SET paused_at = $1, updated_at = NOW() WHERE id = $2',
+        [today, subscriptionId]
+      );
+      res.json({ message: 'Subscription paused', paused_at: today });
+    } else if (paused === false) {
+      // Resume
+      await pool.query(
+        'UPDATE recurring_jobs SET paused_at = NULL, updated_at = NOW() WHERE id = $1',
+        [subscriptionId]
+      );
+      res.json({ message: 'Subscription resumed' });
+    } else {
+      res.status(400).json({ error: 'Missing or invalid body: { paused: true | false }' });
+    }
+  } catch (error) {
+    console.error('Error pausing subscription:', error);
+    res.status(500).json({ error: 'Failed to pause subscription: ' + error.message });
   }
 });
 
@@ -600,6 +723,20 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     const jobDate = (typeof scheduled_date === 'string' && scheduled_date.length === 10) ? scheduled_date : computedDate;
 
+    // Block materialization if subscription is paused from this date
+    if (sub.paused_at) {
+      const pausedStr = sub.paused_at instanceof Date
+        ? formatDateString(sub.paused_at)
+        : (typeof sub.paused_at === 'string' ? sub.paused_at.split('T')[0] : String(sub.paused_at));
+      if (pausedStr && jobDate >= pausedStr) {
+        dbClient.release();
+        return res.status(400).json({
+          error: 'Subscription is paused. Future jobs from the pause date cannot be materialized.',
+          paused_at: pausedStr
+        });
+      }
+    }
+
     const subServicesRes = await dbClient.query(
       `SELECT rjs.service_id, rjs.custom_price, rjs.custom_duration_minutes
        FROM recurring_job_services rjs
@@ -652,7 +789,7 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
     try {
       await dbClient.query(
         'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
-        [jobId, userId, 'materialized', `Subscription occurrence #${occurrence} created as a real job`]
+        [jobId, userId, 'materialized', 'Created by subscription']
       );
     } catch (logErr) {
       // Ignore if job_logs doesn't exist or columns are missing
@@ -669,6 +806,51 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
     return res.status(500).json({ error: 'Failed to materialize occurrence', details: error.message });
   } finally {
     try { dbClient.release(); } catch {}
+  }
+});
+
+// GET /api/subscriptions/:subscriptionId/jobs - Fetch all jobs generated by a subscription
+router.get('/:subscriptionId/jobs', authenticateToken, async (req, res) => {
+  try {
+    const subscriptionId = parseInt(req.params.subscriptionId, 10);
+    if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) {
+      return res.status(400).json({ error: 'Invalid subscription ID' });
+    }
+
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    // Verify subscription belongs to company
+    const subCheck = await pool.query(
+      'SELECT id FROM recurring_jobs WHERE id = $1 AND company_id = $2',
+      [subscriptionId, companyId]
+    );
+    if (subCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Subscription not found or access denied' });
+    }
+
+    const result = await pool.query(`
+      SELECT
+        j.id, j.title, j.status, j.scheduled_date, j.scheduled_time_from, j.scheduled_time_to,
+        j.recurring_occurrence,
+        COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) AS total_price,
+        u.first_name, u.last_name
+      FROM jobs j
+      LEFT JOIN job_services js ON js.job_id = j.id
+      LEFT JOIN services s ON s.id = js.service_id
+      LEFT JOIN users u ON u.id = j.assigned_user_id
+      WHERE j.recurring_job_id = $1 AND j.company_id = $2
+      GROUP BY j.id, u.first_name, u.last_name
+      ORDER BY j.scheduled_date DESC
+    `, [subscriptionId, companyId]);
+
+    res.json({ jobs: result.rows });
+  } catch (error) {
+    console.error('Error fetching subscription jobs:', error);
+    res.status(500).json({ error: 'Failed to fetch jobs: ' + error.message });
   }
 });
 

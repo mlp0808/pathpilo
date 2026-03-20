@@ -30,18 +30,26 @@ router.get('/', async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const result = await pool.query(`
-      SELECT uc.company_id, c.name as company_name
-      FROM user_companies uc
-      JOIN companies c ON uc.company_id = c.id
-      WHERE uc.user_id = $1
-      LIMIT 1
-    `, [userId]);
+    // Use activeCompanyId from JWT — this is set correctly on login and company switch.
+    // Never use LIMIT 1 without ordering: it returns an unpredictable company for multi-company users.
+    let companyId = req.user.activeCompanyId;
 
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'No active company found' });
+    if (!companyId) {
+      // Fallback: take the first company this user owns, then any company
+      const result = await pool.query(`
+        SELECT uc.company_id
+        FROM user_companies uc
+        JOIN companies c ON uc.company_id = c.id
+        WHERE uc.user_id = $1
+        ORDER BY CASE WHEN uc.role = 'owner' THEN 0 ELSE 1 END, uc.created_at ASC
+        LIMIT 1
+      `, [userId]);
+
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'No active company found' });
+      }
+      companyId = result.rows[0].company_id;
     }
-    const companyId = result.rows[0].company_id;
 
     const usersResult = await pool.query(`
       SELECT u.id, u.first_name, u.last_name, u.email, uc.role, u.created_at

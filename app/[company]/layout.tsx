@@ -5,6 +5,41 @@ import { useParams, useRouter, usePathname } from 'next/navigation'
 import { useUser } from '@/app/hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 
+function SuspendedWall({ companyName }: { companyName: string }) {
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    window.location.href = '/login'
+  }
+  return (
+    <div className="min-h-screen bg-page flex items-center justify-center px-4">
+      <div className="max-w-md w-full text-center space-y-6">
+        <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto">
+          <svg className="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-primary-800 mb-2">Account on hold</h1>
+          <p className="text-gray-600">
+            <strong>{companyName}</strong> has been temporarily suspended.
+            Access to all company data, clients and jobs is currently unavailable.
+          </p>
+          <p className="text-sm text-gray-400 mt-3">
+            If you believe this is a mistake, please contact your account manager.
+          </p>
+        </div>
+        <button
+          onClick={handleLogout}
+          className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function CompanyLayout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={
@@ -27,6 +62,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const { user, loading: userLoading } = useUser()
   const [isResolving, setIsResolving] = useState(true)
   const [lastResolvedSlug, setLastResolvedSlug] = useState<string | null>(null)
+  const [suspendedCompanyName, setSuspendedCompanyName] = useState<string | null>(null)
 
   const companySlug = params?.company as string
 
@@ -97,6 +133,13 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         
         const resolveData = await resolveResponse.json()
         const companyId = resolveData.company.id
+
+        // Company suspended — show wall immediately, no further processing
+        if (resolveData.company.suspendedAt) {
+          setSuspendedCompanyName(resolveData.company.name)
+          setIsResolving(false)
+          return
+        }
         
         // Check if user's active company matches
         const userStr2 = localStorage.getItem('user')
@@ -192,6 +235,10 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     )
+  }
+
+  if (suspendedCompanyName) {
+    return <SuspendedWall companyName={suspendedCompanyName} />
   }
 
   return <>{children}</>

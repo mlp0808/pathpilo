@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, Suspense, useRef } from 'react'
-import Link from 'next/link'
+import { useState, useEffect, Suspense, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { useUser } from '@/app/hooks/useUser'
 import AppLayout from '@/app/components/AppLayout'
 import CreateJob from '@/app/components/CreateJob'
@@ -9,10 +9,24 @@ import CreateSubscription from '@/app/components/CreateSubscription'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
 import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
+import DayRoutePanel from '@/app/components/DayRoutePanel'
 import { apiUrl } from '@/app/utils/api'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
+import type { UserRoute, RouteJob } from '@/app/components/RouteMap'
+
+// RouteMap uses mapbox-gl which cannot be server-rendered
+const RouteMap = dynamic(() => import('@/app/components/RouteMap'), { ssr: false })
+
+// 10 distinct colours for up to 10 users
+const USER_COLORS = [
+  '#3DD57A', '#FF6B6B', '#4ECDC4', '#45B7D1',
+  '#F4A261', '#A8DADC', '#E76F51', '#7B2D8B',
+  '#2196F3', '#FF9800',
+]
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
 interface User {
     id: number
@@ -33,8 +47,10 @@ interface WorkHours {
 }
 
 function JobsPageContent() {
+  const params = useParams()
   const searchParams = useSearchParams()
   const { user, loading: userLoading } = useUser()
+  const companySlug = (params?.company as string) || ''
   
   // Format a Date as YYYY-MM-DD in local time (avoids timezone shifting from toISOString)
   const toLocalDateString = (d: Date) => {
@@ -68,8 +84,21 @@ function JobsPageContent() {
     return new Date()
   }
   
-  const [currentWeek, setCurrentWeek] = useState(getSavedWeek)
+  // Initialise currentWeek from URL ?date= param first, then localStorage
+  const [currentWeek, setCurrentWeek] = useState(() => {
+    const dateStr = searchParams.get('date')
+    if (dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number)
+      if (y && m && d) {
+        const parsed = new Date(y, m - 1, d)
+        if (!isNaN(parsed.getTime())) return parsed
+      }
+    }
+    return getSavedWeek()
+  })
   const [jobs, setJobs] = useState<any[]>([])
+  // Full jobs dataset (unfiltered). Used by the route planner so "All employees" always works.
+  const [allJobs, setAllJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [apiError, setApiError] = useState<string>('')
   const [viewingJob, setViewingJob] = useState<any>(null)
@@ -84,7 +113,10 @@ function JobsPageContent() {
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
   const [workHours, setWorkHours] = useState<WorkHours | null>(null)
   const [allUsersWorkHours, setAllUsersWorkHours] = useState<WorkHours | null>(null)
-  const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>('week')
+  // Initialise viewMode from URL ?view= param
+  const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() =>
+    searchParams.get('view') === 'day' ? 'day' : 'week'
+  )
   
   // Drag and drop state
   const [draggedJob, setDraggedJob] = useState<any>(null)
@@ -98,6 +130,75 @@ function JobsPageContent() {
   const [moveTemplate, setMoveTemplate] = useState<{ subject: string; message: string }>({ subject: '', message: '' })
   const weekScrollContainerRef = useRef<HTMLDivElement>(null)
   const [weekScrollPosition, setWeekScrollPosition] = useState(0)
+
+  // ── Day view / route planner ──────────────────────────────────────────────
+  const [dayRoutes, setDayRoutes] = useState<UserRoute[]>([])
+  const [dayFocusUserId, setDayFocusUserId] = useState<number | null>(null)
+  const [dayOptimizing, setDayOptimizing] = useState(false)
+  const [dayGeocodingCount, setDayGeocodingCount] = useState(0)
+  const [hoveredJobId, setHoveredJobId] = useState<number | string | null>(null)
+  // Bumped every time routes are rebuilt so the directions effect always re-fires
+  const [dayRoutesVersion, setDayRoutesVersion] = useState(0)
+  const directionsFetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const routeOrderSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Baseline driving minutes per user for the current day (before edits in this session)
+  const [dayBaselineMinutes, setDayBaselineMinutes] = useState<Record<number, number>>({})
+  const [dayBaselineDate, setDayBaselineDate] = useState<string | null>(null)
+
+  // Pending assignee changes in route planner (applied only on Save & apply)
+  const [pendingAssigneeChanges, setPendingAssigneeChanges] = useState<Record<number, number>>({})
+
+  // Date strings (YYYY-MM-DD) where a route has been explicitly saved via Save & Apply
+  const [plannedDays, setPlannedDays] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    try {
+      const key = `planned-days-${window.location.pathname.split('/')[1]}`
+      const raw = localStorage.getItem(key)
+      if (raw) setPlannedDays(new Set(JSON.parse(raw)))
+    } catch { /* ignore */ }
+  }, [])
+
+  // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
+  const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
+  // Leave entries for the currently selected employee: date → { leave_type, hours_off }
+  const [employeeLeaveByDate, setEmployeeLeaveByDate] = useState<Record<string, { leave_type: string; hours_off: number | null }>>({})
+
+
+  // Fetch saved travel times from daily_routes whenever the visible week changes
+  useEffect(() => {
+    if (viewMode !== 'week') return
+    const startDate = toLocalDateString(weekDays[0])
+    const endDate = toLocalDateString(weekDays[6])
+    const token = localStorage.getItem('token')
+    fetch(apiUrl(`/daily-routes?start_date=${startDate}&end_date=${endDate}`), {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data?.routes?.length) return
+        setTravelMinutes(prev => {
+          const next = { ...prev }
+          for (const row of data.routes) {
+            if (row.total_minutes == null) continue
+            // scheduled_date may be a plain "YYYY-MM-DD" string (from to_char on server)
+            // or a JS Date serialized as "YYYY-MM-DDT23:00:00.000Z" (UTC, server in UTC+1).
+            // Plain string → use directly.
+            // ISO timestamp → convert to LOCAL date so the day matches the browser timezone.
+            const raw = String(row.scheduled_date)
+            const dateStr = raw.includes('T')
+              ? toLocalDateString(new Date(raw))
+              : raw
+            next[`${dateStr}:${row.user_id}`] = row.total_minutes
+          }
+          return next
+        })
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, currentWeek])
+
 
     // Get the start of the week (Monday)
     const getWeekStart = (date: Date) => {
@@ -234,6 +335,25 @@ function JobsPageContent() {
       } catch (e) {}
     }
   }, [currentWeek])
+
+  // Keep the browser URL in sync with the current view so that:
+  //  • Refreshing the page returns you to the same day view
+  //  • The URL can be copied and shared
+  // Uses replaceState (no new history entry) so the back button works naturally.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (viewMode === 'day') {
+      params.set('view', 'day')
+      params.set('date', toLocalDateString(currentWeek))
+    } else {
+      params.delete('view')
+      params.delete('date')
+    }
+    const qs = params.toString()
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname
+    window.history.replaceState(null, '', newUrl)
+  }, [viewMode, currentWeek])
 
   // Fetch users for employee selector
   const fetchUsers = async () => {
@@ -423,6 +543,9 @@ function JobsPageContent() {
                 
                 console.log(`🔍 Current selectedUserId: ${selectedUserId} (type: ${typeof selectedUserId})`)
                 
+                // Always keep the full dataset for the route planner
+                setAllJobs(allJobs)
+
                 if (selectedUserId === 'all') {
                   setJobs(allJobs)
                   console.log(`✅ Set ${allJobs.length} jobs (all users)`)
@@ -441,11 +564,13 @@ function JobsPageContent() {
                 }
             } else {
                 setJobs([])
+                setAllJobs([])
                 setApiError(data?.error || 'Failed to fetch jobs')
             }
         } catch (error) {
             console.error('Network error: Failed to fetch jobs', error)
             setJobs([])
+            setAllJobs([])
             setApiError('Network error: Failed to fetch jobs')
         } finally {
             setLoading(false)
@@ -593,14 +718,58 @@ function JobsPageContent() {
         }
     }, [currentWeek, viewMode])
 
-    // Filter jobs by day and sort by sort_order
+    // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch)
+    useEffect(() => {
+        if (selectedUserId === 'all' || !user) { setEmployeeLeaveByDate({}); return }
+        const token = localStorage.getItem('token')
+        const year = currentWeek.getFullYear()
+        fetch(apiUrl(`/employee-leave/${selectedUserId}?from=${year}-01-01&to=${year + 1}-12-31`), {
+            headers: { Authorization: `Bearer ${token}` },
+        })
+            .then(r => r.ok ? r.json() : { leave: [] })
+            .then(d => {
+                const byDate: Record<string, { leave_type: string; hours_off: number | null }> = {}
+                for (const e of (d.leave || [])) byDate[e.leave_date] = { leave_type: e.leave_type, hours_off: e.hours_off }
+                setEmployeeLeaveByDate(byDate)
+            })
+            .catch(() => {})
+    }, [selectedUserId, currentWeek, user])
+
+    // Filter jobs by day — localStorage route order (set by route planner) wins, then route_order from DB, then sort_order
     const getJobsForDay = (date: Date) => {
         const dateString = toLocalDateString(date)
         const dayJobs = jobs.filter(job => toDateOnlyString(job.scheduled_date) === dateString)
-        // Sort by sort_order (defaulting to 0), then by created_at
+
+        // Build a per-user position map from the route planner's saved localStorage order
+        const savedOrderMap: Record<number, Record<string, number>> = {}
+        try {
+            if (typeof window !== 'undefined') {
+                const company = window.location.pathname.split('/')[1]
+                const saved = localStorage.getItem(`route-order-${company}-${dateString}`)
+                if (saved) {
+                    const orderMap: Record<number, (number | string)[]> = JSON.parse(saved)
+                    Object.entries(orderMap).forEach(([uid, ids]) => {
+                        const uidNum = Number(uid)
+                        savedOrderMap[uidNum] = {}
+                        ids.forEach((id, idx) => { savedOrderMap[uidNum][String(id)] = idx })
+                    })
+                }
+            }
+        } catch { /* ignore */ }
+
         return dayJobs.sort((a, b) => {
-            const aOrder = a.sort_order ?? 0
-            const bOrder = b.sort_order ?? 0
+            // Within the same user: prefer the route planner's explicit saved order
+            if (a.assigned_user_id === b.assigned_user_id) {
+                const userOrder = savedOrderMap[a.assigned_user_id]
+                if (userOrder) {
+                    const ia = userOrder[String(a.id)] ?? Infinity
+                    const ib = userOrder[String(b.id)] ?? Infinity
+                    if (ia !== Infinity || ib !== Infinity) return ia - ib
+                }
+            }
+            // Fallback: route_order from DB, then sort_order, then created_at
+            const aOrder = a.route_order ?? a.sort_order ?? 999999
+            const bOrder = b.route_order ?? b.sort_order ?? 999999
             if (aOrder !== bOrder) return aOrder - bOrder
             return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         })
@@ -636,16 +805,30 @@ function JobsPageContent() {
         return isNaN(numHours) ? 0 : numHours
     }
 
-    // Calculate occupied time for a day (in hours)
+    // Returns how many hours are unavailable due to leave on a given date string.
+    const getLeaveHoursOff = (dateStr: string, baseHours: number): number => {
+        if (selectedUserId === 'all') return 0
+        const leave = employeeLeaveByDate[dateStr]
+        if (!leave) return 0
+        switch (leave.leave_type) {
+            case 'full_day':           return baseHours
+            case 'half_day_morning':
+            case 'half_day_afternoon': return baseHours / 2
+            case 'custom_hours':       return Math.min(baseHours, leave.hours_off ?? 0)
+            default: return 0
+        }
+    }
+
+    // Calculate occupied time for a day (in hours) — use estimated_duration (all services)
     const getOccupiedTime = (date: Date) => {
         const dayJobs = getJobsForDay(date)
         const totalMinutes = dayJobs.reduce((total, job) => {
-            const duration = job.total_duration
-            // Ensure we parse as number (handle string values from API)
-            const minutes = duration != null && duration !== '' ? parseFloat(String(duration)) : 0
+            // Prefer estimated_duration (all services), fall back to total_duration (completed only)
+            const raw = job.estimated_duration ?? job.total_duration
+            const minutes = raw != null && raw !== '' ? parseFloat(String(raw)) : 0
             return total + (isNaN(minutes) ? 0 : minutes)
         }, 0)
-        return totalMinutes / 60 // Convert minutes to hours
+        return totalMinutes / 60
     }
 
     // Format time duration (compact)
@@ -685,27 +868,13 @@ function JobsPageContent() {
         setDragOverDate(dateString)
     }
 
-    const handleDragOverJob = (e: React.DragEvent, job: any, position: 'above' | 'below') => {
-        e.preventDefault()
-        e.stopPropagation()
-        e.dataTransfer.dropEffect = 'move'
-        setDragOverJobId(job.id)
-        setDragOverPosition(position)
-        setDragOverDate(job.scheduled_date)
-    }
-
-    const handleDragLeaveJob = () => {
-        setDragOverJobId(null)
-        setDragOverPosition(null)
-    }
-    
     const handleDragLeave = () => {
         setDragOverDate(null)
         setDragOverJobId(null)
         setDragOverPosition(null)
     }
     
-    const handleDrop = async (e: React.DragEvent, dateString: string, targetJobId?: number | 'top' | 'bottom', dropPosition?: 'above' | 'below') => {
+    const handleDrop = async (e: React.DragEvent, dateString: string) => {
         e.preventDefault()
         e.stopPropagation()
         
@@ -713,219 +882,15 @@ function JobsPageContent() {
         
         const isSameDay = draggedJob.scheduled_date === dateString
         
-        // If dropping on the same day, handle reordering without popup (targetJobId can be a number, 'top', or 'bottom')
-        if (isSameDay && targetJobId !== undefined) {
-            // Helper function to get subscription metadata from projected job
-            const getProjectedMeta = (j: any): { subscriptionId: number; occurrence: number } | null => {
-                const subId = typeof j?.recurring_job_id === 'number' ? j.recurring_job_id : null
-                const occ = typeof j?.recurring_occurrence === 'number' ? j.recurring_occurrence : null
-                if (subId && occ) return { subscriptionId: subId, occurrence: occ }
-
-                if (typeof j?.id === 'string' && String(j.id).startsWith('subscription-')) {
-                    const parts = String(j.id).split('-')
-                    if (parts.length >= 3) {
-                        const ps = parseInt(parts[1], 10)
-                        const po = parseInt(parts[2], 10)
-                        if (Number.isFinite(ps) && Number.isFinite(po)) return { subscriptionId: ps, occurrence: po }
-                    }
-                }
-                return null
-            }
-            
-            let realJobId: number | null = (typeof draggedJob.id === 'number') ? draggedJob.id : null
-            
-            // If this is a projected job, materialize it first
-            if (!realJobId && (draggedJob.is_projected || (typeof draggedJob.id === 'string' && draggedJob.id.startsWith('subscription-')))) {
-                const meta = getProjectedMeta(draggedJob)
-                if (!meta) {
-                    alert('Could not materialize this subscription job. Please try again.')
-                    setDraggedJob(null)
-                    setDragOverDate(null)
-                    setDragOverJobId(null)
-                    setDragOverPosition(null)
-                    return
-                }
-                
-                try {
-                    const token = localStorage.getItem('token')
-                    // Materialize the job on its current date first
-                    const mat = await fetch(apiUrl(`/subscriptions/${meta.subscriptionId}/occurrences/${meta.occurrence}/materialize`), {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${token}`
-                        },
-                        body: JSON.stringify({ scheduled_date: draggedJob.scheduled_date })
-                    })
-                    const matData = await mat.json().catch(() => ({}))
-                    if (!mat.ok) {
-                        throw new Error(matData.error || matData.details || 'Failed to create real job from subscription')
-                    }
-                    realJobId = matData.jobId
-                    if (typeof realJobId !== 'number') {
-                        throw new Error('Invalid jobId returned from materialize endpoint')
-                    }
-                    
-                    // Update the dragged job object with the real ID for subsequent operations
-                    draggedJob.id = realJobId
-                    draggedJob.is_projected = false
-                } catch (error) {
-                    console.error('Error materializing job:', error)
-                    alert('Failed to materialize subscription job. Please try again.')
-                    setDraggedJob(null)
-                    setDragOverDate(null)
-                    setDragOverJobId(null)
-                    setDragOverPosition(null)
-                    return
-                }
-            }
-            
-            if (!realJobId) {
-                alert('Cannot reorder this job. Please try again.')
-                setDraggedJob(null)
-                setDragOverDate(null)
-                setDragOverJobId(null)
-                setDragOverPosition(null)
-                return
-            }
-            
-            // Find the target index from current jobs list
-            // Filter out projected jobs for index calculation (they'll be materialized if needed)
-            const dayJobs = jobs.filter((j: any) => 
-                j.scheduled_date === dateString && 
-                j.assigned_user_id === draggedJob.assigned_user_id &&
-                typeof j.id === 'number' // Only count real jobs for positioning
-            )
-            
-            // Sort by current sort_order or created_at
-            dayJobs.sort((a: any, b: any) => {
-                const aOrder = a.sort_order ?? 0
-                const bOrder = b.sort_order ?? 0
-                if (aOrder !== bOrder) return aOrder - bOrder
-                return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
-            })
-            
-            // Find target index (for 'top' / 'bottom' or from a specific job)
-            let newIndex: number
-            if (targetJobId === 'top') {
-                newIndex = 0
-            } else if (targetJobId === 'bottom') {
-                newIndex = dayJobs.length
-            } else {
-                // Target is a job id
-                let targetIndex = typeof targetJobId === 'number' ? dayJobs.findIndex((j: any) => j.id === targetJobId) : -1
-                if (targetIndex === -1) {
-                    targetIndex = dayJobs.length // projected job or not found -> end of list
-                }
-                newIndex = dropPosition === 'above' ? targetIndex : targetIndex + 1
-            }
-            
-            // If moving the dragged job, adjust index (exclude it from count)
-            const draggedIndex = dayJobs.findIndex((j: any) => j.id === realJobId)
-            if (draggedIndex !== -1 && draggedIndex < newIndex) {
-                newIndex-- // Adjust because we're removing from before the target
-            }
-            
-            // Ensure newIndex is not negative
-            newIndex = Math.max(0, newIndex)
-            
-            // Call API to reorder
-            try {
-                const token = localStorage.getItem('token')
-                const response = await fetch(apiUrl('/jobs/reorder'), {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({
-                        jobId: realJobId, // Use the real job ID (materialized if needed)
-                        targetDate: dateString,
-                        targetIndex: newIndex,
-                        sourceDate: draggedJob.scheduled_date
-                    })
-                })
-                
-                if (!response.ok) {
-                    const error = await response.json()
-                    throw new Error(error.error || 'Failed to reorder job')
-                }
-                
-                // Optimistically update the local jobs state - no refresh needed
-                // Use a functional update to ensure we're working with the latest state
-                setJobs((prevJobs) => {
-                    // Filter out the old job (if it exists) and projected version
-                    const filteredJobs = prevJobs.filter((j: any) => 
-                        j.id !== realJobId && 
-                        j.id !== draggedJob.id &&
-                        !(typeof draggedJob.id === 'string' && j.id === draggedJob.id)
-                    )
-                    
-                    // Get the job object to update (find it first)
-                    let jobToUpdate = prevJobs.find((j: any) => 
-                        j.id === realJobId || 
-                        (j.id === draggedJob.id && typeof draggedJob.id === 'number')
-                    ) || draggedJob
-                    
-                    // Update the job with new position
-                    const updatedJob = {
-                        ...jobToUpdate,
-                        id: realJobId,
-                        scheduled_date: dateString,
-                        sort_order: newIndex,
-                        is_projected: false
-                    }
-                    
-                    // Get all jobs for the target day (excluding the moved one)
-                    const targetDayJobs = filteredJobs.filter((j: any) => 
-                        j.scheduled_date === dateString && 
-                        j.assigned_user_id === draggedJob.assigned_user_id &&
-                        typeof j.id === 'number'
-                    )
-                    
-                    // Sort them by current sort_order
-                    targetDayJobs.sort((a: any, b: any) => {
-                        const aOrder = a.sort_order ?? 0
-                        const bOrder = b.sort_order ?? 0
-                        if (aOrder !== bOrder) return aOrder - bOrder
-                        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
-                    })
-                    
-                    // Insert the updated job at the correct position
-                    targetDayJobs.splice(newIndex, 0, updatedJob)
-                    
-                    // Update sort_order for all jobs in the target day to match their array position
-                    targetDayJobs.forEach((job: any, idx: number) => {
-                        job.sort_order = idx
-                    })
-                    
-                    // Rebuild the jobs array: keep jobs from other days, replace jobs from target day
-                    const otherDaysJobs = filteredJobs.filter((j: any) => 
-                        !(j.scheduled_date === dateString && j.assigned_user_id === draggedJob.assigned_user_id)
-                    )
-                    
-                    // Combine: other days + updated target day jobs
-                    return [...otherDaysJobs, ...targetDayJobs]
-                })
-                
-                // Clear drag state immediately
-                setDraggedJob(null)
-                setDragOverDate(null)
-                setDragOverJobId(null)
-                setDragOverPosition(null)
-                
-                // No refresh - the optimistic update is sufficient
-            } catch (error) {
-                console.error('Error reordering job:', error)
-                alert('Failed to reorder job. Please try again.')
-                setDraggedJob(null)
-                setDragOverDate(null)
-                setDragOverJobId(null)
-                setDragOverPosition(null)
-            }
+        // Same-day drops do nothing — job order is set exclusively via the route planner
+        if (isSameDay) {
+            setDraggedJob(null)
+            setDragOverDate(null)
+            setDragOverJobId(null)
+            setDragOverPosition(null)
             return
         }
-        
+
         // If dropping on a different day, show the move modal
         if (!isSameDay) {
             // Store the job and date for the modal (before handleDragEnd clears draggedJob)
@@ -1054,7 +1019,38 @@ function JobsPageContent() {
             
             // Refresh jobs
             await fetchJobsForWeek()
-            
+
+            // Auto-update the source column's saved route — remove the moved job from it
+            // so remaining jobs stay "planned" and drive time can be recalculated.
+            try {
+                const sourceDateStr = String(jobToMove.scheduled_date).substring(0, 10)
+                const co = window.location.pathname.split('/')[1]
+                const routeKey = `route-order-${co}-${sourceDateStr}`
+                const stored = localStorage.getItem(routeKey)
+                if (stored) {
+                    const orderMap: Record<string, (number | string)[]> = JSON.parse(stored)
+                    let changed = false
+                    for (const userId of Object.keys(orderMap)) {
+                        const arr = orderMap[userId]
+                        const filtered = arr.filter(id => String(id) !== String(realJobId))
+                        if (filtered.length !== arr.length) {
+                            orderMap[userId] = filtered
+                            changed = true
+                            // Re-save sequential route_order to DB for remaining real jobs
+                            const validIds = filtered.filter(id => Number.isInteger(Number(id))).map(Number)
+                            if (validIds.length > 0) {
+                                fetch(apiUrl('/jobs/route-order'), {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                    body: JSON.stringify({ orderedIds: validIds }),
+                                }).catch(() => { /* best-effort */ })
+                            }
+                        }
+                    }
+                    if (changed) localStorage.setItem(routeKey, JSON.stringify(orderMap))
+                }
+            } catch { /* best-effort */ }
+
             // Close modal and clear all drag state
             setShowMoveModal(false)
             setPendingMoveDate(null)
@@ -1086,29 +1082,6 @@ function JobsPageContent() {
         const zipCity = [job.zip_code, job.city].filter(Boolean).join(' ')
         if (zipCity) parts.push(zipCity)
         return parts.join(' • ')
-    }
-
-    // Get full address for clipboard (Google Maps format)
-    const getFullAddressForClipboard = (job: any) => {
-        const parts = []
-        if (job.address) parts.push(job.address)
-        if (job.zip_code) parts.push(job.zip_code)
-        if (job.city) parts.push(job.city)
-        return parts.join(', ')
-    }
-
-    // Copy address to clipboard
-    const copyAddressToClipboard = async (job: any, e: React.MouseEvent) => {
-        e.stopPropagation()
-        const address = getFullAddressForClipboard(job)
-        if (address) {
-            try {
-                await navigator.clipboard.writeText(address)
-                // You could add a toast notification here if needed
-            } catch (error) {
-                console.error('Failed to copy address:', error)
-            }
-        }
     }
 
     // Handle job click
@@ -1166,6 +1139,498 @@ function JobsPageContent() {
         }
     }, [showCreateMenu])
 
+  // ── Day view helpers ────────────────────────────────────────────────────────
+
+  // Build routes from loaded jobs every time viewMode=day, jobs, or users change
+  const buildDayRoutes = useCallback((dayJobs: any[]): UserRoute[] => {
+    const byUser: Record<number, any[]> = {}
+    dayJobs.forEach(job => {
+      const uid = Number(job.assigned_user_id)
+      if (!byUser[uid]) byUser[uid] = []
+      byUser[uid].push(job)
+    })
+    return Object.entries(byUser).map(([uid, userJobs], idx) => {
+      const user = users.find(u => u.id === Number(uid))
+      const sorted = [...userJobs].sort((a, b) => {
+        if (a.route_order != null && b.route_order != null) return a.route_order - b.route_order
+        if (a.route_order != null) return -1
+        if (b.route_order != null) return 1
+        return (a.sort_order ?? 0) - (b.sort_order ?? 0)
+      })
+      return {
+        userId: Number(uid),
+        userName: user ? `${user.first_name} ${user.last_name}` : `User ${uid}`,
+        color: USER_COLORS[idx % USER_COLORS.length],
+        jobs: sorted.map(job => ({
+          id: job.id,
+          lat: job.lat ?? job.client_lat ?? null,
+          lng: job.lng ?? job.client_lng ?? null,
+          label: job.name
+            ? (job.last_name ? `${job.name} ${job.last_name}` : job.name)
+            : (job.title || 'Untitled'),
+          address: [job.address, job.zip_code, job.city].filter(Boolean).join(', '),
+          time: job.scheduled_time_from
+            ? job.scheduled_time_to
+              ? `${job.scheduled_time_from} – ${job.scheduled_time_to}`
+              : job.scheduled_time_from
+            : undefined,
+          is_projected: !!(job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))),
+          is_cancelled: job.status === 'cancelled',
+          // True only when the job row itself has coords — NOT the client fallback.
+          // Used to decide whether geocoding should run to get a more accurate pin position.
+          has_own_coords: !!(job.lat && job.lng),
+          estimated_duration_minutes: typeof job.estimated_duration === 'number'
+            ? job.estimated_duration
+            : parseFloat(String(job.estimated_duration)) || 0,
+        } as RouteJob)),
+      }
+    })
+  }, [users])
+
+  // Geocode addresses that don't have lat/lng yet (Mapbox Geocoding API).
+  // Includes home (start/end) pins — they are not written to DB (isReal false).
+  const geocodeMissingAddresses = useCallback(async (routes: UserRoute[]) => {
+    if (!MAPBOX_TOKEN) return
+    const token = localStorage.getItem('token')
+    const toGeocode: { routeUserId: number; jobIdx: number; jobId: number | string; isReal: boolean; address: string }[] = []
+    routes.forEach(route => {
+      route.jobs.forEach((job, jobIdx) => {
+        if (job.is_cancelled) return
+        // Geocode when no coords yet (jobs or home start/end)
+        if ((!job.has_own_coords || job.is_home) && job.address && (job.lat == null || job.lng == null)) {
+          const isReal = !job.is_home && !job.is_projected && Number.isInteger(Number(job.id))
+          toGeocode.push({ routeUserId: route.userId, jobIdx, jobId: job.id, isReal, address: job.address })
+        }
+      })
+    })
+    if (toGeocode.length === 0) return
+    setDayGeocodingCount(toGeocode.length)
+
+    // Use the centroid of already-known coordinates as a geographic proximity hint.
+    // This dramatically improves accuracy: Mapbox will prefer results near existing pins
+    // rather than returning the same street name from a different country.
+    const knownCoords = routes.flatMap(r => r.jobs.filter(j => j.lat && j.lng))
+    const proximityParam = knownCoords.length > 0
+      ? `&proximity=${(knownCoords.reduce((s, j) => s + j.lng, 0) / knownCoords.length).toFixed(4)},${(knownCoords.reduce((s, j) => s + j.lat, 0) / knownCoords.length).toFixed(4)}`
+      : ''
+
+    for (const item of toGeocode) {
+      try {
+        const encoded = encodeURIComponent(item.address)
+        const res = await fetch(
+          // types=address,place — broader than just "address" so partial/unnumbered addresses also match
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}`
+        )
+        const data = await res.json()
+        if (data.features?.[0]) {
+          const [lng, lat] = data.features[0].center as [number, number]
+          // Only persist to DB for real (non-projected) jobs with an actual DB row
+          if (item.isReal) {
+            await fetch(apiUrl(`/jobs/${item.jobId}/coordinates`), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+              body: JSON.stringify({ lat, lng }),
+            })
+          }
+          // Always update local state so the pin appears on the map this session.
+          // For projected jobs this is session-only (no DB row to save to).
+          setDayRoutes(prev => prev.map(route => {
+            if (route.userId !== item.routeUserId) return route
+            return {
+              ...route,
+              jobs: route.jobs.map(j => j.id === item.jobId ? { ...j, lat, lng, has_own_coords: item.isReal } : j),
+            }
+          }))
+        } else {
+          console.warn('[geocode] no result for:', item.address, '(jobId:', item.jobId, ')')
+        }
+      } catch (err) {
+        console.warn('[geocode] error for jobId', item.jobId, ':', err)
+      }
+      setDayGeocodingCount(c => Math.max(0, c - 1))
+      await new Promise(r => setTimeout(r, 200))
+    }
+    setDayGeocodingCount(0)
+  }, [])
+
+  // Fetch driving times + road geometry from Mapbox Directions API
+  const fetchDirections = useCallback(async (route: UserRoute): Promise<Partial<UserRoute>> => {
+    if (!MAPBOX_TOKEN) return {}
+    // Exclude cancelled jobs — they appear as grey unconnected pins and must not affect
+    // the road geometry or leg-minute calculations for active stops.
+    const pts = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
+    if (pts.length < 2) return {}
+    // Mapbox Directions supports up to 25 waypoints
+    const waypointPts = pts.slice(0, 25)
+    const coords = waypointPts.map(j => `${j.lng},${j.lat}`).join(';')
+    try {
+      const res = await fetch(
+        `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full&steps=false`
+      )
+      const data = await res.json()
+      if (!data.routes?.[0]) return {}
+      const r = data.routes[0]
+      const totalMinutes = r.duration / 60
+      const totalKm = r.distance / 1000
+      // Full road geometry for drawing on map (active stops only)
+      const routeGeometry = r.geometry as { type: string; coordinates: [number, number][] }
+      let cumulative = 0
+      const updatedJobs = route.jobs.map((job) => {
+        if (!job.lat || !job.lng || job.is_cancelled) return job
+        const ptIdx = waypointPts.findIndex(p => p.id === job.id)
+        if (ptIdx <= 0) return { ...job, legMinutes: 0, etaMinutes: 0 }
+        const legSec = r.legs[ptIdx - 1]?.duration ?? 0
+        const legMin = legSec / 60
+        cumulative += legMin
+        return { ...job, legMinutes: legMin, etaMinutes: cumulative }
+      })
+      return { totalMinutes, totalKm, jobs: updatedJobs, routeGeometry }
+    } catch { return {} }
+  }, [])
+
+  // Debounced directions refresh — runs when job order OR coordinates change
+  useEffect(() => {
+    if (viewMode !== 'day') return
+    if (directionsFetchTimeoutRef.current) clearTimeout(directionsFetchTimeoutRef.current)
+    directionsFetchTimeoutRef.current = setTimeout(async () => {
+      // Fetch all direction patches in parallel (each patch = totalMinutes/km/geometry/legMinutes).
+      // We intentionally do NOT rebuild full route objects here — instead we collect patches
+      // keyed by userId so we can apply them via a functional updater below.
+      // This prevents a race condition where setDayRoutes(updated) could overwrite the last
+      // geocoded coordinate that the geocoding loop just set via its own functional updater.
+      const routeSnapshot = dayRoutes // snapshot for directions fetch only
+      const patches = new Map<number, Partial<UserRoute>>()
+      await Promise.all(
+        routeSnapshot.map(async route => {
+          const patch = await fetchDirections(route)
+          patches.set(route.userId, patch)
+        })
+      )
+
+      // Capture baseline totalMinutes per user the first time we have directions
+      const dateStr = toLocalDateString(currentWeek)
+      setDayBaselineMinutes(prev => {
+        if (dayBaselineDate === dateStr && Object.keys(prev).length > 0) return prev
+        const next: Record<number, number> = {}
+        routeSnapshot.forEach(route => {
+          const patch = patches.get(route.userId)
+          const total = patch.totalMinutes ?? route.totalMinutes
+          if (total != null) next[route.userId] = total
+        })
+        setDayBaselineDate(dateStr)
+        return next
+      })
+      // Apply patches onto the CURRENT state (prev) — not the stale snapshot —
+      // so any coordinates that geocoding wrote between snapshot and now are preserved.
+      setDayRoutes(prev => prev.map(prevRoute => {
+        const patch = patches.get(prevRoute.userId)
+        if (!patch || Object.keys(patch).length === 0) return prevRoute
+        return {
+          ...prevRoute,
+          totalMinutes: patch.totalMinutes ?? prevRoute.totalMinutes,
+          totalKm: patch.totalKm ?? prevRoute.totalKm,
+          routeGeometry: patch.routeGeometry ?? prevRoute.routeGeometry,
+          // Merge per-job leg/eta minutes but keep the current lat/lng from prev
+          jobs: prevRoute.jobs.map(prevJob => {
+            const patchJob = (patch.jobs ?? []).find(j => j.id === prevJob.id)
+            if (!patchJob) return prevJob
+            return { ...prevJob, legMinutes: patchJob.legMinutes, etaMinutes: patchJob.etaMinutes }
+          }),
+        }
+      }))
+    }, 600)
+    return () => { if (directionsFetchTimeoutRef.current) clearTimeout(directionsFetchTimeoutRef.current) }
+  // dayRoutesVersion ensures re-fetch even when coordinates haven't changed
+  // (e.g. after Save & Apply rebuilds routes with the same lat/lng)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayRoutes.map(r => r.jobs.map(j => `${j.id}:${j.lat?.toFixed(5)}:${j.lng?.toFixed(5)}`).join(',')).join('|'), viewMode, dayRoutesVersion, currentWeek, dayBaselineDate])
+
+  // Build initial routes when entering day view or when jobs/users change.
+  // Injects start/end (home) waypoints when company has route locations enabled.
+  useEffect(() => {
+    if (viewMode !== 'day') return
+    const dayDate = currentWeek
+    const dateStr = toLocalDateString(dayDate)
+    const dayJobs = allJobs.filter(j => toDateOnlyString(j.scheduled_date) === dateStr)
+    const dayJobsWithPending = dayJobs.map(j => ({
+      ...j,
+      assigned_user_id: pendingAssigneeChanges[j.id] ?? j.assigned_user_id
+    }))
+    const routes = buildDayRoutes(dayJobsWithPending)
+
+    // Re-apply saved route order from localStorage (middle jobs only; no start/end in saved order).
+    try {
+      const companySlug = window.location.pathname.split('/')[1]
+      const saved = localStorage.getItem(`route-order-${companySlug}-${dateStr}`)
+      if (saved) {
+        const orderMap: Record<number, (number | string)[]> = JSON.parse(saved)
+        routes.forEach((route, idx) => {
+          const savedIds = orderMap[route.userId]
+          if (!savedIds) return
+          routes[idx] = {
+            ...route,
+            jobs: [...route.jobs].sort((a, b) => {
+              const ia = savedIds.indexOf(a.id as never)
+              const ib = savedIds.indexOf(b.id as never)
+              if (ia === -1 && ib === -1) return 0
+              if (ia === -1) return 1
+              if (ib === -1) return -1
+              return ia - ib
+            }),
+          }
+        })
+      }
+    } catch { /* ignore */ }
+
+    // Async: fetch company + work-hours and inject start/end waypoints when feature is on
+    const token = localStorage.getItem('token')
+    const headers = { Authorization: `Bearer ${token}` }
+
+    ;(async () => {
+      let enhancedRoutes: UserRoute[] = routes
+      try {
+        const companyRes = await fetch(apiUrl('/companies/profile'), { headers })
+        const companyData = companyRes.ok ? await companyRes.json() : null
+        const routeLocationsEnabled = companyData?.company?.routeLocationsEnabled !== false
+        const defaultStart = companyData?.company?.defaultStartAddress || ''
+        const defaultEnd = companyData?.company?.defaultEndAddress || defaultStart
+
+        if (routeLocationsEnabled) {
+          enhancedRoutes = await Promise.all(
+            routes.map(async (route): Promise<UserRoute> => {
+              let startAddr = defaultStart
+              let endAddr = defaultEnd
+              try {
+                const whRes = await fetch(apiUrl(`/work-hours/${route.userId}`), { headers })
+                if (whRes.ok) {
+                  const whData = await whRes.json()
+                  const wh = whData.workHours
+                  const useDefault = wh?.use_company_default_location !== false
+                  startAddr = useDefault ? defaultStart : (wh?.start_address || '')
+                  endAddr = useDefault ? (companyData?.company?.defaultEndAddress || defaultStart) : (wh?.end_address || wh?.start_address || '')
+                  if (!endAddr) endAddr = startAddr
+                }
+              } catch { /* ignore */ }
+
+              const jobs = [...route.jobs]
+              // Always add start and end slots when feature is on (empty = prompt to set in settings)
+              jobs.unshift({
+                id: `start-${route.userId}`,
+                lat: null,
+                lng: null,
+                label: 'Start (home)',
+                address: startAddr || '',
+                is_home: true,
+                has_own_coords: !!startAddr,
+              } as RouteJob)
+              jobs.push({
+                id: `end-${route.userId}`,
+                lat: null,
+                lng: null,
+                label: 'End (home)',
+                address: endAddr || '',
+                is_home: true,
+                has_own_coords: !!endAddr,
+              } as RouteJob)
+              return { ...route, jobs }
+            })
+          )
+        }
+      } catch { /* ignore */ }
+
+      setDayRoutes(enhancedRoutes)
+      setDayRoutesVersion(v => v + 1)
+      geocodeMissingAddresses(enhancedRoutes)
+    })()
+  }, [viewMode, currentWeek, allJobs, users, buildDayRoutes, geocodeMissingAddresses, pendingAssigneeChanges])
+
+  // Reorder handler — updates local state only (save via Save & apply button)
+  const handleDayReorder = useCallback((userId: number, newJobs: RouteJob[]) => {
+    setDayRoutes(prev => prev.map(r => r.userId === userId ? { ...r, jobs: newJobs } : r))
+  }, [])
+
+  // When user changes assignee from the route planner slideout, store pending change and update viewing job (no API until Save & apply)
+  const handlePlannerAssigneeChange = useCallback((jobId: number, newUserId: number) => {
+    setPendingAssigneeChanges(prev => ({ ...prev, [jobId]: newUserId }))
+    setViewingJob(prev => prev?.id === jobId ? { ...prev, assigned_user_id: newUserId } : prev)
+  }, [])
+
+  // Save the current route order to DB and update local job state
+  const handleSaveAndApply = useCallback(async () => {
+    // Only include real (non-projected) jobs with integer IDs.
+    // Projected/subscription jobs have string IDs like 'subscription-42' which cause
+    // a PostgreSQL type error in the UPDATE query and silently kill the whole save.
+    const allJobIds = dayRoutes.flatMap(r =>
+      r.jobs.filter(j => !j.is_projected && Number.isInteger(Number(j.id))).map(j => Number(j.id))
+    )
+    console.log('[Save & Apply] allJobIds:', allJobIds.length, allJobIds)
+    if (allJobIds.length === 0) {
+      console.warn('[Save & Apply] No real job IDs found — all jobs may be subscription/projected. Route order not saved.')
+      return
+    }
+
+    const token = localStorage.getItem('token')
+    let res: Response
+    try {
+      res = await fetch(apiUrl('/jobs/route-order'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ orderedIds: allJobIds }),
+      })
+    } catch (err) {
+      console.error('[route-order] Network error — is the API server running?', err)
+      return
+    }
+    if (!res.ok) {
+      console.error('[route-order] Save failed:', res.status, await res.text())
+      return
+    }
+    // Reset baseline so the next directions run after save becomes the new reference
+    setDayBaselineMinutes({})
+    setDayBaselineDate(null)
+    // Do NOT call setJobs here. Updating jobs.route_order would trigger the build-routes
+    // useEffect (jobs is in its dependency array), which calls setDayRoutes(freshRoutes) and
+    // immediately overwrites the user's reordered dayRoutes. The DB already has the correct
+    // order; dayRoutes already reflects the user's intent; nothing else needs updating.
+    // Mark this day as planned and persist across page refreshes
+    const dateStr = toLocalDateString(currentWeek)
+    setPlannedDays(prev => {
+      const next = new Set(prev)
+      next.add(dateStr)
+      try {
+        const key = `planned-days-${window.location.pathname.split('/')[1]}`
+        localStorage.setItem(key, JSON.stringify([...next]))
+      } catch { /* ignore */ }
+      return next
+    })
+
+    // Persist route order to localStorage (exclude home start/end so they stay fixed).
+    try {
+      const company = window.location.pathname.split('/')[1]
+      const orderMap: Record<number, (number | string)[]> = {}
+      dayRoutes.forEach(route => {
+        orderMap[route.userId] = route.jobs.filter(j => !j.is_home).map(j => j.id)
+      })
+      localStorage.setItem(`route-order-${company}-${dateStr}`, JSON.stringify(orderMap))
+    } catch { /* ignore */ }
+
+    // Persist pending assignee changes (from route planner) so jobs are actually moved on the server
+    const pending = { ...pendingAssigneeChanges }
+    if (Object.keys(pending).length > 0) {
+      setPendingAssigneeChanges({})
+      await Promise.all(
+        Object.entries(pending).map(([jobIdStr, newUserId]) =>
+          fetch(apiUrl(`/jobs/${jobIdStr}/assignee`), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ assigned_user_id: newUserId, notifyCustomer: false })
+          })
+        )
+      )
+      fetchJobsForWeek()
+    }
+
+    // Fetch fresh Mapbox directions for each route (including start/end home if present).
+    await Promise.all(dayRoutes.map(async route => {
+      const realJobs = route.jobs.filter(j => !j.is_projected && !j.is_cancelled && Number.isInteger(Number(j.id)))
+      // All stops with coords for directions (include home start/end so drive time is correct)
+      const waypointJobs = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
+      if (waypointJobs.length < 2) return
+
+      const totalJobMins = realJobs.reduce((sum, j) => sum + (j.estimated_duration_minutes ?? 0), 0)
+
+      try {
+        let totalDriveMins: number
+        let totalKm: number | null = route.totalKm != null ? Math.round(route.totalKm * 10) / 10 : null
+        let legMins: (number | null)[] = []
+
+        if (route.totalMinutes != null && waypointJobs.length >= 2) {
+          totalDriveMins = Math.round(route.totalMinutes)
+          const dirRoute = { ...route, jobs: waypointJobs }
+          const legDirections = await fetchDirections(dirRoute)
+          if (legDirections.jobs) {
+            if (totalKm == null && legDirections.totalKm != null) totalKm = Math.round(legDirections.totalKm * 10) / 10
+            // Save leg minutes only for real jobs (same order as realJobs)
+            legMins = realJobs.map(real => {
+              const idx = legDirections.jobs!.findIndex(j => j.id === real.id)
+              const j = idx >= 0 ? legDirections.jobs![idx] : null
+              return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
+            })
+          }
+        } else {
+          const dirRoute = { ...route, jobs: waypointJobs }
+          const directions = await fetchDirections(dirRoute)
+          if (directions.totalMinutes == null) return
+          totalDriveMins = Math.round(directions.totalMinutes)
+          totalKm = directions.totalKm != null ? Math.round(directions.totalKm * 10) / 10 : null
+          legMins = realJobs.map(real => {
+            const idx = (directions.jobs ?? []).findIndex(j => j.id === real.id)
+            const j = idx >= 0 ? (directions.jobs ?? [])[idx] : null
+            return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
+          })
+        }
+
+        console.log('[Save & Apply]', dateStr, {
+          user: route.userId,
+          jobCount: realJobs.length,
+          totalDriveMins,
+          totalJobMins: Math.round(totalJobMins),
+          totalKm,
+        })
+
+        const saveRes = await fetch(apiUrl('/daily-routes'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            user_id: route.userId,
+            scheduled_date: dateStr,
+            job_ids: realJobs.map(j => Number(j.id)),
+            leg_minutes: legMins,
+            total_minutes: totalDriveMins,
+            total_job_minutes: Math.round(totalJobMins),
+            total_km: totalKm,
+          }),
+        })
+        if (!saveRes.ok) {
+          console.error('[Save & Apply] daily-routes save failed:', saveRes.status, await saveRes.text())
+        } else {
+          console.log('[Save & Apply] ✅ saved to DB')
+        }
+        setTravelMinutes(prev => ({ ...prev, [`${dateStr}:${route.userId}`]: totalDriveMins }))
+      } catch { /* best-effort */ }
+    }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayRoutes, currentWeek, fetchDirections, pendingAssigneeChanges])
+
+  // Auto-optimize using OSRM /trip (free, no API key)
+  const handleDayOptimize = useCallback(async (userId: number) => {
+    const route = dayRoutes.find(r => r.userId === userId)
+    if (!route) return
+    // Only optimize non-cancelled jobs; cancelled ones are dropped from routing entirely
+    const pts = route.jobs.filter(j => !j.is_cancelled && j.lat && j.lng)
+    if (pts.length < 2) return
+    setDayOptimizing(true)
+    try {
+      const coords = pts.map(j => `${j.lng},${j.lat}`).join(';')
+      const res = await fetch(
+        `https://router.project-osrm.org/trip/v1/driving/${coords}?roundtrip=false&source=first&destination=last&geometries=geojson`
+      )
+      const data = await res.json()
+      if (data.code === 'Ok' && data.waypoints) {
+        // Build optimized order: waypoints[i].waypoint_index = original index in pts array
+        const sortedWaypoints = [...data.waypoints].sort((a: any, b: any) => a.trip_index - b.trip_index)
+        const optimizedJobs = sortedWaypoints.map((wp: any) => pts[wp.waypoint_index])
+        // Re-attach non-cancelled jobs without coords, then cancelled jobs at the end
+        const noCoordJobs = route.jobs.filter(j => !j.is_cancelled && (!j.lat || !j.lng))
+        const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
+        const newOrder = [...optimizedJobs, ...noCoordJobs, ...cancelledJobs]
+        handleDayReorder(userId, newOrder)
+      }
+    } catch { /* ignore */ }
+    setDayOptimizing(false)
+  }, [dayRoutes, handleDayReorder])
+
+
     if (userLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-page">
@@ -1189,8 +1654,8 @@ function JobsPageContent() {
                     </div>
                   </div>
                 )}
-                {/* Top Bar — no background, border, or shadow; no padding so sides align with content */}
-                <div className="flex items-center justify-between gap-4">
+                {/* Top Bar — hidden in day view (calendar nav lives on the map overlay) */}
+                {viewMode !== 'day' && <div className="flex items-center justify-between gap-4">
                     {/* Left: square softly-rounded arrows, Today (underlined), month year */}
                     <div className="flex items-center gap-3">
                         <button 
@@ -1257,9 +1722,122 @@ function JobsPageContent() {
                             ))}
                         </div>
                     </div>
-                </div>
+                </div>}
 
-                {/* Wrapper around all job lists — background #fff, padding 10px */}
+                {/* ── Day view: full-screen overlay (fixed, right of sidebar) ────── */}
+                {viewMode === 'day' && (
+                  <div className="fixed inset-0 flex z-10" style={{ left: 200 }}>
+                    {/* Left: job list panel — flush to sidebar, full height */}
+                    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden">
+                      <DayRoutePanel
+                        companySlug={companySlug}
+                        routes={dayRoutes}
+                        focusUserId={dayFocusUserId}
+                        onSelectUser={setDayFocusUserId}
+                        onClearUser={() => setDayFocusUserId(null)}
+                        onReorder={handleDayReorder}
+                        onJobOpen={id => {
+                          // Look up from the full dataset so we always have assigned_user_id, even when
+                          // the main jobs list is filtered to a single employee.
+                          const job = allJobs.find(j => j.id === id)
+                          if (job) { setViewingJob(job); setIsViewModalOpen(true) }
+                        }}
+                        onOptimize={handleDayOptimize}
+                        optimizing={dayOptimizing}
+                        geocodingCount={dayGeocodingCount}
+                        onSave={handleSaveAndApply}
+                        onBackToWeek={() => { setViewMode('week'); setDayFocusUserId(null); setHoveredJobId(null) }}
+                        dateLabel={currentWeek.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                        highlightedJobId={hoveredJobId}
+                        onJobCardHover={setHoveredJobId}
+                        baselineMinutesByUser={dayBaselineMinutes}
+                      />
+                    </div>
+
+                    {/* Right: full-bleed map */}
+                    <div className="flex-1 relative overflow-hidden">
+                      <RouteMap
+                        routes={dayRoutes}
+                        focusUserId={dayFocusUserId}
+                        onJobClick={id => {
+                          const job = allJobs.find(j => j.id === id)
+                          if (job) { setViewingJob(job); setIsViewModalOpen(true) }
+                        }}
+                        className="w-full h-full"
+                        highlightedJobId={hoveredJobId}
+                        onPinHover={setHoveredJobId}
+                      />
+
+                      {/* ── Calendar nav overlay — top-left of map ─────────────── */}
+                      <div className="absolute top-4 left-4 z-20 pointer-events-auto select-none">
+                        <div className="bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-3.5 py-3 flex items-center gap-2">
+                          {/* Prev week */}
+                          <button
+                            type="button"
+                            onClick={goToPreviousWeek}
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                            title="Previous week"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+                            </svg>
+                          </button>
+
+                          {/* Day circles M T W T F S S */}
+                          <div className="flex items-center gap-1">
+                            {weekDays.map((day, i) => {
+                              const letters = ['M','T','W','T','F','S','S']
+                              const isSelected = toLocalDateString(day) === toLocalDateString(currentWeek)
+                              const isTodayDay = isToday(day)
+                              const isWeekend = i >= 5
+                              return (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={() => setCurrentWeek(new Date(day))}
+                                  className={`flex flex-col items-center justify-center w-10 h-10 rounded-full transition-all duration-150 ${
+                                    isSelected
+                                      ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 scale-105'
+                                      : isTodayDay
+                                      ? 'bg-accent-50 text-accent-700 ring-2 ring-accent-400/50'
+                                      : isWeekend
+                                      ? 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                  }`}
+                                >
+                                  <span className={`text-[9px] font-bold leading-none uppercase tracking-wide ${isSelected ? 'text-white/70' : 'text-current opacity-60'}`}>
+                                    {letters[i]}
+                                  </span>
+                                  <span className="text-[13px] font-bold leading-none mt-[3px]">{day.getDate()}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
+
+                          {/* Next week */}
+                          <button
+                            type="button"
+                            onClick={goToNextWeek}
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                            title="Next week"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </button>
+                        </div>
+
+                        {/* Month + year label below the pill */}
+                        <p className="text-[11px] font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)] mt-1.5 text-center tracking-wide">
+                          {weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Month / Week views ────────────────────────────────── */}
+                {viewMode !== 'day' && (
                 <div className="bg-[#fff] rounded-xl p-[10px] flex flex-col overflow-hidden max-w-full flex-1 min-h-0">
                 {viewMode === 'month' ? (
                     /* Month Calendar View */
@@ -1286,10 +1864,12 @@ function JobsPageContent() {
                                 const dayOfWeekIndex = jsDayOfWeek === 0 ? 6 : jsDayOfWeek - 1
                                 const workHoursForDay = getWorkHoursForDay(dayOfWeekIndex)
                                 const occupiedHours = getOccupiedTime(day)
-                                const workHoursNum = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
+                                const baseHoursM = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
+                                const leaveHoursOffM = getLeaveHoursOff(dateString, baseHoursM)
+                                const workHoursNum = Math.max(0, baseHoursM - leaveHoursOffM)
                                 
-                                // If there are jobs but 0 hours, show red
-                                const hasJobsButNoHours = dayJobs.length > 0 && occupiedHours === 0
+                                // If there are jobs but 0 available hours (day off or no hours set), show red
+                                const hasJobsButNoHours = dayJobs.length > 0 && workHoursNum === 0
                                 
                                 // Calculate utilization - if jobs exist but no hours, treat as 100%+ (red)
                                 const utilizationPercent = hasJobsButNoHours 
@@ -1422,15 +2002,57 @@ function JobsPageContent() {
                                     const dayOfWeekIndex = jsDayOfWeek === 0 ? 6 : jsDayOfWeek - 1
                                     const workHoursForDay = getWorkHoursForDay(dayOfWeekIndex)
                                     const occupiedHours = getOccupiedTime(day)
-                                    const workHoursNum = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
-                                    const utilizationPercent = workHoursNum > 0 ? (occupiedHours / workHoursNum) * 100 : 0
-                                    const greenPercent = Math.min(100, utilizationPercent) // Green bar up to 100%
-                                    const amberPercent = Math.max(0, utilizationPercent - 100) // Overflow percentage (e.g., 20% for 120%)
-                                    const overflowColor = amberPercent > 50 ? '#EF4444' : '#F59E0B' // Red if overflow > 50%, otherwise amber
+                                    const baseHours = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
 
                                     const dateString = toLocalDateString(day)
                                     const isDragOver = dragOverDate === dateString
                                     const isTodayBanner = isToday(day)
+
+                                    // Leave deduction — only applies when a single employee is selected
+                                    const dayLeaveEntry = selectedUserId !== 'all' ? employeeLeaveByDate[dateString] ?? null : null
+                                    const leaveHoursOff = getLeaveHoursOff(dateString, baseHours)
+                                    const workHoursNum = Math.max(0, baseHours - leaveHoursOff)
+
+                                    // Parse saved route for this day once — drives both the button colour
+                                    // and the planned/unplanned divider in the job list.
+                                    const dayRouteIds = (() => {
+                                        try {
+                                            const co = window.location.pathname.split('/')[1]
+                                            const stored = localStorage.getItem(`route-order-${co}-${dateString}`)
+                                            if (!stored) return new Set<string>()
+                                            const orderMap: Record<string, (number | string)[]> = JSON.parse(stored)
+                                            const ids = new Set<string>()
+                                            Object.values(orderMap).flat().forEach(id => ids.add(String(id)))
+                                            return ids
+                                        } catch { return new Set<string>() }
+                                    })()
+
+                                    // Green = route exists and every real job on this day is in it.
+                                    // Amber = route exists but at least one job is missing from it.
+                                    const routeIsIntact = plannedDays.has(dateString) && dayRouteIds.size > 0 &&
+                                        dayJobs.every((j: any) => j.is_projected || !Number.isInteger(Number(j.id)) || dayRouteIds.has(String(j.id)))
+
+                                    // Index of the first job not in the saved route — divider goes here.
+                                    const firstUnplannedIndex = dayRouteIds.size === 0 ? -1 :
+                                        dayJobs.findIndex((j: any) => !j.is_projected && Number.isInteger(Number(j.id)) && !dayRouteIds.has(String(j.id)))
+
+                                    // Travel time for this day from saved routes
+                                    const dayTravelMins = (() => {
+                                        if (typeof selectedUserId === 'number') {
+                                            return travelMinutes[`${dateString}:${selectedUserId}`] ?? 0
+                                        }
+                                        // 'all' view: sum across all users that have jobs on this day
+                                        const userIds = [...new Set(dayJobs.map((j: { assigned_user_id?: number }) => Number(j.assigned_user_id)).filter(Boolean))]
+                                        return userIds.reduce((sum, uid) => sum + (travelMinutes[`${dateString}:${uid}`] ?? 0), 0)
+                                    })()
+                                    const totalHoursWithTravel = occupiedHours + dayTravelMins / 60
+                                    // workHoursNum=0 with jobs means employee is off but still scheduled → force red
+                                    const utilizationWithTravel = workHoursNum > 0
+                                        ? (totalHoursWithTravel / workHoursNum) * 100
+                                        : (totalHoursWithTravel > 0 ? 200 : 0)
+                                    const greenWithTravel = Math.min(100, utilizationWithTravel)
+                                    const amberWithTravel = Math.max(0, utilizationWithTravel - 100)
+                                    const overflowColorTravel = amberWithTravel > 50 ? '#EF4444' : '#F59E0B'
 
                                     return (
                                         <div
@@ -1488,8 +2110,23 @@ function JobsPageContent() {
                                                             <div className={`text-[11px] ${isTodayBanner ? 'text-white/90' : 'text-white/80'}`}>
                                                                 {day.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                                                             </div>
-                                                            <div className="text-lg font-bold text-white">
-                                                                {formatWeekday(day)}
+                                                            <div className="flex items-end justify-between">
+                                                                <div className="text-lg font-bold text-white">
+                                                                    {formatWeekday(day)}
+                                                                </div>
+                                                                {dayLeaveEntry && (() => {
+                                                                    const leaveLabels: Record<string, string> = {
+                                                                        full_day: 'Day off',
+                                                                        half_day_morning: '½ AM off',
+                                                                        half_day_afternoon: '½ PM off',
+                                                                        custom_hours: `${dayLeaveEntry.hours_off ?? '?'}h off`,
+                                                                    }
+                                                                    return (
+                                                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-white/20 text-white backdrop-blur-sm">
+                                                                            {leaveLabels[dayLeaveEntry.leave_type] ?? 'Leave'}
+                                                                        </span>
+                                                                    )
+                                                                })()}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1497,29 +2134,75 @@ function JobsPageContent() {
                                             })()}
 
                                             {/* Total hour: "Total hour:" above left, "X / Y" above right; bar 100% width below. No bottom border. */}
-                                            <div className="pt-2.5 pb-2.5">
+                                            <div className="pt-2.5 pb-1.5">
                                                 <div className="flex items-center justify-between mb-1.5">
                                                     <span className="text-[11px] font-medium text-gray-700">Total hour:</span>
-                                                    <span className="text-[11px] font-medium text-gray-700 tabular-nums">{occupiedHours.toFixed(1)} / {workHoursNum.toFixed(1)}</span>
+                                                    <span className="text-[11px] font-medium text-gray-700 tabular-nums">
+                                                        {dayTravelMins > 0 && (
+                                                            <span className="text-gray-400 mr-1">({dayTravelMins}m drive)</span>
+                                                        )}
+                                                        {totalHoursWithTravel.toFixed(1)} / {workHoursNum.toFixed(1)}
+                                                    </span>
                                                 </div>
                                                 <div className="w-full h-2 bg-primary-500/30 rounded-full relative" style={{ overflow: 'visible' }}>
                                                     {/* Green bar - shows capacity up to 100% */}
-                                                    {greenPercent > 0 && (
+                                                    {greenWithTravel > 0 && (
                                                         <div
                                                             className="h-full rounded-full transition-all absolute left-0 top-0 z-10"
-                                                            style={{ width: `${greenPercent}%`, backgroundColor: '#3DD57A' }}
+                                                            style={{ width: `${greenWithTravel}%`, backgroundColor: '#3DD57A' }}
                                                         />
                                                     )}
                                                     {/* Overflow bar - shows overflow above 100%, overlays green from left */}
-                                                    {amberPercent > 0 && (
+                                                    {amberWithTravel > 0 && (
                                                         <div
                                                             className="h-full rounded-full transition-all absolute left-0 top-0 z-20"
                                                             style={{ 
-                                                                width: `${amberPercent}%`, 
-                                                                backgroundColor: overflowColor
+                                                                width: `${amberWithTravel}%`, 
+                                                                backgroundColor: overflowColorTravel
                                                             }}
                                                         />
                                                     )}
+                                                </div>
+                                                {/* Action buttons: Add job (left) + Plan route (right) */}
+                                                <div className="flex items-center justify-between mt-2 gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
+                                                        className="flex items-center gap-1 text-[11px] font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-1.5 py-0.5 rounded-md transition-colors"
+                                                        title="Add job"
+                                                    >
+                                                        <PlusIcon className="w-3 h-3" />
+                                                        Add job
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            // If a single employee is selected in the jobs list, open the route planner
+                                                            // directly on that employee's route. Otherwise show all employees overview.
+                                                            if (selectedUserId !== 'all') {
+                                                              const userIdNum = typeof selectedUserId === 'string'
+                                                                ? parseInt(selectedUserId, 10)
+                                                                : selectedUserId
+                                                              setDayFocusUserId(userIdNum)
+                                                            } else {
+                                                              setDayFocusUserId(null)
+                                                            }
+                                                            setCurrentWeek(new Date(day))
+                                                            setViewMode('day')
+                                                        }}
+                                                        className={`flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md transition-colors ${
+                                                            routeIsIntact
+                                                                ? 'text-accent-600 hover:text-accent-700 hover:bg-accent-50'
+                                                                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                                                        }`}
+                                                        title={routeIsIntact ? 'Route planned — click to re-plan' : 'Plan route for this day'}
+                                                    >
+                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                                                        </svg>
+                                                        Plan route
+                                                    </button>
                                                 </div>
                                             </div>
 
@@ -1531,34 +2214,7 @@ function JobsPageContent() {
                                                     </div>
                                                 ) : (
                                                     <div className="space-y-2">
-                                                        {/* Top drop zone — drop at start of list */}
-                                                        <div
-                                                            className="relative min-h-[12px] -mt-1"
-                                                            onDragOver={(e) => {
-                                                                e.preventDefault()
-                                                                e.stopPropagation()
-                                                                e.dataTransfer.dropEffect = 'move'
-                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
-                                                                    setDragOverJobId('top')
-                                                                    setDragOverPosition('above')
-                                                                    setDragOverDate(dateString)
-                                                                }
-                                                            }}
-                                                            onDragLeave={() => { setDragOverJobId(null); setDragOverPosition(null) }}
-                                                            onDrop={(e) => {
-                                                                e.preventDefault()
-                                                                e.stopPropagation()
-                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
-                                                                    handleDrop(e, dateString, 'top')
-                                                                }
-                                                                setDragOverJobId(null)
-                                                                setDragOverPosition(null)
-                                                            }}
-                                                        >
-                                                            {draggedJob && dragOverJobId === 'top' && (
-                                                                <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
-                                                            )}
-                                                        </div>
+                                                        <div className="min-h-[4px]" />
                                                         {dayJobs.length > 0 ? (
                                                         <>
                                                         {selectedUserId === 'all'
@@ -1570,8 +2226,8 @@ function JobsPageContent() {
                                                                 .map((u) => {
                                                                   const userJobsForDay = dayJobs.filter((job: any) => Number(job.assigned_user_id) === Number(u.id))
                                                                   const totalMinutes = userJobsForDay.reduce((total: number, job: any) => {
-                                                                    const duration = job.total_duration
-                                                                    const minutes = duration != null && duration !== '' ? parseFloat(String(duration)) : 0
+                                                                    const raw = job.estimated_duration ?? job.total_duration
+                                                                    const minutes = raw != null && raw !== '' ? parseFloat(String(raw)) : 0
                                                                     return total + (isNaN(minutes) ? 0 : minutes)
                                                                   }, 0)
                                                                   const totalHours = totalMinutes / 60
@@ -1614,55 +2270,44 @@ function JobsPageContent() {
                                                             const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                             const isJobCancelled = job.status === 'cancelled'
                                                             const taskCount = (job.job_services || job.services || []).length || 1
-                                                            const showDividerAbove = draggedJob && draggedJob.id !== job.id && dragOverJobId === job.id && dragOverPosition === 'above'
-                                                            const showDividerBelow = draggedJob && draggedJob.id !== job.id && dragOverJobId === job.id && dragOverPosition === 'below'
+                                                            const noteCount = (job as any).note_count ?? 0
 
                                                             return (
-                                                                <div key={job.id} className="relative">
-                                                                    {/* Green divider above job - absolutely positioned overlay */}
-                                                                    {showDividerAbove && (
-                                                                        <div className="absolute -top-1 left-0 right-0 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
+                                                                <div key={job.id}>
+                                                                    {/* Divider before the first job that isn't part of the saved route */}
+                                                                    {jobIndex === firstUnplannedIndex && firstUnplannedIndex > 0 && (
+                                                                        <div className="flex items-center gap-2 my-2">
+                                                                            <div className="flex-1 border-t border-dashed border-gray-200" />
+                                                                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">Not planned</span>
+                                                                            <div className="flex-1 border-t border-dashed border-gray-200" />
+                                                                        </div>
                                                                     )}
                                                                     <div
                                                                         draggable={!isJobCancelled}
                                                                         onDragStart={(e) => !isJobCancelled && handleDragStart(e, job)}
                                                                         onDragEnd={handleDragEnd}
-                                                                        onDragOver={(e) => {
-                                                                            if (!isJobCancelled && draggedJob && draggedJob.id !== job.id) {
-                                                                                const rect = e.currentTarget.getBoundingClientRect()
-                                                                                const y = e.clientY - rect.top
-                                                                                const position = y < rect.height / 2 ? 'above' : 'below'
-                                                                                handleDragOverJob(e, job, position)
-                                                                            }
-                                                                        }}
-                                                                        onDragLeave={handleDragLeaveJob}
-                                                                        onDrop={(e) => {
-                                                                            if (!isJobCancelled && draggedJob && draggedJob.id !== job.id) {
-                                                                                const rect = e.currentTarget.getBoundingClientRect()
-                                                                                const y = e.clientY - rect.top
-                                                                                const position = y < rect.height / 2 ? 'above' : 'below'
-                                                                                handleDrop(e, job.scheduled_date, job.id, position)
-                                                                            }
-                                                                        }}
                                                                         onClick={() => handleJobClick(job)}
                                                                         className={`rounded-xl p-3 transition-all border ${
                                                                             isJobCancelled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
                                                                         } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
                                                                     >
-                                                                    {/* Row 1: Client (left) + orange circle (right) */}
+                                                                    {/* Row 1: Client (left) + notes badge (right) */}
                                                                     <div className="flex items-start justify-between gap-2 mb-1">
-                                                                        <Link href={`/clients/${job.client_id}`} className="font-semibold text-sm text-gray-800 truncate hover:text-accent-600 min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
-                                                                            {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
-                                                                        </Link>
-                                                                        {taskCount > 0 && (
-                                                                            <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white bg-orange-500">
-                                                                                {taskCount}
+                                                                        <div className="flex items-center min-w-0 flex-1">
+                                                                            <span className="font-semibold text-sm text-gray-800 truncate min-w-0 flex-1">
+                                                                                {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
+                                                                            </span>
+                                                                        </div>
+                                                                        {noteCount > 0 && (
+                                                                            <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full text-[10px] font-bold text-white bg-orange-500 gap-0.5">
+                                                                                <DocumentTextIcon className="w-3 h-3" />
+                                                                                {noteCount}
                                                                             </span>
                                                                         )}
                                                                     </div>
 
                                                                     {addressDisplay && (
-                                                                        <div onClick={(e) => copyAddressToClipboard(job, e)} className="text-xs text-gray-600 truncate mb-1 cursor-pointer hover:text-accent-600" title="Copy address">
+                                                                        <div className="text-xs text-gray-600 truncate mb-1">
                                                                             {addressDisplay}
                                                                         </div>
                                                                     )}
@@ -1684,12 +2329,15 @@ function JobsPageContent() {
                                                                                 <DocumentTextIcon className="w-3.5 h-3.5" />
                                                                                 {taskCount} task{taskCount !== 1 ? 's' : ''}
                                                                             </span>
-                                                                            {job.total_duration != null && (
-                                                                                <span className="flex items-center gap-1 flex-shrink-0">
-                                                                                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/></svg>
-                                                                                    {formatDuration(job.total_duration)}
-                                                                                </span>
-                                                                            )}
+                                                                            {(() => {
+                                                                                const mins = parseFloat(String(job.estimated_duration ?? job.total_duration ?? 0))
+                                                                                return mins > 0 ? (
+                                                                                    <span className="flex items-center gap-1 flex-shrink-0">
+                                                                                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/></svg>
+                                                                                        {formatDuration(mins)}
+                                                                                    </span>
+                                                                                ) : null
+                                                                            })()}
                                                                             {job.total_price != null && job.total_price > 0 && (
                                                                                 <span className="text-[11px] text-gray-500 flex-shrink-0">{formatPrice(job.total_price)}</span>
                                                                             )}
@@ -1710,41 +2358,9 @@ function JobsPageContent() {
                                                                         )}
                                                                     </div>
                                                                     </div>
-                                                                    {/* Green divider below job - absolutely positioned overlay */}
-                                                                    {showDividerBelow && (
-                                                                        <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
-                                                                    )}
                                                                 </div>
                                                             )
                                                         })}
-                                                        {/* Bottom drop zone — drop at end of list */}
-                                                        <div
-                                                            className="relative min-h-[12px] -mb-1"
-                                                            onDragOver={(e) => {
-                                                                e.preventDefault()
-                                                                e.stopPropagation()
-                                                                e.dataTransfer.dropEffect = 'move'
-                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
-                                                                    setDragOverJobId('bottom')
-                                                                    setDragOverPosition('below')
-                                                                    setDragOverDate(dateString)
-                                                                }
-                                                            }}
-                                                            onDragLeave={() => { setDragOverJobId(null); setDragOverPosition(null) }}
-                                                            onDrop={(e) => {
-                                                                e.preventDefault()
-                                                                e.stopPropagation()
-                                                                if (draggedJob && draggedJob.scheduled_date === dateString) {
-                                                                    handleDrop(e, dateString, 'bottom')
-                                                                }
-                                                                setDragOverJobId(null)
-                                                                setDragOverPosition(null)
-                                                            }}
-                                                        >
-                                                            {draggedJob && dragOverJobId === 'bottom' && (
-                                                                <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-0.5 bg-accent-500 rounded-full z-30 pointer-events-none" />
-                                                            )}
-                                                        </div>
                                                         </>
                                                         ) : (
                                                             <div className="text-center text-gray-400 text-xs mt-8">No jobs</div>
@@ -1753,15 +2369,6 @@ function JobsPageContent() {
                                                 )}
                                             </div>
 
-                                            <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
-                                                className="absolute bottom-2 right-2 inline-flex items-center gap-1 text-xs font-medium text-accent-600 hover:text-accent-700"
-                                                title="Add job"
-                                            >
-                                                <PlusIcon className="w-4 h-4" />
-                                                Add job
-                                            </button>
                                         </div>
                                     )
                                 })}
@@ -1769,6 +2376,7 @@ function JobsPageContent() {
                     </div>
                 )}
                 </div>
+                )} {/* end viewMode !== 'day' */}
 
             </div>
 
@@ -1857,11 +2465,22 @@ function JobsPageContent() {
                     setIsViewModalOpen(false)
                     setViewingJob(null)
                 }}
-                job={viewingJob}
+                job={
+                  viewingJob
+                    ? {
+                        ...viewingJob,
+                        assigned_user_id: viewMode === 'day' && pendingAssigneeChanges[viewingJob.id] != null
+                          ? pendingAssigneeChanges[viewingJob.id]
+                          : viewingJob.assigned_user_id
+                      }
+                    : null
+                }
                 onJobUpdated={() => {
                     // Ensure the calendar updates immediately after edits/materialization (no manual refresh)
                     fetchJobsForWeek()
                 }}
+                deferAssigneeToParent={viewMode === 'day'}
+                onAssigneeChange={handlePlannerAssigneeChange}
             />
             
             {/* Move Job Confirmation Modal */}

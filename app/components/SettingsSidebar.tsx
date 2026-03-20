@@ -25,19 +25,26 @@ interface SettingsSidebarProps {
 export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) {
   const pathname = usePathname()
 
+  // Extract company slug from URL: /{slug}/settings/... → slug
+  // Falls back to empty string for legacy /settings/... routes
+  const pathParts = pathname.split('/').filter(Boolean)
+  const companySlug = pathParts[0] !== 'settings' ? pathParts[0] : ''
+  const base = companySlug ? `/${companySlug}/settings` : '/settings'
+
   const handleLogout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    sessionStorage.removeItem('pathpilo_video_guide_dismissed')
     window.location.href = '/'
   }
 
   const settingsNavigation = [
-    { name: 'User', href: '/settings/user', icon: UserIcon },
-    { name: 'Business', href: '/settings/business', icon: BuildingOfficeIcon },
-    { name: 'Notifications', href: '/settings/notifications', icon: BellIcon },
-    { name: 'Lead form', href: '/settings/leads-form', icon: InboxIcon },
-    { name: 'Billing', href: '/settings/billing', icon: CreditCardIcon },
-    { name: 'Invoices', href: '/settings/invoices', icon: DocumentTextIcon },
+    { name: 'User', href: `${base}/user`, icon: UserIcon },
+    { name: 'Business', href: `${base}/business`, icon: BuildingOfficeIcon },
+    { name: 'Notifications', href: `${base}/notifications`, icon: BellIcon },
+    { name: 'Lead form', href: `${base}/leads-form`, icon: InboxIcon },
+    { name: 'Billing', href: `${base}/billing`, icon: CreditCardIcon },
+    { name: 'Invoices', href: `${base}/invoices`, icon: DocumentTextIcon },
   ]
 
   return (
@@ -63,7 +70,7 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {settingsNavigation.map((item) => {
           const Icon = item.icon
-          const isActive = pathname === item.href
+          const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
           return (
             <Link
               key={item.name}
@@ -82,7 +89,7 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
       {/* Bottom Spacing */}
       <div className="px-4 py-3">
         <div className="text-xs text-gray-500 text-center">
-          PathPilo v1.0
+          Vevago v1.0
         </div>
       </div>
     </div>

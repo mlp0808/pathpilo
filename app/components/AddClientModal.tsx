@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import AddressAutocomplete from './AddressAutocomplete'
 
 interface Client {
   client_type: 'person' | 'company'
@@ -14,6 +15,8 @@ interface Client {
   address: string
   zip_code: string
   city: string
+  lat?: number | null
+  lng?: number | null
   email: string
   phone: string
   billing_address: string
@@ -40,6 +43,8 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
     address: '',
     zip_code: '',
     city: '',
+    lat: null,
+    lng: null,
     email: '',
     phone: '',
     billing_address: '',
@@ -80,6 +85,8 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         address: currentClient.address,
         zip_code: currentClient.zip_code,
         city: currentClient.city,
+        lat: currentClient.lat || null,
+        lng: currentClient.lng || null,
         email: currentClient.email,
         phone: currentClient.phone,
         billing_address: separateBillingAddress ? currentClient.billing_address : null,
@@ -112,6 +119,8 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
           address: '',
           zip_code: '',
           city: '',
+          lat: null,
+          lng: null,
           email: '',
           phone: '',
           billing_address: '',
@@ -173,20 +182,26 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
       <div className="flex min-h-screen items-center justify-center p-4">
         {/* Backdrop */}
         <div 
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
           onClick={handleClose}
         />
         
         {/* Modal */}
-        <div className="relative bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="relative bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-gray-200">
-            <h2 className="text-xl font-semibold text-gray-900">Add New Client</h2>
+          <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-primary-500 to-accent-500 text-white">
+            <div>
+              <h2 className="text-base font-semibold">Add client</h2>
+              <p className="text-xs text-white/80 mt-0.5">
+                Create a new client that you can schedule jobs and send invoices to.
+              </p>
+            </div>
             <button
+              type="button"
               onClick={handleClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-white/80 hover:text-white transition-colors"
             >
-              <XMarkIcon className="w-6 h-6" />
+              <XMarkIcon className="w-5 h-5" />
             </button>
           </div>
           
@@ -200,17 +215,17 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
 
             {/* Client Type Selector */}
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-3">
-                Client Type
+              <label className="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">
+                Client type
               </label>
-              <div className="flex bg-gray-100 rounded-xl p-1">
+              <div className="flex bg-slate-50 rounded-xl p-1 border border-slate-200">
                 <button
                   type="button"
                   onClick={() => setCurrentClient({ ...currentClient, client_type: 'person' })}
                   className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
                     currentClient.client_type === 'person'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-white text-primary-600 shadow-sm'
+                      : 'text-slate-500 hover:text-primary-600'
                   }`}
                 >
                   Private Person
@@ -220,8 +235,8 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   onClick={() => setCurrentClient({ ...currentClient, client_type: 'company' })}
                   className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
                     currentClient.client_type === 'company'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-white text-primary-600 shadow-sm'
+                      : 'text-slate-500 hover:text-primary-600'
                   }`}
                 >
                   Company
@@ -234,7 +249,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="group">
-                    <label htmlFor="name" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="name" className="block text-sm font-medium text-slate-900 mb-2">
                       Company Name <span className="text-red-500">*</span>
                     </label>
                     <input
@@ -244,12 +259,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       value={currentClient.name}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                      className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                       placeholder="e.g. ABC Corp"
                     />
                   </div>
                   <div className="group">
-                    <label htmlFor="company_number" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="company_number" className="block text-sm font-medium text-slate-900 mb-2">
                       Company Number
                     </label>
                     <input
@@ -258,7 +273,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       name="company_number"
                       value={currentClient.company_number}
                       onChange={handleInputChange}
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                      className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                       placeholder="e.g. CVR 12345678"
                     />
                   </div>
@@ -271,9 +286,9 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     type="checkbox"
                     checked={includeContactPerson}
                     onChange={(e) => setIncludeContactPerson(e.target.checked)}
-                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
                   />
-                  <label htmlFor="includeContactPerson" className="ml-2 block text-sm text-gray-900">
+                  <label htmlFor="includeContactPerson" className="ml-2 block text-sm text-slate-900">
                     Add contact person?
                   </label>
                 </div>
@@ -282,7 +297,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 {includeContactPerson && (
                   <div className="grid grid-cols-2 gap-4">
                     <div className="group">
-                      <label htmlFor="contact_name" className="block text-sm font-medium text-gray-900 mb-2">
+                      <label htmlFor="contact_name" className="block text-sm font-medium text-slate-900 mb-2">
                         Contact Person Name
                       </label>
                       <input
@@ -291,7 +306,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                         name="contact_name"
                         value={currentClient.contact_name}
                         onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                        className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                         placeholder="e.g. John Smith"
                       />
                     </div>
@@ -306,7 +321,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 {/* Name and Last Name */}
                       <div className="grid grid-cols-2 gap-4">
                         <div className="group">
-                          <label htmlFor="name" className="block text-sm font-medium text-gray-900 mb-2">
+                          <label htmlFor="name" className="block text-sm font-medium text-slate-900 mb-2">
                             First Name <span className="text-red-500">*</span>
                           </label>
                           <input
@@ -316,12 +331,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                             value={currentClient.name}
                             onChange={handleInputChange}
                             required
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                            className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                             placeholder="e.g. John"
                           />
                         </div>
                         <div className="group">
-                          <label htmlFor="last_name" className="block text-sm font-medium text-gray-900 mb-2">
+                          <label htmlFor="last_name" className="block text-sm font-medium text-slate-900 mb-2">
                             Last name
                           </label>
                           <input
@@ -330,7 +345,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                             name="last_name"
                             value={currentClient.last_name}
                             onChange={handleInputChange}
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                            className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                             placeholder="e.g. Smith"
                           />
                         </div>
@@ -338,71 +353,50 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
               </div>
             )}
 
-            {/* Address fields (common for both) */}
-            <div className="grid grid-cols-12 gap-4">
-              <div className="col-span-6 group">
-                <label htmlFor="address" className="block text-sm font-medium text-gray-900 mb-2">
-                  Address
-                </label>
-                <input
-                  type="text"
-                  id="address"
-                  name="address"
-                  value={currentClient.address}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
-                  placeholder="e.g. Main Street 123"
-                />
-              </div>
-              <div className="col-span-3 group">
-                <label htmlFor="zip_code" className="block text-sm font-medium text-gray-900 mb-2">
-                  Zip
-                </label>
-                <input
-                  type="text"
-                  id="zip_code"
-                  name="zip_code"
-                  value={currentClient.zip_code}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
-                  placeholder="e.g. 2100"
-                />
-              </div>
-              <div className="col-span-3 group">
-                <label htmlFor="city" className="block text-sm font-medium text-gray-900 mb-2">
-                  City
-                </label>
-                <input
-                  type="text"
-                  id="city"
-                  name="city"
-                  value={currentClient.city}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
-                  placeholder="e.g. Copenhagen"
-                />
-              </div>
-            </div>
+            {/* Address with autocomplete */}
+            <AddressAutocomplete
+              address={currentClient.address}
+              zip_code={currentClient.zip_code}
+              city={currentClient.city}
+              lat={currentClient.lat}
+              lng={currentClient.lng}
+              onChange={(data) =>
+                setCurrentClient(prev => ({
+                  ...prev,
+                  address: data.address,
+                  zip_code: data.zip_code,
+                  city: data.city,
+                  lat: data.lat ?? null,
+                  lng: data.lng ?? null,
+                }))
+              }
+              placeholder="e.g. Main Street 123"
+            />
 
             {/* Separate Billing Address Checkbox */}
-            <div className="flex items-center">
+            <div className="space-y-1">
+              <div className="flex items-center">
               <input
                 type="checkbox"
                 id="separateBillingAddress"
                 checked={separateBillingAddress}
                 onChange={(e) => setSeparateBillingAddress(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
               />
-              <label htmlFor="separateBillingAddress" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="separateBillingAddress" className="ml-2 block text-sm text-slate-900">
                 Separate billing address?
               </label>
+              </div>
+              <p className="ml-6 text-xs text-slate-500">
+                Use this when the legal/billing address on the invoice should be different from the service address.
+              </p>
             </div>
 
             {/* Billing Address Fields */}
             {separateBillingAddress && (
-              <div className="grid grid-cols-12 gap-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
+              <div className="grid grid-cols-12 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
                 <div className="col-span-6 group">
-                  <label htmlFor="billing_address" className="block text-sm font-medium text-blue-900 mb-2">
+                  <label htmlFor="billing_address" className="block text-sm font-medium text-primary-900 mb-2">
                     Billing Address
                   </label>
                   <input
@@ -411,12 +405,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     name="billing_address"
                     value={currentClient.billing_address}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
                     placeholder="e.g. Business Street 456"
                   />
                 </div>
                 <div className="col-span-3 group">
-                  <label htmlFor="billing_zip_code" className="block text-sm font-medium text-blue-900 mb-2">
+                  <label htmlFor="billing_zip_code" className="block text-sm font-medium text-primary-900 mb-2">
                     Billing Zip
                   </label>
                   <input
@@ -425,12 +419,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     name="billing_zip_code"
                     value={currentClient.billing_zip_code}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
                     placeholder="e.g. 2200"
                   />
                 </div>
                 <div className="col-span-3 group">
-                  <label htmlFor="billing_city" className="block text-sm font-medium text-blue-900 mb-2">
+                  <label htmlFor="billing_city" className="block text-sm font-medium text-primary-900 mb-2">
                     Billing City
                   </label>
                   <input
@@ -439,7 +433,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     name="billing_city"
                     value={currentClient.billing_city}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
                     placeholder="e.g. Aarhus"
                   />
                 </div>
@@ -449,7 +443,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
             {/* Email and Phone */}
             <div className="grid grid-cols-2 gap-4">
               <div className="group">
-                <label htmlFor="email" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="email" className="block text-sm font-medium text-slate-900 mb-2">
                   Email
                 </label>
                 <input
@@ -458,12 +452,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   name="email"
                   value={currentClient.email}
                   onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                  className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                   placeholder="e.g. john@example.com"
                 />
               </div>
               <div className="group">
-                <label htmlFor="phone" className="block text-sm font-medium text-gray-900 mb-2">
+                <label htmlFor="phone" className="block text-sm font-medium text-slate-900 mb-2">
                   Phone
                 </label>
                 <input
@@ -472,31 +466,36 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   name="phone"
                   value={currentClient.phone}
                   onChange={handleInputChange}
-                  className="w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400"
+                  className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
                   placeholder="e.g. +45 12 34 56 78"
                 />
               </div>
             </div>
 
             {/* Separate Billing Contact Checkbox */}
-            <div className="flex items-center">
+            <div className="space-y-1">
+              <div className="flex items-center">
               <input
                 type="checkbox"
                 id="separateBillingContact"
                 checked={separateBillingContact}
                 onChange={(e) => setSeparateBillingContact(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
               />
-              <label htmlFor="separateBillingContact" className="ml-2 block text-sm text-gray-900">
+              <label htmlFor="separateBillingContact" className="ml-2 block text-sm text-slate-900">
                 Separate billing contact info?
               </label>
+              </div>
+              <p className="ml-6 text-xs text-slate-500">
+                Use this when invoices and payment reminders should go to a different email/phone than the main client.
+              </p>
             </div>
 
             {/* Billing Contact Fields */}
             {separateBillingContact && (
-              <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
+              <div className="grid grid-cols-2 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
                 <div className="group">
-                  <label htmlFor="billing_email" className="block text-sm font-medium text-blue-900 mb-2">
+                  <label htmlFor="billing_email" className="block text-sm font-medium text-primary-900 mb-2">
                     Billing Email
                   </label>
                   <input
@@ -505,12 +504,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     name="billing_email"
                     value={currentClient.billing_email}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
                     placeholder="e.g. billing@company.com"
                   />
                 </div>
                 <div className="group">
-                  <label htmlFor="billing_phone" className="block text-sm font-medium text-blue-900 mb-2">
+                  <label htmlFor="billing_phone" className="block text-sm font-medium text-primary-900 mb-2">
                     Billing Phone
                   </label>
                   <input
@@ -519,7 +518,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     name="billing_phone"
                     value={currentClient.billing_phone}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-blue-300 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
                     placeholder="e.g. +45 98 76 54 32"
                   />
                 </div>
@@ -527,18 +526,18 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
             )}
 
             {/* Submit Buttons */}
-            <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200">
+            <div className="flex justify-end space-x-3 pt-6 border-t border-slate-200">
               <button
                 type="button"
                 onClick={handleClose}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl shadow-md shadow-primary-500/20 hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
                   <span className="flex items-center">

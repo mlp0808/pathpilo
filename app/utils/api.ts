@@ -1,48 +1,30 @@
 /**
  * API Configuration
- * 
- * In production, this will use relative paths (/api) which works with the reverse proxy.
- * In development, it uses localhost:3002 for the backend.
+ *
+ * All API requests from the browser use relative paths (/api/...) so they hit the
+ * current origin. Next.js rewrites /api/* to the backend (see next.config.js).
+ * This way the API server receives every request and you'll see logs in its terminal.
+ *
+ * Set NEXT_PUBLIC_API_URL to match your API server (e.g. http://localhost:8000 or
+ * http://localhost:3001). Default in next.config.js is http://localhost:8000.
  */
 
-// Get API base URL from environment variable or use default
-// For production: Set NEXT_PUBLIC_API_URL="" (empty) to use relative paths
-// For development: Set NEXT_PUBLIC_API_URL="http://localhost:3003" or leave undefined
 const getApiBaseUrl = (): string => {
-  // If explicitly set in environment, use it
-  if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL
-  }
-  
-  // If accessing via IP address (direct port access), use full URL with port 3003
+  // In the browser: always use relative path so the request goes to the current
+  // origin and Next.js can proxy it to the API server. This ensures the backend
+  // receives the request and you see logs in the API terminal.
   if (typeof window !== 'undefined') {
-    const hostname = window.location.hostname
-    const port = window.location.port
-    
-    // If accessing via IP or with explicit port, use full backend URL (api-server on port 8000)
-    if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/) || port === '3002') {
-      return `http://${hostname}:8000`
-    }
-    
-    // If localhost with port, use localhost api-server
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return 'http://localhost:8000'
-    }
+    return ''
   }
-  
-  // Production domain: use relative path (works with reverse proxy)
-  // This will use /api which goes through nginx to the backend
-  return ''
+  // Server-side (e.g. SSR): use env or default so server-side fetch has a full URL
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 }
 
 export const API_BASE_URL = getApiBaseUrl()
 
 /**
- * Helper function to build API URLs
- * In development (localhost / 127.0.0.1 / IP), uses full URL to api-server (port 8000) so requests go directly to the backend.
- * Otherwise uses relative /api paths (e.g. for production behind a reverse proxy).
- * @param endpoint - API endpoint (e.g., '/api/clients' or 'clients')
- * @returns Full or relative API URL
+ * Build API URL. In the browser returns relative path (e.g. /api/companies/profile)
+ * so the request goes through Next.js rewrite to the backend.
  */
 export const apiUrl = (endpoint: string): string => {
   const cleanEndpoint = endpoint.startsWith('/api')
@@ -51,14 +33,10 @@ export const apiUrl = (endpoint: string): string => {
       ? `/api${endpoint}`
       : `/api/${endpoint}`
 
-  // In the browser: use full URL to api-server in dev so we don't rely on Next.js rewrite
   if (typeof window !== 'undefined') {
     const base = getApiBaseUrl()
-    if (base) return base.replace(/\/$/, '') + cleanEndpoint
-    return cleanEndpoint
+    return base ? base.replace(/\/$/, '') + cleanEndpoint : cleanEndpoint
   }
-
-  // Server-side: use full URL for fetch
   const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
   return base.replace(/\/$/, '') + cleanEndpoint
 }

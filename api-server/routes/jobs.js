@@ -118,6 +118,8 @@ router.get('/:jobId', async (req, res) => {
         c.address,
         c.zip_code,
         c.city,
+        c.lat as client_lat,
+        c.lng as client_lng,
         c.client_type,
         CASE WHEN c.client_type = 'company' THEN true ELSE false END as is_company
       FROM jobs j
@@ -263,7 +265,8 @@ router.get('/', async (req, res) => {
 
     const onlyCompleted = statusFilter === 'completed';
 
-    // Use subquery: totals only from completed services (so invoice preview matches)
+    // js_totals: completed services only (for invoice/price totals)
+    // js_all:    all services regardless of status (for time planning bar)
     let query = `
       SELECT
         j.*,
@@ -274,9 +277,13 @@ router.get('/', async (req, res) => {
         c.address,
         c.zip_code,
         c.city,
+        c.lat as client_lat,
+        c.lng as client_lng,
         COALESCE(js_totals.service_count, 0) as service_count,
+        COALESCE(jn.note_count, 0) as note_count,
         COALESCE(js_totals.calculated_price, 0) as total_price,
-        COALESCE(js_totals.calculated_duration, 0) as total_duration
+        COALESCE(js_totals.calculated_duration, 0) as total_duration,
+        COALESCE(js_all.estimated_duration, 0) as estimated_duration
       FROM jobs j
       LEFT JOIN clients c ON j.client_id = c.id
       LEFT JOIN (
@@ -290,6 +297,21 @@ router.get('/', async (req, res) => {
         WHERE js.status = 'completed'
         GROUP BY js.job_id
       ) js_totals ON j.id = js_totals.job_id
+      LEFT JOIN (
+        SELECT
+          js.job_id,
+          SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as estimated_duration
+        FROM job_services js
+        LEFT JOIN services s ON js.service_id = s.id
+        GROUP BY js.job_id
+      ) js_all ON j.id = js_all.job_id
+      LEFT JOIN (
+        SELECT
+          jn.job_id,
+          COUNT(jn.id) as note_count
+        FROM job_notes jn
+        GROUP BY jn.job_id
+      ) jn ON j.id = jn.job_id
       WHERE j.company_id = $1
     `;
 
@@ -310,7 +332,7 @@ router.get('/', async (req, res) => {
       `;
     } else {
       query += `
-        ORDER BY j.scheduled_date ASC, COALESCE(j.sort_order, 0) ASC, j.created_at ASC
+        ORDER BY j.scheduled_date ASC, COALESCE(j.route_order, j.sort_order, 999999) ASC, j.created_at ASC
       `;
     }
 
@@ -362,6 +384,13 @@ router.get('/', async (req, res) => {
         const month = String(date.getMonth() + 1).padStart(2, '0')
         const day = String(date.getDate()).padStart(2, '0')
         return `${year}-${month}-${day}`
+      }
+
+      // Use calendar-day math (UTC midnight) so DST shifts don't break weekly occurrence indexing.
+      const diffCalendarDays = (a, b) => {
+        const aUtc = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate())
+        const bUtc = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate())
+        return Math.floor((aUtc - bUtc) / (1000 * 60 * 60 * 24))
       }
       
       // Parse date strings directly (they're already in YYYY-MM-DD format)
@@ -531,7 +560,7 @@ router.get('/', async (req, res) => {
                 currentDate.setDate(currentDate.getDate() + daysUntilTargetDay)
               }
 
-              const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / (1000 * 60 * 60 * 24))
+              const daysSinceFirst = diffCalendarDays(currentDate, firstOccurrenceDateObj)
               const intervalsSinceFirst = Math.floor(daysSinceFirst / (7 * subscription.interval_value))
               const remainderDays = daysSinceFirst % (7 * subscription.interval_value)
 
@@ -567,17 +596,27 @@ router.get('/', async (req, res) => {
             }
           }
           
+          // Paused subscriptions: skip dates on or after paused_at
+          let pausedAtStr = null
+          if (subscription.paused_at) {
+            const p = subscription.paused_at
+            pausedAtStr = p instanceof Date ? formatDateString(p) : (typeof p === 'string' ? p.split('T')[0] : null)
+          }
+
           // Generate dates for this subscription
           while (currentDate <= endDateObj) {
             // Only generate if the date is >= first occurrence (subscription has started) and >= startDate
             if (currentDate >= firstOccurrenceDateObj && currentDate >= startDateObj) {
               const dateStr = formatDateString(currentDate)
+              if (pausedAtStr && dateStr >= pausedAtStr) {
+                // Skip this and all future dates (subscription paused from paused_at)
+                break
+              }
               
               // Compute occurrence index within subscription pattern (1-based)
               let occ;
               if (subscription.recurrence_type === 'weekly') {
-                const msPerDay = 1000 * 60 * 60 * 24
-                const daysSinceFirst = Math.floor((currentDate.getTime() - firstOccurrenceDateObj.getTime()) / msPerDay)
+                const daysSinceFirst = diffCalendarDays(currentDate, firstOccurrenceDateObj)
                 occ = Math.floor(daysSinceFirst / (7 * subscription.interval_value)) + 1
               } else if (subscription.recurrence_type === 'monthly') {
                 const monthsSinceFirst = (currentDate.getFullYear() - firstOccurrenceDateObj.getFullYear()) * 12 +
@@ -655,9 +694,20 @@ router.get('/', async (req, res) => {
             .map((r) => `${r.recurring_job_id}:${r.recurring_occurrence}`)
         )
 
+        // Legacy safety net:
+        // older generated jobs may have NULL recurring_occurrence.
+        // De-dupe projected jobs by (subscription,date) too so we don't show doubles.
+        const existingDateSet = new Set(
+          realJobs
+            .filter((j) => j.recurring_job_id != null && !!j.scheduled_date)
+            .map((j) => `${j.recurring_job_id}:${j.scheduled_date}`)
+        )
+
         for (const p of occurrencePairs) {
           // If an occurrence has been materialized (even if moved/cancelled), do not show it as projected.
           if (existingSet.has(`${p.subId}:${p.occ}`)) continue
+          // Also suppress if a real job already exists on same sub+date (legacy rows with NULL occurrence)
+          if (existingDateSet.has(`${p.subId}:${p.dateStr}`)) continue
 
           projectedJobs.push({
             id: `subscription-${p.subId}-${p.occ}`, // Virtual ID (stable even if moved)
@@ -829,7 +879,7 @@ router.post('/', async (req, res) => {
       const jobWithDetails = await pool.query(`
         SELECT
           j.*,
-          c.name, c.last_name, c.address, c.zip_code, c.city,
+          c.name, c.last_name, c.address, c.zip_code, c.city, c.lat as client_lat, c.lng as client_lng,
           COUNT(js.id) as service_count,
           COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) as total_price,
           COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes)), 0) as total_duration
@@ -838,7 +888,7 @@ router.post('/', async (req, res) => {
         LEFT JOIN job_services js ON j.id = js.job_id
         LEFT JOIN services s ON js.service_id = s.id
         WHERE j.id = $1
-        GROUP BY j.id, c.name, c.last_name, c.address, c.zip_code, c.city
+        GROUP BY j.id, c.name, c.last_name, c.address, c.zip_code, c.city, c.lat, c.lng
       `, [job.id]);
 
       res.status(201).json({
@@ -928,8 +978,9 @@ router.put('/reorder', async (req, res) => {
       await client.query('BEGIN');
 
       for (const update of jobsToUpdate) {
+        // Keep sort_order and route_order in sync so all views show the same order
         await client.query(
-          'UPDATE jobs SET sort_order = $1, updated_at = NOW() WHERE id = $2',
+          'UPDATE jobs SET sort_order = $1, route_order = $1, updated_at = NOW() WHERE id = $2',
           [update.sort_order, update.id]
         );
       }
@@ -958,6 +1009,41 @@ router.put('/reorder', async (req, res) => {
   } catch (error) {
     console.error('Error reordering jobs:', error);
     res.status(500).json({ error: 'Failed to reorder jobs: ' + error.message });
+  }
+});
+
+// PUT /api/jobs/route-order — save day-view route order for the route planner
+// MUST come before /:jobId route to avoid matching "route-order" as a jobId
+router.put('/route-order', authenticateToken, async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({ error: 'orderedIds array required' });
+    }
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const companyId = companyAccess.companyId;
+
+    // Filter to integer IDs only — projected/subscription jobs have string IDs that
+    // would cause a PostgreSQL type error and silently abort the entire update.
+    const validIds = orderedIds.filter(id => Number.isInteger(Number(id)));
+    if (validIds.length === 0) {
+      return res.status(400).json({ error: 'No valid integer job IDs provided' });
+    }
+
+    // Update both route_order AND sort_order so the order propagates to all views and the mobile app
+    await Promise.all(
+      validIds.map((id, index) =>
+        pool.query(
+          'UPDATE jobs SET route_order = $1, sort_order = $1 WHERE id = $2 AND company_id = $3',
+          [index, Number(id), companyId]
+        )
+      )
+    );
+    res.json({ ok: true, saved: validIds.length });
+  } catch (error) {
+    console.error('Error saving route order:', error);
+    res.status(500).json({ error: 'Failed to save route order' });
   }
 });
 
@@ -1675,6 +1761,32 @@ router.delete('/:jobId/notes/:noteId', async (req, res) => {
   } catch (error) {
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'Failed to delete note' });
+  }
+});
+
+// ── Route planner: geocode coordinates ────────────────────────────────────────
+router.patch('/:jobId/coordinates', authenticateToken, async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { lat, lng } = req.body;
+    if (lat == null || lng == null) return res.status(400).json({ error: 'lat and lng required' });
+
+    // Subscription/projected jobs have string IDs — skip them silently
+    const numericId = parseInt(jobId, 10);
+    if (isNaN(numericId)) return res.json({ ok: true, skipped: true });
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+    const companyId = companyAccess.companyId;
+
+    await pool.query(
+      'UPDATE jobs SET lat = $1, lng = $2 WHERE id = $3 AND company_id = $4',
+      [lat, lng, numericId, companyId]
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error saving coordinates:', error);
+    res.status(500).json({ error: 'Failed to save coordinates' });
   }
 });
 

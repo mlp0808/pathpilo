@@ -501,7 +501,7 @@ export default function CompletedJobsPage() {
                             <tr
                               key={inv.id}
                               className="cursor-pointer transition-colors hover:bg-accent-50/50"
-                              onClick={() => router.push(`/${company}/invoices/${inv.id}`)}
+                              onClick={() => router.push(`/${company}/invoices/${inv.id}?from=completed`)}
                             >
                               <td className="whitespace-nowrap px-4 py-3.5 text-sm font-medium text-gray-900">
                                 {inv.invoice_number || '—'}

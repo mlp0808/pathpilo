@@ -1,7 +1,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { pool } = require('../utils/database');
+const { sendEmail } = require('../utils/email');
 
 const router = express.Router();
 
@@ -15,9 +17,9 @@ router.post('/register', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { firstName, lastName, email, password, invitationToken } = req.body;
+    const { firstName, lastName, email, password, invitationToken, trialToken } = req.body;
 
-    console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken });
+    console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken, hasTrial: !!trialToken });
 
     // Validate input
     if (!firstName || !lastName || !email || !password) {
@@ -29,7 +31,28 @@ router.post('/register', async (req, res) => {
     const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existingUser.rows.length > 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'User with this email already exists' });
+      // If they're registering via an invitation, tell the frontend to send them to login instead
+      if (invitationToken) {
+        return res.status(409).json({
+          error: 'account_exists',
+          message: 'An account with this email already exists. Please log in to accept your invitation.',
+          loginUrl: `/login?invite=${invitationToken}`,
+        });
+      }
+      return res.status(400).json({ error: 'An account with this email already exists' });
+    }
+
+    // Validate trial token (if provided) — look up before creating user
+    let trialRecord = null;
+    if (trialToken) {
+      const trialRes = await client.query(
+        'SELECT * FROM trial_invites WHERE token = $1 AND registered_at IS NULL',
+        [trialToken]
+      );
+      if (trialRes.rows.length > 0) {
+        trialRecord = trialRes.rows[0];
+      }
+      // If token not found we just ignore it and register normally
     }
 
     // Hash password
@@ -123,6 +146,22 @@ router.post('/register', async (req, res) => {
         'INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, $3)',
         [user.id, companyId, 'owner']
       );
+
+      // Apply trial expiry if user registered with a valid trial token
+      if (trialRecord) {
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + trialRecord.trial_days);
+        await client.query(
+          'UPDATE companies SET expires_at = $1 WHERE id = $2',
+          [expiresAt, companyId]
+        );
+        await client.query(
+          `UPDATE trial_invites
+           SET registered_at = NOW(), registered_user_id = $1, registered_company_id = $2
+           WHERE id = $3`,
+          [user.id, companyId, trialRecord.id]
+        );
+      }
     }
 
     await client.query('COMMIT');
@@ -141,6 +180,20 @@ router.post('/register', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Fetch company with slug so the frontend can redirect properly
+    const companyResult = await pool.query(
+      `SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, '[^a-z0-9]+', '-', 'g'))) AS slug FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    const company = companyResult.rows[0] || { id: companyId, name: companyName, slug: null };
+
+    const activeCompany = {
+      id: company.id,
+      name: company.name,
+      slug: company.slug,
+      role: userRole,
+    };
+
     res.status(201).json({
       message: invitationToken ? 'User registered and joined company successfully' : 'User and company created successfully',
       token,
@@ -150,8 +203,10 @@ router.post('/register', async (req, res) => {
         lastName: user.last_name,
         email: user.email,
         role: userRole,
-        companyId: companyId,
-        companyName: companyName
+        companyId: company.id,
+        companyName: company.name,
+        activeCompany,
+        companies: [activeCompany],
       }
     });
 
@@ -173,7 +228,34 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    console.log('Login attempt for:', email);
+    // ── Super admin check (env-only, no DB entry) ──────────────────────────
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (adminEmail && email.toLowerCase() === adminEmail.toLowerCase()) {
+      if (!adminPassword || password !== adminPassword) {
+        return res.status(401).json({ error: 'Invalid email or password' });
+      }
+      const token = jwt.sign(
+        { userId: 0, email: adminEmail, firstName: 'Admin', lastName: '', role: 'admin' },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+      return res.status(200).json({
+        message: 'Login successful',
+        token,
+        user: {
+          id: 0,
+          firstName: 'Admin',
+          lastName: '',
+          email: adminEmail,
+          role: 'admin',
+          companies: [],
+          activeCompany: null,
+        },
+      });
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     // Find user
     const userResult = await pool.query(`
@@ -275,6 +357,149 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed: ' + error.message });
+  }
+});
+
+// ── Ensure the reset-tokens table exists (safe on every startup) ─────────────
+pool.query(`
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).catch(err => console.error('[auth] password_reset_tokens table check failed:', err.message));
+
+// POST /api/auth/forgot-password
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  try {
+    const userRes = await pool.query('SELECT id, first_name, email FROM users WHERE LOWER(email) = LOWER($1)', [email]);
+
+    // Always respond with success to prevent email enumeration
+    if (userRes.rows.length === 0) {
+      return res.status(200).json({ message: 'If that email exists, a reset link has been sent.' });
+    }
+
+    const user = userRes.rows[0];
+
+    // Invalidate any existing unused tokens for this user
+    await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL', [user.id]);
+
+    // Generate a secure random token
+    const rawToken  = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await pool.query(
+      'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+      [user.id, tokenHash, expiresAt]
+    );
+
+    const appBase  = process.env.APP_BASE_URL || 'http://localhost:3000';
+    const resetUrl = `${appBase}/reset-password?token=${rawToken}`;
+    const fromName = process.env.FROM_NAME || 'Vevago';
+    const brandGreen = '#3DD57A';
+    const darkBg     = '#193434';
+
+    await sendEmail({
+      to: user.email,
+      subject: 'Reset your password',
+      html: `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reset your password</title></head>
+<body style="margin:0;padding:0;background:#F4F7F4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F4F7F4;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:560px;width:100%;">
+        <!-- Header -->
+        <tr>
+          <td style="background:${darkBg};padding:32px 40px;text-align:center;">
+            <div style="font-size:24px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">${fromName}</div>
+          </td>
+        </tr>
+        <!-- Body -->
+        <tr>
+          <td style="padding:40px 40px 32px;">
+            <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Reset your password</h1>
+            <p style="margin:0 0 24px;font-size:15px;color:#6B7280;line-height:1.6;">
+              Hi ${user.first_name}, we received a request to reset the password for your account.
+              Click the button below — the link is valid for <strong>1 hour</strong>.
+            </p>
+            <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
+              <tr>
+                <td style="background:${brandGreen};border-radius:12px;padding:0;">
+                  <a href="${resetUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#0A1A0A;text-decoration:none;border-radius:12px;">
+                    Reset password
+                  </a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:0 0 8px;font-size:13px;color:#9CA3AF;line-height:1.6;">
+              If you didn't request this, you can safely ignore this email. Your password won't change.
+            </p>
+            <p style="margin:0;font-size:12px;color:#D1D5DB;word-break:break-all;">
+              Or copy this link: ${resetUrl}
+            </p>
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background:#F9FAFB;padding:20px 40px;border-top:1px solid #F3F4F6;text-align:center;">
+            <p style="margin:0;font-size:12px;color:#9CA3AF;">© ${new Date().getFullYear()} ${fromName}. All rights reserved.</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim(),
+      text: `Reset your password\n\nHi ${user.first_name},\n\nClick the link below to reset your password (valid for 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email.`,
+    });
+
+    console.log(`[auth] Password reset email sent to ${user.email}`);
+    res.status(200).json({ message: 'If that email exists, a reset link has been sent.' });
+  } catch (err) {
+    console.error('[auth] forgot-password error:', err);
+    res.status(500).json({ error: 'Failed to send reset email' });
+  }
+});
+
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) return res.status(400).json({ error: 'Token and password are required' });
+  if (password.length < 8)  return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const tokenRes  = await pool.query(
+      `SELECT prt.id, prt.user_id, prt.expires_at, prt.used_at
+       FROM password_reset_tokens prt
+       WHERE prt.token_hash = $1`,
+      [tokenHash]
+    );
+
+    if (tokenRes.rows.length === 0) return res.status(400).json({ error: 'Invalid or expired reset link' });
+
+    const row = tokenRes.rows[0];
+    if (row.used_at)              return res.status(400).json({ error: 'This reset link has already been used' });
+    if (new Date() > row.expires_at) return res.status(400).json({ error: 'This reset link has expired' });
+
+    const hashed = await bcrypt.hash(password, 12);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashed, row.user_id]);
+    await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [row.id]);
+
+    console.log(`[auth] Password reset successful for user ${row.user_id}`);
+    res.status(200).json({ message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('[auth] reset-password error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 

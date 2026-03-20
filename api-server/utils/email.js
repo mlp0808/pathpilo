@@ -51,7 +51,8 @@ async function sendEmail(options) {
         filename: att.filename,
         content,
         type: att.type,
-        disposition: att.disposition || 'attachment'
+        disposition: att.disposition || 'attachment',
+        content_id: att.content_id || att.cid
       };
     });
     try {

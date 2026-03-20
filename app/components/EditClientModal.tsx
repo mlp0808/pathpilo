@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import AddressAutocomplete from './AddressAutocomplete'
 
 interface Client {
   id: number
@@ -13,6 +14,8 @@ interface Client {
   address: string | null
   zip_code: string | null
   city: string | null
+  lat?: number | null
+  lng?: number | null
   email: string | null
   phone: string | null
   billing_address: string | null
@@ -38,6 +41,8 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
     address: '',
     zip_code: '',
     city: '',
+    lat: null as number | null,
+    lng: null as number | null,
     email: '',
     phone: '',
     billing_address: '',
@@ -62,6 +67,8 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         address: client.address || '',
         zip_code: client.zip_code || '',
         city: client.city || '',
+        lat: client.lat ?? null,
+        lng: client.lng ?? null,
         email: client.email || '',
         phone: client.phone || '',
         billing_address: client.billing_address || '',
@@ -103,6 +110,8 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         address: currentClient.address,
         zip_code: currentClient.zip_code,
         city: currentClient.city,
+        lat: currentClient.lat || null,
+        lng: currentClient.lng || null,
         email: currentClient.email,
         phone: currentClient.phone,
         billing_address: separateBillingAddress ? currentClient.billing_address : null,
@@ -216,51 +225,25 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
             />
           </div>
 
-          {/* Address Fields */}
-          <div className="grid grid-cols-12 gap-4">
-            <div className="col-span-6">
-              <label htmlFor="personal_address" className="block text-sm font-medium text-gray-900 mb-2">
-                Address
-              </label>
-              <input
-                type="text"
-                id="address"
-                name="address"
-                value={currentClient.address}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="Street address"
-              />
-            </div>
-            <div className="col-span-3">
-              <label htmlFor="zip_code" className="block text-sm font-medium text-gray-900 mb-2">
-                Zip
-              </label>
-              <input
-                type="text"
-                id="zip_code"
-                name="zip_code"
-                value={currentClient.zip_code}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="1234"
-              />
-            </div>
-            <div className="col-span-3">
-              <label htmlFor="city" className="block text-sm font-medium text-gray-900 mb-2">
-                City
-              </label>
-              <input
-                type="text"
-                id="city"
-                name="city"
-                value={currentClient.city}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="Copenhagen"
-              />
-            </div>
-          </div>
+          {/* Address with autocomplete */}
+          <AddressAutocomplete
+            address={currentClient.address}
+            zip_code={currentClient.zip_code}
+            city={currentClient.city}
+            lat={currentClient.lat}
+            lng={currentClient.lng}
+            onChange={(data) =>
+              setCurrentClient(prev => ({
+                ...prev,
+                address: data.address,
+                zip_code: data.zip_code,
+                city: data.city,
+                lat: data.lat ?? null,
+                lng: data.lng ?? null,
+              }))
+            }
+            placeholder="Street address"
+          />
 
           {/* Contact Information */}
           <div className="space-y-4">

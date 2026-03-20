@@ -130,7 +130,9 @@ router.post('/', authenticateToken, async (req, res) => {
       zip_code,
       city,
       email,
-      phone
+      phone,
+      lat,
+      lng
     } = req.body;
     const userId = req.user.userId;
 
@@ -148,10 +150,10 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const result = await pool.query(`
       INSERT INTO clients
-      (company_id, name, last_name, client_type, address, zip_code, city, email, phone)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      (company_id, name, last_name, client_type, address, zip_code, city, email, phone, lat, lng)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
-    `, [companyId, name, last_name, client_type, address, zip_code, city, email, phone]);
+    `, [companyId, name, last_name, client_type, address, zip_code, city, email, phone, lat || null, lng || null]);
 
     res.status(201).json({
       message: 'Client created successfully',

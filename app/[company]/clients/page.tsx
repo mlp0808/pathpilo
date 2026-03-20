@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
-import ClientsTable from '../../components/ClientsTable'
 import AddClientModal from '../../components/AddClientModal'
 import { apiUrl } from '../../utils/api'
 
@@ -13,156 +13,256 @@ interface Client {
   last_name: string | null
   address: string | null
   zip_code: string | null
+  city: string | null
   phone: string | null
   email: string | null
   created_at: string
 }
 
+function getInitials(name: string, lastName?: string | null) {
+  const first = name?.[0]?.toUpperCase() || ''
+  const last = lastName?.[0]?.toUpperCase() || ''
+  return first + (last || '')
+}
+
+const AVATAR_COLORS = [
+  'bg-[#BFD1C5] text-[#193434]',
+  'bg-[#d4e8dc] text-[#193434]',
+  'bg-[#e8f0ec] text-[#193434]',
+  'bg-[#c5d8cc] text-[#193434]',
+  'bg-[#dceae2] text-[#193434]',
+]
+
+function avatarColor(id: number) {
+  return AVATAR_COLORS[id % AVATAR_COLORS.length]
+}
+
 export default function ClientsPage() {
+  const router = useRouter()
+  const params = useParams() as any
+  const companySlug = params?.company as string | undefined
+
   const [clients, setClients] = useState<Client[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
-  const [currentPage, setCurrentPage] = useState(1)
+  const [filterType, setFilterType] = useState<'all' | 'person' | 'company'>('all')
 
-  useEffect(() => {
-    fetchClients()
-  }, [])
+  useEffect(() => { fetchClients() }, [])
 
   const fetchClients = async () => {
     try {
       setLoading(true)
       const token = localStorage.getItem('token')
-      
       const response = await fetch(apiUrl('/clients'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       })
-      
       const data = await response.json()
-      
-      if (response.ok) {
-        setClients(data.clients)
-      } else {
-        setError(data.error || 'Failed to fetch clients')
-      }
-    } catch (error) {
+      if (response.ok) setClients(data.clients)
+      else setError(data.error || 'Failed to fetch clients')
+    } catch {
       setError('Network error: Failed to fetch clients')
-      console.error('Clients fetch error:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleAddClient = () => {
-    setIsAddModalOpen(true)
-  }
+  const filtered = useMemo(() => {
+    let list = clients
+    if (filterType !== 'all') list = list.filter(c => c.client_type === filterType)
+    if (!searchTerm.trim()) return list
+    const s = searchTerm.toLowerCase().replace(/\s+/g, '')
+    return list.filter(c => {
+      const fullName = `${c.name}${c.last_name ? ' ' + c.last_name : ''}`.toLowerCase()
+      const phone = (c.phone || '').replace(/\s+/g, '').toLowerCase()
+      return (
+        fullName.includes(searchTerm.toLowerCase()) ||
+        (c.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        phone.includes(s) ||
+        (c.city || '').toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    })
+  }, [clients, searchTerm, filterType])
+
+  const personCount = clients.filter(c => c.client_type === 'person').length
+  const companyCount = clients.filter(c => c.client_type === 'company').length
+
+  const openAddClient = () => setIsAddModalOpen(true)
 
   const handleClientAdded = () => {
-    // Refresh the clients list when a new client is added
     fetchClients()
+    setIsAddModalOpen(false)
   }
 
-  // Reset to page 1 when search term changes
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [searchTerm])
-
-  if (loading) {
-    return (
-      <AppLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-gray-600">Loading clients...</p>
-          </div>
-        </div>
-      </AppLayout>
-    )
+  const goToClient = (id: number) => {
+    const href = companySlug ? `/${companySlug}/clients/${id}` : `/clients/${id}`
+    router.push(href)
   }
 
   return (
     <AppLayout>
       <div>
         {/* Header */}
-        <div className="mb-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
-              <p className="text-sm text-gray-600 mt-1">
-                {clients.length} {clients.length === 1 ? 'client' : 'clients'}
-              </p>
-            </div>
-            
-            <div className="flex flex-col sm:flex-row gap-3">
-              {/* Search Field */}
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Search clients..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2 border border-primary-200 rounded-xl text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 bg-white shadow-sm transition-all duration-200"
-                />
-              </div>
-              
-              {/* Add Client Button */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-primary-500">Clients</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {clients.length} {clients.length === 1 ? 'client' : 'clients'} total
+            </p>
+          </div>
+          <button
+            onClick={openAddClient}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New client
+          </button>
+        </div>
+
+        {/* Filters + Search */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-5">
+          {/* Type filters */}
+          <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
+            {(['all', 'person', 'company'] as const).map(type => (
               <button
-                onClick={handleAddClient}
-                className="inline-flex items-center px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-xl hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 transition-all duration-200 shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25 transform hover:scale-[1.02]"
+                key={type}
+                onClick={() => setFilterType(type)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  filterType === type
+                    ? 'bg-primary-500 text-white'
+                    : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                }`}
               >
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Client
+                {type === 'all' ? `All (${clients.length})` : type === 'person' ? `People (${personCount})` : `Companies (${companyCount})`}
               </button>
-            </div>
+            ))}
+          </div>
+
+          {/* Search */}
+          <div className="relative flex-1 max-w-sm">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Search by name, phone, email…"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-transparent"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Error State */}
+        {/* Error */}
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">Error</h3>
-                <div className="mt-2 text-sm text-red-700">
-                  <p>{error}</p>
-                </div>
-                <div className="mt-4">
-                  <button
-                    onClick={fetchClients}
-                    className="bg-red-50 text-red-800 text-sm font-medium hover:bg-red-100 transition-colors"
-                  >
-                    Try again
-                  </button>
-                </div>
-              </div>
-            </div>
+          <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700 flex items-center gap-3">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {error}
+            <button onClick={fetchClients} className="ml-auto underline">Retry</button>
           </div>
         )}
 
-        {/* Clients Table */}
-        <ClientsTable 
-          clients={clients} 
-          searchTerm={searchTerm} 
-          currentPage={currentPage}
-          onPageChange={setCurrentPage}
-        />
-        
-        {/* Add Client Modal */}
+        {/* Loading / empty / list */}
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-400 border-t-transparent" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center">
+            <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </div>
+            <p className="text-sm font-medium text-gray-900 mb-1">
+              {searchTerm ? 'No clients found' : 'No clients yet'}
+            </p>
+            <p className="text-xs text-gray-500">
+              {searchTerm ? 'Try a different search term' : 'Add your first client to get started'}
+            </p>
+            {!searchTerm && (
+              <button
+                onClick={openAddClient}
+                className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+              >
+                Add client
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+            {filtered.map((client, idx) => {
+              const fullName = `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
+              const initials = getInitials(client.name, client.last_name)
+              const location = [client.address, client.city].filter(Boolean).join(', ')
+              return (
+                <div
+                  key={client.id}
+                  onClick={() => goToClient(client.id)}
+                  className={`flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${
+                    idx > 0 ? 'border-t border-gray-100' : ''
+                  }`}
+                >
+                  {/* Avatar */}
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 ${avatarColor(client.id)}`}>
+                    {client.client_type === 'company' ? (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                      </svg>
+                    ) : initials}
+                  </div>
+
+                  {/* Name + type */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm text-primary-500 truncate">{fullName}</span>
+                      {client.client_type === 'company' && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full flex-shrink-0">Company</span>
+                      )}
+                    </div>
+                    {location && (
+                      <p className="text-xs text-gray-400 truncate mt-0.5">{location}</p>
+                    )}
+                  </div>
+
+                  {/* Contact */}
+                  <div className="hidden sm:flex flex-col items-end gap-0.5 flex-shrink-0 text-right">
+                    {client.phone && (
+                      <span className="text-xs text-gray-600">{client.phone}</span>
+                    )}
+                    {client.email && (
+                      <span className="text-xs text-gray-400 truncate max-w-[180px]">{client.email}</span>
+                    )}
+                  </div>
+
+                  {/* Arrow */}
+                  <svg className="w-4 h-4 text-gray-300 flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {filtered.length > 0 && searchTerm && (
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{searchTerm}"
+          </p>
+        )}
+
         <AddClientModal
           isOpen={isAddModalOpen}
           onClose={() => setIsAddModalOpen(false)}

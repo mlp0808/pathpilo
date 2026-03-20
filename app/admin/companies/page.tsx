@@ -13,11 +13,63 @@ interface Company {
   zipCode: string
   city: string
   createdAt: string
+  suspendedAt: string | null
+  expiresAt: string | null
+  userCount: number
   owner: {
     firstName: string
     lastName: string
     email: string
   }
+}
+
+function ExpiryCell({ expiresAt, suspendedAt }: { expiresAt: string | null; suspendedAt: string | null }) {
+  if (suspendedAt) {
+    return (
+      <div>
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+          On hold
+        </span>
+      </div>
+    )
+  }
+
+  if (!expiresAt) {
+    return <span className="text-sm text-gray-400">No expiry</span>
+  }
+
+  const now = new Date()
+  const exp = new Date(expiresAt)
+  const daysLeft = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+  const dateStr = exp.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+
+  if (daysLeft < 0) {
+    return (
+      <div>
+        <div className="text-sm font-medium text-red-600">{dateStr}</div>
+        <div className="text-xs text-red-400 mt-0.5">({Math.abs(daysLeft)} days ago)</div>
+      </div>
+    )
+  }
+
+  if (daysLeft === 0) {
+    return (
+      <div>
+        <div className="text-sm font-medium text-orange-600">{dateStr}</div>
+        <div className="text-xs text-orange-400 mt-0.5">(expires today)</div>
+      </div>
+    )
+  }
+
+  const color = daysLeft <= 7 ? 'text-orange-600' : daysLeft <= 30 ? 'text-yellow-600' : 'text-gray-900'
+  const subColor = daysLeft <= 7 ? 'text-orange-400' : daysLeft <= 30 ? 'text-yellow-500' : 'text-gray-400'
+
+  return (
+    <div>
+      <div className={`text-sm font-medium ${color}`}>{dateStr}</div>
+      <div className={`text-xs mt-0.5 ${subColor}`}>({daysLeft} days left)</div>
+    </div>
+  )
 }
 
 export default function AdminCompaniesPage() {
@@ -135,6 +187,12 @@ export default function AdminCompaniesPage() {
               <Link href="/admin/companies" className="text-blue-600 hover:text-blue-700 font-medium">
                 Companies
               </Link>
+              <Link href="/admin/video-guides" className="text-gray-600 hover:text-gray-900">
+                Video Guides
+              </Link>
+              <Link href="/admin/trials" className="text-gray-600 hover:text-gray-900">
+                Trials
+              </Link>
               <button
                 onClick={() => {
                   localStorage.removeItem('token')
@@ -195,72 +253,38 @@ export default function AdminCompaniesPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Company
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      CVR Number
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Address
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Owner
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Created
-                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Owner</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Users</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access expires</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {companies.map((company) => (
                     <tr key={company.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="flex-shrink-0 h-10 w-10">
-                            <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                              <span className="text-sm font-medium text-blue-600">
-                                {company.name.charAt(0).toUpperCase()}
-                              </span>
-                            </div>
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-sm font-semibold text-blue-600">{company.name.charAt(0).toUpperCase()}</span>
                           </div>
-                          <div className="ml-4">
-                            <Link 
-                              href={`/admin/companies/${company.id}`}
-                              className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                            >
+                          <div>
+                            <Link href={`/admin/companies/${company.id}`} className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline">
                               {company.name}
                             </Link>
-                            <div className="text-sm text-gray-500">
-                              ID: {company.id}
-                            </div>
+                            <div className="text-xs text-gray-400">ID: {company.id}</div>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {company.cvrNumber || 'Not provided'}
-                        </div>
+                        <div className="text-sm text-gray-900">{company.owner.firstName} {company.owner.lastName}</div>
+                        <div className="text-xs text-gray-500">{company.owner.email}</div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {company.address}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          {company.zipCode} {company.city}
-                        </div>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{company.userCount ?? '—'}</td>
+                      <td className="px-6 py-4">
+                        <ExpiryCell expiresAt={company.expiresAt} suspendedAt={company.suspendedAt} />
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {company.owner.firstName} {company.owner.lastName}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          {company.owner.email}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{formatDate(company.createdAt)}</div>
-                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatDate(company.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -271,26 +295,32 @@ export default function AdminCompaniesPage() {
 
         {/* Stats */}
         {companies.length > 0 && (
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-blue-600">{companies.length}</div>
-              <div className="text-sm text-gray-600">Total Companies</div>
+              <div className="text-sm text-gray-500 mt-0.5">Total companies</div>
             </div>
-            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-green-600">
-                {companies.filter(c => c.cvrNumber).length}
+                {companies.filter(c => !c.suspendedAt && (!c.expiresAt || new Date(c.expiresAt) > new Date())).length}
               </div>
-              <div className="text-sm text-gray-600">With CVR Number</div>
+              <div className="text-sm text-gray-500 mt-0.5">Active</div>
             </div>
-            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
-              <div className="text-2xl font-bold text-purple-600">
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
+              <div className="text-2xl font-bold text-orange-500">
                 {companies.filter(c => {
-                  const today = new Date()
-                  const companyDate = new Date(c.createdAt)
-                  return companyDate.toDateString() === today.toDateString()
+                  if (!c.expiresAt || c.suspendedAt) return false
+                  const days = Math.ceil((new Date(c.expiresAt).getTime() - Date.now()) / 86400000)
+                  return days >= 0 && days <= 7
                 }).length}
               </div>
-              <div className="text-sm text-gray-600">Created Today</div>
+              <div className="text-sm text-gray-500 mt-0.5">Expiring this week</div>
+            </div>
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
+              <div className="text-2xl font-bold text-amber-600">
+                {companies.filter(c => c.suspendedAt).length}
+              </div>
+              <div className="text-sm text-gray-500 mt-0.5">On hold</div>
             </div>
           </div>
         )}

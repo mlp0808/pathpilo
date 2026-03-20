@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
+import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
 
 interface Client {
   id?: number
@@ -424,48 +425,25 @@ export default function ClientsSetupPage() {
                     </div>
                   )}
 
-                  {/* Address fields (common for both) */}
+                  {/* Address fields (common for both) — with Maps autocomplete */}
                   <div className="grid grid-cols-12 gap-4">
-                    <div className="col-span-6 group">
-                      <label htmlFor="address" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Address
-                      </label>
-                      <input
-                        type="text"
-                        id="address"
-                        name="address"
-                        value={currentClient.address}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. Main Street 123"
-                      />
-                    </div>
-                    <div className="col-span-3 group">
-                      <label htmlFor="zip_code" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Zip
-                      </label>
-                      <input
-                        type="text"
-                        id="zip_code"
-                        name="zip_code"
-                        value={currentClient.zip_code}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. 2100"
-                      />
-                    </div>
-                    <div className="col-span-3 group">
-                      <label htmlFor="city" className="block text-xs font-semibold text-primary-700 mb-2">
-                        City
-                      </label>
-                      <input
-                        type="text"
-                        id="city"
-                        name="city"
-                        value={currentClient.city}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. Copenhagen"
+                    <div className="col-span-12">
+                      <AddressAutocomplete
+                        label="Address"
+                        address={currentClient.address}
+                        zip_code={currentClient.zip_code}
+                        city={currentClient.city}
+                        lat={undefined}
+                        lng={undefined}
+                        placeholder="Start typing an address…"
+                        onChange={(data: AddressData) => {
+                          setCurrentClient(prev => ({
+                            ...prev,
+                            address: data.address,
+                            zip_code: data.zip_code,
+                            city: data.city,
+                          }))
+                        }}
                       />
                     </div>
                   </div>

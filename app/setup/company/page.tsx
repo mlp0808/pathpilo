@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
 import { useUser } from '../../hooks/useUser'
+import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
 
 export default function CompanySetupPage() {
   const { user } = useUser()
@@ -13,18 +14,16 @@ export default function CompanySetupPage() {
     cvrNumber: '',
     address: '',
     city: '',
-    zipCode: ''
+    zipCode: '',
   })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [isUpdating, setIsUpdating] = useState(false)
   const router = useRouter()
 
-  // Check if user already has a company (from registration)
   useEffect(() => {
     if (user && user.companyId) {
       setIsUpdating(true)
-      // Pre-fill with existing company name if available
       const companyName = user.companyName ?? ''
       if (companyName) setFormData(prev => ({ ...prev, name: companyName }))
     }
@@ -32,40 +31,32 @@ export default function CompanySetupPage() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }))
+    setFormData(prev => ({ ...prev, [name]: value }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     setError('')
-    
+
     try {
       const token = localStorage.getItem('token')
-      
-      // If user already has a company, update it instead of creating new one
+
       const method = isUpdating ? 'PUT' : 'POST'
       const endpoint = isUpdating ? `/companies/${user?.companyId}` : '/companies'
-      
+
+      // No slug sent — the backend derives it from the name and auto-resolves collisions
       const response = await fetch(apiUrl(endpoint), {
-        method: method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(formData)
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(formData),
       })
-      
+
       const data = await response.json()
-      
+
       if (response.ok) {
-        // Store company data in localStorage
         localStorage.setItem('company', JSON.stringify(data.company))
-        
-        // Update user data with companyId + company context (so /select-company + /dashboard redirects work)
+
         const userData = localStorage.getItem('user')
         if (userData) {
           const userObj = JSON.parse(userData)
@@ -77,27 +68,21 @@ export default function CompanySetupPage() {
               name: data.company.name,
               slug: data.company.slug,
               role: 'owner',
-              isOwner: true
+              isOwner: true,
             }
-
-            // Ensure companies array exists and contains the created/updated company
             const existingCompanies = Array.isArray(userObj.companies) ? userObj.companies : []
-            const withoutThis = existingCompanies.filter((c: any) => c?.id !== companyEntry.id)
-            userObj.companies = [companyEntry, ...withoutThis]
-
-            // Ensure activeCompany is set (used by /dashboard redirect)
+            userObj.companies = [companyEntry, ...existingCompanies.filter((c: any) => c?.id !== companyEntry.id)]
             userObj.activeCompany = companyEntry
           }
           localStorage.setItem('user', JSON.stringify(userObj))
         }
-        
+
         router.push('/setup/services')
       } else {
         setError(data.error || `Failed to ${isUpdating ? 'update' : 'create'} company`)
       }
-    } catch (error) {
+    } catch {
       setError(`Network error: Failed to ${isUpdating ? 'update' : 'create'} company`)
-      console.error('Company creation error:', error)
     } finally {
       setIsLoading(false)
     }
@@ -107,7 +92,7 @@ export default function CompanySetupPage() {
     <div className="min-h-screen bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50">
       <div className="max-w-4xl mx-auto px-6 py-16">
         <div className="grid grid-cols-5 gap-16 items-start">
-          {/* Left Column - Text (40%) */}
+          {/* Left Column */}
           <div className="col-span-2 pt-4">
             <div className="space-y-6">
               <div>
@@ -121,25 +106,25 @@ export default function CompanySetupPage() {
                   Let's get started by adding all your company details.
                 </p>
               </div>
-              
+
               <div className="space-y-3 pt-4">
                 <div className="flex items-center space-x-3 text-sm font-medium text-primary-700">
-                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full" />
                   <span>Create Company</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
                   <span>Setup Services</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full" />
                   <span>Add Clients</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Right Column - Form (60%) */}
+          {/* Right Column - Form */}
           <div className="col-span-3">
             <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-primary-500/5">
               <form onSubmit={handleSubmit} className="space-y-6">
@@ -151,7 +136,7 @@ export default function CompanySetupPage() {
 
                 <div className="space-y-5">
                   {/* Country */}
-                  <div className="group">
+                  <div>
                     <label htmlFor="country" className="block text-sm font-medium text-gray-900 mb-2">
                       Country <span className="text-red-500">*</span>
                     </label>
@@ -162,13 +147,13 @@ export default function CompanySetupPage() {
                       value={formData.country}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. Denmark"
                     />
                   </div>
 
                   {/* Company Name */}
-                  <div className="group">
+                  <div>
                     <label htmlFor="name" className="block text-xs font-semibold text-primary-700 mb-2">
                       Company name <span className="text-red-500">*</span>
                     </label>
@@ -179,13 +164,13 @@ export default function CompanySetupPage() {
                       value={formData.name}
                       onChange={handleInputChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. Clean Windows Co."
                     />
                   </div>
 
                   {/* CVR Number */}
-                  <div className="group">
+                  <div>
                     <label htmlFor="cvrNumber" className="block text-sm font-medium text-gray-900 mb-2">
                       CVR number <span className="text-gray-400 text-xs">(optional)</span>
                     </label>
@@ -195,72 +180,40 @@ export default function CompanySetupPage() {
                       name="cvrNumber"
                       value={formData.cvrNumber}
                       onChange={handleInputChange}
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all placeholder-gray-400 hover:border-gray-300 shadow-sm"
                       placeholder="e.g. 12345678"
                     />
                   </div>
 
                   {/* Address */}
-                  <div className="group">
-                    <label htmlFor="address" className="block text-xs font-semibold text-primary-700 mb-2">
-                      Address <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      id="address"
-                      name="address"
-                      value={formData.address}
-                      onChange={handleInputChange}
-                      required
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                      placeholder="e.g. Main Street 123"
-                    />
-                  </div>
-
-                  {/* City and Zip Code in one row */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="group">
-                      <label htmlFor="city" className="block text-sm font-medium text-gray-900 mb-2">
-                        City <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        id="city"
-                        name="city"
-                        value={formData.city}
-                        onChange={handleInputChange}
-                        required
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. Copenhagen"
-                      />
-                    </div>
-                    <div className="group">
-                      <label htmlFor="zipCode" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Zip <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        id="zipCode"
-                        name="zipCode"
-                        value={formData.zipCode}
-                        onChange={handleInputChange}
-                        required
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. 2100"
-                      />
-                    </div>
-                  </div>
+                  <AddressAutocomplete
+                    label="Company address"
+                    address={formData.address}
+                    zip_code={formData.zipCode}
+                    city={formData.city}
+                    lat={undefined}
+                    lng={undefined}
+                    placeholder="Start typing an address…"
+                    onChange={(data: AddressData) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        address: data.address,
+                        zipCode: data.zip_code,
+                        city: data.city,
+                      }))
+                    }}
+                  />
                 </div>
 
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
+                  className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
                 >
                   {isLoading ? (
                     <span className="flex items-center justify-center space-x-2">
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span>Saving...</span>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Saving…</span>
                     </span>
                   ) : (
                     'Next step'

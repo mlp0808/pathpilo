@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useUser } from '../../hooks/useUser'
 import AppLayout from '../../components/AppLayout'
 import EditClientModal from '../../components/EditClientModal'
 import CreateJobSlideout from '../../components/CreateJobSlideout'
 import JobViewSlideout from '../../components/JobViewSlideout'
 import SubscriptionSlideout from '../../components/SubscriptionSlideout'
-import CreateInvoiceModal from '../../components/CreateInvoiceModal'
+import CreateSubscription from '../../components/CreateSubscription'
 import SendInvoiceModal from '../../components/SendInvoiceModal'
 import { apiUrl } from '../../utils/api'
 
@@ -31,355 +32,298 @@ interface Client {
   updated_at: string
 }
 
+type TabId = 'jobs' | 'subscriptions' | 'invoices' | 'settings'
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function fmtDate(d: string) {
+  if (!d) return '—'
+  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function fmtDateShort(d: string) {
+  if (!d) return '—'
+  const date = new Date(d)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  const isYesterday = date.toDateString() === new Date(now.getTime() - 86400000).toDateString()
+  if (isToday) return 'Today'
+  if (isYesterday) return 'Yesterday'
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+}
+
+function fmtMoney(amount: number, currency = 'DKK') {
+  return new Intl.NumberFormat('da-DK', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
+}
+
+function getInitials(name: string, lastName?: string | null) {
+  return (name?.[0] || '').toUpperCase() + (lastName?.[0] || '').toUpperCase()
+}
+
+// ─── sub-components ──────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    scheduled: 'bg-blue-50 text-blue-700',
+    'in-progress': 'bg-amber-50 text-amber-700',
+    completed: 'bg-green-50 text-green-700',
+    cancelled: 'bg-gray-100 text-gray-500',
+    paid: 'bg-green-50 text-green-700',
+    sent: 'bg-blue-50 text-blue-700',
+    draft: 'bg-amber-50 text-amber-700',
+    overdue: 'bg-red-50 text-red-600',
+  }
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${map[status] || 'bg-gray-100 text-gray-500'}`}>
+      {status.charAt(0).toUpperCase() + status.slice(1)}
+    </span>
+  )
+}
+
+function InfoRow({ label, value }: { label: string; value?: string | null }) {
+  if (!value) return null
+  return (
+    <div>
+      <dt className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">{label}</dt>
+      <dd className="mt-0.5 text-sm text-primary-500">{value}</dd>
+    </div>
+  )
+}
+
+function Spinner() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-400 border-t-transparent" />
+    </div>
+  )
+}
+
+function EmptyState({ icon, title, subtitle, action }: { icon: React.ReactNode; title: string; subtitle?: string; action?: React.ReactNode }) {
+  return (
+    <div className="text-center py-12">
+      <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3 text-gray-400">
+        {icon}
+      </div>
+      <p className="text-sm font-medium text-gray-700">{title}</p>
+      {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  )
+}
+
+// ─── main component ───────────────────────────────────────────────────────────
+
 export default function ClientDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const { user } = useUser()
   const clientId = params.id as string
-  
+  const companySlug = user?.activeCompany?.slug ?? ''
+
+  const tabFromUrl = searchParams.get('tab') as TabId | null
+  const [activeTab, setActiveTab] = useState<TabId>(tabFromUrl ?? 'jobs')
+
   const [client, setClient] = useState<Client | null>(null)
-  const [activeTab, setActiveTab] = useState<'overview' | 'jobs' | 'subscriptions' | 'invoicing' | 'reporting'>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [isEditClientModalOpen, setIsEditClientModalOpen] = useState(false)
-  const [isCreateJobModalOpen, setIsCreateJobModalOpen] = useState(false)
-  const [isEditJobModalOpen, setIsEditJobModalOpen] = useState(false)
-  const [editingJob, setEditingJob] = useState<any>(null)
+
+  // Jobs
   const [jobs, setJobs] = useState<any[]>([])
   const [jobsLoading, setJobsLoading] = useState(false)
-  const [isCreateSubscriptionModalOpen, setIsCreateSubscriptionModalOpen] = useState(false)
-  const [isEditSubscriptionModalOpen, setIsEditSubscriptionModalOpen] = useState(false)
-  const [editingSubscription, setEditingSubscription] = useState<any>(null)
+  const [jobFilter, setJobFilter] = useState<'all' | 'scheduled' | 'completed' | 'cancelled'>('all')
+  const [isCreateJobOpen, setIsCreateJobOpen] = useState(false)
+  const [editingJob, setEditingJob] = useState<any>(null)
+
+  // Subscriptions
   const [subscriptions, setSubscriptions] = useState<any[]>([])
   const [subscriptionsLoading, setSubscriptionsLoading] = useState(false)
-  const [completedJobs, setCompletedJobs] = useState<any[]>([])
-  const [completedJobsLoading, setCompletedJobsLoading] = useState(false)
+  const [isCreateSubOpen, setIsCreateSubOpen] = useState(false)
+  const [editingSub, setEditingSub] = useState<any>(null)
+  const [openSubMenuId, setOpenSubMenuId] = useState<number | null>(null)
+
+  // Invoicing
   const [invoices, setInvoices] = useState<any[]>([])
   const [invoicesLoading, setInvoicesLoading] = useState(false)
+  const [completedJobs, setCompletedJobs] = useState<any[]>([])
+  const [completedJobsLoading, setCompletedJobsLoading] = useState(false)
   const [selectedJobs, setSelectedJobs] = useState<Set<number>>(new Set())
-  const [showCreateInvoice, setShowCreateInvoice] = useState(false)
   const [openInvoiceMenuId, setOpenInvoiceMenuId] = useState<number | null>(null)
   const [deleteInvoiceId, setDeleteInvoiceId] = useState<number | null>(null)
   const [deleteJobAction, setDeleteJobAction] = useState<'restore' | 'delete_jobs'>('restore')
   const [sendInvoiceId, setSendInvoiceId] = useState<number | null>(null)
   const [sendInvoiceDefaultSubject, setSendInvoiceDefaultSubject] = useState('')
   const [sendInvoiceDefaultMessage, setSendInvoiceDefaultMessage] = useState('')
-  const [isDeletingClient, setIsDeletingClient] = useState(false)
   const [sendingInvoice, setSendingInvoice] = useState(false)
-  const [createInvoiceData, setCreateInvoiceData] = useState({
-    issue_date: new Date().toISOString().split('T')[0],
-    due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days from now
-    tax_rate: 25,
-    currency: 'DKK',
-    notes: '',
-    payment_terms: 'Payment due within 30 days',
-    discounts: {} as { [key: string]: number } // job_id -> discount amount
-  })
 
+  // Modals
+  const [isEditClientOpen, setIsEditClientOpen] = useState(false)
+  const [isDeletingClient, setIsDeletingClient] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [showClientMenu, setShowClientMenu] = useState(false)
+
+  // ── fetch client ───────────────────────────────────────────────────────────
+  useEffect(() => { if (clientId) fetchClient() }, [clientId])
   useEffect(() => {
-    if (clientId) {
-      fetchClient()
-    }
-  }, [clientId])
+    const validTabs: TabId[] = ['jobs', 'subscriptions', 'invoices', 'settings']
+    if (tabFromUrl && validTabs.includes(tabFromUrl)) setActiveTab(tabFromUrl)
+  }, [tabFromUrl])
 
   const fetchClient = async () => {
     try {
       setLoading(true)
-      setError('')
       const token = localStorage.getItem('token')
-      
-      if (!token) {
-        setError('No authentication token found')
-        return
-      }
-      
-      console.log('Fetching client:', clientId)
-      const response = await fetch(apiUrl(`/clients/${clientId}`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      const data = await response.json()
-      console.log('Client API response:', { status: response.status, data })
-      
-      if (response.ok) {
-        if (data.client) {
-          setClient(data.client)
-        } else {
-          setError('Client data not found in response')
-        }
-      } else {
-        setError(data.error || `Failed to fetch client (${response.status})`)
-      }
-    } catch (error) {
-      setError('Network error: Failed to fetch client')
-      console.error('Client fetch error:', error)
-    } finally {
-      setLoading(false)
-    }
+      const res = await fetch(apiUrl(`/clients/${clientId}`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok && data.client) setClient(data.client)
+      else setError(data.error || 'Failed to load client')
+    } catch { setError('Network error') }
+    finally { setLoading(false) }
   }
 
-  const handleClientUpdated = () => {
-    fetchClient() // Refresh client data
-  }
-
-  const handleDeleteClient = async () => {
-    if (!client) return
-
-    const confirmed = confirm(`Are you sure you want to delete ${client.name}${client.last_name ? ` ${client.last_name}` : ''}?\n\nThis will:\n• Anonymize their personal information (name, email, phone, address)\n• Delete ALL jobs and subscriptions\n• Preserve all invoices and financial records\n• Replace their name with "Deleted Client #${client.id}" in invoice records\n\nThis action cannot be undone but maintains legal compliance for business records.`)
-
-    if (!confirmed) return
-
-    try {
-      setIsDeletingClient(true)
-      const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/clients/${clientId}`), {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to delete client')
-      }
-
-      // Redirect to clients list
-      router.push('/clients')
-    } catch (error) {
-      console.error('Error deleting client:', error)
-      alert('Failed to delete client. Please try again.')
-    } finally {
-      setIsDeletingClient(false)
-    }
-  }
-
+  // ── fetch per-tab data ─────────────────────────────────────────────────────
   const fetchJobs = async () => {
     if (!clientId) return
-    
+    setJobsLoading(true)
     try {
-      setJobsLoading(true)
       const token = localStorage.getItem('token')
-      
-      const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
-        setJobs(data.jobs)
-      } else {
-        console.error('Failed to fetch jobs:', data.error)
-      }
-    } catch (error) {
-      console.error('Network error: Failed to fetch jobs', error)
-    } finally {
-      setJobsLoading(false)
-    }
-  }
-
-  const handleJobCreated = () => {
-    console.log('Job created successfully')
-    fetchJobs() // Refresh the jobs list
-  }
-
-  const handleJobClick = (job: any) => {
-    setEditingJob(job)
-    setIsEditJobModalOpen(true)
+      const res = await fetch(apiUrl(`/clients/${clientId}/jobs`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok) setJobs(data.jobs || [])
+    } catch {}
+    finally { setJobsLoading(false) }
   }
 
   const fetchSubscriptions = async () => {
     if (!clientId) return
-    
-    try {
-      setSubscriptionsLoading(true)
-      const token = localStorage.getItem('token')
-      
-      console.log('Fetching subscriptions for client:', clientId)
-      const response = await fetch(apiUrl(`/clients/${clientId}/subscriptions`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-      
-      const data = await response.json()
-      console.log('Subscriptions response:', data)
-      
-      if (response.ok) {
-        console.log('Setting subscriptions:', data.subscriptions || [])
-        setSubscriptions(data.subscriptions || [])
-      } else {
-        console.error('Failed to fetch subscriptions:', data.error)
-      }
-    } catch (error) {
-      console.error('Network error: Failed to fetch subscriptions', error)
-    } finally {
-      setSubscriptionsLoading(false)
-    }
-  }
-
-  const handleSubscriptionCreated = () => {
-    fetchSubscriptions()
-  }
-
-  const handleSubscriptionClick = (subscription: any) => {
-    setEditingSubscription(subscription)
-    setIsEditSubscriptionModalOpen(true)
-  }
-
-  const handleDeleteSubscription = async (subscriptionId: number) => {
-    if (!confirm('Are you sure you want to delete this subscription?')) return
-
+    setSubscriptionsLoading(true)
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/subscriptions/${subscriptionId}`), {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      if (response.ok) {
-        fetchSubscriptions()
-      } else {
-        const data = await response.json()
-        alert(data.error || 'Failed to delete subscription')
-      }
-    } catch (error) {
-      console.error('Error deleting subscription:', error)
-      alert('Failed to delete subscription')
-    }
-  }
-
-  const fetchCompletedJobs = async () => {
-    if (!clientId) return
-
-    try {
-      setCompletedJobsLoading(true)
-      const token = localStorage.getItem('token')
-
-      const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        // Filter only completed jobs that have services assigned
-        const completed = data.jobs.filter((job: any) =>
-          job.status === 'completed' &&
-          job.services &&
-          job.services.length > 0 &&
-          !job.invoice_id // hide jobs already connected to an invoice
-        )
-        setCompletedJobs(completed)
-      } else {
-        console.error('Failed to fetch completed jobs:', data.error)
-      }
-    } catch (error) {
-      console.error('Network error: Failed to fetch completed jobs', error)
-    } finally {
-      setCompletedJobsLoading(false)
-    }
+      const res = await fetch(apiUrl(`/clients/${clientId}/subscriptions`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok) setSubscriptions(data.subscriptions || [])
+    } catch {}
+    finally { setSubscriptionsLoading(false) }
   }
 
   const fetchInvoices = async () => {
     if (!clientId) return
-
+    setInvoicesLoading(true)
     try {
-      setInvoicesLoading(true)
       const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/clients/${clientId}/invoices`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok) setInvoices(data.invoices || [])
+    } catch {}
+    finally { setInvoicesLoading(false) }
+  }
 
-      const response = await fetch(apiUrl(`/clients/${clientId}/invoices`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        setInvoices(data.invoices || [])
-      } else {
-        console.error('Failed to fetch invoices:', data.error)
+  const fetchCompletedJobs = async () => {
+    if (!clientId) return
+    setCompletedJobsLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/clients/${clientId}/jobs`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (res.ok) {
+        setCompletedJobs(
+          (data.jobs || []).filter((j: any) => j.status === 'completed' && j.services?.length > 0 && !j.invoice_id)
+        )
       }
-    } catch (error) {
-      console.error('Network error: Failed to fetch invoices', error)
-    } finally {
-      setInvoicesLoading(false)
+    } catch {}
+    finally { setCompletedJobsLoading(false) }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'jobs') fetchJobs()
+    if (activeTab === 'subscriptions') fetchSubscriptions()
+    if (activeTab === 'invoices') { fetchInvoices(); fetchCompletedJobs() }
+  }, [activeTab, clientId])
+
+  // ── navigation helpers ─────────────────────────────────────────────────────
+  const goBackToClients = () => {
+    if (companySlug) {
+      router.push(`/${companySlug}/clients`)
+    } else {
+      router.push('/clients')
     }
   }
 
-  const downloadInvoicePdf = async (invoiceId: number, invoiceNumber?: string) => {
+  // ── client actions ─────────────────────────────────────────────────────────
+  const handleDeleteClient = async () => {
+    if (!client) return
+    if (!confirm(`Delete ${client.name}${client.last_name ? ' ' + client.last_name : ''}?\n\nThis will anonymize their data and delete all jobs and subscriptions. Invoices are preserved. This cannot be undone.`)) return
     try {
+      setIsDeletingClient(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/invoices/${invoiceId}/pdf`), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        alert(data.error || 'Failed to download PDF')
-        return
-      }
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `invoice-${invoiceNumber || invoiceId}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.URL.revokeObjectURL(url)
-    } catch (e) {
-      console.error('Download PDF failed:', e)
-      alert('Failed to download PDF')
-    }
+      const res = await fetch(apiUrl(`/clients/${clientId}`), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+      if (res.ok) goBackToClients()
+      else { const d = await res.json(); alert(d.error || 'Failed to delete') }
+    } catch { alert('Failed to delete client') }
+    finally { setIsDeletingClient(false) }
   }
 
-  const markInvoiceSentExternal = async (invoiceId: number) => {
-    if (!confirm('Mark this invoice as sent? This will lock it from editing/deleting.')) return
+  const handlePauseSubscription = async (subscription: any, paused: boolean) => {
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/invoices/${invoiceId}/status`), {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ status: 'sent' })
+      const res = await fetch(apiUrl(`/subscriptions/${subscription.id}/pause`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ paused }),
       })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        alert(data.error || 'Failed to mark as sent')
-        return
-      }
-      await fetchInvoices()
-      await fetchCompletedJobs()
-    } catch (e) {
-      console.error('Mark sent failed:', e)
-      alert('Failed to mark as sent')
-    }
+      const data = await res.json()
+      if (res.ok) {
+        fetchSubscriptions()
+        if (editingSub?.id === subscription.id) setEditingSub({ ...editingSub, paused_at: paused ? new Date().toISOString().split('T')[0] : null })
+      } else alert(data.error || 'Failed to update')
+    } catch { alert('Failed to update subscription') }
+  }
+
+  const handleDeleteSubscription = async (id: number) => {
+    if (!confirm('Delete this subscription?')) return
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/subscriptions/${id}`), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+      if (res.ok) fetchSubscriptions()
+    } catch {}
+  }
+
+  // Invoice actions
+  const downloadPdf = async (id: number, num?: string) => {
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/invoices/${id}/pdf`), { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) { alert('Failed to download PDF'); return }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `invoice-${num || id}.pdf`
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+    } catch { alert('Failed to download PDF') }
+  }
+
+  const markSentExternal = async (id: number) => {
+    if (!confirm('Mark this invoice as sent? It will be locked from editing.')) return
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/invoices/${id}/status`), {
+        method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'sent' }),
+      })
+      if (res.ok) { await fetchInvoices(); await fetchCompletedJobs() }
+      else { const d = await res.json(); alert(d.error || 'Failed') }
+    } catch {}
   }
 
   const openSendInvoice = async (invoice: any) => {
     try {
       const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/email-templates'), {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      const res = await fetch(apiUrl('/email-templates'), { headers: { Authorization: `Bearer ${token}` } })
       const data = await res.json().catch(() => ({}))
-      const tpl = data?.templates?.send_invoice || { subject: '', message: '' }
+      const tpl = data?.templates?.send_invoice || {}
       setSendInvoiceDefaultSubject(tpl.subject || `Invoice ${invoice.invoice_number}`)
       setSendInvoiceDefaultMessage(tpl.message || '')
       setSendInvoiceId(invoice.id)
-    } catch (e) {
-      console.error('Failed to load email template:', e)
+    } catch {
       setSendInvoiceDefaultSubject(`Invoice ${invoice.invoice_number}`)
       setSendInvoiceDefaultMessage('')
       setSendInvoiceId(invoice.id)
@@ -391,161 +335,39 @@ export default function ClientDetailPage() {
     try {
       setSendingInvoice(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/invoices/${sendInvoiceId}/send-email`), {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
+      const res = await fetch(apiUrl(`/invoices/${sendInvoiceId}/send-email`), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        alert(data.error || 'Failed to send invoice')
-        return
-      }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { alert(data.error || 'Failed to send'); return }
       setSendInvoiceId(null)
-      await fetchInvoices()
-      await fetchCompletedJobs()
-      alert('Invoice sent!')
-    } catch (e) {
-      console.error('Send invoice failed:', e)
-      alert('Failed to send invoice')
-    } finally {
-      setSendingInvoice(false)
-    }
+      await fetchInvoices(); await fetchCompletedJobs()
+    } catch { alert('Failed to send invoice') }
+    finally { setSendingInvoice(false) }
   }
 
   const deleteInvoice = async () => {
     if (!deleteInvoiceId) return
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/invoices/${deleteInvoiceId}`), {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ jobAction: deleteJobAction })
+      const res = await fetch(apiUrl(`/invoices/${deleteInvoiceId}`), {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobAction: deleteJobAction }),
       })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        alert(data.error || 'Failed to delete invoice')
-        return
-      }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error || 'Failed to delete'); return }
       setDeleteInvoiceId(null)
-      await fetchInvoices()
-      await fetchCompletedJobs()
-    } catch (e) {
-      console.error('Delete invoice failed:', e)
-      alert('Failed to delete invoice')
-    }
+      await fetchInvoices(); await fetchCompletedJobs()
+    } catch { alert('Failed to delete invoice') }
   }
 
-  const handleJobSelection = (jobId: number) => {
-    const newSelection = new Set(selectedJobs)
-    if (newSelection.has(jobId)) {
-      newSelection.delete(jobId)
-    } else {
-      newSelection.add(jobId)
-    }
-    setSelectedJobs(newSelection)
-  }
 
-  const handleCreateInvoice = async (invoiceData: any) => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/clients/${clientId}/invoices`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          job_ids: Array.from(selectedJobs),
-          ...invoiceData
-        })
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        setSelectedJobs(new Set())
-        setShowCreateInvoice(false)
-        fetchInvoices()
-        fetchCompletedJobs() // Refresh to show which jobs are now invoiced
-      } else {
-        alert(data.error || 'Failed to create invoice')
-      }
-    } catch (error) {
-      console.error('Error creating invoice:', error)
-      alert('Failed to create invoice')
-    }
-  }
-
-  // Fetch jobs when switching to jobs tab
-  useEffect(() => {
-    if (activeTab === 'jobs' && clientId) {
-      fetchJobs()
-    }
-  }, [activeTab, clientId])
-
-  // Fetch subscriptions when switching to subscriptions tab
-  useEffect(() => {
-    if (activeTab === 'subscriptions' && clientId) {
-      fetchSubscriptions()
-    }
-  }, [activeTab, clientId])
-
-  // Fetch completed jobs and invoices when switching to invoicing tab
-  useEffect(() => {
-    if (activeTab === 'invoicing' && clientId) {
-      fetchCompletedJobs()
-      fetchInvoices()
-    }
-  }, [activeTab, clientId])
-
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-'
-    const date = new Date(dateString)
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  }
-
-  const formatDateCompact = (dateString: string) => {
-    if (!dateString) return '-'
-    const date = new Date(dateString)
-    const now = new Date()
-    const isToday = date.toDateString() === now.toDateString()
-    const isYesterday = date.toDateString() === new Date(now.getTime() - 24 * 60 * 60 * 1000).toDateString()
-    
-    if (isToday) {
-      return `Today ${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
-    } else if (isYesterday) {
-      return `Yesterday ${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    }
-  }
-
+  // ── loading / error states ─────────────────────────────────────────────────
   if (loading) {
     return (
       <AppLayout>
         <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-gray-600">Loading client...</p>
-          </div>
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-400 border-t-transparent" />
         </div>
       </AppLayout>
     )
@@ -554,477 +376,569 @@ export default function ClientDetailPage() {
   if (error || !client) {
     return (
       <AppLayout>
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="mx-auto h-12 w-12 text-red-400">
-              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <h3 className="mt-2 text-sm font-medium text-gray-900">Error</h3>
-            <p className="mt-1 text-sm text-gray-500">{error || 'Client not found'}</p>
-            <div className="mt-6">
-              <button
-                onClick={() => router.back()}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700"
-              >
-                Go Back
-              </button>
-            </div>
+        <div className="flex items-center justify-center h-64 text-center">
+          <div>
+            <p className="text-sm text-gray-500 mb-4">{error || 'Client not found'}</p>
+            <button onClick={goBackToClients} className="text-sm text-primary-500 underline">Back to clients</button>
           </div>
         </div>
       </AppLayout>
     )
   }
 
-  const tabs = [
-    { id: 'overview', name: 'Overview', icon: '👤' },
-    { id: 'jobs', name: 'Jobs', icon: '🔧' },
-    { id: 'subscriptions', name: 'Subscriptions', icon: '🔄' },
-    { id: 'invoicing', name: 'Invoicing', icon: '💰' },
-    { id: 'reporting', name: 'Reporting', icon: '📊' }
-  ] as const
+  const fullName = `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
+  const initials = getInitials(client.name, client.last_name)
+  const location = [client.address, client.zip_code, client.city].filter(Boolean).join(', ')
+  const billingLocation = [client.billing_address, client.billing_zip_code, client.billing_city].filter(Boolean).join(', ')
+
+  const filteredJobs = jobs.filter(j => jobFilter === 'all' ? true : j.status === jobFilter)
+  const scheduledCount = jobs.filter(j => j.status === 'scheduled').length
+  const completedCount = jobs.filter(j => j.status === 'completed').length
+  const cancelledCount = jobs.filter(j => j.status === 'cancelled').length
+
+  const tabs: { id: TabId; label: string; count?: number }[] = [
+    { id: 'jobs', label: 'Jobs', count: jobs.length },
+    { id: 'subscriptions', label: 'Subscriptions', count: subscriptions.length },
+    { id: 'invoices', label: 'Invoices', count: invoices.length },
+    { id: 'settings', label: 'Settings' },
+  ]
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
   return (
     <AppLayout>
-      <div>
-        {/* Header */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <button
-                onClick={() => router.back()}
-                className="flex items-center text-sm text-gray-500 hover:text-gray-700 mb-2"
-              >
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                Back to Clients
-              </button>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-              </h1>
-              <p className="text-sm text-gray-600 mt-1">
-                Client since {formatDate(client.created_at)}
-              </p>
-            </div>
-            
-            <button
-              onClick={() => setIsEditClientModalOpen(true)}
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors mr-3"
-            >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-              Edit Client
-            </button>
+      {/* Top back link (desktop) */}
+      <div className="hidden lg:block mb-3">
+        <button
+          onClick={goBackToClients}
+          className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-primary-500 transition-colors"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          All clients
+        </button>
+      </div>
 
-            <button
-              onClick={handleDeleteClient}
-              disabled={isDeletingClient}
-              className="inline-flex items-center px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors disabled:opacity-50"
-            >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              {isDeletingClient ? 'Deleting…' : 'Delete Client'}
-            </button>
-          </div>
-        </div>
+      <div className="flex gap-6 items-start min-h-0">
 
-        {/* Tabs */}
-        <div className="border-b border-gray-200 mb-6">
-          <nav className="-mb-px flex space-x-8">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <span className="mr-2">{tab.icon}</span>
-                {tab.name}
-              </button>
-            ))}
-          </nav>
-        </div>
+        {/* ── LEFT SIDEBAR (sticky client card) ──────────────────────────────── */}
+        <div className="hidden lg:flex flex-col gap-4 w-64 xl:w-72 flex-shrink-0 sticky top-0">
 
-        {/* Tab Content */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          {activeTab === 'overview' && (
-            <div className="p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-6">Client Information</h2>
-              
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Personal Information */}
-                <div>
-                  <h3 className="text-md font-medium text-gray-900 mb-4">Personal Information</h3>
-                  <dl className="space-y-3">
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Name</dt>
-                      <dd className="mt-1 text-sm text-gray-900">
-                        {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Country</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{client.country || '-'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Address</dt>
-                      <dd className="mt-1 text-sm text-gray-900">
-                        {client.address || '-'}
-                        {client.zip_code && `, ${client.zip_code}`}
-                        {client.city && `, ${client.city}`}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Email</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{client.email || '-'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-sm font-medium text-gray-500">Phone</dt>
-                      <dd className="mt-1 text-sm text-gray-900">{client.phone || '-'}</dd>
-                    </div>
-                  </dl>
-                </div>
-
-                {/* Billing Information */}
-                <div>
-                  <h3 className="text-md font-medium text-gray-900 mb-4">Billing Information</h3>
-                  {client.billing_address || client.billing_email || client.billing_phone ? (
-                    <dl className="space-y-3">
-                      <div>
-                        <dt className="text-sm font-medium text-gray-500">Billing Address</dt>
-                        <dd className="mt-1 text-sm text-gray-900">
-                          {client.billing_address || '-'}
-                          {client.billing_zip_code && `, ${client.billing_zip_code}`}
-                          {client.billing_city && `, ${client.billing_city}`}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-sm font-medium text-gray-500">Billing Email</dt>
-                        <dd className="mt-1 text-sm text-gray-900">{client.billing_email || '-'}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-sm font-medium text-gray-500">Billing Phone</dt>
-                        <dd className="mt-1 text-sm text-gray-900">{client.billing_phone || '-'}</dd>
-                      </div>
-                    </dl>
-                  ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <p className="mt-2 text-sm">No separate billing information</p>
-                      <p className="text-xs text-gray-400">Using personal information for billing</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Metadata */}
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">Created</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{formatDate(client.created_at)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">Last Updated</dt>
-                    <dd className="mt-1 text-sm text-gray-900">{formatDate(client.updated_at)}</dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'jobs' && (
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Jobs</h2>
-                  <p className="text-sm text-gray-600">
-                    {jobs.length} {jobs.length === 1 ? 'job' : 'jobs'} for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setIsCreateJobModalOpen(true)}
-                  className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
-                >
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          {/* Client card */}
+          <div className="bg-white border border-gray-200 rounded-2xl p-5">
+            {/* Avatar + name */}
+            <div className="flex flex-col items-center text-center mb-5">
+              <div className="w-16 h-16 rounded-2xl bg-[#BFD1C5] text-primary-500 flex items-center justify-center text-2xl font-bold mb-3">
+                {client.client_type === 'company' ? (
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                   </svg>
-                  Create Job
-                </button>
+                ) : initials}
               </div>
+              <h1 className="font-bold text-base text-primary-500 leading-snug">{fullName}</h1>
+              {client.client_type === 'company' && (
+                <span className="mt-1 text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Company</span>
+              )}
+              <p className="text-[11px] text-gray-400 mt-1">Since {fmtDate(client.created_at)}</p>
+            </div>
 
-              {jobsLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="mt-2 text-gray-600">Loading jobs...</p>
-                  </div>
-                </div>
-              ) : jobs.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="mx-auto h-12 w-12 text-gray-400">
-                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                  </div>
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No jobs yet</h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Get started by creating your first job for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                    <table className="min-w-full divide-y divide-gray-300">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          ID
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Job Title
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Scheduled Date
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Services
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Duration
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Total Price
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {jobs.map((job) => (
-                        <tr 
-                          key={job.id} 
-                          className="hover:bg-gray-50 cursor-pointer"
-                          onClick={() => handleJobClick(job)}
-                        >
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500">
-                            #{job.id}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div>
-                              <div className="text-sm font-medium text-gray-900">{job.title}</div>
-                              {job.note && (
-                                <div className="text-sm text-gray-500 mt-1 max-w-xs truncate">
-                                  {job.note}
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {formatDateCompact(job.scheduled_date)}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="text-sm text-gray-900">
-                              {job.services?.length || 0} service{(job.services?.length || 0) !== 1 ? 's' : ''}
-                            </div>
-                            {job.services && job.services.length > 0 && (
-                              <div className="text-xs text-gray-500 mt-1 max-w-xs">
-                                {job.services.map((service: any, index: number) => (
-                                  <span key={service.id}>
-                                    {service.service_title || service.custom_title || 'Service'}
-                                    {index < job.services.length - 1 ? ', ' : ''}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            {Math.floor((job.total_duration || 0) / 60)}h {(job.total_duration || 0) % 60}m
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'DKK' }).format(job.total_price || 0)}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                              job.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
-                              job.status === 'in-progress' ? 'bg-yellow-100 text-yellow-800' :
-                              job.status === 'completed' ? 'bg-green-100 text-green-800' :
-                              'bg-gray-100 text-gray-800'
-                            }`}>
-                              {job.status}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleJobClick(job)
-                              }}
-                              className="text-blue-600 hover:text-blue-900"
-                            >
-                              Edit
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    </table>
-                  </div>
+            {/* Contact details */}
+            <div className="space-y-2.5 text-sm">
+              {client.email && (
+                <a href={`mailto:${client.email}`} className="flex items-start gap-2.5 text-gray-600 hover:text-primary-500 group transition-colors">
+                  <svg className="w-4 h-4 mt-0.5 text-gray-400 group-hover:text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  <span className="break-all">{client.email}</span>
+                </a>
+              )}
+              {client.phone && (
+                <a href={`tel:${client.phone}`} className="flex items-start gap-2.5 text-gray-600 hover:text-primary-500 group transition-colors">
+                  <svg className="w-4 h-4 mt-0.5 text-gray-400 group-hover:text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  <span>{client.phone}</span>
+                </a>
+              )}
+              {location && (
+                <div className="flex items-start gap-2.5 text-gray-500">
+                  <svg className="w-4 h-4 mt-0.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span>{location}</span>
                 </div>
               )}
             </div>
-          )}
 
-          {activeTab === 'subscriptions' && (
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Subscriptions</h2>
-                  <p className="text-sm text-gray-600">
-                    {subscriptions.length} {subscriptions.length === 1 ? 'subscription' : 'subscriptions'} for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                  </p>
-                </div>
+            {/* Divider + Quick stats */}
+            <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 text-center">
+              <div>
+                <div className="text-lg font-bold text-primary-500">{jobs.length}</div>
+                <div className="text-[10px] text-gray-400">Jobs</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold text-primary-500">{subscriptions.filter(s => s.is_active).length}</div>
+                <div className="text-[10px] text-gray-400">Active sub</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold text-primary-500">{invoices.length}</div>
+                <div className="text-[10px] text-gray-400">Invoices</div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                onClick={() => setIsEditClientOpen(true)}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium text-primary-500 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                Edit client
+              </button>
+
+              {/* 3-dot / delete */}
+              <div className="relative" ref={menuRef}>
                 <button
-                  onClick={() => setIsCreateSubscriptionModalOpen(true)}
-                  className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+                  onClick={() => setShowClientMenu(v => !v)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
                 >
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01" />
                   </svg>
-                  Create Subscription
+                  More options
+                </button>
+                {showClientMenu && (
+                  <div className="absolute bottom-10 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+                    <button
+                      onClick={() => { setShowClientMenu(false); handleDeleteClient() }}
+                      disabled={isDeletingClient}
+                      className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      {isDeletingClient ? 'Deleting…' : 'Delete client…'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── RIGHT MAIN CONTENT ────────────────────────────────────────────── */}
+        <div className="flex-1 min-w-0">
+
+          {/* Mobile breadcrumb + header (shown only on small screens) */}
+          <div className="lg:hidden mb-4">
+            <button
+              onClick={goBackToClients}
+              className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-primary-500 transition-colors mb-3"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              All clients
+            </button>
+            <div className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-4 mb-4">
+              <div className="w-12 h-12 rounded-2xl bg-[#BFD1C5] text-primary-500 flex items-center justify-center text-lg font-bold flex-shrink-0">
+                {client.client_type === 'company' ? (
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                ) : initials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h1 className="font-bold text-base text-primary-500 truncate">{fullName}</h1>
+                <div className="text-xs text-gray-400 truncate">{client.email || client.phone || location || '—'}</div>
+              </div>
+              <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-primary-500 px-3 py-1.5 border border-gray-200 rounded-xl hover:bg-gray-50">Edit</button>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex items-center gap-1 mb-5 bg-white border border-gray-200 rounded-xl p-1 w-fit overflow-x-auto">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? 'bg-primary-500 text-white'
+                    : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                }`}
+              >
+                {tab.label}
+                {tab.count !== undefined && tab.count > 0 && (
+                  <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full leading-none ${
+                    activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+        {/* ── JOBS TAB ─────────────────────────────────────────────────────── */}
+        {activeTab === 'jobs' && (
+          <div>
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1">
+                {[
+                  { id: 'all', label: `All (${jobs.length})` },
+                  { id: 'scheduled', label: `Scheduled (${scheduledCount})` },
+                  { id: 'completed', label: `Done (${completedCount})` },
+                  { id: 'cancelled', label: `Cancelled (${cancelledCount})` },
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => setJobFilter(f.id as typeof jobFilter)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                      jobFilter === f.id ? 'bg-primary-500 text-white' : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => setIsCreateJobOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New job
+              </button>
+            </div>
+
+            {jobsLoading ? <Spinner /> : filteredJobs.length === 0 ? (
+              <div className="bg-white border border-gray-200 rounded-2xl">
+                <EmptyState
+                  icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>}
+                  title={jobFilter === 'all' ? 'No jobs yet' : `No ${jobFilter} jobs`}
+                  subtitle="Jobs will appear here when created"
+                  action={jobFilter === 'all' ? (
+                    <button onClick={() => setIsCreateJobOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors">
+                      Create first job
+                    </button>
+                  ) : undefined}
+                />
+              </div>
+            ) : (
+              <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+                {filteredJobs.map((job, idx) => {
+                  const isCancelled = job.status === 'cancelled'
+                  return (
+                    <div
+                      key={job.id}
+                      onClick={() => setEditingJob(job)}
+                      className={`flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${idx > 0 ? 'border-t border-gray-100' : ''} ${isCancelled ? 'opacity-60' : ''}`}
+                    >
+                      {/* Date block */}
+                      <div className="w-12 text-center flex-shrink-0">
+                        <div className="text-[10px] text-gray-400 uppercase font-medium">
+                          {job.scheduled_date ? new Date(job.scheduled_date).toLocaleDateString('en-GB', { month: 'short' }) : ''}
+                        </div>
+                        <div className="text-lg font-bold text-primary-500 leading-none">
+                          {job.scheduled_date ? new Date(job.scheduled_date).getDate() : '—'}
+                        </div>
+                      </div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-semibold text-sm text-primary-500 truncate ${isCancelled ? 'line-through' : ''}`}>
+                            {job.title}
+                          </span>
+                          <StatusBadge status={job.status} />
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                          {job.services?.length > 0 && (
+                            <span>{job.services.length} service{job.services.length !== 1 ? 's' : ''}</span>
+                          )}
+                          {job.total_price > 0 && (
+                            <span>{fmtMoney(job.total_price)}</span>
+                          )}
+                          {job.scheduled_time_from && (
+                            <span>{job.scheduled_time_from}{job.scheduled_time_to ? ` – ${job.scheduled_time_to}` : ''}</span>
+                          )}
+                          {job.recurring_job_id && (
+                            <span className="inline-flex items-center gap-0.5 text-accent-600">
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                              Subscription
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── SUBSCRIPTIONS TAB ────────────────────────────────────────────── */}
+        {activeTab === 'subscriptions' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm text-gray-500">{subscriptions.length} subscription{subscriptions.length !== 1 ? 's' : ''}</p>
+              <button
+                onClick={() => setIsCreateSubOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                New subscription
+              </button>
+            </div>
+
+            {subscriptionsLoading ? <Spinner /> : subscriptions.length === 0 ? (
+              <div className="bg-white border border-gray-200 rounded-2xl">
+                <EmptyState
+                  icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>}
+                  title="No subscriptions"
+                  subtitle="Create recurring jobs with a subscription"
+                  action={
+                    <button onClick={() => setIsCreateSubOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors">
+                      Create subscription
+                    </button>
+                  }
+                />
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                {subscriptions.map(sub => {
+                  const isPaused = !!sub.paused_at
+                  const isInactive = !sub.is_active
+                  const recurrenceLabel = sub.recurrence_type === 'monthly'
+                    ? `${sub.day_of_month ? `Day ${sub.day_of_month}` : ''} of every ${sub.interval_value > 1 ? `${sub.interval_value} months` : 'month'}`
+                    : sub.day_of_week !== null && sub.day_of_week !== undefined
+                      ? `Every ${sub.interval_value > 1 ? `${sub.interval_value} weeks on ` : ''}${dayNames[sub.day_of_week]}`
+                      : 'Recurring'
+                  return (
+                    <div key={sub.id} className={`bg-white border border-gray-200 rounded-2xl p-5 ${isInactive ? 'opacity-50' : ''}`}>
+                      <div className="flex items-start gap-4">
+                        {/* Icon */}
+                        <div className="w-10 h-10 bg-gray-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-semibold text-sm text-primary-500">{sub.title}</span>
+                            {isInactive ? (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">Inactive</span>
+                            ) : isPaused ? (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">Paused from {sub.paused_at}</span>
+                            ) : (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-green-50 text-green-700 rounded-full">Active</span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-gray-400">
+                            <span>{recurrenceLabel}</span>
+                            {sub.scheduled_time_from && <span>{sub.scheduled_time_from}{sub.scheduled_time_to ? ` – ${sub.scheduled_time_to}` : ''}</span>}
+                            {sub.service_count > 0 && <span>{sub.service_count} service{sub.service_count !== 1 ? 's' : ''}</span>}
+                            {sub.assigned_user_first_name && <span>{sub.assigned_user_first_name} {sub.assigned_user_last_name}</span>}
+                          </div>
+                        </div>
+
+                        {/* ⋯ kebab menu */}
+                        <div className="relative flex-shrink-0">
+                          <button
+                            onClick={e => { e.stopPropagation(); setOpenSubMenuId(openSubMenuId === sub.id ? null : sub.id) }}
+                            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                          >
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
+                            </svg>
+                          </button>
+
+                          {openSubMenuId === sub.id && (
+                            <>
+                              {/* backdrop to close on outside click */}
+                              <div className="fixed inset-0 z-10" onClick={() => setOpenSubMenuId(null)} />
+                              <div className="absolute right-0 top-9 z-20 w-44 bg-white border border-gray-200 rounded-xl shadow-lg py-1 animate-fadeIn">
+                                <button
+                                  onClick={() => { setEditingSub(sub); setOpenSubMenuId(null) }}
+                                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                >
+                                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                  Edit
+                                </button>
+
+                                {sub.is_active && (
+                                  <button
+                                    onClick={() => { handlePauseSubscription(sub, !isPaused); setOpenSubMenuId(null) }}
+                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                  >
+                                    {isPaused ? (
+                                      <>
+                                        <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Resume
+                                      </>
+                                    ) : (
+                                      <>
+                                        <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Pause
+                                      </>
+                                    )}
+                                  </button>
+                                )}
+
+                                <div className="border-t border-gray-100 my-1" />
+
+                                <button
+                                  onClick={() => { handleDeleteSubscription(sub.id); setOpenSubMenuId(null) }}
+                                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                                >
+                                  <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                  Delete
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── INVOICES TAB ─────────────────────────────────────────────────── */}
+        {activeTab === 'invoices' && (() => {
+          const invoiceableJobs = completedJobs.filter(j => j.status === 'completed' || j.status === 'sub_completed' || !j.status)
+          const allSelected = invoiceableJobs.length > 0 && invoiceableJobs.every(j => selectedJobs.has(j.id))
+          const toggleAll = () => {
+            if (allSelected) setSelectedJobs(new Set())
+            else setSelectedJobs(new Set(invoiceableJobs.map(j => j.id)))
+          }
+          return (
+            <div>
+              {/* Top action bar */}
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm text-gray-500">
+                  {completedJobs.length} uninvoiced job{completedJobs.length !== 1 ? 's' : ''}
+                  {selectedJobs.size > 0 && <span className="ml-2 text-primary-500 font-medium">· {selectedJobs.size} selected</span>}
+                </p>
+                <button
+                  onClick={() => {
+                    const ids = Array.from(selectedJobs).join(',')
+                    router.push(`/${companySlug}/invoices/new?jobIds=${ids}`)
+                  }}
+                  disabled={selectedJobs.size === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-accent-500 text-white text-sm font-medium rounded-xl hover:bg-accent-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  Create invoice{selectedJobs.size > 0 ? ` (${selectedJobs.size})` : ''}
                 </button>
               </div>
 
-              {subscriptionsLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="mt-2 text-gray-600">Loading subscriptions...</p>
-                  </div>
-                </div>
-              ) : subscriptions.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="mx-auto h-12 w-12 text-gray-400">
-                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                  </div>
-                  <h3 className="mt-2 text-sm font-medium text-gray-900">No subscriptions yet</h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Create recurring subscriptions for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
-                    <table className="min-w-full divide-y divide-gray-300">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Title
+              {/* Uninvoiced jobs table */}
+              {completedJobsLoading ? <Spinner /> : (
+                <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm mb-10">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead>
+                        <tr className="bg-gray-50/80">
+                          <th className="w-10 px-4 py-3.5 text-left">
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              onChange={toggleAll}
+                              disabled={invoiceableJobs.length === 0}
+                              className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                            />
                           </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Schedule
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Employee
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Services
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Status
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
+                          <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Job name</th>
+                          <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
+                          <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Type</th>
+                          <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Date</th>
+                          <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Total</th>
+                          <th className="px-4 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-gray-500"><span className="sr-only">Open</span></th>
                         </tr>
                       </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {subscriptions.map((subscription) => {
-                          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-                          const scheduleText = `${dayNames[subscription.day_of_week]}, every ${subscription.interval_weeks} week${subscription.interval_weeks > 1 ? 's' : ''}`
-                          
+                      <tbody className="divide-y divide-gray-200 bg-white">
+                        {completedJobs.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-400">No completed jobs to invoice yet.</td>
+                          </tr>
+                        ) : completedJobs.map(job => {
+                          const invoiceable = job.status === 'completed' || job.status === 'sub_completed' || !job.status
+                          const isSubscription = !!(job.recurring_job_id)
                           return (
-                            <tr 
-                              key={subscription.id} 
-                              className="hover:bg-gray-50 cursor-pointer"
-                              onClick={() => handleSubscriptionClick(subscription)}
-                            >
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div>
-                                  <div className="text-sm font-medium text-gray-900">{subscription.title}</div>
-                                  {subscription.note && (
-                                    <div className="text-sm text-gray-500 mt-1 max-w-xs truncate">
-                                      {subscription.note}
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                <div>{scheduleText}</div>
-                                {subscription.scheduled_time_from && (
-                                  <div className="text-xs text-gray-500">
-                                    {subscription.scheduled_time_from}
-                                    {subscription.scheduled_time_to && ` - ${subscription.scheduled_time_to}`}
-                                  </div>
+                            <tr key={job.id} className={`transition-colors hover:bg-gray-50/50 ${!invoiceable ? 'opacity-60' : ''}`}>
+                              <td className="w-10 whitespace-nowrap px-4 py-3.5">
+                                {invoiceable ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedJobs.has(job.id)}
+                                    onChange={() => {
+                                      const next = new Set(selectedJobs)
+                                      if (next.has(job.id)) next.delete(job.id); else next.add(job.id)
+                                      setSelectedJobs(next)
+                                    }}
+                                    className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                                  />
+                                ) : (
+                                  <span className="text-xs text-gray-300" title="Cancelled jobs are not included on invoices">—</span>
                                 )}
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                {subscription.assigned_user_first_name 
-                                  ? `${subscription.assigned_user_first_name} ${subscription.assigned_user_last_name}`
-                                  : 'No employee'
-                                }
-                              </td>
-                              <td className="px-6 py-4">
-                                <div className="text-sm text-gray-900">
-                                  {subscription.service_count || 0} service{(subscription.service_count || 0) !== 1 ? 's' : ''}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                                  subscription.is_active 
-                                    ? 'bg-green-100 text-green-800' 
-                                    : 'bg-gray-100 text-gray-800'
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm font-medium text-gray-900">{job.title || 'Untitled job'}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5">
+                                <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                  job.status === 'cancelled' ? 'bg-gray-100 text-gray-600'
+                                  : job.status === 'sub_completed' ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-accent-100 text-accent-800'
                                 }`}>
-                                  {subscription.is_active ? 'Active' : 'Inactive'}
+                                  {job.status === 'cancelled' ? 'Cancelled' : job.status === 'sub_completed' ? 'Sub-completed' : 'Completed'}
                                 </span>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                <div className="flex items-center space-x-3">
-                                  <button 
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleSubscriptionClick(subscription)
-                                    }}
-                                    className="text-blue-600 hover:text-blue-900"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button 
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleDeleteSubscription(subscription.id)
-                                    }}
-                                    className="text-red-600 hover:text-red-900"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                              <td className="whitespace-nowrap px-4 py-3.5">
+                                <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${isSubscription ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                                  {isSubscription ? 'Subscription' : 'Manual'}
+                                </span>
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">{fmtDateShort(job.scheduled_date)}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">{fmtMoney(job.total_price || 0)}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-right">
+                                <button
+                                  onClick={() => setEditingJob(job)}
+                                  className="inline-flex items-center justify-center rounded-lg p-2 text-gray-400 transition-colors hover:bg-accent-50 hover:text-accent-600"
+                                  title="View job"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                  </svg>
+                                </button>
                               </td>
                             </tr>
                           )
@@ -1034,427 +948,246 @@ export default function ClientDetailPage() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
 
-          {activeTab === 'invoicing' && (
-            <div className="p-6">
-              {/* Header */}
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Invoicing</h2>
-                  <p className="text-sm text-gray-600">
-                    Create and manage invoices for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                  </p>
-                </div>
-                <div className="flex space-x-3">
-                  {selectedJobs.size > 0 && (
-                    <button
-                      onClick={() => setShowCreateInvoice(true)}
-                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
-                    >
-                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                      </svg>
-                      Create Invoice ({selectedJobs.size} job{selectedJobs.size !== 1 ? 's' : ''})
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      fetchCompletedJobs()
-                      fetchInvoices()
-                    }}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
-                  >
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Refresh
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Completed Jobs */}
-                <div className="bg-gray-50 rounded-lg p-6">
-                  <h3 className="text-md font-medium text-gray-900 mb-4">Completed Jobs</h3>
-
-                  {completedJobsLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="text-center">
-                        <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                        <p className="mt-2 text-sm text-gray-600">Loading completed jobs...</p>
-                      </div>
-                    </div>
-                  ) : completedJobs.length === 0 ? (
-                    <div className="text-center py-8">
-                      <div className="mx-auto h-8 w-8 text-gray-400">
-                        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <p className="mt-2 text-sm text-gray-500">No invoice-ready jobs available</p>
-                      <p className="text-xs text-gray-400">Complete jobs with services assigned to create invoices</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {completedJobs.map((job) => (
-                        <div
-                          key={job.id}
-                          className={`flex items-start space-x-3 p-3 rounded-lg border transition-colors cursor-pointer ${
-                            selectedJobs.has(job.id)
-                              ? 'bg-blue-50 border-blue-300'
-                              : 'bg-white border-gray-200 hover:bg-gray-50'
-                          }`}
-                          onClick={() => handleJobSelection(job.id)}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedJobs.has(job.id)}
-                            onChange={() => handleJobSelection(job.id)}
-                            className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <p className="text-sm font-medium text-gray-900 truncate">
-                                {job.title}
-                              </p>
-                              <span className="text-sm font-semibold text-gray-900 ml-2">
-                                {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'DKK' }).format(job.total_price || 0)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-gray-500 mt-1">
-                              Completed {formatDateCompact(job.scheduled_date)}
-                            </p>
-                            <div className="flex items-center mt-2 text-xs text-gray-500">
-                              <span>{job.services.length} service{job.services.length !== 1 ? 's' : ''}</span>
-                              <span className="mx-2">•</span>
-                              <span>{Math.floor((job.total_duration || 0) / 60)}h {(job.total_duration || 0) % 60}m</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Invoices */}
-                <div className="bg-gray-50 rounded-lg p-6">
-                  <h3 className="text-md font-medium text-gray-900 mb-4">Invoices</h3>
-
-                  {invoicesLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="text-center">
-                        <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                        <p className="mt-2 text-sm text-gray-600">Loading invoices...</p>
-                      </div>
-                    </div>
-                  ) : invoices.length === 0 ? (
-                    <div className="text-center py-8">
-                      <div className="mx-auto h-8 w-8 text-gray-400">
-                        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                        </svg>
-                      </div>
-                      <p className="mt-2 text-sm text-gray-500">No invoices yet</p>
-                      <p className="text-xs text-gray-400">Create your first invoice from completed jobs</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {invoices.map((invoice) => (
-                        <div
-                          key={invoice.id}
-                          className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-shadow"
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-gray-900">
-                              #{invoice.invoice_number}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                                invoice.status === 'paid' ? 'bg-green-100 text-green-800' :
-                                invoice.status === 'sent' ? 'bg-blue-100 text-blue-800' :
-                                invoice.status === 'overdue' ? 'bg-red-100 text-red-800' :
-                                invoice.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
-                                'bg-yellow-100 text-yellow-800'
-                              }`}>
-                                {invoice.status}
-                              </span>
-
-                              {/* Actions (3 dots) */}
-                              <div className="relative">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setOpenInvoiceMenuId(openInvoiceMenuId === invoice.id ? null : invoice.id)
-                                  }}
-                                  className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-                                  title="Invoice actions"
-                                >
-                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
-                                  </svg>
-                                </button>
-
-                                {openInvoiceMenuId === invoice.id && (
-                                  <div
-                                    className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setOpenInvoiceMenuId(null)
-                                        downloadInvoicePdf(invoice.id, invoice.invoice_number)
-                                      }}
-                                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                                    >
-                                      Download PDF
-                                    </button>
-
-                                    {invoice.status === 'draft' && (
-                                      <>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setOpenInvoiceMenuId(null)
-                                            markInvoiceSentExternal(invoice.id)
-                                          }}
-                                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                                        >
-                                          Mark as sent (external)
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setOpenInvoiceMenuId(null)
-                                            openSendInvoice(invoice)
-                                          }}
-                                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                                        >
-                                          Send invoice to client…
-                                        </button>
-                                        <div className="border-t border-gray-100 my-1" />
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setOpenInvoiceMenuId(null)
-                                            setDeleteJobAction('restore')
-                                            setDeleteInvoiceId(invoice.id)
-                                          }}
-                                          className="w-full text-left px-3 py-2 text-sm hover:bg-red-50 text-red-700"
-                                        >
-                                          Delete invoice…
-                                        </button>
-                                      </>
-                                    )}
-
-                                    {invoice.status !== 'draft' && (
-                                      <div className="px-3 py-2 text-xs text-gray-500">
-                                        Sent invoices are locked (cannot be edited/deleted).
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-xs text-gray-500 mb-2">
-                            Issued {formatDateCompact(invoice.issue_date)} • Due {formatDateCompact(invoice.due_date)}
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-500">
-                              {invoice.item_count} item{invoice.item_count !== 1 ? 's' : ''}
-                            </span>
-                            <span className="text-sm font-semibold text-gray-900">
-                              {new Intl.NumberFormat('en-US', { style: 'currency', currency: invoice.currency }).format(invoice.total)}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'reporting' && (
-            <div className="p-6">
-              <div className="text-center py-12">
-                <div className="mx-auto h-12 w-12 text-gray-400">
-                  <svg fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
-                </div>
-                <h3 className="mt-2 text-sm font-medium text-gray-900">Reporting</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  View history and revenue reports for {client.name}{client.last_name ? ` ${client.last_name}` : ''}
-                </p>
-                <div className="mt-6">
-                  <button
-                    disabled
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-400 bg-gray-100 cursor-not-allowed"
-                  >
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                    View Reports (Coming Soon)
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-gray-400">
-                  Reports will show job history, revenue, and performance metrics
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Edit Client Modal */}
-        <EditClientModal
-          isOpen={isEditClientModalOpen}
-          onClose={() => setIsEditClientModalOpen(false)}
-          onClientUpdated={handleClientUpdated}
-          client={client}
-        />
-
-        {/* Create Job Slideout */}
-        {client && (
-          <CreateJobSlideout
-            isOpen={isCreateJobModalOpen}
-            onClose={() => setIsCreateJobModalOpen(false)}
-            onJobCreated={handleJobCreated}
-            clientId={client.id}
-            clientName={`${client.name}${client.last_name ? ` ${client.last_name}` : ''}`}
-          />
-        )}
-
-        {/* Edit Job Slideout */}
-        <JobViewSlideout
-          isOpen={isEditJobModalOpen}
-          onClose={() => {
-            setIsEditJobModalOpen(false)
-            setEditingJob(null)
-          }}
-          job={editingJob}
-          onJobUpdated={() => {
-            // Refresh both lists so materialize/complete/move updates show immediately
-            fetchJobs()
-            fetchCompletedJobs()
-          }}
-        />
-
-        {/* Create Subscription Slideout */}
-        {client && (
-          <SubscriptionSlideout
-            isOpen={isCreateSubscriptionModalOpen}
-            onClose={() => setIsCreateSubscriptionModalOpen(false)}
-            onSubscriptionCreated={handleSubscriptionCreated}
-            clientId={client.id}
-          />
-        )}
-
-        {/* Edit Subscription Slideout */}
-        {client && editingSubscription && (
-          <SubscriptionSlideout
-            isOpen={isEditSubscriptionModalOpen}
-            onClose={() => {
-              setIsEditSubscriptionModalOpen(false)
-              setEditingSubscription(null)
-            }}
-            onSubscriptionCreated={handleSubscriptionCreated}
-            clientId={client.id}
-            subscription={editingSubscription}
-          />
-        )}
-
-        {/* Create Invoice Modal */}
-        {showCreateInvoice && (
-          <CreateInvoiceModal
-            selectedJobs={selectedJobs}
-            completedJobs={completedJobs}
-            createInvoiceData={createInvoiceData}
-            setCreateInvoiceData={setCreateInvoiceData}
-            onClose={() => setShowCreateInvoice(false)}
-            onCreateInvoice={handleCreateInvoice}
-          />
-        )}
-
-        {/* Delete Invoice Modal */}
-        {deleteInvoiceId && (
-          <div className="fixed inset-0 z-[70]">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setDeleteInvoiceId(null)} />
-            <div className="absolute inset-0 flex items-center justify-center p-4">
-              <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-200">
-                  <h3 className="text-base font-semibold text-gray-900">Delete invoice</h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    This can only be done while the invoice is <span className="font-medium">draft</span>.
-                  </p>
-                </div>
-                <div className="p-6 space-y-4">
-                  <div className="space-y-2">
-                    <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
-                      <input
-                        type="radio"
-                        name="jobAction"
-                        className="mt-1"
-                        checked={deleteJobAction === 'restore'}
-                        onChange={() => setDeleteJobAction('restore')}
-                      />
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">Delete invoice, keep jobs</div>
-                        <div className="text-xs text-gray-500">Jobs will be restored and become invoiceable again.</div>
-                      </div>
-                    </label>
-                    <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
-                      <input
-                        type="radio"
-                        name="jobAction"
-                        className="mt-1"
-                        checked={deleteJobAction === 'delete_jobs'}
-                        onChange={() => setDeleteJobAction('delete_jobs')}
-                      />
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">Delete invoice and delete jobs</div>
-                        <div className="text-xs text-gray-500">Removes the jobs linked to this invoice.</div>
-                      </div>
-                    </label>
+              {/* Invoices section */}
+              <section className="border-t border-gray-200 pt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-gray-900">Invoices</h2>
+                    <p className="text-sm text-gray-400 mt-0.5">{invoices.length} invoice{invoices.length !== 1 ? 's' : ''} for this client</p>
                   </div>
+                  <button onClick={() => { fetchInvoices(); fetchCompletedJobs() }} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">Refresh</button>
                 </div>
-                <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDeleteInvoiceId(null)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={deleteInvoice}
-                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-lg hover:bg-red-700"
-                  >
-                    Delete
-                  </button>
-                </div>
+                {invoicesLoading ? <Spinner /> : (
+                  <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead>
+                          <tr className="bg-gray-50/80">
+                            <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Invoice #</th>
+                            <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
+                            <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Issued</th>
+                            <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Due</th>
+                            <th className="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Total</th>
+                            <th className="px-4 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-gray-500"><span className="sr-only">Actions</span></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 bg-white">
+                          {invoices.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-400">No invoices yet. Select completed jobs above to create one.</td>
+                            </tr>
+                          ) : invoices.map(invoice => (
+                            <tr
+                              key={invoice.id}
+                              className="cursor-pointer transition-colors hover:bg-accent-50/50"
+                              onClick={() => router.push(`/${companySlug}/invoices/${invoice.id}?from=client&clientId=${clientId}&clientName=${encodeURIComponent(fullName)}`)}
+                            >
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-gray-900">#{invoice.invoice_number}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5">
+                                <StatusBadge status={invoice.status} />
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">{fmtDate(invoice.issue_date)}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">{fmtDate(invoice.due_date)}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-sm font-medium text-gray-900">{fmtMoney(invoice.total, invoice.currency)}</td>
+                              <td className="whitespace-nowrap px-4 py-3.5 text-right" onClick={e => e.stopPropagation()}>
+                                <div className="relative inline-block">
+                                  <button
+                                    onClick={e => { e.stopPropagation(); setOpenInvoiceMenuId(openInvoiceMenuId === invoice.id ? null : invoice.id) }}
+                                    className="inline-flex items-center justify-center w-8 h-8 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6h.01M12 12h.01M12 18h.01" />
+                                    </svg>
+                                  </button>
+                                  {openInvoiceMenuId === invoice.id && (
+                                    <div className="absolute right-0 top-9 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden" onClick={e => e.stopPropagation()}>
+                                      <button onClick={() => { setOpenInvoiceMenuId(null); downloadPdf(invoice.id, invoice.invoice_number) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Download PDF</button>
+                                      {invoice.status === 'draft' && (
+                                        <>
+                                          <button onClick={() => { setOpenInvoiceMenuId(null); openSendInvoice(invoice) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Send to client…</button>
+                                          <button onClick={() => { setOpenInvoiceMenuId(null); markSentExternal(invoice.id) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Mark as sent (external)</button>
+                                          <div className="border-t border-gray-100" />
+                                          <button onClick={() => { setOpenInvoiceMenuId(null); setDeleteJobAction('restore'); setDeleteInvoiceId(invoice.id) }} className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">Delete invoice…</button>
+                                        </>
+                                      )}
+                                      {invoice.status !== 'draft' && <p className="px-4 py-2.5 text-xs text-gray-400">Sent invoices are locked.</p>}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          )
+        })()}
+
+        {/* ── SETTINGS TAB ─────────────────────────────────────────────────── */}
+        {activeTab === 'settings' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Contact info */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-primary-500">Contact information</h3>
+                <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-accent-600 hover:underline">Edit</button>
               </div>
+              <dl className="space-y-3">
+                <InfoRow label="Type" value={client.client_type === 'company' ? 'Company' : 'Person'} />
+                <InfoRow label="Name" value={fullName} />
+                {client.email && <InfoRow label="Email" value={client.email} />}
+                {client.phone && <InfoRow label="Phone" value={client.phone} />}
+                {client.address && <InfoRow label="Address" value={[client.address, client.zip_code, client.city, client.country].filter(Boolean).join(', ')} />}
+              </dl>
+            </div>
+
+            {/* Billing info */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-primary-500">Billing information</h3>
+                <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-accent-600 hover:underline">Edit</button>
+              </div>
+              {client.billing_address || client.billing_email || client.billing_phone ? (
+                <dl className="space-y-3">
+                  {client.billing_address && <InfoRow label="Billing address" value={billingLocation} />}
+                  {client.billing_email && <InfoRow label="Billing email" value={client.billing_email} />}
+                  {client.billing_phone && <InfoRow label="Billing phone" value={client.billing_phone} />}
+                </dl>
+              ) : (
+                <p className="text-xs text-gray-400">No separate billing information — using contact details.</p>
+              )}
+            </div>
+
+            {/* Future: Automations */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-5 opacity-50 cursor-not-allowed select-none">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-sm font-semibold text-gray-400">Automations</h3>
+                <span className="text-[10px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">Coming soon</span>
+              </div>
+              <p className="text-xs text-gray-400">Set up automatic messages, reminders and follow-ups for this client.</p>
+            </div>
+
+            {/* Future: Communications */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-5 opacity-50 cursor-not-allowed select-none">
+              <div className="flex items-center gap-2 mb-2">
+                <h3 className="text-sm font-semibold text-gray-400">Communication history</h3>
+                <span className="text-[10px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">Coming soon</span>
+              </div>
+              <p className="text-xs text-gray-400">View all emails and messages sent to this client.</p>
+            </div>
+
+            {/* Danger zone */}
+            <div className="lg:col-span-2 bg-white border border-red-100 rounded-2xl p-5">
+              <h3 className="text-sm font-semibold text-red-600 mb-1">Danger zone</h3>
+              <p className="text-xs text-gray-400 mb-4">
+                Deleting a client will anonymize their personal data and remove all jobs and subscriptions.
+                Financial records (invoices) are preserved for legal compliance.
+              </p>
+              <button
+                onClick={handleDeleteClient}
+                disabled={isDeletingClient}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                {isDeletingClient ? 'Deleting…' : 'Delete client'}
+              </button>
             </div>
           </div>
         )}
 
-        {/* Send Invoice Modal */}
-        <SendInvoiceModal
-          isOpen={sendInvoiceId !== null}
-          invoiceNumber={invoices.find((i) => i.id === sendInvoiceId)?.invoice_number}
-          defaultSubject={sendInvoiceDefaultSubject}
-          defaultMessage={sendInvoiceDefaultMessage}
-          isSending={sendingInvoice}
-          onClose={() => setSendInvoiceId(null)}
-          onSend={sendInvoiceEmail}
+        </div>{/* end right main content */}
+      </div>{/* end flex wrapper */}
+
+      {/* ── Modals & Slideouts ─────────────────────────────────────────────── */}
+      <EditClientModal
+        isOpen={isEditClientOpen}
+        onClose={() => setIsEditClientOpen(false)}
+        onClientUpdated={() => fetchClient()}
+        client={client}
+      />
+
+      {client && (
+        <CreateJobSlideout
+          isOpen={isCreateJobOpen}
+          onClose={() => setIsCreateJobOpen(false)}
+          onJobCreated={() => fetchJobs()}
+          clientId={client.id}
+          clientName={fullName}
         />
-      </div>
+      )}
+
+      <JobViewSlideout
+        isOpen={!!editingJob}
+        onClose={() => setEditingJob(null)}
+        job={editingJob}
+        onJobUpdated={() => { fetchJobs(); fetchCompletedJobs() }}
+      />
+
+      {client && (
+        <CreateSubscription
+          isOpen={isCreateSubOpen}
+          onClose={() => setIsCreateSubOpen(false)}
+          onSubscriptionCreated={() => { setIsCreateSubOpen(false); fetchSubscriptions() }}
+          initialClientId={client.id}
+          lockClient={true}
+        />
+      )}
+
+      {client && editingSub && (
+        <SubscriptionSlideout
+          isOpen={!!editingSub}
+          onClose={() => setEditingSub(null)}
+          onSubscriptionCreated={() => fetchSubscriptions()}
+          onPauseToggle={handlePauseSubscription}
+          clientId={client.id}
+          subscription={editingSub}
+        />
+      )}
+
+
+      {deleteInvoiceId && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setDeleteInvoiceId(null)} />
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h3 className="text-base font-semibold text-primary-500">Delete invoice</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Only draft invoices can be deleted.</p>
+            </div>
+            <div className="p-6 space-y-3">
+              {[
+                { value: 'restore', title: 'Delete invoice, keep jobs', subtitle: 'Jobs will be restored and become invoiceable again.' },
+                { value: 'delete_jobs', title: 'Delete invoice and delete jobs', subtitle: 'Also removes the jobs linked to this invoice.' },
+              ].map(opt => (
+                <label key={opt.value} className={`flex items-start gap-3 p-3 border rounded-xl cursor-pointer transition-colors ${deleteJobAction === opt.value ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                  <input type="radio" name="jobAction" className="mt-0.5" checked={deleteJobAction === opt.value as typeof deleteJobAction} onChange={() => setDeleteJobAction(opt.value as typeof deleteJobAction)} />
+                  <div>
+                    <div className="text-sm font-medium text-primary-500">{opt.title}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{opt.subtitle}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+              <button onClick={() => setDeleteInvoiceId(null)} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50">Cancel</button>
+              <button onClick={deleteInvoice} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-xl hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SendInvoiceModal
+        isOpen={sendInvoiceId !== null}
+        invoiceNumber={invoices.find(i => i.id === sendInvoiceId)?.invoice_number}
+        defaultSubject={sendInvoiceDefaultSubject}
+        defaultMessage={sendInvoiceDefaultMessage}
+        isSending={sendingInvoice}
+        onClose={() => setSendInvoiceId(null)}
+        onSend={sendInvoiceEmail}
+      />
     </AppLayout>
   )
 }
