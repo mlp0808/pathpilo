@@ -10,8 +10,11 @@ jobs:
       - name: Generate SSH Key Pair
         run: |
           ssh-keygen -t rsa -b 4096 -f /tmp/deploy_key -N "" -C "github-actions-pathpilo"
-          echo "========== PUBLIC KEY (add to server) =========="
+          echo ""
+          echo "========== PUBLIC KEY (send to server admin) =========="
           cat /tmp/deploy_key.pub
-          echo "========== PRIVATE KEY (add to GitHub secret SSH_PRIVATE_KEY) =========="
-          cat /tmp/deploy_key
+          echo ""
+          echo "========== PRIVATE KEY AS BASE64 (paste this into GitHub secret: SSH_PRIVATE_KEY_B64) =========="
+          base64 -w 0 /tmp/deploy_key
+          echo ""
           echo "================================================"
