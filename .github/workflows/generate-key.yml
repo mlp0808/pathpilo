@@ -1,0 +1,17 @@
+name: Generate Deploy Key
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate SSH Key Pair
+        run: |
+          ssh-keygen -t rsa -b 4096 -f /tmp/deploy_key -N "" -C "github-actions-pathpilo"
+          echo "========== PUBLIC KEY (add to server) =========="
+          cat /tmp/deploy_key.pub
+          echo "========== PRIVATE KEY (add to GitHub secret SSH_PRIVATE_KEY) =========="
+          cat /tmp/deploy_key
+          echo "================================================"

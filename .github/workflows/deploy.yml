@@ -5,32 +5,117 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  NODE_VERSION: "22"
-  APP_DIR: /home/pathpilo/htdocs/pathpilo.com
-
 jobs:
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    environment: Production
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: "22"
           cache: npm
           cache-dependency-path: |
             package-lock.json
             api-server/package-lock.json
             marketing/package-lock.json
 
-      - name: Write .env for build
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Install Marketing Dependencies
+        run: cd marketing && npm ci
+
+      - name: Write .env for Build
         run: |
-          printf %sn \
+          printf '%s\n' \
+            "NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}" \
+            "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
+            "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
+            "NEXT_PUBLIC_API_URL=" > .env
+
+      - name: Build Frontend
+        run: npm run build
+
+      - name: Build Marketing
+        run: cd marketing && npm run build
+
+      - name: Create Deployment Archive
+        shell: bash
+        run: |
+          set +e
+          tar -czf deployment.tar.gz \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=.env \
+            --exclude=logs \
+            --exclude=PathPiloMobile \
+            --exclude=pathpilo_web_OLD_DO_NOT_USE \
+            --exclude='marketing/node_modules' \
+            --exclude='api-server/node_modules' \
+            --exclude='api-server/.env' \
+            .
+          EXIT_CODE=$?
+          set -e
+          if [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 1 ]; then
+            echo "Archive created successfully"
+            exit 0
+          else
+            echo "Archive creation failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Test SSH Connection
+        run: |
+          ssh -v -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "echo 'SSH connection successful'"
+
+      - name: Upload Archive to Server
+        run: |
+          scp -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key deployment.tar.gz ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/
+
+      - name: Deploy on Server
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'bash -s' << 'DEPLOY_SCRIPT'
+          set -e
+          APP="/home/pathpilo/htdocs/pathpilo.com"
+          TEMP_DEPLOY="/tmp/pathpilo_deploy_$$"
+
+          mkdir -p $TEMP_DEPLOY
+
+          echo "==> Extracting deployment..."
+          tar -xzf /tmp/deployment.tar.gz -C $TEMP_DEPLOY
+
+          echo "==> Syncing files..."
+          rsync -a --delete \
+            --exclude='.env' \
+            --exclude='api-server/.env' \
+            --exclude='node_modules' \
+            --exclude='api-server/node_modules' \
+            --exclude='marketing/node_modules' \
+            --exclude='logs' \
+            $TEMP_DEPLOY/ $APP/
+
+          rm -rf $TEMP_DEPLOY
+          rm -f /tmp/deployment.tar.gz
+
+          cd $APP
+
+          echo "==> Writing .env..."
+          printf '%s\n' \
             "DATABASE_URL=postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}" \
             "DB_HOST=${{ vars.DB_HOST }}" \
             "DB_PORT=${{ vars.DB_PORT }}" \
@@ -53,118 +138,38 @@ jobs:
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
             "NEXT_PUBLIC_API_URL=" > .env
 
-      - name: Install frontend dependencies
-        run: npm ci
+          printf '%s\n' \
+            "DB_HOST=${{ vars.DB_HOST }}" \
+            "DB_PORT=${{ vars.DB_PORT }}" \
+            "DB_NAME=${{ vars.DB_NAME }}" \
+            "DB_USER=${{ vars.DB_USER }}" \
+            "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" \
+            "JWT_SECRET=${{ secrets.JWT_SECRET }}" \
+            "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" \
+            "FROM_EMAIL=${{ vars.FROM_EMAIL }}" \
+            "FRONTEND_URL=${{ vars.APP_URL }}" \
+            "API_PORT=${{ vars.API_PORT }}" \
+            "NODE_ENV=production" \
+            "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" > api-server/.env
 
-      - name: Install marketing dependencies
-        run: cd marketing && npm ci
+          echo "==> Installing production dependencies..."
+          npm ci --omit=dev
+          cd api-server && npm ci --omit=dev && cd ..
+          cd marketing && npm ci --omit=dev && cd ..
 
-      - name: Build frontend
-        run: npm run build
+          mkdir -p logs
 
-      - name: Build marketing
-        run: cd marketing && npm run build
+          echo "==> Restarting services..."
+          pm2 restart pathpilo-frontend --update-env
+          pm2 restart pathpilo-api --update-env
+          pm2 restart pathpilo-marketing --update-env
+          pm2 save
 
-      - name: Setup SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          echo "==> Deploy complete!"
+          DEPLOY_SCRIPT
 
-      - name: Add server to known hosts
-        run: ssh-keyscan -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Deploy frontend build
+      - name: Cleanup
+        if: always()
         run: |
-          rsync -az --delete \
-            -e "ssh -p ${{ secrets.SSH_PORT }}" \
-            .next/ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/.next/
-
-      - name: Deploy marketing build
-        run: |
-          rsync -az --delete \
-            -e "ssh -p ${{ secrets.SSH_PORT }}" \
-            marketing/.next/ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/marketing/.next/
-
-      - name: Deploy source files
-        run: |
-          rsync -az \
-            -e "ssh -p ${{ secrets.SSH_PORT }}" \
-            --exclude=node_modules \
-            --exclude=.git \
-            --exclude=.env \
-            --exclude=.next \
-            --exclude=marketing/.next \
-            --exclude=marketing/node_modules \
-            --exclude=api-server/node_modules \
-            --exclude=api-server/.env \
-            --exclude=logs \
-            --exclude=PathPiloMobile \
-            --exclude=pathpilo_web_OLD_DO_NOT_USE \
-            ./ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/
-
-      - name: Install deps, write env, restart
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          command_timeout: 5m
-          script_stop: true
-          script: |
-            set -e
-            cd /home/pathpilo/htdocs/pathpilo.com
-
-            echo "==> Writing .env files..."
-            printf %sn \
-              "DATABASE_URL=postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}" \
-              "DB_HOST=${{ vars.DB_HOST }}" \
-              "DB_PORT=${{ vars.DB_PORT }}" \
-              "DB_NAME=${{ vars.DB_NAME }}" \
-              "DB_USER=${{ vars.DB_USER }}" \
-              "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" \
-              "JWT_SECRET=${{ secrets.JWT_SECRET }}" \
-              "ADMIN_EMAIL=${{ vars.ADMIN_EMAIL }}" \
-              "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}" \
-              "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" \
-              "NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}" \
-              "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
-              "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
-              "FROM_EMAIL=${{ vars.FROM_EMAIL }}" \
-              "FROM_NAME=${{ vars.FROM_NAME }}" \
-              "FRONTEND_URL=${{ vars.FRONTEND_URL }}" \
-              "API_PORT=${{ vars.API_PORT }}" \
-              "PORT=${{ vars.PORT }}" \
-              "NODE_ENV=production" \
-              "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
-              "NEXT_PUBLIC_API_URL=" > .env
-
-            printf %sn \
-              "DB_HOST=${{ vars.DB_HOST }}" \
-              "DB_PORT=${{ vars.DB_PORT }}" \
-              "DB_NAME=${{ vars.DB_NAME }}" \
-              "DB_USER=${{ vars.DB_USER }}" \
-              "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" \
-              "JWT_SECRET=${{ secrets.JWT_SECRET }}" \
-              "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" \
-              "FROM_EMAIL=${{ vars.FROM_EMAIL }}" \
-              "FRONTEND_URL=${{ vars.APP_URL }}" \
-              "API_PORT=${{ vars.API_PORT }}" \
-              "NODE_ENV=production" \
-              "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" > api-server/.env
-
-            echo "==> Installing production dependencies..."
-            npm ci --omit=dev
-            cd api-server && npm ci --omit=dev && cd ..
-            cd marketing && npm ci --omit=dev && cd ..
-
-            echo "==> Restarting services..."
-            pm2 restart pathpilo-frontend --update-env
-            pm2 restart pathpilo-api --update-env
-            pm2 restart pathpilo-marketing --update-env
-            pm2 save
-
-            echo "==> Deploy complete!"
+          rm -f ~/.ssh/deploy_key
+          rm -f deployment.tar.gz
