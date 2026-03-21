@@ -65,31 +65,32 @@ jobs:
       - name: Build marketing
         run: cd marketing && npm run build
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          printf %sn "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d r > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: ssh-keyscan -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy frontend build
         run: |
           rsync -az --delete \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
             .next/ \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/.next/
 
       - name: Deploy marketing build
         run: |
           rsync -az --delete \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
             marketing/.next/ \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ env.APP_DIR }}/marketing/.next/
 
       - name: Deploy source files
         run: |
           rsync -az \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
             --exclude=node_modules \
             --exclude=.git \
             --exclude=.env \
