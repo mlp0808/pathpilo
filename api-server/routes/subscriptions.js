@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../utils/database');
+const { scheduleAutomationSendsForJob } = require('../utils/automatedEmails');
 
 const router = express.Router();
 
@@ -358,6 +359,14 @@ router.post('/', authenticateToken, async (req, res) => {
       }
 
       await dbClient.query('COMMIT');
+
+      if (firstJob) {
+        setImmediate(() =>
+          scheduleAutomationSendsForJob(pool, companyId, firstJob.id).catch((err) =>
+            console.error('scheduleAutomationSendsForJob after subscription create:', err.message || err)
+          )
+        );
+      }
 
       console.log('Subscription created successfully:', {
         id: subscription.id,
@@ -798,6 +807,12 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     await dbClient.query('COMMIT');
     dbClient.release();
+
+    setImmediate(() =>
+      scheduleAutomationSendsForJob(pool, companyId, jobId).catch((err) =>
+        console.error('scheduleAutomationSendsForJob after materialize:', err.message || err)
+      )
+    );
 
     return res.status(201).json({ message: 'Materialized', jobId, scheduled_date: jobDate, recurring_occurrence: occurrence });
   } catch (error) {

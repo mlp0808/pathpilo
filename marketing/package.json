@@ -7,7 +7,8 @@
     "dev": "next dev -p 3003",
     "build": "next build",
     "start": "next start -p 3003",
-    "lint": "next lint"
+    "lint": "next lint",
+    "placeholders": "node scripts/generate-placeholder-images.js"
   },
   "dependencies": {
     "next": "^15.5.5",

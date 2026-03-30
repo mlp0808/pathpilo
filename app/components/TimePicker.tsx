@@ -10,6 +10,7 @@ interface TimePickerProps {
   placeholder?: string
   className?: string
   label?: string
+  minTime?: string
 }
 
 /**
@@ -23,6 +24,7 @@ export default function TimePicker({
   placeholder = 'e.g. 09:00',
   className = '',
   label,
+  minTime,
 }: TimePickerProps) {
   const [showPicker, setShowPicker] = useState(false)
   const [rect, setRect] = useState<DOMRect | null>(null)
@@ -62,6 +64,13 @@ export default function TimePicker({
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
   })
 
+  const minMinutes = (() => {
+    if (!minTime) return -1
+    const parts = minTime.split(':')
+    if (parts.length < 2) return -1
+    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10)
+  })()
+
   return (
     <div data-time-picker-trigger ref={triggerRef} className={`relative ${className}`}>
       {label && (
@@ -91,20 +100,27 @@ export default function TimePicker({
           }}
         >
           <div className="grid grid-cols-4 gap-1.5">
-            {times.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => { onChange(t); setShowPicker(false) }}
-                className={`px-2 py-2 text-xs font-semibold rounded-lg transition-all duration-150 ${
-                  value === t
-                    ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 ring-2 ring-accent-300'
-                    : 'bg-white text-gray-700 hover:bg-accent-50 border border-gray-200 hover:border-accent-200'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+            {times.map((t) => {
+              const tMinutes = parseInt(t.split(':')[0], 10) * 60 + parseInt(t.split(':')[1], 10)
+              const isDisabled = minMinutes >= 0 && tMinutes <= minMinutes
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => { if (!isDisabled) { onChange(t); setShowPicker(false) } }}
+                  className={`px-2 py-2 text-xs font-semibold rounded-lg transition-all duration-150 ${
+                    isDisabled
+                      ? 'bg-gray-50 text-gray-300 border border-gray-100 cursor-not-allowed'
+                      : value === t
+                        ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 ring-2 ring-accent-300'
+                        : 'bg-white text-gray-700 hover:bg-accent-50 border border-gray-200 hover:border-accent-200'
+                  }`}
+                >
+                  {t}
+                </button>
+              )
+            })}
           </div>
         </div>,
         document.body

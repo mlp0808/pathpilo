@@ -11,8 +11,11 @@ import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
 import DayRoutePanel from '@/app/components/DayRoutePanel'
 import { apiUrl } from '@/app/utils/api'
+import { formatMoney } from '@/app/config/countryRules'
+import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useParams, useSearchParams } from 'next/navigation'
+import { useAppI18n } from '@/app/components/I18nProvider'
 import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
 import type { UserRoute, RouteJob } from '@/app/components/RouteMap'
 
@@ -47,9 +50,12 @@ interface WorkHours {
 }
 
 function JobsPageContent() {
+  const { t, locale } = useAppI18n()
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-US'
   const params = useParams()
   const searchParams = useSearchParams()
   const { user, loading: userLoading } = useUser()
+  const companyCountryCode = useCompanyCountryCode(user)
   const companySlug = (params?.company as string) || ''
   
   // Format a Date as YYYY-MM-DD in local time (avoids timezone shifting from toISOString)
@@ -223,14 +229,14 @@ function JobsPageContent() {
     const weekDays = getWeekDays()
 
     const formatDate = (date: Date) => {
-        return date.toLocaleDateString('en-US', {
+        return date.toLocaleDateString(dateLocale, {
             month: 'short',
             day: 'numeric'
         })
     }
 
     const formatWeekday = (date: Date) => {
-        return date.toLocaleDateString('en-US', {
+        return date.toLocaleDateString(dateLocale, {
             weekday: 'long'
         })
     }
@@ -898,8 +904,8 @@ function JobsPageContent() {
             setPendingMoveDate(dateString)
             
             // Fetch email template
-            const oldDate = new Date(draggedJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
-            const newDate = new Date(dateString + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+            const oldDate = new Date(draggedJob.scheduled_date + 'T00:00:00').toLocaleDateString(dateLocale, { day: '2-digit', month: '2-digit', year: 'numeric' })
+            const newDate = new Date(dateString + 'T00:00:00').toLocaleDateString(dateLocale, { day: '2-digit', month: '2-digit', year: 'numeric' })
             
             let userName = 'Our team'
             try {
@@ -1064,15 +1070,10 @@ function JobsPageContent() {
         }
     }
 
-    // Format price (compact)
+    // Format price (compact) — company currency
     const formatPrice = (price: number) => {
         if (!price) return ''
-        return new Intl.NumberFormat('da-DK', {
-            style: 'currency',
-            currency: 'DKK',
-            minimumFractionDigits: 0,
-            maximumFractionDigits: 0
-        }).format(price).replace('kr', 'kr.')
+        return formatMoney(price, companyCountryCode)
     }
 
     // Get address string for display (address • zip city) to match design e.g. "Tyttebærvej 2 • 2400 København"
@@ -1630,13 +1631,27 @@ function JobsPageContent() {
     setDayOptimizing(false)
   }, [dayRoutes, handleDayReorder])
 
+  const formatLeaveBadge = (leaveType: string, hoursOff: number | null) => {
+    switch (leaveType) {
+      case 'full_day':
+        return t('app.jobsPage.leaveFullDay')
+      case 'half_day_morning':
+        return t('app.jobsPage.leaveHalfAm')
+      case 'half_day_afternoon':
+        return t('app.jobsPage.leaveHalfPm')
+      case 'custom_hours':
+        return t('app.jobsPage.leaveHoursOff').replace('{{hours}}', String(hoursOff ?? '?'))
+      default:
+        return t('app.jobsPage.leave')
+    }
+  }
 
     if (userLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-page">
                 <div className="text-center">
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-500 border-t-transparent"></div>
-                    <p className="mt-2 text-primary-500">Loading...</p>
+                    <p className="mt-2 text-primary-500">{t('app.jobsPage.loading')}</p>
                 </div>
             </div>
         )
@@ -1647,11 +1662,9 @@ function JobsPageContent() {
             <div className="space-y-4 overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
                 {apiError && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                    <div className="text-sm text-red-800 font-medium">Jobs page error</div>
+                    <div className="text-sm text-red-800 font-medium">{t('app.jobsPage.errorTitle')}</div>
                     <div className="text-xs text-red-700 mt-1">{apiError}</div>
-                    <div className="text-xs text-red-700 mt-2">
-                      If this says “No active company selected”, log out and log back in (or go to <span className="font-mono">/select-company</span>).
-                    </div>
+                    <div className="text-xs text-red-700 mt-2">{t('app.jobsPage.errorHint')}</div>
                   </div>
                 )}
                 {/* Top Bar — hidden in day view (calendar nav lives on the map overlay) */}
@@ -1661,14 +1674,14 @@ function JobsPageContent() {
                         <button 
                             onClick={viewMode === 'month' ? goToPreviousMonth : goToPreviousWeek} 
                             className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
-                            aria-label={viewMode === 'month' ? 'Previous month' : 'Previous week'}
+                            aria-label={viewMode === 'month' ? t('app.jobsPage.prevMonth') : t('app.jobsPage.prevWeek')}
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                         </button>
                         <button 
                             onClick={viewMode === 'month' ? goToNextMonth : goToNextWeek} 
                             className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
-                            aria-label={viewMode === 'month' ? 'Next month' : 'Next week'}
+                            aria-label={viewMode === 'month' ? t('app.jobsPage.nextMonth') : t('app.jobsPage.nextWeek')}
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                         </button>
@@ -1676,12 +1689,12 @@ function JobsPageContent() {
                             onClick={viewMode === 'month' ? goToCurrentMonth : goToCurrentWeek} 
                             className="text-sm font-medium text-gray-700 hover:text-primary-600 underline"
                         >
-                            Today
+                            {t('app.jobsPage.today')}
                         </button>
                         <span className="text-sm font-medium text-primary-500">
                             {viewMode === 'month' 
-                                ? currentWeek.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                                : weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                                ? currentWeek.toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })
+                                : weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })
                             }
                         </span>
                     </div>
@@ -1702,7 +1715,7 @@ function JobsPageContent() {
                                     }}
                                     className="w-full bg-transparent border-none text-sm font-medium text-accent-500 focus:ring-0 focus:outline-none cursor-pointer appearance-none pr-6 py-1"
                                 >
-                                    <option value="all">All team</option>
+                                    <option value="all">{t('app.jobsPage.allTeam')}</option>
                                     {users.map((u) => (
                                         <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>
                                     ))}
@@ -1715,9 +1728,9 @@ function JobsPageContent() {
                                 <button
                                     key={m}
                                     onClick={() => setViewMode(m)}
-                                    className={`px-4 py-2 text-sm font-medium rounded-md capitalize transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                    className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
                                 >
-                                    {m}
+                                    {m === 'day' ? t('app.jobsPage.viewDay') : m === 'week' ? t('app.jobsPage.viewWeek') : m === 'month' ? t('app.jobsPage.viewMonth') : t('app.jobsPage.viewYear')}
                                 </button>
                             ))}
                         </div>
@@ -1747,7 +1760,7 @@ function JobsPageContent() {
                         geocodingCount={dayGeocodingCount}
                         onSave={handleSaveAndApply}
                         onBackToWeek={() => { setViewMode('week'); setDayFocusUserId(null); setHoveredJobId(null) }}
-                        dateLabel={currentWeek.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' })}
+                        dateLabel={currentWeek.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'short' })}
                         highlightedJobId={hoveredJobId}
                         onJobCardHover={setHoveredJobId}
                         baselineMinutesByUser={dayBaselineMinutes}
@@ -1776,7 +1789,7 @@ function JobsPageContent() {
                             type="button"
                             onClick={goToPreviousWeek}
                             className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
-                            title="Previous week"
+                            title={t('app.jobsPage.prevWeek')}
                           >
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
@@ -1819,7 +1832,7 @@ function JobsPageContent() {
                             type="button"
                             onClick={goToNextWeek}
                             className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
-                            title="Next week"
+                            title={t('app.jobsPage.nextWeek')}
                           >
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
@@ -1829,7 +1842,7 @@ function JobsPageContent() {
 
                         {/* Month + year label below the pill */}
                         <p className="text-[11px] font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)] mt-1.5 text-center tracking-wide">
-                          {weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                          {weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })}
                         </p>
                       </div>
                     </div>
@@ -1844,11 +1857,15 @@ function JobsPageContent() {
                     <div className="space-y-2">
                         {/* Weekday headers */}
                         <div className="grid grid-cols-7 gap-2 mb-2">
-                            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
-                                <div key={day} className="text-center text-xs font-semibold text-gray-600 py-2">
-                                    {day}
+                            {[0, 1, 2, 3, 4, 5, 6].map((i) => {
+                                const d = new Date(2024, 0, 1 + i)
+                                const label = d.toLocaleDateString(dateLocale, { weekday: 'short' })
+                                return (
+                                <div key={i} className="text-center text-xs font-semibold text-gray-600 py-2">
+                                    {label}
                                 </div>
-                            ))}
+                                )
+                            })}
                         </div>
                         {/* Calendar grid */}
                         <div className="grid grid-cols-7 gap-2">
@@ -1946,11 +1963,11 @@ function JobsPageContent() {
                                                                     <CheckIcon className="w-3 h-3 text-accent-500 flex-shrink-0" strokeWidth={3} />
                                                                 )}
                                                                 <span className="truncate">
-                                                                    {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
+                                                                    {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || t('app.jobsPage.client')}
                                                                 </span>
                                                             </div>
                                                             {isJobCancelled && (
-                                                                <span className="text-[9px] font-medium text-red-600">Cancelled</span>
+                                                                <span className="text-[9px] font-medium text-red-600">{t('app.jobsPage.cancelled')}</span>
                                                             )}
                                                         </div>
                                                     )
@@ -1958,7 +1975,7 @@ function JobsPageContent() {
                                             ) : null}
                                             {dayJobs.length > 3 && (
                                                 <div className="text-[10px] text-gray-500 text-center pt-1">
-                                                    +{dayJobs.length - 3} more
+                                                    {t('app.jobsPage.moreJobs').replace('{{n}}', String(dayJobs.length - 3))}
                                                 </div>
                                             )}
                                         </div>
@@ -1968,7 +1985,7 @@ function JobsPageContent() {
                                             type="button"
                                             onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
                                             className="absolute bottom-1 right-1 inline-flex items-center justify-center w-5 h-5 text-accent-600 hover:text-accent-700 hover:bg-accent-50 rounded"
-                                            title="Add job"
+                                            title={t('app.jobsPage.addJob')}
                                         >
                                             <PlusIcon className="w-3 h-3" />
                                         </button>
@@ -2108,25 +2125,17 @@ function JobsPageContent() {
                                                         )}
                                                         <div className="relative z-10 px-3 py-3 h-full flex flex-col justify-between">
                                                             <div className={`text-[11px] ${isTodayBanner ? 'text-white/90' : 'text-white/80'}`}>
-                                                                {day.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                                {day.toLocaleDateString(dateLocale, { day: '2-digit', month: '2-digit', year: 'numeric' })}
                                                             </div>
                                                             <div className="flex items-end justify-between">
                                                                 <div className="text-lg font-bold text-white">
                                                                     {formatWeekday(day)}
                                                                 </div>
-                                                                {dayLeaveEntry && (() => {
-                                                                    const leaveLabels: Record<string, string> = {
-                                                                        full_day: 'Day off',
-                                                                        half_day_morning: '½ AM off',
-                                                                        half_day_afternoon: '½ PM off',
-                                                                        custom_hours: `${dayLeaveEntry.hours_off ?? '?'}h off`,
-                                                                    }
-                                                                    return (
+                                                                {dayLeaveEntry && (
                                                                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-white/20 text-white backdrop-blur-sm">
-                                                                            {leaveLabels[dayLeaveEntry.leave_type] ?? 'Leave'}
+                                                                            {formatLeaveBadge(dayLeaveEntry.leave_type, dayLeaveEntry.hours_off)}
                                                                         </span>
-                                                                    )
-                                                                })()}
+                                                                )}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -2136,10 +2145,10 @@ function JobsPageContent() {
                                             {/* Total hour: "Total hour:" above left, "X / Y" above right; bar 100% width below. No bottom border. */}
                                             <div className="pt-2.5 pb-1.5">
                                                 <div className="flex items-center justify-between mb-1.5">
-                                                    <span className="text-[11px] font-medium text-gray-700">Total hour:</span>
+                                                    <span className="text-[11px] font-medium text-gray-700">{t('app.jobsPage.totalHours')}</span>
                                                     <span className="text-[11px] font-medium text-gray-700 tabular-nums">
                                                         {dayTravelMins > 0 && (
-                                                            <span className="text-gray-400 mr-1">({dayTravelMins}m drive)</span>
+                                                            <span className="text-gray-400 mr-1">{t('app.jobsPage.driveMins').replace('{{mins}}', String(dayTravelMins))}</span>
                                                         )}
                                                         {totalHoursWithTravel.toFixed(1)} / {workHoursNum.toFixed(1)}
                                                     </span>
@@ -2169,10 +2178,10 @@ function JobsPageContent() {
                                                         type="button"
                                                         onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
                                                         className="flex items-center gap-1 text-[11px] font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-1.5 py-0.5 rounded-md transition-colors"
-                                                        title="Add job"
+                                                        title={t('app.jobsPage.addJob')}
                                                     >
                                                         <PlusIcon className="w-3 h-3" />
-                                                        Add job
+                                                        {t('app.jobsPage.addJob')}
                                                     </button>
                                                     <button
                                                         type="button"
@@ -2196,12 +2205,12 @@ function JobsPageContent() {
                                                                 ? 'text-accent-600 hover:text-accent-700 hover:bg-accent-50'
                                                                 : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                                                         }`}
-                                                        title={routeIsIntact ? 'Route planned — click to re-plan' : 'Plan route for this day'}
+                                                        title={routeIsIntact ? t('app.jobsPage.planRouteTitlePlanned') : t('app.jobsPage.planRouteTitle')}
                                                     >
                                                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                                                         </svg>
-                                                        Plan route
+                                                        {t('app.jobsPage.planRoute')}
                                                     </button>
                                                 </div>
                                             </div>
@@ -2278,7 +2287,7 @@ function JobsPageContent() {
                                                                     {jobIndex === firstUnplannedIndex && firstUnplannedIndex > 0 && (
                                                                         <div className="flex items-center gap-2 my-2">
                                                                             <div className="flex-1 border-t border-dashed border-gray-200" />
-                                                                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">Not planned</span>
+                                                                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">{t('app.jobsPage.notPlanned')}</span>
                                                                             <div className="flex-1 border-t border-dashed border-gray-200" />
                                                                         </div>
                                                                     )}
@@ -2295,7 +2304,7 @@ function JobsPageContent() {
                                                                     <div className="flex items-start justify-between gap-2 mb-1">
                                                                         <div className="flex items-center min-w-0 flex-1">
                                                                             <span className="font-semibold text-sm text-gray-800 truncate min-w-0 flex-1">
-                                                                                {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || 'Client'}
+                                                                                {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || t('app.jobsPage.client')}
                                                                             </span>
                                                                         </div>
                                                                         {noteCount > 0 && (
@@ -2343,7 +2352,7 @@ function JobsPageContent() {
                                                                             )}
                                                                         </div>
                                                                         {isJobCancelled ? (
-                                                                            <span className="text-[10px] font-medium text-red-600 px-1.5 py-0.5 rounded bg-red-100 flex-shrink-0">Cancelled</span>
+                                                                            <span className="text-[10px] font-medium text-red-600 px-1.5 py-0.5 rounded bg-red-100 flex-shrink-0">{t('app.jobsPage.cancelled')}</span>
                                                                         ) : typeof job.status !== 'undefined' && (
                                                                             <button
                                                                                 type="button"
@@ -2351,7 +2360,7 @@ function JobsPageContent() {
                                                                                 className={`w-5 h-5 rounded-full flex items-center justify-center border-2 flex-shrink-0 ${
                                                                                     isJobCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white'
                                                                                 }`}
-                                                                                title={isJobCompleted ? 'Mark not completed' : 'Mark completed'}
+                                                                                title={isJobCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
                                                                             >
                                                                                 <CheckIcon className={`w-3 h-3 ${isJobCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
                                                                             </button>
@@ -2401,7 +2410,7 @@ function JobsPageContent() {
                 <button
                     onClick={() => setShowCreateMenu(!showCreateMenu)}
                     className="bg-accent-500 text-white px-4 py-2.5 rounded-xl shadow-md hover:shadow-lg hover:bg-accent-600 transition-all flex items-center space-x-2 font-medium"
-                    title="Create"
+                    title={t('app.jobsPage.createFab')}
                 >
                     <span>create +</span>
                 </button>
@@ -2486,17 +2495,17 @@ function JobsPageContent() {
             {/* Move Job Confirmation Modal */}
             <ConfirmModal
                 isOpen={showMoveModal && !!pendingMoveJob && !!pendingMoveDate}
-                title="Move Job"
-                description={`Move this job to a new date?`}
-                confirmLabel={isMovingJob ? 'Moving...' : 'Move Job'}
-                cancelLabel="Cancel"
+                title={t('app.jobsPage.moveJob')}
+                description={t('app.jobsPage.moveJobDescription')}
+                confirmLabel={isMovingJob ? t('app.jobsPage.movingJob') : t('app.jobsPage.moveJob')}
+                cancelLabel={t('app.common.cancel')}
                 enableNotification={true}
                 isSubmitting={isMovingJob}
                 defaultEmail={pendingMoveJob ? (pendingMoveJob.client_billing_email || pendingMoveJob.client_personal_email || pendingMoveJob.client_email || '') : ''}
                 defaultMessage={moveTemplate.message || (() => {
                     if (!pendingMoveJob || !pendingMoveDate) return ''
-                    const oldDate = new Date(pendingMoveJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                    const newDate = new Date(pendingMoveDate + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                    const oldDate = new Date(pendingMoveJob.scheduled_date + 'T00:00:00').toLocaleDateString(dateLocale, { day: '2-digit', month: '2-digit', year: 'numeric' })
+                    const newDate = new Date(pendingMoveDate + 'T00:00:00').toLocaleDateString(dateLocale, { day: '2-digit', month: '2-digit', year: 'numeric' })
                     const customerName = `${pendingMoveJob.first_name || ''} ${pendingMoveJob.last_name || ''}`.trim() || 'Customer'
                     const userName = (user as any)?.first_name && (user as any)?.last_name ? `${(user as any).first_name} ${(user as any).last_name}` : 'We'
                     return `Hi ${customerName},\n\nWe need to reschedule your appointment.\n\nOld date: ${oldDate}\nNew date: ${newDate}\n\nIf this new date doesn't work for you, please let us know.\n\nBest regards,\n${userName}`
@@ -2519,9 +2528,9 @@ function JobsPageContent() {
                     <div className="space-y-2">
                         <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                             <div>
-                                <p className="text-sm font-medium text-gray-700">Old Date</p>
+                                <p className="text-sm font-medium text-gray-700">{t('app.jobsPage.oldDate')}</p>
                                 <p className="text-sm text-gray-500">
-                                    {new Date(pendingMoveJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { 
+                                    {new Date(pendingMoveJob.scheduled_date + 'T00:00:00').toLocaleDateString(dateLocale, { 
                                         weekday: 'long',
                                         day: '2-digit', 
                                         month: '2-digit', 
@@ -2535,9 +2544,9 @@ function JobsPageContent() {
                                 </svg>
                             </div>
                             <div>
-                                <p className="text-sm font-medium text-gray-700">New Date</p>
+                                <p className="text-sm font-medium text-gray-700">{t('app.jobsPage.newDate')}</p>
                                 <p className="text-sm text-gray-500">
-                                    {new Date(pendingMoveDate + 'T00:00:00').toLocaleDateString('en-GB', { 
+                                    {new Date(pendingMoveDate + 'T00:00:00').toLocaleDateString(dateLocale, { 
                                         weekday: 'long',
                                         day: '2-digit', 
                                         month: '2-digit', 
@@ -2547,7 +2556,7 @@ function JobsPageContent() {
                             </div>
                         </div>
                         <p className="text-xs text-gray-500">
-                            Client: <span className="font-medium">{pendingMoveJob.first_name} {pendingMoveJob.last_name}</span>
+                            {t('app.jobsPage.moveClientPrefix')} <span className="font-medium">{pendingMoveJob.first_name} {pendingMoveJob.last_name}</span>
                         </p>
                     </div>
                 )}
@@ -2557,12 +2566,13 @@ function JobsPageContent() {
 }
 
 export default function JobsPage() {
+    const { t } = useAppI18n()
     return (
         <Suspense fallback={
             <div className="min-h-screen bg-page flex items-center justify-center">
                 <div className="text-center">
                     <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-500 border-t-transparent"></div>
-                    <p className="mt-2 text-primary-500">Loading...</p>
+                    <p className="mt-2 text-primary-500">{t('app.jobsPage.loading')}</p>
                 </div>
             </div>
         }>

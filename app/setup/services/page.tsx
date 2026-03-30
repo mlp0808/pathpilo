@@ -1,9 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
+import { formatMoney, getCountryRule } from '../../config/countryRules'
+import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
 
 interface Service {
   id?: number
@@ -25,6 +27,8 @@ export default function ServicesSetupPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const companyCountryCode = useCompanyCountryCode()
+  const priceCurrency = getCountryRule(companyCountryCode).defaultCurrency
   const router = useRouter()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,7 +181,7 @@ export default function ServicesSetupPage() {
                           <div className="flex-1">
                             <div className="text-sm font-medium text-gray-900">{service.title}</div>
                             <div className="text-xs text-gray-500">
-                              {service.price} DKK • {durationText}
+                              {formatMoney(Number(service.price) || 0, companyCountryCode)} • {durationText}
                             </div>
                           </div>
                         </div>
@@ -227,7 +231,7 @@ export default function ServicesSetupPage() {
                   {/* Price */}
                   <div className="group">
                     <label htmlFor="price" className="block text-sm font-medium text-gray-900 mb-2">
-                      Price (DKK) <span className="text-red-500">*</span>
+                      Price ({priceCurrency}) <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="number"

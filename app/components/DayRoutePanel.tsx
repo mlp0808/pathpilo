@@ -18,6 +18,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { UserRoute, RouteJob } from './RouteMap'
+import { useAppI18n } from './I18nProvider'
 
 function fmtMin(minutes: number) {
   if (!minutes || minutes < 1) return ''
@@ -56,6 +57,7 @@ function SortableJobCard({
   onMouseEnter?: () => void
   onMouseLeave?: () => void
 }) {
+  const { t, locale } = useAppI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: job.id })
 
@@ -84,7 +86,7 @@ function SortableJobCard({
                 : '0 1px 2px rgba(0,0,0,0.06)',
               transform: isHighlighted ? 'scale(1.08)' : 'scale(1)',
             }}
-            title="Drag to reorder"
+            title={t('app.routePlanner.dragReorder', 'Drag to reorder')}
           >
             {index + 1}
           </div>
@@ -146,7 +148,7 @@ function SortableJobCard({
                 type="button"
                 onClick={() => onOpen(job.id)}
                 className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-                title="Open job"
+                title={t('app.routePlanner.openJob', 'Open job')}
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -197,6 +199,7 @@ function HomeStopRow({
   onMouseEnter: () => void
   onMouseLeave: () => void
 }) {
+  const { t } = useAppI18n()
   const isEmpty = !job.address || job.address.trim() === ''
   const settingsHref = companySlug && userId != null ? `/${companySlug}/team/${userId}` : null
 
@@ -210,7 +213,7 @@ function HomeStopRow({
         <div
           className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-white"
           style={{ background: color, boxShadow: `0 1px 2px ${color}40` }}
-          title="Start/end — fixed"
+          title={t('app.routePlanner.startEndFixed', 'Start/end - fixed')}
         >
           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
             <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
@@ -226,15 +229,15 @@ function HomeStopRow({
               href={settingsHref}
               className="text-[11px] text-accent-600 hover:text-accent-700 hover:underline mt-0.5 inline-block"
             >
-              Select start/end location
+              {t('app.routePlanner.selectStartEnd', 'Select start/end location')}
             </Link>
           ) : (
-            <p className="text-[11px] text-gray-400 mt-0.5">Select start/end location</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">{t('app.routePlanner.selectStartEnd', 'Select start/end location')}</p>
           )
         ) : (
           <>
             <p className="text-[11px] text-gray-400 truncate mt-0.5">{job.address}</p>
-            <p className="text-[10px] text-gray-400 mt-1">Fixed location — not reorderable</p>
+            <p className="text-[10px] text-gray-400 mt-1">{t('app.routePlanner.fixedNotReorderable', 'Fixed location - not reorderable')}</p>
           </>
         )}
       </div>
@@ -267,6 +270,7 @@ function UserRoutePanel({
   onJobCardHover?: (jobId: number | string | null) => void
   baselineMinutes?: number
 }) {
+  const { t } = useAppI18n()
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
   const activeJobs = route.jobs.filter(j => !j.is_cancelled)
   const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
@@ -303,7 +307,7 @@ function UserRoutePanel({
           type="button"
           onClick={onBack}
           className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
-          title="All employees"
+          title={t('app.routePlanner.allEmployees', 'All employees')}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
@@ -318,7 +322,7 @@ function UserRoutePanel({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-gray-900 truncate">{route.userName}</p>
           <p className="text-[11px] text-gray-400">
-            {activeJobs.length} stop{activeJobs.length !== 1 ? 's' : ''}
+            {activeJobs.length} {activeJobs.length === 1 ? t('app.routePlanner.stop', 'stop') : t('app.routePlanner.stops', 'stops')}
           </p>
         </div>
       </div>
@@ -328,13 +332,13 @@ function UserRoutePanel({
         <div className="grid grid-cols-3 gap-2">
           {route.totalMinutes != null && (
             <div className="rounded-xl px-3 py-2.5 text-center bg-accent-50 border border-accent-100">
-              <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-accent-500">Drive</p>
+              <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-accent-500">{t('app.routePlanner.drive', 'Drive')}</p>
               <p className="text-sm font-bold text-accent-600">{fmtMin(route.totalMinutes)}</p>
               {baselineMinutes != null && baselineMinutes > 0 && route.totalMinutes != null && (
                 (() => {
                   const diff = route.totalMinutes! - baselineMinutes
                   if (Math.abs(diff) < 0.5) return null
-                  const label = diff < 0 ? `Saved ${fmtDeltaMin(diff)}` : `+${fmtDeltaMin(diff)}`
+                  const label = diff < 0 ? `${t('app.routePlanner.saved', 'Saved')} ${fmtDeltaMin(diff)}` : `+${fmtDeltaMin(diff)}`
                   const color = diff < 0 ? 'text-emerald-600' : 'text-amber-600'
                   return (
                     <p className={`mt-0.5 text-[10px] font-medium ${color}`}>
@@ -347,12 +351,12 @@ function UserRoutePanel({
           )}
           {route.totalKm != null && (
             <div className="rounded-xl px-3 py-2.5 text-center bg-gray-50 border border-gray-100">
-              <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-gray-400">Dist.</p>
+              <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-gray-400">{t('app.routePlanner.distance', 'Dist.')}</p>
               <p className="text-sm font-bold text-gray-800">{route.totalKm.toFixed(1)} km</p>
             </div>
           )}
           <div className="rounded-xl px-3 py-2.5 text-center bg-gray-50 border border-gray-100">
-            <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-gray-400">Stops</p>
+            <p className="text-[9px] uppercase tracking-widest font-bold mb-1 text-gray-400">{t('app.routePlanner.stops', 'Stops')}</p>
             <p className="text-sm font-bold text-gray-800">{middleJobs.length}</p>
           </div>
         </div>
@@ -371,14 +375,14 @@ function UserRoutePanel({
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            Optimizing…
+            {t('app.routePlanner.optimizing', 'Optimizing...')}
           </>
         ) : (
           <>
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
-            Auto-optimize route
+            {t('app.routePlanner.autoOptimize', 'Auto-optimize route')}
           </>
         )}
       </button>
@@ -388,7 +392,7 @@ function UserRoutePanel({
 
       {/* Timeline job list */}
       {activeJobs.length === 0 && cancelledJobs.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-10">No jobs today</p>
+        <p className="text-sm text-gray-400 text-center py-10">{t('app.routePlanner.noJobsToday', 'No jobs today')}</p>
       ) : (
         <div>
           {activeJobs.length > 0 && (
@@ -495,6 +499,7 @@ function AllUsersPanel({
   onSelectUser: (userId: number) => void
   baselineMinutesByUser?: Record<number, number>
 }) {
+  const { t } = useAppI18n()
   const totalDelta = routes.reduce((sum, route) => {
     const baseline = baselineMinutesByUser?.[route.userId]
     const total = route.totalMinutes
@@ -506,7 +511,7 @@ function AllUsersPanel({
   return (
     <div>
       <p className="text-[11px] text-gray-400 text-center mb-1">
-        Select an employee to plan their route
+        {t('app.routePlanner.selectEmployeePlan', 'Select an employee to plan their route')}
       </p>
       {showTotalDelta && (
         <p className="text-[11px] text-center mb-4">
@@ -518,8 +523,8 @@ function AllUsersPanel({
             }
           >
             {totalDelta < 0
-              ? `Total saved: ${fmtMin(Math.abs(totalDelta))}`
-              : `Total added: ${fmtMin(totalDelta)}`}
+              ? `${t('app.routePlanner.totalSaved', 'Total saved:')} ${fmtMin(Math.abs(totalDelta))}`
+              : `${t('app.routePlanner.totalAdded', 'Total added:')} ${fmtMin(totalDelta)}`}
           </span>
         </p>
       )}
@@ -534,7 +539,7 @@ function AllUsersPanel({
           const timeDeltaLabel =
             diff != null && Math.abs(diff) >= 0.5
               ? diff < 0
-                ? `Saved ${fmtDeltaMin(diff)}`
+                ? `${t('app.routePlanner.saved', 'Saved')} ${fmtDeltaMin(diff)}`
                 : `+${fmtDeltaMin(diff)}`
               : null
           const timeDeltaSaved = diff != null && diff < -0.5
@@ -558,8 +563,8 @@ function AllUsersPanel({
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-900 truncate">{route.userName}</p>
                 <p className="text-[11px] text-gray-400 mt-0.5">
-                  {stops} stop{stops !== 1 ? 's' : ''}
-                  {total != null && ` · ${fmtMin(total)} driving`}
+                  {stops} {stops === 1 ? t('app.routePlanner.stop', 'stop') : t('app.routePlanner.stops', 'stops')}
+                  {total != null && ` · ${fmtMin(total)} ${t('app.routePlanner.driving', 'driving')}`}
                   {timeDeltaLabel && (
                     <span
                       className={
@@ -604,7 +609,7 @@ function AllUsersPanel({
           )
         })}
         {routes.length === 0 && (
-          <p className="text-sm text-gray-400 text-center py-12">No jobs scheduled today</p>
+          <p className="text-sm text-gray-400 text-center py-12">{t('app.routePlanner.noJobsScheduledToday', 'No jobs scheduled today')}</p>
         )}
       </div>
     </div>
@@ -650,6 +655,7 @@ export default function DayRoutePanel({
   onJobCardHover,
   baselineMinutesByUser,
 }: DayRoutePanelProps) {
+  const { t } = useAppI18n()
   const focusedRoute = focusUserId != null ? routes.find(r => r.userId === focusUserId) : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -674,7 +680,7 @@ export default function DayRoutePanel({
               type="button"
               onClick={onBackToWeek}
               className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
-              title="Back to week view"
+              title={t('app.routePlanner.backToWeek', 'Back to week view')}
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
@@ -683,7 +689,7 @@ export default function DayRoutePanel({
           )}
           <div className="flex-1 min-w-0">
             <p className="text-[9px] font-black uppercase tracking-[0.18em] mb-0.5 text-accent-500">
-              Route Planner
+              {t('app.routePlanner.title', 'Route Planner')}
             </p>
             {dateLabel && (
               <p className="text-base font-bold text-gray-900 leading-tight truncate">{dateLabel}</p>
@@ -730,7 +736,9 @@ export default function DayRoutePanel({
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            Locating {geocodingCount} address{geocodingCount !== 1 ? 'es' : ''}…
+            {t('app.routePlanner.locatingAddresses', 'Locating {{count}} address{{suffix}}...')
+              .replace('{{count}}', String(geocodingCount))
+              .replace('{{suffix}}', geocodingCount !== 1 ? (locale === 'da' ? 'r' : 'es') : '')}
           </p>
         )}
         <button
@@ -753,21 +761,21 @@ export default function DayRoutePanel({
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              Saving…
+              {t('app.routePlanner.saving', 'Saving...')}
             </>
           ) : saved ? (
             <>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
               </svg>
-              Route saved!
+              {t('app.routePlanner.routeSaved', 'Route saved!')}
             </>
           ) : (
             <>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
               </svg>
-              Save & apply route
+              {t('app.routePlanner.saveApply', 'Save & apply route')}
             </>
           )}
         </button>

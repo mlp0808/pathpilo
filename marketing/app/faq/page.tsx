@@ -2,19 +2,73 @@
 
 import type { Metadata } from 'next'
 import { useState } from 'react'
+import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
 import CTASection from '../components/CTASection'
 import { ChevronDownIcon } from '@heroicons/react/24/outline'
+import { getLocaleFromPathname, withLocalePath } from '../lib/i18n'
 
-export default function FAQPage() {
+export default function FAQPage({ locale: localeProp }: { locale?: string }) {
+  const pathname = usePathname()
+  const locale = localeProp || getLocaleFromPathname(pathname || '/')
+  const da = locale === 'da'
   const [openIndex, setOpenIndex] = useState<number | null>(0)
 
   const toggleQuestion = (index: number) => {
     setOpenIndex(openIndex === index ? null : index)
   }
 
-  const faqs = [
+  const faqs = da ? [
+    {
+      question: 'Hvilke typer servicevirksomheder er PathPilo bygget til?',
+      answer: 'PathPilo er ideel til mobile servicevirksomheder med planlægning, aftaler og flere medarbejdere. Det gælder fx rengøring, anlæg, vedligehold, VVS, el, ejendomsservice m.fl.',
+    },
+    {
+      question: 'Hvordan fungerer gentagne opgaver?',
+      answer: 'Du kan oprette abonnementer med ugentlige eller månedlige intervaller, vælge faste dage og lade PathPilo oprette opgaver automatisk.',
+    },
+    {
+      question: 'Kan jeg administrere flere medarbejdere og deres tider?',
+      answer: 'Ja. Du kan tilføje medarbejdere, sætte arbejdstider, tildele opgaver og bruge roller (owner/manager/employee) for adgangsstyring.',
+    },
+    {
+      question: 'Hvordan fungerer fakturering?',
+      answer: 'Vælg afsluttede opgaver, vælg fakturatype, tilføj rabat/moms og send faktura på få minutter. Du kan også eksportere PDF.',
+    },
+    {
+      question: 'Kan jeg få leads fra min hjemmeside?',
+      answer: 'Ja. Du kan oprette lead-formularer, dele dem via link, få notifikationer og konvertere leads direkte til kunder og opgaver.',
+    },
+    {
+      question: 'Er PathPilo mobilvenlig?',
+      answer: 'Ja, hele platformen er responsiv og optimeret til mobil og tablet - uden app-download.',
+    },
+    {
+      question: 'Hvordan fungerer kundekommunikation?',
+      answer: 'PathPilo kan sende automatiske e-mails om bekræftelser, ændringer, aflysninger og fakturaer med skabeloner, du selv tilpasser.',
+    },
+    {
+      question: 'Hvilke analyser og rapporter får jeg?',
+      answer: 'Du får indsigt i omsætning, opgavestatus, teamperformance og kundeadfærd med filtre på dato og mulighed for eksport.',
+    },
+    {
+      question: 'Hvor sikker er mine data?',
+      answer: 'Vi bruger moderne sikkerhedsstandarder, adgangsstyring og backup i cloud. Dine data deles ikke med tredjeparter.',
+    },
+    {
+      question: 'Kan jeg prøve PathPilo gratis først?',
+      answer: 'Ja. Du kan komme i gang gratis uden kreditkort og bruge alle kernefunktioner med det samme.',
+    },
+    {
+      question: 'Hvad hvis jeg har brug for hjælp til opstart?',
+      answer: 'Vi tilbyder onboarding, vejledninger og support, så de fleste kommer hurtigt i gang.',
+    },
+    {
+      question: 'Kan jeg eksportere mine data?',
+      answer: 'Ja, du kan eksportere kunder, opgaver, fakturaer og rapporter, når du vil.',
+    },
+  ] : [
     {
       question: 'What types of service businesses is PathPilo designed for?',
       answer: 'PathPilo is perfect for any mobile service business that schedules appointments and manages multiple employees. This includes cleaning companies, landscaping services, home maintenance and repair, property management companies, HVAC services, plumbing, electrical services, and more. If you have recurring jobs, multiple team members, and need to coordinate schedules, PathPilo is built for you.',
@@ -53,7 +107,7 @@ export default function FAQPage() {
     },
     {
       question: 'Can I try PathPilo before committing?',
-      answer: 'Yes! We offer a free trial so you can explore all features risk-free. No credit card required. Set up your company, add services and clients, create jobs, and see how PathPilo works for your business. If you have questions during your trial, our support team is here to help.',
+      answer: 'Yes! PathPilo is free to get started, so you can explore all features risk-free. No credit card required. Set up your company, add services and clients, create jobs, and see how PathPilo works for your business.',
     },
     {
       question: 'What if I need help getting started?',
@@ -73,10 +127,10 @@ export default function FAQPage() {
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">
         <div className="max-w-4xl mx-auto px-6 text-center">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-primary-800 mb-6">
-            Frequently Asked Questions
+            {da ? 'Ofte stillede spørgsmål' : 'Frequently Asked Questions'}
           </h1>
           <p className="text-xl text-gray-600">
-            Everything you need to know about PathPilo and how it can help your service business.
+            {da ? 'Alt du skal vide om PathPilo, og hvordan platformen kan hjælpe din servicevirksomhed.' : 'Everything you need to know about PathPilo and how it can help your service business.'}
           </p>
         </div>
       </section>
@@ -118,24 +172,24 @@ export default function FAQPage() {
       <section className="py-20 bg-primary-50">
         <div className="max-w-4xl mx-auto px-6 text-center">
           <h2 className="text-3xl font-bold text-primary-800 mb-4">
-            Still Have Questions?
+            {da ? 'Har du stadig spørgsmål?' : 'Still Have Questions?'}
           </h2>
           <p className="text-lg text-gray-600 mb-8">
-            Our team is here to help. Contact us and we'll get back to you within 24 hours.
+            {da ? 'Vores team er klar til at hjælpe. Kontakt os, så vender vi tilbage inden for 24 timer.' : "Our team is here to help. Contact us and we'll get back to you within 24 hours."}
           </p>
-          <a href="/contact" className="btn-primary text-lg px-8 py-4 inline-block">
-            Contact Us
+          <a href={withLocalePath(locale, '/contact')} className="btn-primary text-lg px-8 py-4 inline-block">
+            {da ? 'Kontakt os' : 'Contact Us'}
           </a>
         </div>
       </section>
 
       {/* CTA Section */}
       <CTASection 
-        title="Ready to Get Started?"
-        subtitle="Join hundreds of service businesses using PathPilo to streamline their operations."
-        primaryCTA="Start Free Trial"
+        title={da ? 'Klar til at komme i gang?' : 'Ready to Get Started?'}
+        subtitle={da ? 'Bliv en del af hundredvis af servicevirksomheder, der bruger PathPilo til at effektivisere driften.' : 'Join hundreds of service businesses using PathPilo to streamline their operations.'}
+        primaryCTA={da ? 'Kom i gang gratis' : 'Get Started Free'}
         primaryLink="https://app.pathpilo.com/register"
-        secondaryCTA="Contact Sales"
+        secondaryCTA={da ? 'Kontakt salg' : 'Contact Sales'}
         secondaryLink="/contact"
       />
 

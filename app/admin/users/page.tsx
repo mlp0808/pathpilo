@@ -20,9 +20,17 @@ interface User {
   createdAt: string
 }
 
+interface StartedSignup {
+  email: string
+  startedAt: string
+  expiresAt: string
+  codeVerified: boolean
+}
+
 export default function AdminUsersPage() {
   const router = useRouter()
   const [users, setUsers] = useState<User[]>([])
+  const [startedSignups, setStartedSignups] = useState<StartedSignup[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -77,6 +85,7 @@ export default function AdminUsersPage() {
 
       if (response.ok) {
         setUsers(data.users)
+        setStartedSignups(Array.isArray(data.startedSignups) ? data.startedSignups : [])
       } else {
         if (response.status === 403) {
           setError('Admin access required. Only admin users can view this page.')
@@ -160,7 +169,51 @@ export default function AdminUsersPage() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">All Users</h1>
-          <p className="text-gray-600">View and manage all registered users in the system</p>
+          <p className="text-gray-600">View registrations in progress and fully registered users</p>
+        </div>
+
+        {/* Started signups */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+          <div className="px-6 py-4 border-b border-gray-200 bg-amber-50/60">
+            <h2 className="text-lg font-semibold text-amber-900">Started (not verified)</h2>
+            <p className="text-sm text-amber-700">Users who started signup but have not completed email verification/account creation.</p>
+          </div>
+          {loading ? (
+            <div className="p-6 text-sm text-gray-500">Loading...</div>
+          ) : startedSignups.length === 0 ? (
+            <div className="p-6 text-sm text-gray-500">No started signups right now.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Started</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code Expires</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {startedSignups.map((signup) => (
+                    <tr key={signup.email} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{signup.email}</td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${
+                          signup.codeVerified
+                            ? 'bg-blue-100 text-blue-800 border-blue-200'
+                            : 'bg-amber-100 text-amber-800 border-amber-200'
+                        }`}>
+                          {signup.codeVerified ? 'Code verified, not completed' : 'Awaiting code verification'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatDate(signup.startedAt)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatDate(signup.expiresAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Users Table */}
@@ -288,12 +341,16 @@ export default function AdminUsersPage() {
               <div className="text-sm text-gray-600">Total Users</div>
             </div>
             <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+              <div className="text-2xl font-bold text-amber-600">{startedSignups.length}</div>
+              <div className="text-sm text-gray-600">Started Signups</div>
+            </div>
+            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-green-600">
                 {new Set(users.flatMap(u => u.companies?.map(c => c.id) || [])).size}
               </div>
               <div className="text-sm text-gray-600">Unique Companies</div>
             </div>
-            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200">
+            <div className="bg-white rounded-lg p-6 shadow-sm border border-gray-200 md:col-span-2">
               <div className="text-2xl font-bold text-purple-600">
                 {users.filter(u => {
                   const today = new Date()

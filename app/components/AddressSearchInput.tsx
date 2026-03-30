@@ -17,6 +17,7 @@ interface Props {
   className?: string
   label?: string
   dotColor?: string  // small colored dot shown before the label
+  countryCode?: string
 }
 
 export default function AddressSearchInput({
@@ -26,6 +27,7 @@ export default function AddressSearchInput({
   className,
   label,
   dotColor,
+  countryCode,
 }: Props) {
   const [query, setQuery] = useState(value || '')
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
@@ -63,8 +65,10 @@ export default function AddressSearchInput({
     setIsLoading(true)
     try {
       const encoded = encodeURIComponent(q)
+      const countryFilter = String(countryCode || '').trim().toLowerCase()
+      const countryParam = countryFilter.length === 2 ? `&country=${encodeURIComponent(countryFilter)}` : ''
       const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address,place&limit=6`
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address,place&limit=6${countryParam}`
       )
       const data = await res.json()
       const results: Suggestion[] = (data.features || []).map((f: {
@@ -84,7 +88,7 @@ export default function AddressSearchInput({
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [countryCode])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value

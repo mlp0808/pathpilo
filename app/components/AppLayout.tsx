@@ -6,12 +6,14 @@ import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import SettingsSidebar from './SettingsSidebar'
 import { apiUrl } from '../utils/api'
+import { useAppI18n } from './I18nProvider'
 
 interface AppLayoutProps {
   children: React.ReactNode
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
+  const { t } = useAppI18n()
   const { user, loading } = useUser()
   const pathname = usePathname()
   const [syncingCompany, setSyncingCompany] = useState(false)
@@ -56,6 +58,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
             firstName: data.user.firstName,
             lastName: data.user.lastName,
             email: data.user.email,
+            languageCode: data.user.languageCode,
             role: data.user.role,
             companyId: data.user.companyId,
             companyName: data.user.companyName,
@@ -75,7 +78,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       <div className="min-h-screen bg-page flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500"></div>
-          <p className="mt-2 text-primary-500">Loading...</p>
+          <p className="mt-2 text-primary-500">{t('app.layout.loading', 'Loading...')}</p>
         </div>
       </div>
     )

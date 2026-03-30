@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
 import { apiUrl } from '@/app/utils/api'
+import { formatMoney, getCountryRule } from '@/app/config/countryRules'
+import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { EyeIcon, ChevronDownIcon, DocumentTextIcon, XMarkIcon } from '@heroicons/react/24/outline'
 
 interface CompletedJob {
@@ -39,13 +41,6 @@ function formatDate(value: string | undefined): string {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-function formatCurrency(value: number | string | undefined): string {
-  if (value === undefined || value === null) return '0.00'
-  const n = typeof value === 'string' ? parseFloat(value) : value
-  if (isNaN(n)) return '0.00'
-  return n.toFixed(2)
-}
-
 const INVOICE_TITLE_MAX = 30
 function invoiceTitleDisplay(title: string | null | undefined): string {
   if (!title) return '—'
@@ -56,6 +51,7 @@ export default function CompletedJobsPage() {
   const params = useParams()
   const router = useRouter()
   const company = (params?.company as string) || ''
+  const companyCountryCode = useCompanyCountryCode()
   const [jobs, setJobs] = useState<CompletedJob[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -429,7 +425,7 @@ export default function CompletedJobsPage() {
                           </span>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">
-                          {formatCurrency(job.total_price)} kr.
+                          {formatMoney(Number(job.total_price) || 0, companyCountryCode)}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">
                           {dateCompleted(job)}
@@ -516,7 +512,15 @@ export default function CompletedJobsPage() {
                                 {formatDate(inv.due_date)}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-600">
-                                {formatCurrency(inv.total)} {inv.currency || 'DKK'}
+                                {new Intl.NumberFormat('en-US', {
+                                  style: 'currency',
+                                  currency:
+                                    inv.currency && String(inv.currency).length === 3
+                                      ? String(inv.currency).toUpperCase()
+                                      : getCountryRule(companyCountryCode).defaultCurrency,
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                }).format(Number(inv.total) || 0)}
                               </td>
                             </tr>
                           ))

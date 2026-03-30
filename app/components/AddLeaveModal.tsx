@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { apiUrl } from '../utils/api'
+import { useAppI18n } from './I18nProvider'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -39,20 +40,13 @@ export interface AddLeaveModalProps {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CATEGORY_META: Record<LeaveCategory, { label: string; color: string; bg: string; border: string; emoji: string }> = {
-  holiday:        { label: 'Holiday',        color: '#3DD57A', bg: '#F0FDF4', border: '#BBF7D0', emoji: '🌴' },
-  sick:           { label: 'Sick day',       color: '#EF4444', bg: '#FEF2F2', border: '#FECACA', emoji: '🤒' },
-  personal:       { label: 'Personal',       color: '#3B82F6', bg: '#EFF6FF', border: '#BFDBFE', emoji: '👤' },
-  public_holiday: { label: 'Public holiday', color: '#8B5CF6', bg: '#F5F3FF', border: '#DDD6FE', emoji: '🎉' },
-  other:          { label: 'Other',          color: '#6B7280', bg: '#F9FAFB', border: '#E5E7EB', emoji: '📋' },
+const CATEGORY_META: Record<LeaveCategory, { color: string; bg: string; border: string; emoji: string }> = {
+  holiday:        { color: '#3DD57A', bg: '#F0FDF4', border: '#BBF7D0', emoji: '🌴' },
+  sick:           { color: '#EF4444', bg: '#FEF2F2', border: '#FECACA', emoji: '🤒' },
+  personal:       { color: '#3B82F6', bg: '#EFF6FF', border: '#BFDBFE', emoji: '👤' },
+  public_holiday: { color: '#8B5CF6', bg: '#F5F3FF', border: '#DDD6FE', emoji: '🎉' },
+  other:          { color: '#6B7280', bg: '#F9FAFB', border: '#E5E7EB', emoji: '📋' },
 }
-
-const DURATION_OPTIONS: { key: LeaveType; label: string; sub: string }[] = [
-  { key: 'full_day',           label: 'Full day',        sub: 'All day off' },
-  { key: 'half_day_morning',   label: 'Morning off',     sub: 'First half' },
-  { key: 'half_day_afternoon', label: 'Afternoon off',   sub: 'Second half' },
-  { key: 'custom_hours',       label: 'Custom hours',    sub: 'Specify hours' },
-]
 
 const AVATAR_COLORS = ['#3DD57A','#FF6B6B','#4ECDC4','#45B7D1','#F4A261','#E76F51','#7B2D8B','#2196F3']
 const avatarColor = (id: number) => AVATAR_COLORS[id % AVATAR_COLORS.length]
@@ -62,6 +56,7 @@ const avatarColor = (id: number) => AVATAR_COLORS[id % AVATAR_COLORS.length]
 export default function AddLeaveModal({
   onClose, onSaved, preselectedUserId, preselectedDate, existingLeave,
 }: AddLeaveModalProps) {
+  const { t } = useAppI18n()
   const [users, setUsers]               = useState<User[]>([])
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [userSearch, setUserSearch]     = useState('')
@@ -97,8 +92,8 @@ export default function AddLeaveModal({
   )
 
   const handleSave = async () => {
-    if (!selectedUser) { setError('Please select an employee'); return }
-    if (!date)         { setError('Please select a date'); return }
+    if (!selectedUser) { setError(t('app.leaveModal.errSelectEmployee', 'Please select an employee')); return }
+    if (!date)         { setError(t('app.leaveModal.errSelectDate', 'Please select a date')); return }
     setSaving(true); setError('')
     try {
       const token = localStorage.getItem('token')
@@ -109,9 +104,9 @@ export default function AddLeaveModal({
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) { const d = await res.json(); setError(d.error || 'Failed to save') }
+      if (!res.ok) { const d = await res.json(); setError(d.error || t('app.leaveModal.errSave', 'Failed to save')) }
       else onSaved(selectedUser.id, date)
-    } catch { setError('Network error') }
+    } catch { setError(t('app.leaveModal.errNetwork', 'Network error')) }
     finally { setSaving(false) }
   }
 
@@ -141,9 +136,9 @@ export default function AddLeaveModal({
         <div className="flex items-center justify-between px-6 pt-6 pb-4 flex-shrink-0">
           <div>
             <h2 className="text-lg font-bold text-gray-900">
-              {existingLeave ? 'Edit time off' : 'Add time off'}
+              {existingLeave ? t('app.leaveModal.editTitle', 'Edit time off') : t('app.leaveModal.addTitle', 'Add time off')}
             </h2>
-            <p className="text-sm text-gray-400 mt-0.5">Record leave, sick days, or absences</p>
+            <p className="text-sm text-gray-400 mt-0.5">{t('app.leaveModal.subtitle', 'Record leave, sick days, or absences')}</p>
           </div>
           <button
             onClick={onClose}
@@ -160,7 +155,7 @@ export default function AddLeaveModal({
 
           {/* Employee selector */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Employee</label>
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{t('app.team.sectionEmployees', 'Employee')}</label>
             {selectedUser ? (
               <button
                 onClick={() => { setSelectedUser(null); setUserSearch(''); setTimeout(() => inputRef.current?.focus(), 50) }}
@@ -177,7 +172,7 @@ export default function AddLeaveModal({
                   <p className="text-xs text-gray-500 truncate">{selectedUser.email}</p>
                 </div>
                 <span className="text-xs text-accent-600 font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                  Change ›
+                  {t('app.common.edit', 'Change')} ›
                 </span>
               </button>
             ) : (
@@ -189,14 +184,14 @@ export default function AddLeaveModal({
                   onChange={e => { setUserSearch(e.target.value); setShowDropdown(true) }}
                   onFocus={() => setShowDropdown(true)}
                   onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-                  placeholder="Search for an employee…"
+                  placeholder={t('app.leaveModal.searchEmployee', 'Search for an employee...')}
                   autoFocus={!preselectedUserId}
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300 transition-colors outline-none"
                 />
                 {showDropdown && (
                   <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-52 overflow-y-auto z-20">
                     {filtered.length === 0 ? (
-                      <div className="px-4 py-3 text-sm text-gray-400 text-center">No employees found</div>
+                      <div className="px-4 py-3 text-sm text-gray-400 text-center">{t('app.leaveModal.noEmployees', 'No employees found')}</div>
                     ) : filtered.map(u => (
                       <button
                         key={u.id}
@@ -223,7 +218,7 @@ export default function AddLeaveModal({
 
           {/* Date */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Date</label>
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{t('app.jobs.create.jobDate', 'Date')}</label>
             <input
               type="date"
               value={date}
@@ -234,7 +229,7 @@ export default function AddLeaveModal({
 
           {/* Type / category */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Reason</label>
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{t('app.leaveModal.reason', 'Reason')}</label>
             <div className="grid grid-cols-2 gap-2">
               {(Object.entries(CATEGORY_META) as [LeaveCategory, typeof CATEGORY_META[LeaveCategory]][]).map(([key, meta]) => (
                 <button
@@ -248,7 +243,7 @@ export default function AddLeaveModal({
                     : {}}
                 >
                   <span className="text-base leading-none">{meta.emoji}</span>
-                  <span className={category === key ? 'text-gray-900' : 'text-gray-700'}>{meta.label}</span>
+                  <span className={category === key ? 'text-gray-900' : 'text-gray-700'}>{t(`app.teamMember.leaveCategory.${key}`, key)}</span>
                 </button>
               ))}
             </div>
@@ -256,9 +251,14 @@ export default function AddLeaveModal({
 
           {/* Duration */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">Duration</label>
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">{t('app.leaveModal.duration', 'Duration')}</label>
             <div className="grid grid-cols-2 gap-2">
-              {DURATION_OPTIONS.map(({ key, label, sub }) => (
+              {([
+                { key: 'full_day', label: t('app.teamMember.leaveType.full_day', 'Full day'), sub: t('app.leaveModal.durationSub.full', 'All day off') },
+                { key: 'half_day_morning', label: t('app.teamMember.leaveType.half_day_morning', 'Morning off'), sub: t('app.leaveModal.durationSub.firstHalf', 'First half') },
+                { key: 'half_day_afternoon', label: t('app.teamMember.leaveType.half_day_afternoon', 'Afternoon off'), sub: t('app.leaveModal.durationSub.secondHalf', 'Second half') },
+                { key: 'custom_hours', label: t('app.teamMember.leaveType.custom_hours', 'Custom hours'), sub: t('app.leaveModal.durationSub.specifyHours', 'Specify hours') },
+              ] as { key: LeaveType; label: string; sub: string }[]).map(({ key, label, sub }) => (
                 <button
                   key={key}
                   onClick={() => setLeaveType(key)}
@@ -280,10 +280,10 @@ export default function AddLeaveModal({
                   type="number" min={0.5} max={24} step={0.5}
                   value={hoursOff}
                   onChange={e => setHoursOff(e.target.value)}
-                  placeholder="e.g. 2.5"
+                  placeholder={t('app.leaveModal.hoursPlaceholder', 'e.g. 2.5')}
                   className="w-full pl-4 pr-16 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm outline-none"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium pointer-events-none">hours</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium pointer-events-none">{t('app.teamMember.leaveType.custom_hours', 'hours')}</span>
               </div>
             )}
           </div>
@@ -291,13 +291,13 @@ export default function AddLeaveModal({
           {/* Note */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
-              Note <span className="normal-case font-normal text-gray-400">(optional)</span>
+              {t('app.common.note', 'Note')} <span className="normal-case font-normal text-gray-400">({t('app.leaveModal.optional', 'optional')})</span>
             </label>
             <input
               type="text"
               value={note}
               onChange={e => setNote(e.target.value)}
-              placeholder="e.g. Dentist, vacation in Spain…"
+              placeholder={t('app.leaveModal.notePlaceholder', 'e.g. Dentist, vacation in Spain...')}
               className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300 transition-colors outline-none"
             />
           </div>
@@ -320,7 +320,7 @@ export default function AddLeaveModal({
               disabled={deleting}
               className="px-4 py-2.5 rounded-xl text-sm font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors disabled:opacity-50"
             >
-              {deleting ? 'Removing…' : 'Remove'}
+              {deleting ? t('app.team.removing', 'Removing...') : t('app.team.remove', 'Remove')}
             </button>
           )}
           <div className="flex-1" />
@@ -328,7 +328,7 @@ export default function AddLeaveModal({
             onClick={onClose}
             className="px-4 py-2.5 rounded-xl text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
           >
-            Cancel
+            {t('app.common.cancel', 'Cancel')}
           </button>
           <button
             onClick={handleSave}
@@ -336,7 +336,7 @@ export default function AddLeaveModal({
             className="px-5 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ background: '#3DD57A', color: '#0A1A0A', boxShadow: '0 2px 12px rgba(61,213,122,0.25)' }}
           >
-            {saving ? 'Saving…' : existingLeave ? 'Update' : 'Save'}
+            {saving ? t('app.common.saving', 'Saving...') : existingLeave ? t('app.leaveModal.update', 'Update') : t('app.common.save', 'Save')}
           </button>
         </div>
       </div>

@@ -1,44 +1,33 @@
-import { MetadataRoute } from 'next'
+import type { MetadataRoute } from 'next'
+
+const SITE_URL = 'https://pathpilo.com'
+const LOCALES = ['en', 'da'] as const
+const ROUTES = ['', '/about', '/pricing', '/faq', '/contact'] as const
+
+function absoluteUrl(path: string): string {
+  return `${SITE_URL}${path}`
+}
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = 'https://pathpilo.com'
-  
-  return [
-    {
-      url: baseUrl,
-      lastModified: new Date(),
-      changeFrequency: 'weekly',
-      priority: 1,
-    },
-    {
-      url: `${baseUrl}/features`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
-      priority: 0.9,
-    },
-    {
-      url: `${baseUrl}/pricing`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
-      priority: 0.9,
-    },
-    {
-      url: `${baseUrl}/about`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
-      priority: 0.8,
-    },
-    {
-      url: `${baseUrl}/faq`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
-      priority: 0.8,
-    },
-    {
-      url: `${baseUrl}/contact`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
-      priority: 0.7,
-    },
-  ]
+  const now = new Date()
+
+  return ROUTES.flatMap((route) =>
+    LOCALES.map((locale) => {
+      const localizedPath = `/${locale}${route}`
+
+      return {
+        url: absoluteUrl(localizedPath),
+        lastModified: now,
+        changeFrequency: route === '' ? 'daily' : 'weekly',
+        priority: route === '' ? 1 : 0.8,
+        alternates: {
+          languages: {
+            en: absoluteUrl(`/en${route}`),
+            da: absoluteUrl(`/da${route}`),
+            'x-default': absoluteUrl(`/en${route}`),
+          },
+        },
+      }
+    })
+  )
 }

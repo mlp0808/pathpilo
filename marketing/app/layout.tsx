@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -40,7 +41,7 @@ export const metadata: Metadata = {
     description: 'The all-in-one platform for managing your mobile service business',
     images: [
       {
-        url: '/og-image.png',
+        url: '/images/og/og-image.png',
         width: 1200,
         height: 630,
         alt: 'PathPilo Service Management Platform',
@@ -51,7 +52,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'PathPilo - Complete Service Management Platform',
     description: 'The all-in-one platform for managing your mobile service business',
-    images: ['/og-image.png'],
+    images: ['/images/og/og-image.png'],
   },
   robots: {
     index: true,
@@ -71,9 +72,30 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const gtmId = 'GTM-5FLVBF65'
+
   return (
     <html lang="en">
       <body className="antialiased">
+        <Script
+          id="gtm-base"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','${gtmId}');`,
+          }}
+        />
+        <noscript>
+          <iframe
+            src={`https://www.googletagmanager.com/ns.html?id=${gtmId}`}
+            height="0"
+            width="0"
+            style={{ display: 'none', visibility: 'hidden' }}
+          />
+        </noscript>
         {children}
       </body>
     </html>

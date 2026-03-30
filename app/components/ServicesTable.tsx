@@ -3,6 +3,8 @@
 import { useMemo, useState } from 'react'
 import EditServiceModal from './EditServiceModal'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 
 interface Service {
   id: number
@@ -44,17 +46,13 @@ const formatDuration = (minutes: number) => {
   return durationString.trim()
 }
 
-const formatPrice = (price: number | string) => {
-  // Convert to number if it's a string
-  const numPrice = typeof price === 'string' ? parseFloat(price) : price
-  if (isNaN(numPrice) || numPrice == null) return '-'
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'DKK' // Changed to DKK since that's what we're using in the form
-  }).format(numPrice)
-}
-
 export default function ServicesTable({ services, searchTerm, onServiceUpdated }: ServicesTableProps) {
+  const companyCountryCode = useCompanyCountryCode()
+  const formatPrice = (price: number | string) => {
+    const numPrice = typeof price === 'string' ? parseFloat(price) : price
+    if (isNaN(numPrice) || numPrice == null) return '-'
+    return formatMoney(numPrice, companyCountryCode)
+  }
   const [editingService, setEditingService] = useState<Service | null>(null)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [deletingServiceId, setDeletingServiceId] = useState<number | null>(null)

@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import TimePicker from './TimePicker'
 import { SchedulePanel, ForecastPanel } from './SubscriptionPanels'
 import {
@@ -11,6 +13,7 @@ import {
   buildMonthlyForecast,
   fmtMoney,
 } from '../utils/subscriptionHelpers'
+import { useAppI18n } from './I18nProvider'
 
 interface Service {
   id: number
@@ -49,6 +52,8 @@ interface SubscriptionSlideoutProps {
 export default function SubscriptionSlideout({
   isOpen, onClose, onSubscriptionCreated, onPauseToggle, clientId, subscription
 }: SubscriptionSlideoutProps) {
+  const { t } = useAppI18n()
+  const companyCountryCode = useCompanyCountryCode()
 
   const [activeTab, setActiveTab] = useState<'details' | 'schedule' | 'forecast'>('details')
   const [services, setServices] = useState<Service[]>([])
@@ -261,8 +266,8 @@ export default function SubscriptionSlideout({
       })
       const data = await res.json()
       if (res.ok) { onSubscriptionCreated?.(); onClose() }
-      else alert(data.error || 'Failed to save subscription')
-    } catch { alert('Failed to save subscription') }
+      else alert(data.error || t('app.subscription.errSave'))
+    } catch { alert(t('app.subscription.errSave')) }
     finally { setIsSubmitting(false) }
   }
 
@@ -270,6 +275,14 @@ export default function SubscriptionSlideout({
 
   const selectedUser = users.find(u => u.id === selectedUserId) ?? null
   const today = new Date(); today.setHours(0, 0, 0, 0)
+
+  const weekSubtitlePhrase =
+    intervalWeeks === 1
+      ? t('app.subscription.subtitleEveryWeek')
+      : t('app.subscription.subtitleEveryNWeeks').replace('{{n}}', String(intervalWeeks))
+  const headerSubtitle = subscription
+    ? `${subscriptionTitle || subscription.title} · ${DAY_NAMES[dayOfWeek]} ${weekSubtitlePhrase}`
+    : t('app.subscription.subtitleNew')
 
   // categorise existing jobs as past/completed vs upcoming
   const pastJobs = existingJobs
@@ -288,13 +301,10 @@ export default function SubscriptionSlideout({
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
           <div>
             <h2 className="text-2xl font-bold text-primary-800 tracking-tight">
-              {subscription ? 'Edit Subscription' : 'Create Subscription'}
+              {subscription ? t('app.subscription.titleEdit') : t('app.subscription.titleCreate')}
             </h2>
             <p className="text-sm text-gray-500 font-medium mt-0.5">
-              {subscription
-                ? `${subscriptionTitle || subscription.title} · ${DAY_NAMES[dayOfWeek]} every ${intervalWeeks} week${intervalWeeks > 1 ? 's' : ''}`
-                : 'Set up a recurring job schedule'
-              }
+              {headerSubtitle}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -310,10 +320,10 @@ export default function SubscriptionSlideout({
         {/* ── Tabs ───────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-1 px-6 py-3 border-b border-gray-100 bg-white">
           {([
-            { id: 'details', label: 'Details', icon: DocumentTextIcon },
-            { id: 'schedule', label: 'Schedule', icon: CalendarDaysIcon },
-            { id: 'forecast', label: 'Forecast', icon: ArrowTrendingUpIcon },
-          ] as const).map(tab => (
+            { id: 'details' as const, label: t('app.subscription.tabDetails'), icon: DocumentTextIcon },
+            { id: 'schedule' as const, label: t('app.subscription.tabSchedule'), icon: CalendarDaysIcon },
+            { id: 'forecast' as const, label: t('app.subscription.tabForecast'), icon: ArrowTrendingUpIcon },
+          ]).map(tab => (
             <button
               key={tab.id}
               type="button"
@@ -351,7 +361,7 @@ export default function SubscriptionSlideout({
 
               {/* Services */}
               <div className="space-y-2">
-                <label className="block text-xs font-semibold text-primary-700">Services</label>
+                <label className="block text-xs font-semibold text-primary-700">{t('app.subscription.servicesLabel')}</label>
                 <div className="relative dropdown-container">
                   <input
                     type="text"
@@ -367,10 +377,10 @@ export default function SubscriptionSlideout({
                         <button key={s.id} onClick={() => addService(s)}
                           className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100 last:border-b-0 transition-colors">
                           <div className="text-sm font-semibold text-primary-800">{s.title}</div>
-                          <div className="text-xs text-gray-500 mt-0.5">{s.price} DKK · {s.duration_minutes} min</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{formatMoney(Number(s.price) || 0, companyCountryCode)} · {s.duration_minutes} min</div>
                         </button>
                       )) : (
-                        <div className="px-4 py-3 text-sm text-gray-400">No services found</div>
+                        <div className="px-4 py-3 text-sm text-gray-400">{t('app.subscription.noServicesFound')}</div>
                       )}
                     </div>
                   )}
@@ -396,7 +406,7 @@ export default function SubscriptionSlideout({
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
-                        <span className="text-xs text-gray-500">Time:</span>
+                        <span className="text-xs text-gray-500">{t('app.subscription.time')}</span>
                         {editingDuration === service.id ? (
                           <input autoFocus type="number" defaultValue={service.customDuration}
                             onBlur={e => finishEditingDuration(service.id, e.target.value)}
@@ -438,7 +448,7 @@ export default function SubscriptionSlideout({
                       ) : (
                         <>
                           <UserIcon className="w-4 h-4 text-gray-400" />
-                          <span>Assign employee</span>
+                          <span>{t('app.subscription.assignEmployee')}</span>
                           <PlusIcon className="w-3 h-3 text-gray-400" />
                         </>
                       )}
@@ -478,7 +488,7 @@ export default function SubscriptionSlideout({
                             <button key={String(range)} type="button"
                               onClick={() => { setIsTimeRangeMode(range); if (!range) setTimeTo('') }}
                               className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-colors ${isTimeRangeMode === range ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>
-                              {range ? 'Time range' : 'Single time'}
+                              {range ? t('app.subscription.timeRange') : t('app.subscription.singleTime')}
                             </button>
                           ))}
                         </div>
@@ -488,9 +498,9 @@ export default function SubscriptionSlideout({
                         </div>
                         <div className="flex gap-2 mt-4 pt-3 border-t border-gray-100">
                           <button type="button" onClick={() => { setTimeFrom(''); setTimeTo(''); setShowTimePicker(false) }}
-                            className="flex-1 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors">Clear</button>
+                            className="flex-1 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors">{t('app.subscription.clear')}</button>
                           <button type="button" onClick={() => setShowTimePicker(false)}
-                            className="flex-1 py-2 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">Done</button>
+                            className="flex-1 py-2 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">{t('app.subscription.done')}</button>
                         </div>
                       </div>
                     )}
@@ -500,7 +510,7 @@ export default function SubscriptionSlideout({
                   <button type="button" onClick={() => setShowNoteInput(v => !v)}
                     className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 hover:scale-[1.02]">
                     <DocumentTextIcon className="w-4 h-4 text-gray-400" />
-                    {note.trim() ? <span className="max-w-[120px] truncate">{note}</span> : <><span>Add note</span><PlusIcon className="w-3 h-3 text-gray-400" /></>}
+                    {note.trim() ? <span className="max-w-[120px] truncate">{note}</span> : <><span>{t('app.subscription.addNote')}</span><PlusIcon className="w-3 h-3 text-gray-400" /></>}
                   </button>
                 </div>
               )}
@@ -508,15 +518,15 @@ export default function SubscriptionSlideout({
               {showNoteInput && (
                 <div className="space-y-2">
                   <textarea value={note} onChange={e => setNote(e.target.value)}
-                    placeholder="Add a note for this subscription…"
+                    placeholder={t('app.subscription.notePlaceholder')}
                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm resize-none bg-white shadow-sm"
                     rows={3}
                   />
                   <div className="flex justify-end gap-2">
                     <button type="button" onClick={() => { setNote(''); setShowNoteInput(false) }}
-                      className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">Clear</button>
+                      className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">{t('app.subscription.clearNote')}</button>
                     <button type="button" onClick={() => setShowNoteInput(false)}
-                      className="px-4 py-1.5 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">Save note</button>
+                      className="px-4 py-1.5 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">{t('app.subscription.saveNote')}</button>
                   </div>
                 </div>
               )}
@@ -545,6 +555,7 @@ export default function SubscriptionSlideout({
                 durationPerVisit={durationPerVisit}
                 visitsPerYear={visitsPerYear}
                 revenuePerYear={revenuePerYear}
+                countryCode={companyCountryCode}
               />
             </div>
           )}
@@ -564,6 +575,7 @@ export default function SubscriptionSlideout({
                 selectedUser={selectedUser}
                 timeFrom={timeFrom}
                 timeTo={timeTo}
+                countryCode={companyCountryCode}
               />
             </div>
           )}
@@ -573,19 +585,19 @@ export default function SubscriptionSlideout({
         <div className="border-t border-gray-100 px-6 py-4 bg-white flex items-center justify-between gap-3">
           <div className="text-xs text-gray-400">
             {selectedServices.length > 0 && startingDate
-              ? `${fmtMoney(pricePerVisit)} per visit · ${fmtMoney(revenuePerYear)} / year`
+              ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear')}`
               : ''
             }
           </div>
           <div className="flex items-center gap-3">
             <button onClick={onClose}
               className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
-              Cancel
+              {t('app.subscription.cancel')}
             </button>
             <button onClick={handleSubmit}
               disabled={isSubmitting || !subscriptionTitle.trim() || !startingDate || selectedServices.length === 0}
               className="px-6 py-2.5 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-accent-500/20 hover:shadow-lg hover:shadow-accent-500/30 hover:scale-[1.02] active:scale-[0.98]">
-              {isSubmitting ? 'Saving…' : subscription ? 'Save changes' : 'Create Subscription'}
+              {isSubmitting ? t('app.subscription.saving') : subscription ? t('app.subscription.saveChanges') : t('app.subscription.createSubscriptionBtn')}
             </button>
           </div>
         </div>

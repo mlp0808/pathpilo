@@ -4,9 +4,11 @@ import { useEffect, useState, Suspense } from 'react'
 import { useParams, useRouter, usePathname } from 'next/navigation'
 import { useUser } from '@/app/hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
+import { clearClientLocaleStorage } from '@/app/i18n'
 
 function SuspendedWall({ companyName }: { companyName: string }) {
   const handleLogout = () => {
+    clearClientLocaleStorage()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     window.location.href = '/login'

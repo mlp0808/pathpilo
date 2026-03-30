@@ -7,6 +7,8 @@ import {
   CheckCircleIcon, CalendarDaysIcon, ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
 import { SchedulePanel, ForecastPanel } from './SubscriptionPanels'
@@ -16,6 +18,7 @@ import {
   fmtMoney,
   SelectedService,
 } from '../utils/subscriptionHelpers'
+import { useAppI18n } from './I18nProvider'
 
 interface Service {
   id: number
@@ -50,6 +53,8 @@ const DAY_ICON = DocumentTextIcon
 export default function CreateSubscription({
   isOpen, onClose, onSubscriptionCreated, initialClientId, lockClient = false,
 }: CreateSubscriptionProps) {
+  const { t } = useAppI18n()
+  const companyCountryCode = useCompanyCountryCode()
 
   // ── tab ──────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<'details' | 'schedule' | 'forecast'>('details')
@@ -291,7 +296,7 @@ export default function CreateSubscription({
   const addCustomService = () => {
     const tempId = -Date.now()
     setSelectedServices(prev => [...prev, {
-      id: tempId, title: '(custom task)', price: 0, duration_minutes: 0,
+      id: tempId, title: t('app.subscription.customTask', '(custom task)'), price: 0, duration_minutes: 0,
       customPrice: '0', customDuration: 0, isCustom: true, customTitle: '',
     }])
     setEditingTitle(tempId)
@@ -307,10 +312,10 @@ export default function CreateSubscription({
 
   // ── submit ────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!subscriptionTitle.trim()) { alert('Please enter a subscription title'); return }
-    if (!selectedClient && !isAddingNewClient) { alert('Please select or add a client'); return }
-    if (selectedServices.length === 0) { alert('Please add at least one service'); return }
-    if (!startingDate) { alert('Please set a starting date in the Schedule tab'); return }
+    if (!subscriptionTitle.trim()) { alert(t('app.subscription.errTitleRequired', 'Please enter a subscription title')); return }
+    if (!selectedClient && !isAddingNewClient) { alert(t('app.subscription.errClientRequired', 'Please select or add a client')); return }
+    if (selectedServices.length === 0) { alert(t('app.subscription.errServiceRequired', 'Please add at least one service')); return }
+    if (!startingDate) { alert(t('app.subscription.errStartingDateRequired', 'Please set a starting date in the Schedule tab')); return }
 
     try {
       setIsSubmitting(true)
@@ -335,19 +340,19 @@ export default function CreateSubscription({
           }),
         })
         const cData = await cRes.json()
-        if (!cRes.ok || !cData.client?.id) { alert(`Error creating client: ${cData.error || 'Unknown error'}`); return }
+        if (!cRes.ok || !cData.client?.id) { alert(`${t('app.subscription.errCreateClient', 'Error creating client:')} ${cData.error || t('app.subscription.unknownError', 'Unknown error')}`); return }
         clientId = cData.client.id
       }
 
-      if (!clientId || clientId <= 0) { alert('Error: invalid client. Please select or create a valid client.'); return }
+      if (!clientId || clientId <= 0) { alert(t('app.subscription.errInvalidClient', 'Error: invalid client. Please select or create a valid client.')); return }
 
       const body = {
-        title: subscriptionTitle.trim() || 'Subscription',
+        title: subscriptionTitle.trim() || t('app.subscription.fallbackTitle', 'Subscription'),
         client_id: clientId,
         assigned_user_id: selectedUserId || null,
         services: selectedServices.map(s =>
           s.isCustom
-            ? { custom_title: s.customTitle?.trim() || 'Custom task', custom_price: parseFloat(s.customPrice) || 0, custom_duration: s.customDuration || 0 }
+            ? { custom_title: s.customTitle?.trim() || t('app.subscription.customTaskTitle', 'Custom task'), custom_price: parseFloat(s.customPrice) || 0, custom_duration: s.customDuration || 0 }
             : { service_id: s.id, custom_price: parseFloat(s.customPrice) || s.price, custom_duration: s.customDuration }
         ),
         starting_date: startingDate || null,
@@ -372,10 +377,10 @@ export default function CreateSubscription({
         onSubscriptionCreated?.()
         setTimeout(() => onClose(), 200)
       } else {
-        alert(`Error creating subscription: ${data.error || 'Unknown error'}`)
+        alert(`${t('app.subscription.errCreatePrefix', 'Error creating subscription:')} ${data.error || t('app.subscription.unknownError', 'Unknown error')}`)
       }
     } catch (err) {
-      alert('Error creating subscription')
+      alert(t('app.subscription.errCreateGeneric', 'Error creating subscription'))
     } finally {
       setIsSubmitting(false)
     }
@@ -400,11 +405,11 @@ export default function CreateSubscription({
           {/* ── Header ─────────────────────────────────────────── */}
           <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
             <div>
-              <h2 className="text-2xl font-bold text-primary-800 tracking-tight">Create Subscription</h2>
+              <h2 className="text-2xl font-bold text-primary-800 tracking-tight">{t('app.subscription.titleCreate', 'Create Subscription')}</h2>
               <p className="text-sm text-gray-500 font-medium mt-0.5">
                 {selectedClient
-                  ? `${clientDisplayName} · ${subscriptionTitle || 'new subscription'}`
-                  : 'Set up a recurring job schedule'
+                  ? `${clientDisplayName} · ${subscriptionTitle || t('app.subscription.newSubscription', 'nyt abonnement')}`
+                  : t('app.subscription.subtitleNew', 'Set up a recurring job schedule')
                 }
               </p>
             </div>
@@ -419,9 +424,9 @@ export default function CreateSubscription({
           {/* ── Tabs ───────────────────────────────────────────── */}
           <div className="flex items-center gap-1 px-6 py-3 border-b border-gray-100 bg-white">
             {([
-              { id: 'details', label: 'Details', icon: DAY_ICON },
-              { id: 'schedule', label: 'Schedule', icon: CalendarDaysIcon },
-              { id: 'forecast', label: 'Forecast', icon: ArrowTrendingUpIcon },
+              { id: 'details', label: t('app.subscription.tabDetails', 'Details'), icon: DAY_ICON },
+              { id: 'schedule', label: t('app.subscription.tabSchedule', 'Schedule'), icon: CalendarDaysIcon },
+              { id: 'forecast', label: t('app.subscription.tabForecast', 'Forecast'), icon: ArrowTrendingUpIcon },
             ] as const).map(tab => (
               <button
                 key={tab.id}
@@ -448,12 +453,12 @@ export default function CreateSubscription({
 
                 {/* Title */}
                 <div>
-                  <label className="block text-xs font-semibold text-primary-700 mb-2">Subscription Title *</label>
+                  <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.subscriptionTitleLabel', 'Subscription Title *')}</label>
                   <input
                     type="text"
                     value={subscriptionTitle}
                     onChange={e => setSubscriptionTitle(e.target.value)}
-                    placeholder="e.g., Weekly Window Cleaning…"
+                    placeholder={t('app.subscription.subscriptionTitlePlaceholder', 'e.g., Weekly Window Cleaning…')}
                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
                   />
                 </div>
@@ -461,7 +466,7 @@ export default function CreateSubscription({
                 {/* Client picker */}
                 {!lockClient && (
                   <div>
-                    <label className="block text-xs font-semibold text-primary-700 mb-2">Client *</label>
+                    <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.clientRequired', 'Client *')}</label>
                     {selectedClient ? (
                       <div className="bg-gradient-to-r from-accent-50/50 to-white rounded-xl border border-accent-200/40 px-4 py-3 flex items-center justify-between shadow-sm">
                         <div>
@@ -469,7 +474,7 @@ export default function CreateSubscription({
                           <div className="text-xs text-gray-400 mt-0.5">
                             {selectedClient.address
                               ? `${selectedClient.address}${selectedClient.city ? `, ${selectedClient.city}` : ''}`
-                              : selectedClient.email || 'No address'}
+                              : selectedClient.email || t('app.jobView.noAddress', 'No address')}
                           </div>
                         </div>
                         <button
@@ -498,7 +503,7 @@ export default function CreateSubscription({
                           value={clientSearch}
                           onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }}
                           onFocus={() => setShowClientDropdown(true)}
-                          placeholder="Search for a client…"
+                          placeholder={t('app.createJob.searchClient', 'Search for a client...')}
                           className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
                         />
                       </div>
@@ -509,14 +514,14 @@ export default function CreateSubscription({
                 {/* Services */}
                 {(selectedClient || isAddingNewClient || lockClient) && (
                   <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-primary-700">Services</label>
+                    <label className="block text-xs font-semibold text-primary-700">{t('app.subscription.servicesLabel', 'Services')}</label>
                     <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
                       <input
                         type="text"
                         value={serviceSearch}
                         onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
                         onFocus={() => setShowServiceDropdown(true)}
-                        placeholder="Search services to add…"
+                        placeholder={t('app.subscription.searchServicesPlaceholder', 'Search services to add…')}
                         className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
                       />
                     </div>
@@ -529,11 +534,11 @@ export default function CreateSubscription({
                               <input
                                 autoFocus
                                 type="text"
-                                placeholder="Task title"
+                                placeholder={t('app.subscription.taskTitle', 'Task title')}
                                 defaultValue={service.customTitle || ''}
                                 onBlur={e => {
                                   const v = e.target.value.trim()
-                                  setSelectedServices(prev => prev.map(s => s.id === service.id ? { ...s, customTitle: v, title: v || '(custom task)' } : s))
+                                  setSelectedServices(prev => prev.map(s => s.id === service.id ? { ...s, customTitle: v, title: v || t('app.subscription.customTask', '(custom task)') } : s))
                                   setEditingTitle(null)
                                 }}
                                 onKeyPress={e => e.key === 'Enter' && e.currentTarget.blur()}
@@ -541,7 +546,7 @@ export default function CreateSubscription({
                               />
                             ) : (
                               <button onClick={() => setEditingTitle(service.id)} className="text-left text-sm font-semibold text-accent-600 hover:text-accent-700 underline decoration-2 underline-offset-2">
-                                {service.customTitle?.trim() || '(custom task)'}
+                                {service.customTitle?.trim() || t('app.subscription.customTask', '(custom task)')}
                               </button>
                             )
                           ) : (
@@ -550,7 +555,7 @@ export default function CreateSubscription({
                         </div>
                         <div className="flex items-center gap-3 ml-3 flex-shrink-0">
                           <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
-                            <span className="text-xs text-gray-500">Price:</span>
+                            <span className="text-xs text-gray-500">{t('app.subscription.price', 'Price:')}</span>
                             {editingPrice === service.id ? (
                               <input autoFocus type="number" defaultValue={service.customPrice}
                                 onBlur={e => { updateService(service.id, 'customPrice', e.target.value); setEditingPrice(null) }}
@@ -564,7 +569,7 @@ export default function CreateSubscription({
                             )}
                           </div>
                           <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
-                            <span className="text-xs text-gray-500">Time:</span>
+                            <span className="text-xs text-gray-500">{t('app.subscription.time', 'Time:')}</span>
                             {editingDuration === service.id ? (
                               <input autoFocus type="number" defaultValue={service.customDuration}
                                 onBlur={e => { updateService(service.id, 'customDuration', parseInt(e.target.value) || 0); setEditingDuration(null) }}
@@ -573,7 +578,7 @@ export default function CreateSubscription({
                               />
                             ) : (
                               <button onClick={() => setEditingDuration(service.id)} className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline decoration-1 underline-offset-2">
-                                {service.customDuration}min.
+                                {service.customDuration}{t('app.subscription.schedule.minPerVisit', 'min')}
                               </button>
                             )}
                           </div>
@@ -605,7 +610,7 @@ export default function CreateSubscription({
                             ) : (
                               <>
                                 <UserIcon className="w-4 h-4 text-gray-400" />
-                                <span>Assign employee</span>
+                                <span>{t('app.subscription.assignEmployee', 'Assign employee')}</span>
                                 <PlusIcon className="w-3 h-3 text-gray-400" />
                               </>
                             )}
@@ -630,7 +635,7 @@ export default function CreateSubscription({
                             className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all hover:scale-[1.02]"
                           >
                             <ClockIcon className="w-4 h-4 text-gray-400" />
-                            <span>Add time</span>
+                            <span>{t('app.subscription.addTime', 'Add time')}</span>
                             <PlusIcon className="w-3 h-3 text-gray-400" />
                           </button>
                         )}
@@ -651,7 +656,7 @@ export default function CreateSubscription({
                             className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all hover:scale-[1.02]"
                           >
                             <DocumentTextIcon className="w-4 h-4 text-gray-400" />
-                            <span>Add note</span>
+                            <span>{t('app.subscription.addNote', 'Add note')}</span>
                             <PlusIcon className="w-3 h-3 text-gray-400" />
                           </button>
                         )}
@@ -666,7 +671,7 @@ export default function CreateSubscription({
                           onClick={() => setActiveTab('schedule')}
                           className="text-xs text-accent-600 hover:text-accent-700 font-semibold flex items-center gap-1 transition-colors"
                         >
-                          Set schedule →
+                          {t('app.subscription.setSchedule', 'Set schedule')} {'->'}
                         </button>
                       </div>
                     )}
@@ -716,6 +721,7 @@ export default function CreateSubscription({
                   selectedUser={selectedUser}
                   timeFrom={jobTimeFrom}
                   timeTo={jobTimeTo}
+                  countryCode={companyCountryCode}
                 />
               </div>
             )}
@@ -725,20 +731,20 @@ export default function CreateSubscription({
           <div className="border-t border-gray-100 px-6 py-4 bg-white flex items-center justify-between gap-3">
             <div className="text-xs text-gray-400">
               {pricePerVisit > 0 && startingDate
-                ? `${fmtMoney(pricePerVisit)} per visit · ${fmtMoney(revenuePerYear)} / year`
+                ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit', 'per visit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear', '/ year')}`
                 : ''
               }
             </div>
             <div className="flex items-center gap-3">
               <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
-                Cancel
+                {t('app.subscription.cancel', 'Cancel')}
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit}
                 className="px-6 py-2.5 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-accent-500/20 hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]"
               >
-                {isSubmitting ? 'Creating…' : 'Create Subscription'}
+                {isSubmitting ? t('app.subscription.saving', 'Saving...') : t('app.subscription.createSubscriptionBtn', 'Create Subscription')}
               </button>
             </div>
           </div>
@@ -754,13 +760,13 @@ export default function CreateSubscription({
               <div className="text-sm font-semibold text-primary-800">
                 {client.client_type === 'company' ? client.name : `${client.name}${client.last_name ? ` ${client.last_name}` : ''}`.trim()}
               </div>
-              <div className="text-xs text-gray-400 mt-0.5">{client.address ? `${client.address}, ${client.city}` : 'No address'}</div>
+              <div className="text-xs text-gray-400 mt-0.5">{client.address ? `${client.address}, ${client.city}` : t('app.jobView.noAddress', 'No address')}</div>
             </button>
-          )) : <div className="px-4 py-3 text-sm text-gray-400">No clients found</div>}
+          )) : <div className="px-4 py-3 text-sm text-gray-400">{t('app.createJob.noClientsFound', 'No clients found')}</div>}
           <button onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
             className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0">
             <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
-              <PlusIcon className="w-4 h-4" />Add new client
+              <PlusIcon className="w-4 h-4" />{t('app.createJob.addNewClient', 'Add new client')}
             </div>
           </button>
         </div>,
@@ -774,12 +780,12 @@ export default function CreateSubscription({
               <button key={s.id} onClick={() => addService(s)}
                 className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100 last:border-b-0 transition-all group">
                 <div className="text-sm font-semibold text-primary-800 group-hover:text-accent-600">{s.title}</div>
-                <div className="text-xs text-gray-400 mt-0.5">{s.price} DKK · {s.duration_minutes} min</div>
+                <div className="text-xs text-gray-400 mt-0.5">{formatMoney(Number(s.price) || 0, companyCountryCode)} · {s.duration_minutes} min</div>
               </button>
             ))}
           <button onClick={addCustomService} className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0">
             <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
-              <PlusIcon className="w-4 h-4" />Add custom task
+              <PlusIcon className="w-4 h-4" />{t('app.subscription.addCustomTask', 'Add custom task')}
             </div>
           </button>
         </div>,
@@ -809,9 +815,9 @@ export default function CreateSubscription({
         isOpen={showTimeModal}
         onClose={() => setShowTimeModal(false)}
         onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }}
-        title="Set Time"
-        description="Set the scheduled time for this subscription"
-        confirmLabel="Save Time"
+        title={t('app.subscription.setTimeTitle', 'Set Time')}
+        description={t('app.subscription.setTimeDesc', 'Set the scheduled time for this subscription')}
+        confirmLabel={t('app.subscription.saveTime', 'Save Time')}
       >
         <div className="space-y-4">
           <div className="flex gap-2">
@@ -819,25 +825,25 @@ export default function CreateSubscription({
               <button key={String(range)} type="button"
                 onClick={() => { setIsTimeRangeMode(range); if (!range) setPendingTimeTo('') }}
                 className={`flex-1 py-2.5 text-sm font-semibold rounded-xl border transition-all ${isTimeRangeMode === range ? 'bg-accent-500 border-accent-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-700 hover:bg-accent-50/30'}`}>
-                {range ? 'Time range' : 'Single time'}
+                {range ? t('app.subscription.timeRange', 'Time range') : t('app.subscription.singleTime', 'Single time')}
               </button>
             ))}
           </div>
           <div className="relative" data-time-from-picker ref={timeFromPickerTriggerRef}>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">{isTimeRangeMode ? 'Start Time' : 'Select Time'}</label>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{isTimeRangeMode ? t('app.subscription.startTime', 'Start Time') : t('app.subscription.selectTime', 'Select Time')}</label>
             <input type="text" value={pendingTimeFrom} onChange={e => setPendingTimeFrom(e.target.value)}
               onFocus={() => setShowTimeFromPicker(true)} onClick={() => setShowTimeFromPicker(true)}
               className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white shadow-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500"
-              placeholder="09:00" autoComplete="off" />
+              placeholder={t('app.subscription.timePlaceholder', '09:00')} autoComplete="off" />
           </div>
           {isTimeRangeMode && (
             <div className="relative" data-time-to-picker ref={timeToPickerTriggerRef}>
-              <label className="block text-xs font-semibold text-primary-700 mb-2">End Time</label>
+              <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.endTime', 'End Time')}</label>
               <input type="text" value={pendingTimeTo} onChange={e => setPendingTimeTo(e.target.value)}
                 onFocus={() => pendingTimeFrom && setShowTimeToPicker(true)} onClick={() => pendingTimeFrom && setShowTimeToPicker(true)}
                 disabled={!pendingTimeFrom}
                 className={`w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white shadow-sm ${!pendingTimeFrom ? 'opacity-50 cursor-not-allowed' : 'focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500'}`}
-                placeholder={pendingTimeFrom ? '17:00' : 'Select start time first'} autoComplete="off" />
+                placeholder={pendingTimeFrom ? t('app.subscription.endTimePlaceholder', '17:00') : t('app.subscription.selectStartFirst', 'Select start time first')} autoComplete="off" />
             </div>
           )}
         </div>
@@ -878,15 +884,15 @@ export default function CreateSubscription({
         isOpen={showNoteInput}
         onClose={() => setShowNoteInput(false)}
         onConfirm={() => setShowNoteInput(false)}
-        title="Add Note"
-        description="Add a note to this subscription"
-        confirmLabel="Save Note"
+        title={t('app.subscription.addNoteTitle', 'Add Note')}
+        description={t('app.subscription.addNoteDesc', 'Add a note to this subscription')}
+        confirmLabel={t('app.subscription.saveNote', 'Save note')}
         enableNotification={false}
       >
         <div>
-          <label className="block text-xs font-semibold text-primary-700 mb-2">Note</label>
+          <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.common.note', 'Note')}</label>
           <textarea value={jobNote} onChange={e => setJobNote(e.target.value)}
-            placeholder="Enter a note for this subscription…" rows={5}
+            placeholder={t('app.subscription.notePlaceholder', 'Add a note for this subscription…')} rows={5}
             className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none bg-white shadow-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
         </div>
       </ConfirmModal>

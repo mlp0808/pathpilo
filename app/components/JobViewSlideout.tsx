@@ -1,13 +1,37 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import TimePicker from './TimePicker'
 import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
+import { useAppI18n } from './I18nProvider'
+
+/** List/API responses sometimes return job id as string; normalize for fetches and automation badges. */
+function parseJobId(id: unknown): number | null {
+  if (typeof id === 'number' && Number.isFinite(id)) return id
+  if (typeof id === 'string' && /^\d+$/.test(id.trim())) return parseInt(id.trim(), 10)
+  return null
+}
+
+/** Client first name: API uses `clients.name`; some list payloads use `first_name`. */
+function clientFirstNameFromJob(job: any): string {
+  if (!job) return ''
+  // Try all common field names the API may use for the client's first/personal name
+  const v = job.client_first_name ?? job.first_name ?? job.name ?? job.client_name
+  return v != null && String(v).trim() ? String(v).trim() : ''
+}
+
+function clientLastNameFromJob(job: any): string {
+  if (!job) return ''
+  const v = job.client_last_name ?? job.last_name
+  return v != null ? String(v).trim() : ''
+}
 
 interface NoteInputProps {
   jobId: number
@@ -16,6 +40,7 @@ interface NoteInputProps {
 }
 
 function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
+  const { t } = useAppI18n()
   const [noteContent, setNoteContent] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -24,7 +49,7 @@ function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
     e.preventDefault()
     
     if (!noteContent.trim()) {
-      setError('Note content is required')
+      setError(t('app.jobView.noteRequired'))
       return
     }
 
@@ -44,13 +69,13 @@ function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to add note')
+        throw new Error(errorData.error || t('app.jobView.noteErr'))
       }
 
       setNoteContent('')
       onNoteAdded()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add note')
+      setError(err instanceof Error ? err.message : t('app.jobView.noteErr'))
     } finally {
       setIsSubmitting(false)
     }
@@ -61,7 +86,7 @@ function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
       <textarea
         value={noteContent}
         onChange={(e) => setNoteContent(e.target.value)}
-        placeholder="Write your note here..."
+        placeholder={t('app.jobView.notePlaceholder')}
         rows={4}
         className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-white text-primary-500 placeholder-gray-400 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 resize-none"
       />
@@ -101,6 +126,116 @@ interface JobViewSlideoutProps {
   onAssigneeChange?: (jobId: number, newUserId: number) => void
 }
 
+function AutomationBadgePopover({
+  label,
+  title,
+  desc,
+  sendAtFormatted,
+  automationKey,
+  jobId,
+  sendAtLabel,
+  cancelLabel,
+  cancellingLabel,
+  onCancelled,
+}: {
+  label: string
+  title: string
+  desc: string
+  sendAtFormatted: string
+  automationKey: string
+  jobId: number
+  sendAtLabel: string
+  cancelLabel: string
+  cancellingLabel: string
+  onCancelled: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearClose = () => {
+    if (closeTimerRef.current != null) {
+      clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }
+
+  const scheduleClose = () => {
+    clearClose()
+    closeTimerRef.current = setTimeout(() => setOpen(false), 200)
+  }
+
+  const handleEnter = () => {
+    clearClose()
+    setOpen(true)
+  }
+
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setCancelling(true)
+    try {
+      const token = localStorage.getItem('token')
+      await fetch(`/api/jobs/${jobId}/automation-cancel/${automationKey}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      onCancelled()
+    } catch {
+      // silently ignore; badge will disappear on next poll if already cancelled
+    } finally {
+      setCancelling(false)
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className="relative" onMouseEnter={handleEnter} onMouseLeave={scheduleClose}>
+      <span className="inline-flex items-center gap-0.5 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 cursor-default select-none">
+        <EnvelopeIcon className="h-3 w-3 shrink-0" aria-hidden />
+        <ArrowRightIcon className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
+        <span>{label}</span>
+      </span>
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-1 z-50 w-64 rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-left"
+          onMouseEnter={handleEnter}
+          onMouseLeave={scheduleClose}
+        >
+          <p className="text-xs font-semibold text-gray-900 mb-1">{title}</p>
+          <p className="text-xs text-gray-500 mb-2 leading-relaxed">{desc}</p>
+          {sendAtFormatted && (
+            <p className="text-[11px] text-violet-700 font-medium mb-3">
+              {sendAtLabel}: {sendAtFormatted}
+            </p>
+          )}
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="w-full rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 transition-colors"
+          >
+            {cancelling ? cancellingLabel : cancelLabel}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatAutomationEta(ms: number, soonLabel: string): string {
+  if (ms <= 0) return soonLabel
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return sec === 0 && ms > 0 ? '1s' : `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) {
+    const remSec = sec % 60
+    return remSec === 0 ? `${min} min` : `${min}m ${remSec}s`
+  }
+  const h = Math.floor(min / 60)
+  if (h < 48) return `${h}h ${min % 60}m`
+  const d = Math.floor(h / 24)
+  return `${d}d ${h % 24}h`
+}
+
 interface JobLog {
   id: number
   action: string
@@ -125,6 +260,8 @@ interface MoveJobModalProps {
 }
 
 function MoveJobModal({ isOpen, onClose, onConfirm, oldDate, newDate, customerName, customerEmail }: MoveJobModalProps) {
+  const { t, locale } = useAppI18n()
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
   const [notifyCustomer, setNotifyCustomer] = useState(false)
   const [message, setMessage] = useState('')
   const [selectedDate, setSelectedDate] = useState<string>('')
@@ -135,7 +272,7 @@ function MoveJobModal({ isOpen, onClose, onConfirm, oldDate, newDate, customerNa
     if (isOpen) {
       // Get current user from localStorage
       const userStr = localStorage.getItem('user')
-      let userName = 'Your Team'
+      let userName = t('app.jobView.yourTeam')
       if (userStr) {
         try {
           const user = JSON.parse(userStr)
@@ -149,7 +286,7 @@ function MoveJobModal({ isOpen, onClose, onConfirm, oldDate, newDate, customerNa
 
       const formatDateDisplay = (dateString: string) => {
         const date = new Date(dateString + 'T00:00:00')
-        return date.toLocaleDateString('en-GB', {
+        return date.toLocaleDateString(dateLocale, {
           day: '2-digit',
           month: '2-digit',
           year: 'numeric'
@@ -187,7 +324,7 @@ ${userName}`
 
   const formatDateDisplay = (dateString: string) => {
     const date = new Date(dateString + 'T00:00:00')
-    return date.toLocaleDateString('en-GB', {
+    return date.toLocaleDateString(dateLocale, {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric'
@@ -200,8 +337,8 @@ ${userName}`
       <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <div className="p-6 border-b border-gray-200">
-            <h3 className="text-xl font-semibold text-gray-900">Move Job</h3>
-            <p className="text-sm text-gray-600 mt-1">You are about to move this job to a new date</p>
+            <h3 className="text-xl font-semibold text-gray-900">{t('app.jobView.moveJobTitle')}</h3>
+            <p className="text-sm text-gray-600 mt-1">{t('app.jobView.moveJobSubtitle')}</p>
           </div>
 
           <div className="p-6 space-y-6">
@@ -209,11 +346,11 @@ ${userName}`
             <div className="space-y-3 bg-gray-50 rounded-lg p-6">
               <div className="grid grid-cols-2 gap-6 items-end">
                 <div className="text-center">
-                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Current</div>
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">{t('app.jobView.currentDate')}</div>
                   <div className="text-2xl font-bold text-gray-900">{formatDateDisplay(oldDate)}</div>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1.5">New date</label>
+                  <label className="block text-xs text-gray-500 mb-1.5">{t('app.jobView.newDate')}</label>
                   <input
                     type="date"
                     value={selectedDate}
@@ -234,39 +371,39 @@ ${userName}`
                   className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                 />
                 <div>
-                  <span className="text-sm font-medium text-gray-900">Notify customer</span>
+                  <span className="text-sm font-medium text-gray-900">{t('app.jobView.notifyCustomer')}</span>
                 </div>
               </label>
 
               {notifyCustomer && (
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700">Send to</label>
+                  <label className="block text-sm font-medium text-gray-700">{t('app.jobView.sendTo')}</label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="client@example.com"
+                    placeholder={t('app.jobView.emailPlaceholder')}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900"
                   />
                   <label className="block text-sm font-medium text-gray-700">
-                    Email Subject
+                    {t('app.jobView.emailSubject')}
                   </label>
                   <input
                     type="text"
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900"
-                    placeholder="Subject..."
+                    placeholder={t('app.jobView.subjectPlaceholder')}
                   />
                   <label className="block text-sm font-medium text-gray-700">
-                    Email Message
+                    {t('app.jobView.emailMessage')}
                   </label>
                   <textarea
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     rows={8}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm text-gray-900 resize-none"
-                    placeholder="Enter your message..."
+                    placeholder={t('app.jobView.messagePlaceholder')}
                   />
                 </div>
               )}
@@ -278,13 +415,13 @@ ${userName}`
               onClick={onClose}
               className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-white transition-colors"
             >
-              Cancel
+              {t('app.common.cancel')}
             </button>
             <button
               onClick={() => onConfirm({ newDate: selectedDate || oldDate, notify: notifyCustomer, subject: notifyCustomer ? subject : undefined, message: notifyCustomer ? message : undefined, email: notifyCustomer ? email : undefined })}
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm"
             >
-              {notifyCustomer ? 'Send and move job' : 'Proceed with move'}
+              {notifyCustomer ? t('app.jobView.sendAndMove') : t('app.jobView.proceedMove')}
             </button>
           </div>
         </div>
@@ -296,6 +433,7 @@ ${userName}`
 }
 
 export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange }: JobViewSlideoutProps) {
+  const { t } = useAppI18n()
   const router = useRouter()
   const params = useParams()
   const companySlugFromRoute = (params as any)?.company as string | undefined
@@ -329,6 +467,34 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const [showNoteInput, setShowNoteInput] = useState(false)
   const [updatingServiceId, setUpdatingServiceId] = useState<number | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<{ id: number; status: string; invoice_number?: string | null } | null>(null)
+  const [automationBadges, setAutomationBadges] = useState<{
+    pending: { key: string; sendAt: string; phase: string }[]
+    serverNow: string
+  } | null>(null)
+  const [clockOffsetMs, setClockOffsetMs] = useState(0)
+  const [automationBadgeTick, setAutomationBadgeTick] = useState(0)
+  const companyCountryCode = useCompanyCountryCode()
+
+  const fetchAutomationBadges = useCallback(async (jobId: number) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/jobs/${jobId}/automation-badges`), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok) {
+        setAutomationBadges(null)
+        return
+      }
+      const data = await response.json()
+      setAutomationBadges(data)
+      const serverNow = Date.parse(data.serverNow)
+      if (!Number.isNaN(serverNow)) {
+        setClockOffsetMs(serverNow - Date.now())
+      }
+    } catch {
+      setAutomationBadges(null)
+    }
+  }, [])
 
   const updateServiceStatus = async (jobId: number, serviceId: number, status: 'scheduled' | 'completed' | 'cancelled') => {
     setUpdatingServiceId(serviceId)
@@ -405,17 +571,55 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     return () => { cancelled = true }
   }, [(jobDetails || job)?.client_id, (jobDetails || job)?.client_email, (jobDetails || job)?.client_phone, (jobDetails || job)?.email, (jobDetails || job)?.phone])
 
-  const handleCancelJob = () => {
+  const handleCancelJob = async () => {
+    if (jobDetails || job) {
+      const jobData = jobDetails || job
+      const jobDate = (jobData as any).scheduled_date
+        ? new Date((jobData as any).scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+          })
+        : ''
+      const timeFrom = (jobData as any).scheduled_time_from ? String((jobData as any).scheduled_time_from).substring(0, 5) : ''
+      const timeTo = (jobData as any).scheduled_time_to ? String((jobData as any).scheduled_time_to).substring(0, 5) : ''
+      let userName = 'Our team'
+      try {
+        const u = JSON.parse(localStorage.getItem('user') || '{}')
+        if (u.first_name && u.last_name) {
+          userName = `${u.first_name} ${u.last_name}`
+        } else if (u.firstName && u.lastName) {
+          userName = `${u.firstName} ${u.lastName}`
+        }
+      } catch {}
+
+      const template = await getEmailTemplate('cancel_job', {
+        clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || (jobData as any).client_name || '',
+        clientFirstName: clientFirstNameFromJob(jobData),
+        clientLastName: clientLastNameFromJob(jobData),
+        jobDate: jobDate,
+        jobTimeFrom: timeFrom,
+        jobTimeTo: timeTo,
+        jobAddress: (jobData as any).address || (jobData as any).personal_address || '',
+        jobCity: (jobData as any).city || (jobData as any).personal_city || '',
+        jobServices: Array.isArray((jobData as any).services)
+          ? (jobData as any).services.map((s: any) => s.title || s.service_name || '').filter(Boolean).join(', ')
+          : '',
+        userName: userName,
+        companyName: (jobData as any).company_name || '',
+      })
+      setCancelTemplate(template)
+    }
     setShowCancelModal(true)
   }
 
   const confirmCancelJob = async ({ notify, message, subject }: { notify: boolean, message: string, subject: string }) => {
-    if (!currentJob?.id || typeof currentJob.id !== 'number') return
+    if (parseJobId(currentJob?.id) == null) return
 
     try {
       setIsDeleting(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/jobs/${currentJob.id}/status`), {
+      const response = await fetch(apiUrl(`/jobs/${parseJobId(currentJob.id)}/status`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -446,7 +650,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   }
 
   const handleDeleteJob = async () => {
-    if (!currentJob?.id || typeof currentJob.id !== 'number') return
+    if (parseJobId(currentJob?.id) == null) return
 
     const confirmed = confirm('Are you sure you want to permanently delete this job? This action cannot be undone and will remove all job data, notes, and logs.')
     if (!confirmed) return
@@ -454,7 +658,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     try {
       setIsDeleting(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/jobs/${currentJob.id}`), {
+      const response = await fetch(apiUrl(`/jobs/${parseJobId(currentJob.id)}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -557,6 +761,31 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     }
   }, [invoiceIdOnJob])
 
+  // Pending automated email badges (footer); server returns sendAt — countdown updates client-side
+  useEffect(() => {
+    const jid = parseJobId(currentJob?.id)
+    if (!isOpen || jid == null || isProjectedJob) {
+      setAutomationBadges(null)
+      return
+    }
+    let cancelled = false
+    const run = () => {
+      if (!cancelled) fetchAutomationBadges(jid)
+    }
+    run()
+    const id = setInterval(run, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [isOpen, currentJob?.id, isProjectedJob, fetchAutomationBadges])
+
+  useEffect(() => {
+    if (!automationBadges?.pending?.length) return
+    const id = setInterval(() => setAutomationBadgeTick((x) => x + 1), 1000)
+    return () => clearInterval(id)
+  }, [automationBadges?.pending?.length])
+
   // Derived job status for display (scheduled, completed, cancelled, sub completed, invoice draft, invoiced)
   const computeStatusMeta = () => {
     if (!currentJob) return null
@@ -643,7 +872,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   }
 
   const ensureRealJobId = async (): Promise<number | null> => {
-    if (typeof currentJob?.id === 'number') return currentJob.id
+    const parsed = parseJobId(currentJob?.id)
+    if (parsed != null) return parsed
 
     if (!isProjectedJob) {
       alert('Invalid job id. Please refresh the page and try again.')
@@ -773,8 +1003,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         body: JSON.stringify({
           status: 'cancelled',
           notify_customer: notify,
-          notification_subject: subject,
-          notification_message: message
+          notification_subject: notify ? subject : undefined,
+          notification_message: notify ? message : undefined
         })
       })
 
@@ -885,16 +1115,15 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   }
 
   // Fetch job logs
-  const fetchJobLogs = async (jobId: number) => {
-    if (!jobId || typeof jobId !== 'number') {
-      return
-    }
+  const fetchJobLogs = async (jobId: number | string) => {
+    const nid = parseJobId(jobId)
+    if (nid == null) return
 
     try {
       setLogsLoading(true)
       const token = localStorage.getItem('token')
       
-      const response = await fetch(apiUrl(`/jobs/${jobId}/logs`), {
+      const response = await fetch(apiUrl(`/jobs/${nid}/logs`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -904,6 +1133,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       
       if (response.ok && data.logs) {
         setJobLogs(data.logs)
+        fetchAutomationBadges(nid)
       }
     } catch (error) {
       console.error('Error fetching job logs:', error)
@@ -916,44 +1146,48 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   // Helper function to update time template
   const updateTimeTemplate = async (newTimeFrom: string, newTimeTo: string, isRange: boolean) => {
     if (!(jobDetails || job)) return
-    
+
     const jobData = jobDetails || job
-    const oldTimeFrom = jobData.scheduled_time_from ? String(jobData.scheduled_time_from).substring(0,5) : ''
-    const oldTimeTo = jobData.scheduled_time_to ? String(jobData.scheduled_time_to).substring(0,5) : ''
-    const oldTime = oldTimeFrom && oldTimeTo ? `${oldTimeFrom} - ${oldTimeTo}` : (oldTimeFrom || oldTimeTo || 'unspecified')
-    
-    const newTime = newTimeFrom && newTimeTo ? `${newTimeFrom} - ${newTimeTo}` : (newTimeFrom || newTimeTo || 'unspecified')
-    
+    const oldTimeFrom = jobData.scheduled_time_from ? String(jobData.scheduled_time_from).substring(0, 5) : ''
+    const oldTimeTo = jobData.scheduled_time_to ? String(jobData.scheduled_time_to).substring(0, 5) : ''
+
+    // Use "Not set" when there was no previous time
+    const oldTimeFromDisplay = oldTimeFrom || 'Not set'
+    const oldTimeToDisplay = oldTimeTo || 'Not set'
+    const oldTime = oldTimeFrom && oldTimeTo ? `${oldTimeFrom} - ${oldTimeTo}` : (oldTimeFrom || oldTimeTo || 'Not set')
+    const newTime = newTimeFrom && newTimeTo ? `${newTimeFrom} - ${newTimeTo}` : (newTimeFrom || newTimeTo || 'Not set')
+
+    const jobDate = (jobData as any).scheduled_date
+      ? new Date((jobData as any).scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+        })
+      : ''
+
     let userName = 'Our team'
     try {
       const u = JSON.parse(localStorage.getItem('user') || '{}')
-      if (u.first_name && u.last_name) {
-        userName = `${u.first_name} ${u.last_name}`
-      } else if (u.firstName && u.lastName) {
-        userName = `${u.firstName} ${u.lastName}`
-      }
+      if (u.first_name && u.last_name) userName = `${u.first_name} ${u.last_name}`
+      else if (u.firstName && u.lastName) userName = `${u.firstName} ${u.lastName}`
     } catch {}
-    
+
     const template = await getEmailTemplate('change_time', {
-      clientName: `${(jobData as any).name || ''}${(jobData as any).last_name ? ` ${(jobData as any).last_name}` : ''}`.trim() || 'Customer',
-      clientFirstName: (jobData as any).name || 'Customer',
-      clientLastName: (jobData as any).last_name || '',
+      clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || (jobData as any).client_name || '',
+      clientFirstName: clientFirstNameFromJob(jobData),
+      clientLastName: clientLastNameFromJob(jobData),
+      jobDate,
       jobTime: oldTime,
       jobOldTime: oldTime,
       jobNewTime: newTime,
-      jobTimeFrom: oldTimeFrom,
-      jobTimeTo: oldTimeTo,
-      jobOldTimeFrom: oldTimeFrom,
-      jobOldTimeTo: oldTimeTo,
-      jobNewTimeFrom: newTimeFrom,
-      jobNewTimeTo: newTimeTo,
-      userName: userName,
+      jobTimeFrom: oldTimeFromDisplay,
+      jobTimeTo: oldTimeToDisplay,
+      jobOldTimeFrom: oldTimeFromDisplay,
+      jobOldTimeTo: oldTimeToDisplay,
+      jobNewTimeFrom: newTimeFrom || 'Not set',
+      jobNewTimeTo: newTimeTo || 'Not set',
+      userName,
       companyName: (jobData as any).company_name || '',
-      employeeName: (jobData as any).assigned_user_first_name && (jobData as any).assigned_user_last_name 
-        ? `${(jobData as any).assigned_user_first_name} ${(jobData as any).assigned_user_last_name}` 
-        : ''
     })
-    
+
     setTimeTemplate(template)
   }
 
@@ -987,7 +1221,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           const u = JSON.parse(localStorage.getItem('user') || '{}')
           if (u.firstName && u.lastName) userName = `${u.firstName} ${u.lastName}`
         } catch {}
-        finalMessage = `Dear ${(jobDetails || job)?.first_name || 'customer'},\n\nI wanted to let you know that the time of your appointment has been updated.\n\nPreviously: ${oldRange}\nNew time: ${newRange}\n\nIf the new time does not suit you, please reply and we will arrange another time.\n\nKind regards,\n${userName}`
+        finalMessage = `Dear ${clientFirstNameFromJob(jobDetails || job) || 'customer'},\n\nI wanted to let you know that the time of your appointment has been updated.\n\nPreviously: ${oldRange}\nNew time: ${newRange}\n\nIf the new time does not suit you, please reply and we will arrange another time.\n\nKind regards,\n${userName}`
       }
       const response = await fetch(apiUrl(`/jobs/${jobId}/time`), {
         method: 'PUT',
@@ -1040,9 +1274,9 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       } catch {}
       
       const template = await getEmailTemplate('change_employee', {
-        clientName: `${(jobData as any).first_name || ''} ${(jobData as any).last_name || ''}`.trim() || 'Customer',
-        clientFirstName: (jobData as any).first_name || 'Customer',
-        clientLastName: (jobData as any).last_name || '',
+        clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || (jobData as any).client_name || '',
+        clientFirstName: clientFirstNameFromJob(jobData),
+        clientLastName: clientLastNameFromJob(jobData),
         employeeName: oldEmployeeName,
         employeeOldName: oldEmployeeName,
         employeeNewName: 'another team member', // Will be updated when user selects
@@ -1090,7 +1324,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           const u = JSON.parse(localStorage.getItem('user') || '{}')
           if (u.firstName && u.lastName) userName = `${u.firstName} ${u.lastName}`
         } catch {}
-        finalMessage = `Dear ${(jobDetails || job)?.first_name || 'customer'},\n\nI wanted to inform you that your appointment will be handled by a different team member.\n\nPreviously: ${oldPerson}\nNew: ${newPerson}\n\nIf you have any questions, feel free to reply to this email.\n\nKind regards,\n${userName}`
+        finalMessage = `Dear ${clientFirstNameFromJob(jobDetails || job) || 'customer'},\n\nI wanted to inform you that your appointment will be handled by a different team member.\n\nPreviously: ${oldPerson}\nNew: ${newPerson}\n\nIf you have any questions, feel free to reply to this email.\n\nKind regards,\n${userName}`
       }
       const response = await fetch(apiUrl(`/jobs/${jobId}/assignee`), {
         method: 'PUT',
@@ -1126,19 +1360,21 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
 
   // Fetch job details for real jobs (use GET /jobs/:id to get full job with service statuses)
   const fetchJobDetails = async (jobData: any) => {
-    if (!jobData?.id || typeof jobData.id !== 'number') return
+    const nid = parseJobId(jobData?.id)
+    if (nid == null) return
 
     try {
       setLoading(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/jobs/${jobData.id}`), {
+      const response = await fetch(apiUrl(`/jobs/${nid}`), {
         headers: { Authorization: `Bearer ${token}` },
       })
       const data = await response.json()
 
       if (response.ok && data.job) {
         setJobDetails(data.job)
-        fetchJobLogs(data.job.id)
+        fetchAutomationBadges(nid)
+        fetchJobLogs(data.job.id ?? nid)
       }
     } catch (error) {
       console.error('Failed to fetch job details', error)
@@ -1212,8 +1448,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       if (isProjectedJob) {
         // Materialize immediately so completing/updating tasks works (job gets recurring_job_id preserved)
         materializeAndFetchProjectedJob(initialJobData)
-      } else if (typeof job.id === 'number') {
-        // For real jobs, fetch full details with service statuses from GET /jobs/:id
+      } else if (parseJobId(job.id) != null) {
+        // For real jobs, fetch full details with service statuses from GET /jobs/:id (id may be string from list API)
         fetchJobDetails(initialJobData)
       } else {
         setLoading(false)
@@ -1283,14 +1519,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     return `${mins}m`
   }
 
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('en-US', { 
-      style: 'currency', 
-      currency: 'DKK',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(price || 0)
-  }
+  const formatPrice = (price: number) => formatMoney(price || 0, companyCountryCode)
 
   const formatLogTime = (dateString: string) => {
     const date = new Date(dateString)
@@ -1343,13 +1572,18 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         }
       } catch {}
       
+      const tf = (jobData as any).scheduled_time_from ? String((jobData as any).scheduled_time_from).substring(0, 5) : ''
+      const tt = (jobData as any).scheduled_time_to ? String((jobData as any).scheduled_time_to).substring(0, 5) : ''
       const template = await getEmailTemplate('change_date', {
-        clientName: `${(jobData as any).first_name || ''} ${(jobData as any).last_name || ''}`.trim() || 'Customer',
-        clientFirstName: (jobData as any).first_name || 'Customer',
-        clientLastName: (jobData as any).last_name || '',
+        clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || (jobData as any).client_name || '',
+        clientFirstName: clientFirstNameFromJob(jobData),
+        clientLastName: clientLastNameFromJob(jobData),
         jobDate: oldDate,
         jobOldDate: oldDate,
         jobNewDate: newDateFormatted,
+        jobTimeFrom: tf,
+        jobTimeTo: tt,
+        jobTimeRange: tf && tt ? `${tf} - ${tt}` : tf || tt || '',
         userName: userName,
         companyName: (jobData as any).company_name || ''
       })
@@ -1396,11 +1630,6 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         // Notify parent to refresh jobs list
         if (onJobUpdated) {
           onJobUpdated()
-        }
-        
-        if (notify) {
-          // TODO: Send email when email functionality is implemented
-          console.log('Email notification would be sent:', message)
         }
       } else {
         let errorMessage = 'Unknown error'
@@ -1509,7 +1738,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                 <button
                   onClick={onClose}
                   className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0"
-                  aria-label="Close"
+                  aria-label={t('app.jobView.close')}
                 >
                   <XMarkIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
                 </button>
@@ -1522,13 +1751,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
               <LockClosedIcon className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
               <div className="text-xs">
-                <div className="font-semibold text-amber-800">Job is locked</div>
+                <div className="font-semibold text-amber-800">{t('app.jobView.lockedTitle')}</div>
                 <div className="text-amber-700">
-                  This job is part of an invoice and cannot be changed here.
+                  {t('app.jobView.lockedDesc')}
                   {invoiceSummary && (
                     <>
                       {' '}
-                      View it on{' '}
+                      {t('app.jobView.viewOn')}{' '}
                       <button
                         type="button"
                         onClick={() => {
@@ -1541,7 +1770,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         }}
                         className="underline font-semibold"
                       >
-                        invoice {invoiceSummary.invoice_number || `#${invoiceSummary.id}`}
+                        {t('app.jobView.invoicePrefix')} {invoiceSummary.invoice_number || `#${invoiceSummary.id}`}
                       </button>
                       .
                     </>
@@ -1552,7 +1781,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           )}
           {/* Client name — large, bold, white */}
           <button onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-2xl font-bold text-white hover:opacity-90 transition-opacity text-left block w-full">
-            {[(jobDetails || job)?.first_name || (jobDetails || job)?.name, (jobDetails || job)?.last_name].filter(Boolean).join(' ') || 'Unknown'}
+            {[(jobDetails || job)?.first_name || (jobDetails || job)?.name, (jobDetails || job)?.last_name].filter(Boolean).join(' ') || t('app.jobView.unknownClient')}
           </button>
           {/* Email — from job or client fetch. If empty: "add" link to client. */}
           <div className="flex items-center gap-2 mt-2">
@@ -1560,7 +1789,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             {((jobDetails || job)?.client_email || (jobDetails || job)?.email || (jobDetails || job)?.client?.email || clientContact?.email) ? (
               <span className="text-sm text-white">{(jobDetails || job)?.client_email || (jobDetails || job)?.email || (jobDetails || job)?.client?.email || clientContact?.email}</span>
             ) : (
-              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">add</button>
+              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">{t('app.jobView.add')}</button>
             )}
           </div>
           {/* Phone — from job or client fetch. If empty: "add" link to client. */}
@@ -1569,7 +1798,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             {((jobDetails || job)?.client_phone || (jobDetails || job)?.phone || (jobDetails || job)?.client?.phone || clientContact?.phone) ? (
               <span className="text-sm text-white">{(jobDetails || job)?.client_phone || (jobDetails || job)?.phone || (jobDetails || job)?.client?.phone || clientContact?.phone}</span>
             ) : (
-              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">add</button>
+              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">{t('app.jobView.add')}</button>
             )}
           </div>
           </div>
@@ -1584,7 +1813,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             <>
               {/* Schedule & Location */}
               <div>
-                <h3 className="text-base font-semibold text-primary-500 mb-4">Schedule & Location</h3>
+                <h3 className="text-base font-semibold text-primary-500 mb-4">{t('app.jobView.scheduleLocation')}</h3>
                 <div className="space-y-3">
                   {/* Address row — display or inline edit */}
                   {editingAddress ? (
@@ -1596,11 +1825,11 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         lat={addrDraft.lat}
                         lng={addrDraft.lng}
                         onChange={(d) => setAddrDraft(d)}
-                        placeholder="Search for address..."
+                        placeholder={t('app.jobView.searchAddress')}
                       />
                       {!addrDraft.lat && addrDraft.address.length > 0 && (
                         <p className="text-xs text-amber-600 flex items-center gap-1">
-                          <span>⚠</span> Select an address from the suggestions to confirm location
+                          <span>⚠</span> {t('app.jobView.selectAddressHint')}
                         </p>
                       )}
                       <div className="flex gap-2 pt-1">
@@ -1609,13 +1838,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                           disabled={addrSaving || !addrDraft.lat || !addrDraft.lng}
                           className="flex-1 py-2 px-3 bg-accent-500 text-white text-xs font-semibold rounded-lg hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
-                          {addrSaving ? 'Saving…' : 'Save address'}
+                          {addrSaving ? t('app.common.saving') : t('app.jobView.saveAddress')}
                         </button>
                         <button
                           onClick={() => setEditingAddress(false)}
                           className="py-2 px-3 text-xs text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
                         >
-                          Cancel
+                          {t('app.common.cancel')}
                         </button>
                       </div>
                     </div>
@@ -1623,9 +1852,9 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     <div className="flex items-start gap-2 group">
                       <MapPinIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                       <span className="text-sm text-primary-500 flex-1">
-                        {formatAddress(jobDetails || job) !== 'No address'
+                        {formatAddress(jobDetails || job) !== t('app.jobView.noAddress')
                           ? formatAddress(jobDetails || job)
-                          : <span className="text-gray-400 italic">No address set</span>}
+                          : <span className="text-gray-400 italic">{t('app.jobView.noAddressSet')}</span>}
                       </span>
                       {!isLocked && (
                         <button
@@ -1641,7 +1870,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                             setEditingAddress(true)
                           }}
                           className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex-shrink-0"
-                          title="Edit address"
+                          title={t('app.jobView.editAddress')}
                         >
                           <PencilIcon className="w-3.5 h-3.5" />
                         </button>
@@ -1656,7 +1885,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                   >
                     <ClockIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                     <span className="text-sm text-primary-500">
-                      {formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'Not set'}
+                      {formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || t('app.jobView.notSet')}
                     </span>
                   </button>
                   <button
@@ -1671,7 +1900,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                   >
                     <CalendarIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                     <span className="text-sm text-primary-500">
-                      {(jobDetails || job)?.scheduled_date ? formatFullDate((jobDetails || job).scheduled_date) : 'No date'}
+                      {(jobDetails || job)?.scheduled_date ? formatFullDate((jobDetails || job).scheduled_date) : t('app.jobView.noDate')}
                     </span>
                   </button>
                   {/* Assigned user moved here, below date/time */}
@@ -1693,14 +1922,14 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                           const firstName = j?.assigned_user_first_name
                           const lastName = j?.assigned_user_last_name
                           if (firstName || lastName) {
-                            return `${firstName || ''} ${lastName || ''}`.trim() || 'Unassigned'
+                            return `${firstName || ''} ${lastName || ''}`.trim() || t('app.jobView.unassigned')
                           }
                           const aid = j?.assigned_user_id
                           if (aid && users.length > 0) {
                             const u = users.find((u: any) => Number(u.id) === Number(aid))
-                            if (u) return `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Unassigned'
+                            if (u) return `${u.first_name || ''} ${u.last_name || ''}`.trim() || t('app.jobView.unassigned')
                           }
-                          return 'Unassigned'
+                          return t('app.jobView.unassigned')
                         })()}
                       </span>
                       {!isLocked && <ChevronDownIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />}
@@ -1721,7 +1950,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_duration_minutes ?? s.duration_minutes) || 0), 0)
                   const totalPrice =
                     (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
-                  const canEditServices = typeof currentJob?.id === 'number' && !isProjectedJob && !isLocked
+                  const canEditServices = parseJobId(currentJob?.id) != null && !isProjectedJob && !isLocked
                   const handleCheckClick = async (s: any) => {
                     if (!canEditServices || !s.id) return
                     const jobId = await ensureRealJobId()
@@ -1741,9 +1970,9 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="text-base font-semibold text-primary-500 flex items-center gap-2">
                           <DocumentTextIcon className="w-5 h-5 text-accent-500" />
-                          Tasks
+                          {t('app.jobView.tasks')}
                         </h3>
-                        <span className="text-sm text-gray-500">{completedCount} of {totalTasks || 0} complete</span>
+                        <span className="text-sm text-gray-500">{t('app.jobView.tasksProgress').replace('{{done}}', String(completedCount)).replace('{{total}}', String(totalTasks || 0))}</span>
                       </div>
                       {svcs.length > 0 ? (
                         <div className="space-y-1">
@@ -1762,7 +1991,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                                   onClick={() => handleCheckClick(s)}
                                   disabled={!canEditServices || isUpdating}
                                   className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-colors disabled:opacity-50 ${isServiceCancelled ? 'border-red-300 bg-red-100 text-red-500' : isServiceCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white hover:border-accent-400'}`}
-                                  title={isServiceCancelled ? 'Undo cancel' : isServiceCompleted ? 'Mark not completed' : 'Mark completed'}
+                                  title={isServiceCancelled ? t('app.jobView.undoCancel') : isServiceCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
                                 >
                                   {isServiceCancelled ? (
                                     <XMarkIcon className="w-3 h-3" strokeWidth={2.5} />
@@ -1772,7 +2001,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                                 </button>
                                 <div className="flex-1 min-w-0 flex items-center gap-2">
                                   <span className={`text-sm font-medium truncate ${isServiceCancelled ? 'text-red-700 line-through' : 'text-primary-500'}`}>
-                                    {s.title || s.service_title || s.service_name || 'Task'}
+                                    {s.title || s.service_title || s.service_name || t('app.jobView.task')}
                                   </span>
                                   <span className="text-xs text-gray-500 flex-shrink-0">
                                     {formatDuration(s.custom_duration_minutes ?? s.duration_minutes ?? 0)}
@@ -1788,7 +2017,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                                     disabled={isUpdating}
                                     className="flex-shrink-0 text-xs font-medium px-2 py-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
                                   >
-                                    {isServiceCancelled ? 'Undo' : 'Cancel'}
+                                    {isServiceCancelled ? t('app.jobView.undo') : t('app.common.cancel')}
                                   </button>
                                 )}
                               </div>
@@ -1796,12 +2025,12 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                           })}
                         </div>
                       ) : (
-                        <p className="text-sm text-gray-500 py-4 text-center">No tasks assigned</p>
+                        <p className="text-sm text-gray-500 py-4 text-center">{t('app.jobView.noTasks')}</p>
                       )}
                       {svcs.length > 0 && (
                         <div className="flex flex-col items-end gap-0.5 mt-2">
-                          <div className="text-sm text-gray-500">Time: {formatDuration(totalDuration)}</div>
-                          <div className="text-sm text-gray-500">Value: {formatPrice(totalPrice)}</div>
+                          <div className="text-sm text-gray-500">{t('app.jobView.timeLabel')} {formatDuration(totalDuration)}</div>
+                          <div className="text-sm text-gray-500">{t('app.jobView.valueLabel')} {formatPrice(totalPrice)}</div>
                         </div>
                       )}
                     </>
@@ -1811,7 +2040,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
 
               {/* Activity Log — mobile-style: continuous line through bullets, white box per update, "add note +" button */}
               <div className="pt-4 border-t border-gray-200">
-                <h3 className="text-base font-semibold text-primary-500 mb-4">Activity Log</h3>
+                <h3 className="text-base font-semibold text-primary-500 mb-4">{t('app.jobView.activityLog')}</h3>
                 {logsLoading ? (
                   <div className="flex items-center justify-center py-4">
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-500 border-t-transparent"></div>
@@ -1932,7 +2161,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       )
                     })}
                     {/* add note + button (like mobile) — aligns with white boxes, toggles text field */}
-                    {typeof currentJob?.id === 'number' && !showNoteInput && (
+                    {parseJobId(currentJob?.id) != null && !showNoteInput && (
                       <button
                         type="button"
                         onClick={() => setShowNoteInput(true)}
@@ -1942,26 +2171,26 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         add note +
                       </button>
                     )}
-                    {typeof currentJob?.id === 'number' && showNoteInput && (
+                    {parseJobId(currentJob?.id) != null && showNoteInput && (
                       <div className="mt-4 ml-[36px]">
                         <NoteInput
-                          jobId={currentJob.id}
+                          jobId={parseJobId(currentJob.id)!}
                           onNoteAdded={() => {
-                            fetchJobLogs(currentJob.id)
+                            fetchJobLogs(parseJobId(currentJob.id)!)
                             setShowNoteInput(false)
                           }}
                           onCancel={() => setShowNoteInput(false)}
                         />
                       </div>
                     )}
-                    {typeof currentJob?.id !== 'number' && (
+                    {parseJobId(currentJob?.id) == null && (
                       <div className="text-xs text-gray-500 mt-4">Notes are only available for real jobs (not subscription previews).</div>
                     )}
                   </div>
                 ) : (
                   <div>
                     <div className="text-sm text-gray-500">No timeline entries yet</div>
-                    {typeof currentJob?.id === 'number' && !showNoteInput && (
+                    {parseJobId(currentJob?.id) != null && !showNoteInput && (
                       <button
                         type="button"
                         onClick={() => setShowNoteInput(true)}
@@ -1971,19 +2200,19 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         add note +
                       </button>
                     )}
-                    {typeof currentJob?.id === 'number' && showNoteInput && (
+                    {parseJobId(currentJob?.id) != null && showNoteInput && (
                       <div className="mt-4 ml-[36px]">
                         <NoteInput
-                          jobId={currentJob.id}
+                          jobId={parseJobId(currentJob.id)!}
                           onNoteAdded={() => {
-                            fetchJobLogs(currentJob.id)
+                            fetchJobLogs(parseJobId(currentJob.id)!)
                             setShowNoteInput(false)
                           }}
                           onCancel={() => setShowNoteInput(false)}
                         />
                       </div>
                     )}
-                    {typeof currentJob?.id !== 'number' && (
+                    {parseJobId(currentJob?.id) == null && (
                       <div className="text-xs text-gray-500 mt-4">Notes are only available for real jobs.</div>
                     )}
                   </div>
@@ -2000,12 +2229,69 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 bg-page px-5 py-2.5 text-[11px] text-gray-500 flex items-center justify-between">
+        <div className="border-t border-gray-200 bg-page px-5 py-2.5 text-[11px] text-gray-500 flex items-center justify-between gap-2 flex-wrap">
           <span>
             <span className="font-medium text-gray-700">ID:</span>{' '}
-            {typeof currentJob?.id === 'number' ? currentJob.id : '--'}
+            {parseJobId(currentJob?.id) ?? '--'}
           </span>
-          {isProjectedJob && <span className="text-amber-700">Subscription preview</span>}
+          <div className="flex items-center gap-2 flex-wrap justify-end min-w-0">
+            {parseJobId(currentJob?.id) != null &&
+              !isProjectedJob &&
+              automationBadges?.pending &&
+              automationBadges.pending.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  {(() => {
+                    void automationBadgeTick
+                    const soon = t('app.jobView.automationSoon')
+                    const jobId = parseJobId(currentJob?.id)!
+                    return automationBadges.pending.map((b) => {
+                      const sendAtMs = Date.parse(b.sendAt)
+                      const adjNow = Date.now() + clockOffsetMs
+                      const ms = sendAtMs - adjNow
+                      const label =
+                        !Number.isFinite(sendAtMs) || !Number.isFinite(ms) || ms <= 0
+                          ? soon
+                          : formatAutomationEta(ms, soon)
+                      const title =
+                        b.key === 'email_job_created'
+                          ? t('app.jobView.automationBookingTitle')
+                          : t('app.jobView.automationReminderTitle')
+                      const desc =
+                        b.key === 'email_job_created'
+                          ? t('app.jobView.automationBookingDesc')
+                          : t('app.jobView.automationReminderDesc')
+                      const sendAtFormatted = Number.isFinite(sendAtMs)
+                        ? new Date(sendAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+                          ' · ' +
+                          new Date(sendAtMs).toLocaleDateString([], { day: 'numeric', month: 'short' })
+                        : ''
+                      return (
+                        <AutomationBadgePopover
+                          key={b.key}
+                          label={label}
+                          title={title}
+                          desc={desc}
+                          sendAtFormatted={sendAtFormatted}
+                          automationKey={b.key}
+                          jobId={jobId}
+                          sendAtLabel={t('app.jobView.automationSendingAt')}
+                          cancelLabel={t('app.jobView.automationCancelSend')}
+                          cancellingLabel={t('app.jobView.automationCancelling')}
+                          onCancelled={() => {
+                            setAutomationBadges((prev) =>
+                              prev
+                                ? { ...prev, pending: prev.pending.filter((p) => p.key !== b.key) }
+                                : prev
+                            )
+                          }}
+                        />
+                      )
+                    })
+                  })()}
+                </div>
+              )}
+            {isProjectedJob && <span className="text-amber-700 shrink-0">Subscription preview</span>}
+          </div>
         </div>
       </div>
       {/* Move Job Confirmation Modal (Unified) */}
@@ -2020,7 +2306,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         description="Select a new date for this job"
         confirmLabel="Save"
         enableNotification={true}
-        defaultEmail={(jobDetails || job) ? ((jobDetails || job) as any).client_billing_email || ((jobDetails || job) as any).client_personal_email || ((jobDetails || job) as any).client_email || '' : ''}
+        defaultEmail={clientContact?.email || ((jobDetails || job) ? ((jobDetails || job) as any).client_email || ((jobDetails || job) as any).email || ((jobDetails || job) as any).client_billing_email || ((jobDetails || job) as any).client_personal_email || '' : '')}
         defaultSubject={moveTemplate.subject || (() => {
           if (!(jobDetails || job)) return 'Appointment Date Changed'
           const oldDate = new Date(((jobDetails || job) as any).scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -2036,18 +2322,20 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             const u = JSON.parse(localStorage.getItem('user') || '{}')
             if (u.firstName && u.lastName) userName = `${u.firstName} ${u.lastName}`
           } catch {}
-          const name = `${((jobDetails || job) as any).first_name || ''} ${((jobDetails || job) as any).last_name || ''}`.trim() || 'customer'
+          const j = (jobDetails || job) as any
+          const name = `${clientFirstNameFromJob(j)} ${clientLastNameFromJob(j)}`.trim() || 'there'
+          const company = (j.company_name && String(j.company_name).trim()) || 'Our team'
           return `Dear ${name},
 
-I wanted to let you know that your appointment has been rescheduled.
+Your appointment with ${company} has been rescheduled.
 
-Previously: ${oldDate}
-New date: ${newDate}
+• Previous date: ${oldDate}
+• New date: ${newDate}
 
-If the new date does not work for you, please let us know and we will find an alternative.
+If the new date does not work for you, reply to this email and we will help.
 
-Kind regards,
-${userName}`
+Best regards,
+${company}`
         })()}
       >
         {(jobDetails || job) && (
@@ -2095,13 +2383,18 @@ ${userName}`
                         }
                       } catch {}
                       
+                      const tf = (jobData as any).scheduled_time_from ? String((jobData as any).scheduled_time_from).substring(0, 5) : ''
+                      const tt = (jobData as any).scheduled_time_to ? String((jobData as any).scheduled_time_to).substring(0, 5) : ''
                       const template = await getEmailTemplate('change_date', {
-                        clientName: `${(jobData as any).first_name || ''} ${(jobData as any).last_name || ''}`.trim() || 'Customer',
-                        clientFirstName: (jobData as any).first_name || 'Customer',
-                        clientLastName: (jobData as any).last_name || '',
+                        clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || 'Customer',
+                        clientFirstName: clientFirstNameFromJob(jobData),
+                        clientLastName: clientLastNameFromJob(jobData),
                         jobDate: oldDate,
                         jobOldDate: oldDate,
                         jobNewDate: newDate,
+                        jobTimeFrom: tf,
+                        jobTimeTo: tt,
+                        jobTimeRange: tf && tt ? `${tf} - ${tt}` : tf || tt || '',
                         userName: userName,
                         companyName: (jobData as any).company_name || ''
                       })
@@ -2130,7 +2423,7 @@ ${userName}`
         isSubmitting={isDeleting}
         defaultMessage={cancelTemplate.message || (() => {
           if (!currentJob) return ''
-          const name = `${currentJob.first_name || ''} ${currentJob.last_name || ''}`.trim() || 'customer'
+          const name = `${clientFirstNameFromJob(currentJob)} ${clientLastNameFromJob(currentJob)}`.trim() || 'customer'
           const date = currentJob.scheduled_date
             ? new Date(currentJob.scheduled_date + 'T00:00:00').toLocaleDateString('en-GB', {
                 day: '2-digit',
@@ -2191,20 +2484,23 @@ Our team`
         title="Change Time"
         description="Update the scheduled time for this job"
         confirmLabel="Save"
+        syncKey={timeTemplate.subject + '|' + timeTemplate.message}
+        defaultEmail={clientContact?.email || (jobDetails || job as any)?.client_email || (jobDetails || job as any)?.email || ''}
         defaultSubject={timeTemplate.subject || (() => {
-          const oldRange = formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'unspecified'
-          const newRange = ((pendingTimeFrom || pendingTimeTo) ? (pendingTimeFrom && pendingTimeTo ? `${pendingTimeFrom} - ${pendingTimeTo}` : (pendingTimeFrom || pendingTimeTo)) : 'unspecified')
+          const oldRange = formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'Not set'
+          const newRange = (pendingTimeFrom && pendingTimeTo ? `${pendingTimeFrom} - ${pendingTimeTo}` : (pendingTimeFrom || pendingTimeTo || 'Not set'))
           return `Appointment time updated (${oldRange} → ${newRange})`
         })()}
         defaultMessage={timeTemplate.message || (() => {
-          const oldRange = formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'unspecified'
-          const newRange = ((pendingTimeFrom || pendingTimeTo) ? (pendingTimeFrom && pendingTimeTo ? `${pendingTimeFrom} - ${pendingTimeTo}` : (pendingTimeFrom || pendingTimeTo)) : 'unspecified')
+          const oldRange = formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || 'Not set'
+          const newRange = (pendingTimeFrom && pendingTimeTo ? `${pendingTimeFrom} - ${pendingTimeTo}` : (pendingTimeFrom || pendingTimeTo || 'Not set'))
           let userName = 'Our team'
           try {
             const u = JSON.parse(localStorage.getItem('user') || '{}')
             if (u.firstName && u.lastName) userName = `${u.firstName} ${u.lastName}`
           } catch {}
-          return `Dear ${(jobDetails || job)?.first_name || 'customer'},
+          const clientFirst = clientFirstNameFromJob(jobDetails || job) || 'there'
+          return `Dear ${clientFirst},
 
 I wanted to let you know that the time of your appointment has been updated.
 
@@ -2278,6 +2574,7 @@ ${userName}`
                   if (jobDetails || job) await updateTimeTemplate(pendingTimeFrom, val, true)
                 }}
                 disabled={!pendingTimeFrom}
+                minTime={pendingTimeFrom}
                 placeholder="e.g. 17:00"
               />
             </div>
@@ -2378,13 +2675,14 @@ ${currentUserName}`
       {/* Cancel Job Confirmation Modal */}
       <ConfirmModal
         isOpen={showCancelModal}
-        onClose={() => setShowCancelModal(false)}
+        onClose={() => { setShowCancelModal(false); setCancelTemplate({ subject: '', message: '' }) }}
         onConfirm={confirmCancelJob}
         title="Cancel Job"
         description="Are you sure you want to cancel this job?"
         confirmLabel="Cancel Job"
-        defaultSubject={`Job Cancelled: ${currentJob?.title || 'Job'}`}
-        defaultMessage={() => {
+        defaultEmail={clientContact?.email || (jobDetails || currentJob as any)?.client_email || (jobDetails || currentJob as any)?.email || ''}
+        defaultSubject={cancelTemplate.subject || `Job Cancelled: ${currentJob?.title || 'Job'}`}
+        defaultMessage={cancelTemplate.message || (() => {
           const jobData = jobDetails || currentJob
           let userName = 'Our team'
           try {
@@ -2399,7 +2697,7 @@ If you would like to reschedule or have any questions, please don't hesitate to 
 
 Kind regards,
 ${userName}`
-        }}
+        })()}
       >
         <div className="text-sm text-gray-600">
           <p>This will mark the job as cancelled. The customer will be notified if you choose to send a notification.</p>

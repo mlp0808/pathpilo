@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
+import { getCountryRule } from '../../config/countryRules'
+import { markSetupWizardComplete } from '../../utils/sessionClient'
 
 interface Client {
   id?: number
@@ -53,7 +55,51 @@ export default function ClientsSetupPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  /** Biases Mapbox + labels to the active company country (same as dashboard client modals) */
+  const [companyCountryCode, setCompanyCountryCode] = useState('DK')
   const router = useRouter()
+
+  const countryRule = useMemo(() => getCountryRule(companyCountryCode), [companyCountryCode])
+
+  useLayoutEffect(() => {
+    try {
+      const rawCompany = localStorage.getItem('company')
+      if (rawCompany) {
+        const c = JSON.parse(rawCompany)
+        if (c?.countryCode) {
+          setCompanyCountryCode(String(c.countryCode))
+          return
+        }
+      }
+      const u = JSON.parse(localStorage.getItem('user') || '{}')
+      const code =
+        u.activeCompany?.countryCode ||
+        (Array.isArray(u.companies)
+          ? u.companies.find((co: { id?: number }) => co?.id === u.companyId)?.countryCode
+          : undefined)
+      if (code) setCompanyCountryCode(String(code))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/companies/profile'), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) return
+        const data = await res.json()
+        const code = data.company?.countryCode || 'DK'
+        setCompanyCountryCode(String(code))
+      } catch {
+        /* keep localStorage value */
+      }
+    }
+    load()
+  }, [])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -76,13 +122,17 @@ export default function ClientsSetupPage() {
     try {
       const token = localStorage.getItem('token')
       
+      const resolvedCountry =
+        (currentClient.country && String(currentClient.country).trim()) ||
+        countryRule.countryName
+
       const clientData = {
         client_type: currentClient.client_type,
         name: currentClient.name,
         last_name: currentClient.last_name,
         company_number: currentClient.company_number,
         contact_name: includeContactPerson ? currentClient.contact_name : null,
-        country: currentClient.country,
+        country: resolvedCountry,
         address: currentClient.address,
         zip_code: currentClient.zip_code,
         city: currentClient.city,
@@ -145,6 +195,7 @@ export default function ClientsSetupPage() {
   }
 
   const handleContinue = () => {
+    markSetupWizardComplete()
     try {
       const userData = localStorage.getItem('user')
       const userObj = userData ? JSON.parse(userData) : null
@@ -435,6 +486,9 @@ export default function ClientsSetupPage() {
                         city={currentClient.city}
                         lat={undefined}
                         lng={undefined}
+                        countryCode={companyCountryCode}
+                        zipLabel={countryRule.postalCodeLabel}
+                        cityLabel="City"
                         placeholder="Start typing an address…"
                         onChange={(data: AddressData) => {
                           setCurrentClient(prev => ({
@@ -442,6 +496,7 @@ export default function ClientsSetupPage() {
                             address: data.address,
                             zip_code: data.zip_code,
                             city: data.city,
+                            country: countryRule.countryName,
                           }))
                         }}
                       />
@@ -464,49 +519,27 @@ export default function ClientsSetupPage() {
 
                   {/* Billing Address Fields */}
                   {separateBillingAddress && (
-                    <div className="grid grid-cols-12 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200/60">
-                      <div className="col-span-6 group">
-                        <label htmlFor="billing_address" className="block text-xs font-semibold text-primary-700 mb-2">
-                          Billing Address
-                        </label>
-                        <input
-                          type="text"
-                          id="billing_address"
-                          name="billing_address"
-                          value={currentClient.billing_address}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-3 text-sm bg-white/80 border border-accent-200/80 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                          placeholder="e.g. Business Street 456"
-                        />
-                      </div>
-                      <div className="col-span-3 group">
-                        <label htmlFor="billing_zip_code" className="block text-xs font-semibold text-primary-700 mb-2">
-                          Billing Zip
-                        </label>
-                        <input
-                          type="text"
-                          id="billing_zip_code"
-                          name="billing_zip_code"
-                          value={currentClient.billing_zip_code}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-3 text-sm bg-white/80 border border-accent-200/80 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                          placeholder="e.g. 2200"
-                        />
-                      </div>
-                      <div className="col-span-3 group">
-                        <label htmlFor="billing_city" className="block text-xs font-semibold text-primary-700 mb-2">
-                          Billing City
-                        </label>
-                        <input
-                          type="text"
-                          id="billing_city"
-                          name="billing_city"
-                          value={currentClient.billing_city}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-3 text-sm bg-white/80 border border-accent-200/80 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                          placeholder="e.g. Aarhus"
-                        />
-                      </div>
+                    <div className="p-4 bg-accent-50 rounded-xl border border-accent-200/60">
+                      <AddressAutocomplete
+                        label="Billing address"
+                        address={currentClient.billing_address}
+                        zip_code={currentClient.billing_zip_code}
+                        city={currentClient.billing_city}
+                        lat={undefined}
+                        lng={undefined}
+                        countryCode={companyCountryCode}
+                        zipLabel={`Billing ${countryRule.postalCodeLabel}`}
+                        cityLabel="Billing city"
+                        placeholder="Start typing a billing address…"
+                        onChange={(data: AddressData) => {
+                          setCurrentClient(prev => ({
+                            ...prev,
+                            billing_address: data.address,
+                            billing_zip_code: data.zip_code,
+                            billing_city: data.city,
+                          }))
+                        }}
+                      />
                     </div>
                   )}
 

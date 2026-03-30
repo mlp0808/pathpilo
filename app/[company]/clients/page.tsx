@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
 import AddClientModal from '../../components/AddClientModal'
+import { useAppI18n } from '../../components/I18nProvider'
 import { apiUrl } from '../../utils/api'
 
 interface Client {
@@ -38,6 +39,7 @@ function avatarColor(id: number) {
 }
 
 export default function ClientsPage() {
+  const { t } = useAppI18n()
   const router = useRouter()
   const params = useParams() as any
   const companySlug = params?.company as string | undefined
@@ -60,9 +62,9 @@ export default function ClientsPage() {
       })
       const data = await response.json()
       if (response.ok) setClients(data.clients)
-      else setError(data.error || 'Failed to fetch clients')
+      else setError(data.error || t('app.clientsList.errFetch'))
     } catch {
-      setError('Network error: Failed to fetch clients')
+      setError(t('app.clientsList.errNetwork'))
     } finally {
       setLoading(false)
     }
@@ -106,9 +108,11 @@ export default function ClientsPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-primary-500">Clients</h1>
+            <h1 className="text-2xl font-bold text-primary-500">{t('app.clientsList.title')}</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              {clients.length} {clients.length === 1 ? 'client' : 'clients'} total
+              {clients.length === 1
+                ? t('app.clientsList.subtitle').replace('{{count}}', String(clients.length))
+                : t('app.clientsList.subtitlePlural').replace('{{count}}', String(clients.length))}
             </p>
           </div>
           <button
@@ -118,7 +122,7 @@ export default function ClientsPage() {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            New client
+            {t('app.clientsList.newClient')}
           </button>
         </div>
 
@@ -136,7 +140,7 @@ export default function ClientsPage() {
                     : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
                 }`}
               >
-                {type === 'all' ? `All (${clients.length})` : type === 'person' ? `People (${personCount})` : `Companies (${companyCount})`}
+                {type === 'all' ? t('app.clientsList.filterAll').replace('{{count}}', String(clients.length)) : type === 'person' ? t('app.clientsList.filterPeople').replace('{{count}}', String(personCount)) : t('app.clientsList.filterCompanies').replace('{{count}}', String(companyCount))}
               </button>
             ))}
           </div>
@@ -148,7 +152,7 @@ export default function ClientsPage() {
             </svg>
             <input
               type="text"
-              placeholder="Search by name, phone, email…"
+              placeholder={t('app.clientsList.searchPlaceholder')}
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-transparent"
@@ -170,7 +174,7 @@ export default function ClientsPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {error}
-            <button onClick={fetchClients} className="ml-auto underline">Retry</button>
+            <button onClick={fetchClients} className="ml-auto underline">{t('app.clientsList.retry')}</button>
           </div>
         )}
 
@@ -187,17 +191,17 @@ export default function ClientsPage() {
               </svg>
             </div>
             <p className="text-sm font-medium text-gray-900 mb-1">
-              {searchTerm ? 'No clients found' : 'No clients yet'}
+              {searchTerm ? t('app.clientsList.noResults') : t('app.clientsList.empty')}
             </p>
             <p className="text-xs text-gray-500">
-              {searchTerm ? 'Try a different search term' : 'Add your first client to get started'}
+              {searchTerm ? t('app.clientsList.tryDifferent') : t('app.clientsList.getStarted')}
             </p>
             {!searchTerm && (
               <button
                 onClick={openAddClient}
                 className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
               >
-                Add client
+                {t('app.clientsList.addClient')}
               </button>
             )}
           </div>
@@ -229,7 +233,7 @@ export default function ClientsPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-sm text-primary-500 truncate">{fullName}</span>
                       {client.client_type === 'company' && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full flex-shrink-0">Company</span>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full flex-shrink-0">{t('app.clientsList.company')}</span>
                       )}
                     </div>
                     {location && (
@@ -259,7 +263,9 @@ export default function ClientsPage() {
 
         {filtered.length > 0 && searchTerm && (
           <p className="text-xs text-gray-400 mt-3 text-center">
-            {filtered.length} result{filtered.length !== 1 ? 's' : ''} for "{searchTerm}"
+            {filtered.length === 1
+              ? t('app.clientsList.resultsLine').replace('{{count}}', String(filtered.length)).replace('{{term}}', searchTerm)
+              : t('app.clientsList.resultsLinePlural').replace('{{count}}', String(filtered.length)).replace('{{term}}', searchTerm)}
           </p>
         )}
 

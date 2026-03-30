@@ -1,0 +1,21 @@
+{
+  "description": "Mirror of app/config/marketingImages.ts — for designers / asset pipelines",
+  "version": 1,
+  "files": [
+    { "path": "images/brand/logo-header.png", "use": "Header logo" },
+    { "path": "images/brand/logo-footer-white.png", "use": "Footer logo (white)" },
+    { "path": "images/hero/collage-main.png", "use": "Hero main panel" },
+    { "path": "images/hero/collage-top.png", "use": "Hero top tile" },
+    { "path": "images/hero/collage-bottom.png", "use": "Hero bottom tile" },
+    { "path": "images/features/scheduling.png", "use": "Feature tab: Scheduling" },
+    { "path": "images/features/jobs.png", "use": "Feature tab: Jobs" },
+    { "path": "images/features/recurring.png", "use": "Feature tab: Recurring" },
+    { "path": "images/features/clients.png", "use": "Feature tab: Clients" },
+    { "path": "images/features/leads.png", "use": "Feature tab: Leads" },
+    { "path": "images/features/invoicing.png", "use": "Feature tab: Invoicing" },
+    { "path": "images/features/analytics.png", "use": "Feature tab: Analytics" },
+    { "path": "images/features/routes.png", "use": "Feature tab: Routes" },
+    { "path": "images/features/team.png", "use": "Feature tab: Team" },
+    { "path": "images/og/og-image.png", "use": "Social / Open Graph preview" }
+  ]
+}

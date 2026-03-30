@@ -1,8 +1,83 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
+const {
+  getPendingAutomationBadgesForJob,
+  scheduleAutomationSendsForJob,
+  rescheduleReminderForJob,
+  cancelPendingForJob,
+} = require('../utils/automatedEmails');
+const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
 
 const router = express.Router();
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function plainMessageToHtml(text) {
+  return escapeHtml(String(text || '').trim()).replace(/\r\n/g, '\n').replace(/\n/g, '<br>\n');
+}
+
+/** HTML wrapper for manual job emails — company header, readable body, footer. */
+function buildManualJobEmailHtml(companyName, bodyPlain) {
+  const company = escapeHtml(companyName || 'Your service provider');
+  const paragraphs = String(bodyPlain || '')
+    .trim()
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p style="margin:0 0 14px 0;">${plainMessageToHtml(p).replace(/<br>\n/g, '<br>')}</p>`)
+    .join('');
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"/></head>
+<body style="margin:0;padding:0;background-color:#eef2f2;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#eef2f2;padding:24px 12px;">
+  <tr><td align="center">
+    <table role="presentation" width="100%" style="max-width:560px;border-collapse:collapse;">
+      <tr>
+        <td style="background-color:#193434;color:#ffffff;padding:22px 24px;border-radius:12px 12px 0 0;">
+          <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;margin-bottom:6px;">Message from</div>
+          <div style="font-size:20px;font-weight:600;line-height:1.25;">${company}</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="background-color:#ffffff;padding:0;border-left:1px solid #e2e8e0;border-right:1px solid #e2e8e0;border-bottom:1px solid #e2e8e0;border-radius:0 0 12px 12px;">
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.65;color:#1e293b;padding:26px 24px 0 24px;">
+            ${paragraphs || `<p style="margin:0;">${plainMessageToHtml(bodyPlain)}</p>`}
+            ${STANDARD_FOOTER_PLACEHOLDER}
+          </div>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`;
+}
+
+/** Send email for manual “notify customer” actions (templates edited in app, body from client). */
+async function sendJobCustomerEmail(pool, companyId, { to, subject, text }) {
+  const addr = to && String(to).trim();
+  const subj = subject && String(subject).trim();
+  const body = text && String(text).trim();
+  if (!addr || !subj || !body) return;
+  const companyRes = await pool.query('SELECT name FROM companies WHERE id = $1', [companyId]);
+  const companyName = companyRes.rows[0]?.name || '';
+  const fromName = companyName || undefined;
+  await sendEmail({
+    to: addr,
+    subject: subj,
+    text: body,
+    html: buildManualJobEmailHtml(companyName, body),
+    fromName,
+    companyId,
+  });
+}
 
 // JWT Secret - should match auth.js
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -87,6 +162,48 @@ async function computeAndUpdateJobStatus(jobId) {
   );
   return jobStatus;
 }
+
+// DELETE /api/jobs/:jobId/automation-cancel/:automationKey — cancel a pending scheduled send
+router.delete('/:jobId/automation-cancel/:automationKey', async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const jobId = parseInt(req.params.jobId, 10);
+    const { automationKey } = req.params;
+    if (Number.isNaN(jobId) || !automationKey) {
+      return res.status(400).json({ error: 'Invalid parameters' });
+    }
+    const { cancelPendingByKey } = require('../utils/automatedEmails');
+    await cancelPendingByKey(pool, companyId, jobId, automationKey);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('automation-cancel:', e);
+    res.status(500).json({ error: 'Failed to cancel automation send' });
+  }
+});
+
+// GET /api/jobs/:jobId/automation-badges — pending automated email ETAs for job footer badges
+router.get('/:jobId/automation-badges', async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const jobId = parseInt(req.params.jobId, 10);
+    if (Number.isNaN(jobId)) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+    const result = await getPendingAutomationBadgesForJob(pool, jobId, companyId);
+    res.json(result);
+  } catch (e) {
+    console.error('automation-badges:', e);
+    res.status(500).json({ error: 'Failed to load automation status' });
+  }
+});
 
 // GET /api/jobs/:jobId - Get single job with full details (MUST come before GET /)
 // Note: authenticateToken is already applied via router.use() above
@@ -875,6 +992,9 @@ router.post('/', async (req, res) => {
 
       await dbClient.query('COMMIT');
 
+      // Schedule automation sends before responding so the badge is immediately visible.
+      await scheduleAutomationSendsForJob(pool, companyId, job.id);
+
       // Return job with client and service info
       const jobWithDetails = await pool.query(`
         SELECT
@@ -1001,6 +1121,15 @@ router.put('/reorder', async (req, res) => {
       client.release();
     }
 
+    // If moved to a different day, recalculate reminder
+    if (!isSameDate) {
+      setImmediate(() =>
+        rescheduleReminderForJob(pool, companyId, parseInt(jobId, 10)).catch((err) =>
+          console.error('rescheduleReminderForJob after reorder:', err.message || err)
+        )
+      );
+    }
+
     res.json({
       message: 'Jobs reordered successfully',
       isSameDay: isSameDate
@@ -1098,6 +1227,15 @@ router.put('/:jobId', async (req, res) => {
     `;
 
     const result = await pool.query(updateQuery, values);
+
+    // If date changed, recalculate reminder send time
+    if (updates.scheduled_date !== undefined) {
+      setImmediate(() =>
+        rescheduleReminderForJob(pool, companyId, parseInt(jobId, 10)).catch((err) =>
+          console.error('rescheduleReminderForJob after update:', err.message || err)
+        )
+      );
+    }
 
     res.json({
       message: 'Job updated successfully',
@@ -1210,7 +1348,7 @@ router.put('/:jobId/services/:serviceId/status', async (req, res) => {
 router.put('/:jobId/status', async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { status } = req.body;
+    const { status, notify_customer, notification_subject, notification_message } = req.body;
     const userId = req.user.userId;
 
     if (!status) {
@@ -1258,6 +1396,41 @@ router.put('/:jobId/status', async (req, res) => {
     }
 
     await computeAndUpdateJobStatus(jobId);
+
+    // If cancelled, remove any pending scheduled emails
+    if (status === 'cancelled') {
+      setImmediate(() =>
+        cancelPendingForJob(pool, companyId, parseInt(jobId, 10)).catch((err) =>
+          console.error('cancelPendingForJob after cancel:', err.message || err)
+        )
+      );
+    }
+
+    if (
+      status === 'cancelled' &&
+      notify_customer &&
+      notification_message &&
+      String(notification_message).trim()
+    ) {
+      const subj =
+        (notification_subject && String(notification_subject).trim()) || 'Job update';
+      try {
+        const clientRes = await pool.query(
+          `SELECT c.email FROM jobs j JOIN clients c ON c.id = j.client_id WHERE j.id = $1 AND j.company_id = $2`,
+          [jobId, companyId]
+        );
+        const clientEmail = clientRes.rows[0]?.email;
+        if (clientEmail) {
+          await sendJobCustomerEmail(pool, companyId, {
+            to: clientEmail,
+            subject: subj,
+            text: String(notification_message).trim(),
+          });
+        }
+      } catch (emailErr) {
+        console.error('Cancel notification email failed:', emailErr.message || emailErr);
+      }
+    }
 
     const result = await pool.query(
       'SELECT * FROM jobs WHERE id = $1',
@@ -1436,6 +1609,18 @@ router.put('/:jobId/time', async (req, res) => {
       }
     }
 
+    if (notifyCustomer && clientEmail && notification_subject && notification_message) {
+      try {
+        await sendJobCustomerEmail(pool, companyId, {
+          to: clientEmail,
+          subject: notification_subject,
+          text: notification_message,
+        });
+      } catch (emailErr) {
+        console.error('Time-change notification email failed:', emailErr.message || emailErr);
+      }
+    }
+
     res.json({ message: 'Job time updated' });
   } catch (error) {
     console.error('Error updating job time:', error);
@@ -1516,6 +1701,18 @@ router.put('/:jobId/assignee', async (req, res) => {
         throw logError;
       }
     }
+
+    if (notifyCustomer && clientEmail && notification_subject && notification_message) {
+      try {
+        await sendJobCustomerEmail(pool, companyId, {
+          to: clientEmail,
+          subject: notification_subject,
+          text: notification_message,
+        });
+      } catch (emailErr) {
+        console.error('Assignee-change notification email failed:', emailErr.message || emailErr);
+      }
+    }
     
     res.json({ message: 'Job assignee updated' });
   } catch (error) {
@@ -1528,7 +1725,7 @@ router.put('/:jobId/assignee', async (req, res) => {
 router.put('/:jobId/move', async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { new_date, notify_customer, notification_message, notification_subject } = req.body;
+    const { new_date, notify_customer, notification_message, notification_subject, notification_email } = req.body;
     const userId = req.user.userId;
 
     if (!new_date) {
@@ -1542,7 +1739,8 @@ router.put('/:jobId/move', async (req, res) => {
     const companyId = companyAccess.companyId;
 
     const jobCheck = await pool.query(
-      `SELECT j.id, j.scheduled_date, c.email, c.name, c.last_name
+      `SELECT j.id, j.scheduled_date, c.name, c.last_name,
+              COALESCE(NULLIF(TRIM(c.email), ''), NULLIF(TRIM(c.billing_email), '')) AS resolved_email
        FROM jobs j
        JOIN clients c ON j.client_id = c.id
        WHERE j.id = $1 AND j.company_id = $2`,
@@ -1555,7 +1753,7 @@ router.put('/:jobId/move', async (req, res) => {
 
     const currentJob = jobCheck.rows[0];
     const oldDate = currentJob.scheduled_date;
-    const clientEmail = currentJob.email;
+    const clientEmail = currentJob.resolved_email || null;
 
     const dbClient = await pool.connect();
     try {
@@ -1625,6 +1823,61 @@ router.put('/:jobId/move', async (req, res) => {
       }
 
       await dbClient.query('COMMIT');
+
+      const wantsNotify =
+        notify_customer === true ||
+        notify_customer === 'true' ||
+        notify_customer === 1 ||
+        notify_customer === '1';
+      const overrideTo =
+        wantsNotify && notification_email && String(notification_email).trim().includes('@')
+          ? String(notification_email).trim()
+          : null;
+      const toEmail = overrideTo || clientEmail;
+      let msgBody = notification_message != null ? String(notification_message).trim() : '';
+      if (wantsNotify && toEmail && !msgBody) {
+        const co = await pool.query('SELECT name, country_code FROM companies WHERE id = $1', [companyId]);
+        const brand = co.rows[0]?.name || 'Our team';
+        const countryCode = String(co.rows[0]?.country_code || '').trim().toUpperCase();
+        const clientName = [currentJob.name, currentJob.last_name].filter(Boolean).join(' ').trim();
+        const MOVE_FALLBACKS = {
+          DK: { greeting: 'Hej', name: 'der', body: `Din aftale med ${brand} er blevet rykket.\n\n• Tidligere dato: ${oldFormattedDate}\n• Ny dato: ${newFormattedDate}\n\nHvis den nye dato ikke passer dig, er du velkommen til at svare på denne e-mail.`, signOff: 'Med venlig hilsen,' },
+          NO: { greeting: 'Hei', name: 'der', body: `Avtalen din med ${brand} er blitt utsatt.\n\n• Tidligere dato: ${oldFormattedDate}\n• Ny dato: ${newFormattedDate}\n\nHvis den nye datoen ikke passer, er du velkommen til å svare på denne e-posten.`, signOff: 'Med vennlig hilsen,' },
+          SE: { greeting: 'Hej', name: 'där', body: `Ditt möte med ${brand} har schemalagts om.\n\n• Tidigare datum: ${oldFormattedDate}\n• Nytt datum: ${newFormattedDate}\n\nOm det nya datumet inte passar dig, är du välkommen att svara på detta e-postmeddelande.`, signOff: 'Med vänliga hälsningar,' },
+          DE: { greeting: 'Hallo', name: '', body: `Ihr Termin bei ${brand} wurde verschoben.\n\n• Vorheriges Datum: ${oldFormattedDate}\n• Neues Datum: ${newFormattedDate}\n\nFalls das neue Datum nicht passt, antworten Sie bitte auf diese E-Mail.`, signOff: 'Mit freundlichen Grüßen,' },
+        };
+        const fb = MOVE_FALLBACKS[countryCode] || null;
+        if (fb) {
+          const salutation = clientName ? `${fb.greeting} ${clientName},` : `${fb.greeting},`;
+          msgBody = `${salutation}\n\n${fb.body}\n\n${fb.signOff}\n${brand}`;
+        } else {
+          const dear = clientName || 'there';
+          msgBody = `Dear ${dear},\n\nYour appointment with ${brand} has been rescheduled.\n\n• Previous date: ${oldFormattedDate}\n• New date: ${newFormattedDate}\n\nIf the new date does not work for you, reply to this email.\n\nBest regards,\n${brand}`;
+        }
+      }
+      if (wantsNotify && toEmail && msgBody) {
+        const subj =
+          (notification_subject != null && String(notification_subject).trim()) ||
+          'Job date update';
+        try {
+          await sendJobCustomerEmail(pool, companyId, {
+            to: toEmail,
+            subject: subj,
+            text: msgBody,
+          });
+        } catch (emailErr) {
+          console.error('Move notification email failed:', emailErr.message || emailErr);
+        }
+      } else if (wantsNotify && !toEmail) {
+        console.warn('[jobs/move] notify_customer set but no recipient email (client email + billing empty, override missing)');
+      }
+
+      // Recalculate reminder send time now that the date has changed
+      setImmediate(() =>
+        rescheduleReminderForJob(pool, companyId, parseInt(jobId, 10)).catch((err) =>
+          console.error('rescheduleReminderForJob after move:', err.message || err)
+        )
+      );
 
       res.json({
         message: 'Job moved successfully',

@@ -6,6 +6,16 @@ const { pool } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
 
 const router = express.Router();
+const SUPPORTED_VIDEO_LANGUAGES = new Set(['en', 'da', 'de', 'sv', 'no']);
+
+function normalizeVideoLanguageCode(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw.startsWith('da')) return 'da';
+  if (raw.startsWith('de')) return 'de';
+  if (raw.startsWith('sv')) return 'sv';
+  if (raw.startsWith('no') || raw.startsWith('nb') || raw.startsWith('nn')) return 'no';
+  return 'en';
+}
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -60,8 +70,33 @@ async function initAdminSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS video_guides (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        duration VARCHAR(20) NOT NULL DEFAULT '0:00',
+        video_id VARCHAR(100) NOT NULL,
+        language_code VARCHAR(10) NOT NULL DEFAULT 'en',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     await pool.query(`ALTER TABLE trial_invites ADD COLUMN IF NOT EXISTS email_sent_count INTEGER NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE trial_invites ADD COLUMN IF NOT EXISTS last_email_sent_at TIMESTAMP NULL`);
+    await pool.query(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS registration_verification_codes (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(320) NOT NULL,
+        code_hash VARCHAR(255) NOT NULL,
+        verify_token_hash VARCHAR(255),
+        expires_at TIMESTAMP NOT NULL,
+        consumed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     // Run auto-suspend immediately after schema is ready, then every hour
     autoSuspendExpired();
     setInterval(autoSuspendExpired, 60 * 60 * 1000);
@@ -174,6 +209,20 @@ router.get('/users', async (req, res) => {
       ORDER BY u.created_at DESC
     `);
 
+    const startedRes = await pool.query(`
+      SELECT
+        r.email,
+        MAX(r.created_at) AS started_at,
+        MAX(r.expires_at) AS expires_at,
+        BOOL_OR(r.verify_token_hash IS NOT NULL) AS code_verified
+      FROM registration_verification_codes r
+      LEFT JOIN users u ON LOWER(u.email) = LOWER(r.email)
+      WHERE r.consumed_at IS NULL
+        AND u.id IS NULL
+      GROUP BY LOWER(r.email), r.email
+      ORDER BY MAX(r.created_at) DESC
+    `);
+
     res.json({
       users: result.rows.map(u => ({
         id:        u.id,
@@ -183,6 +232,12 @@ router.get('/users', async (req, res) => {
         role:      u.role,
         createdAt: u.created_at,
         companies: u.companies,
+      })),
+      startedSignups: startedRes.rows.map((s) => ({
+        email: s.email,
+        startedAt: s.started_at,
+        expiresAt: s.expires_at,
+        codeVerified: !!s.code_verified,
       })),
     });
   } catch (error) {
@@ -326,11 +381,13 @@ router.get('/companies/:companyId/clients', async (req, res) => {
 // GET /api/admin/video-guides - List all (admin)
 router.get('/video-guides', async (req, res) => {
   try {
+    const languageCode = normalizeVideoLanguageCode(req.query.languageCode || req.query.language_code || 'en');
     const result = await pool.query(`
-      SELECT id, title, description, duration, video_id, sort_order, created_at
+      SELECT id, title, description, duration, video_id, sort_order, created_at, language_code
       FROM video_guides
+      WHERE language_code = $1
       ORDER BY sort_order ASC, created_at ASC
-    `);
+    `, [languageCode]);
 
     const videos = result.rows.map((row) => ({
       id: row.id,
@@ -338,6 +395,7 @@ router.get('/video-guides', async (req, res) => {
       description: row.description || '',
       duration: row.duration || '0:00',
       videoId: row.video_id,
+      languageCode: row.language_code || 'en',
       sortOrder: row.sort_order,
       createdAt: row.created_at,
     }));
@@ -352,20 +410,27 @@ router.get('/video-guides', async (req, res) => {
 // POST /api/admin/video-guides - Create
 router.post('/video-guides', async (req, res) => {
   try {
-    const { title, description, duration, videoId } = req.body;
+    const { title, description, duration, videoId, languageCode: rawLanguageCode, language_code: rawLanguageCodeSnake } = req.body;
+    const languageCode = normalizeVideoLanguageCode(rawLanguageCode || rawLanguageCodeSnake);
 
     if (!title || !videoId) {
       return res.status(400).json({ error: 'Title and video ID are required' });
     }
+    if (!SUPPORTED_VIDEO_LANGUAGES.has(languageCode)) {
+      return res.status(400).json({ error: 'Unsupported language code' });
+    }
 
-    const maxResult = await pool.query('SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM video_guides');
+    const maxResult = await pool.query(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM video_guides WHERE language_code = $1',
+      [languageCode]
+    );
     const nextOrder = maxResult.rows[0]?.next_order || 1;
 
     const result = await pool.query(
-      `INSERT INTO video_guides (title, description, duration, video_id, sort_order)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, title, description, duration, video_id, sort_order, created_at`,
-      [title, description || '', duration || '0:00', videoId, nextOrder]
+      `INSERT INTO video_guides (title, description, duration, video_id, sort_order, language_code)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code`,
+      [title, description || '', duration || '0:00', videoId, nextOrder, languageCode]
     );
 
     const row = result.rows[0];
@@ -376,6 +441,7 @@ router.post('/video-guides', async (req, res) => {
         description: row.description || '',
         duration: row.duration || '0:00',
         videoId: row.video_id,
+        languageCode: row.language_code || 'en',
         sortOrder: row.sort_order,
         createdAt: row.created_at,
       },
@@ -390,7 +456,20 @@ router.post('/video-guides', async (req, res) => {
 router.put('/video-guides/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, duration, videoId, sortOrder } = req.body;
+    const {
+      title,
+      description,
+      duration,
+      videoId,
+      sortOrder,
+      languageCode: rawLanguageCode,
+      language_code: rawLanguageCodeSnake,
+    } = req.body;
+    const rawLang = rawLanguageCode != null ? rawLanguageCode : rawLanguageCodeSnake;
+    const languageCode = rawLang != null ? normalizeVideoLanguageCode(rawLang) : null;
+    if (languageCode && !SUPPORTED_VIDEO_LANGUAGES.has(languageCode)) {
+      return res.status(400).json({ error: 'Unsupported language code' });
+    }
 
     const result = await pool.query(
       `UPDATE video_guides
@@ -399,10 +478,11 @@ router.put('/video-guides/:id', async (req, res) => {
            duration = COALESCE($4, duration),
            video_id = COALESCE($5, video_id),
            sort_order = COALESCE($6, sort_order),
+           language_code = COALESCE($7, language_code),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
-       RETURNING id, title, description, duration, video_id, sort_order, created_at`,
-      [id, title, description, duration, videoId, sortOrder]
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code`,
+      [id, title, description, duration, videoId, sortOrder, languageCode]
     );
 
     if (result.rows.length === 0) {
@@ -417,6 +497,7 @@ router.put('/video-guides/:id', async (req, res) => {
         description: row.description || '',
         duration: row.duration || '0:00',
         videoId: row.video_id,
+        languageCode: row.language_code || 'en',
         sortOrder: row.sort_order,
         createdAt: row.created_at,
       },

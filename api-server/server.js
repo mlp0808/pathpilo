@@ -160,6 +160,7 @@ const dailyRoutesRoutes = require('./routes/daily-routes');
 const employeeLeaveRoutes = require('./routes/employee-leave');
 const invitationRoutes = require('./routes/invitations');
 const trialRoutes = require('./routes/trial');
+const { runAutomatedEmailTick } = require('./utils/automatedEmails');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -246,6 +247,10 @@ app.listen(port, () => {
   console.log(`🚀 PathPilo API Server running on port ${port}`);
   console.log(`📊 Health check: http://localhost:${port}/api/health`);
   console.log(`📚 API documentation: http://localhost:${port}/`);
+  runAutomatedEmailTick(pool);
+  setInterval(() => {
+    runAutomatedEmailTick(pool);
+  }, 60 * 1000);
 });
 
 // Export for testing

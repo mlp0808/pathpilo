@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { PlayIcon, XMarkIcon } from '@heroicons/react/24/solid'
 import { apiUrl } from '../utils/api'
+import { useAppI18n } from './I18nProvider'
 
 export interface VideoItem {
   id: string
@@ -11,7 +12,17 @@ export interface VideoItem {
   description?: string
   duration: string
   videoId: string
+  languageCode?: string
   thumbnail?: string
+}
+
+const normalizeLang = (value: unknown): string => {
+  const raw = String(value || '').trim().toLowerCase()
+  if (raw.startsWith('da')) return 'da'
+  if (raw.startsWith('de')) return 'de'
+  if (raw.startsWith('sv')) return 'sv'
+  if (raw.startsWith('no') || raw.startsWith('nb') || raw.startsWith('nn')) return 'no'
+  return 'en'
 }
 
 const DUMMY_VIDEOS: VideoItem[] = [
@@ -70,6 +81,7 @@ export default function VideoGuideModal({
   onClose,
   videos: videosProp,
 }: VideoGuideModalProps) {
+  const { t } = useAppI18n()
   const [videos, setVideos] = useState<VideoItem[]>([])
   const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null)
   const [mounted, setMounted] = useState(false)
@@ -90,13 +102,34 @@ export default function VideoGuideModal({
     }
 
     setLoading(true)
-    fetch(apiUrl('/video-guides'))
+    const languageCode = (() => {
+      try {
+        const userRaw = localStorage.getItem('user')
+        if (userRaw) {
+          const parsed = JSON.parse(userRaw) as Record<string, unknown>
+          const v = parsed.languageCode || parsed.language_code || parsed.language
+          if (typeof v === 'string' && v.trim()) return v.trim()
+        }
+      } catch {
+        // ignore and fallback
+      }
+      return document.documentElement.lang || 'en'
+    })()
+    const wantedLang = normalizeLang(languageCode)
+    fetch(apiUrl(`/video-guides?languageCode=${encodeURIComponent(wantedLang)}&language_code=${encodeURIComponent(wantedLang)}`))
       .then((res) => res.json())
       .then((data) => {
-        const list = data.videos || []
-        if (list.length > 0) {
-          setVideos(list)
-          setCurrentVideo(list[0])
+        const listRaw = Array.isArray(data.videos) ? data.videos : []
+        const list: VideoItem[] = listRaw.map((v: VideoItem & { language_code?: string }) => ({
+          ...v,
+          languageCode: normalizeLang(v.languageCode || v.language_code || 'en'),
+        }))
+        const exact = list.filter((v) => v.languageCode === wantedLang)
+        const english = list.filter((v) => v.languageCode === 'en')
+        const chosen = exact.length > 0 ? exact : english.length > 0 ? english : list
+        if (chosen.length > 0) {
+          setVideos(chosen)
+          setCurrentVideo(chosen[0])
         } else {
           setVideos(DUMMY_VIDEOS)
           setCurrentVideo(DUMMY_VIDEOS[0])
@@ -131,12 +164,12 @@ export default function VideoGuideModal({
           {/* Header - brand dark teal */}
           <div className="flex items-center justify-between px-6 py-4 bg-primary-500 border-b border-primary-600/50">
             <h2 className="text-lg font-semibold text-white tracking-tight">
-              Get started
+              {t('app.sidebar.getStarted', 'Get started')}
             </h2>
             <button
               onClick={onClose}
               className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-all duration-200"
-              aria-label="Close"
+              aria-label={t('app.modal.close', 'Close')}
             >
               <XMarkIcon className="w-5 h-5" />
             </button>
@@ -153,10 +186,12 @@ export default function VideoGuideModal({
                 <div className="relative aspect-video rounded-xl overflow-hidden bg-primary-500/10 ring-1 ring-gray-200/80 shadow-sm">
                   <iframe
                     key={displayCurrent.id}
-                    src={`https://www.youtube.com/embed/${displayCurrent.videoId}`}
+                    src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(displayCurrent.videoId)}`}
                     title={displayCurrent.title}
                     allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowFullScreen
+                    // YouTube Error 153: embed needs a non-empty referrer; strict-origin matches YouTube’s expectations
+                    referrerPolicy="strict-origin-when-cross-origin"
                     className="absolute inset-0 w-full h-full"
                   />
                 </div>
@@ -217,7 +252,7 @@ export default function VideoGuideModal({
                     </div>
                     {isActive && (
                       <span className="flex-shrink-0 text-[11px] font-semibold text-accent-600 bg-accent-500/15 px-2.5 py-1 rounded-lg">
-                        Now playing
+                        {t('app.videoGuide.nowPlaying', 'Now playing')}
                       </span>
                     )}
                   </button>

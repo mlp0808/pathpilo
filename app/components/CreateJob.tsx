@@ -4,9 +4,12 @@ import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
 import TimePicker from './TimePicker'
+import { useAppI18n } from './I18nProvider'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -17,9 +20,11 @@ interface CalendarViewProps {
   selectedClient: Client | null
   jobType: 'new' | 'redo'
   selectedPastJob: PastJob | null
+  locale: 'en' | 'da'
+  t: (key: string, fallback?: string) => string
 }
 
-function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServices, selectedClient, jobType, selectedPastJob }: CalendarViewProps) {
+function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServices, selectedClient, jobType, selectedPastJob, locale, t }: CalendarViewProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [userWorkHours, setUserWorkHours] = useState<any>(null)
   const [existingJobs, setExistingJobs] = useState<any[]>([])
@@ -129,8 +134,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
   for (let i = 0; i < startingDayOfWeek; i++) days.push(null)
   for (let day = 1; day <= daysInMonth; day++) days.push(day)
   
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-US'
   
   const handleDateClick = (day: number) => {
     const dateString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -161,7 +165,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <h3 className="text-lg font-medium text-gray-900">{monthNames[month]} {year}</h3>
+        <h3 className="text-lg font-medium text-gray-900">{new Date(year, month, 1).toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })}</h3>
         <button onClick={() => setCurrentMonth(new Date(year, month + 1, 1))} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -170,8 +174,8 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
       </div>
       
       <div className="grid grid-cols-7 gap-1">
-        {dayNames.map((day) => (
-          <div key={day} className="text-center text-xs font-medium text-gray-500 py-2">{day}</div>
+        {[0, 1, 2, 3, 4, 5, 6].map((day) => (
+          <div key={day} className="text-center text-xs font-medium text-gray-500 py-2">{new Date(2024, 0, day + 7).toLocaleDateString(dateLocale, { weekday: 'short' })}</div>
         ))}
       </div>
       
@@ -228,14 +232,14 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
                     {job.name}{job.last_name ? ` ${job.last_name}` : ''}
                     {job.status === 'cancelled' && (
                       <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
-                        Cancelled
+                        {t('app.jobsPage.cancelled', 'Cancelled')}
                       </span>
                     )}
                   </div>
                   <div className={`text-xs truncate ${
                     job.status === 'cancelled' ? 'text-gray-400' : 'text-gray-500'
                   }`}>
-                    {job.personal_address ? `${job.personal_address}, ${job.personal_city}` : 'No address'}
+                    {job.personal_address ? `${job.personal_address}, ${job.personal_city}` : t('app.createJob.noAddress', 'No address')}
                   </div>
                 </div>
                 <div className={`text-xs font-medium ml-2 ${
@@ -255,7 +259,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
                       {selectedClient.name}{selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}
                     </div>
                     <div className="text-xs text-blue-600 truncate">
-                      {selectedClient.address ? `${selectedClient.address}${selectedClient.city ? `, ${selectedClient.city}` : ''}` : 'No address'}
+                      {selectedClient.address ? `${selectedClient.address}${selectedClient.city ? `, ${selectedClient.city}` : ''}` : t('app.createJob.noAddress', 'No address')}
                     </div>
                   </div>
                 </div>
@@ -265,7 +269,7 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
             
             {getJobsForDate(new Date(selectedDate)).length === 0 && (!selectedUserId || !selectedClient || 
               (jobType === 'new' && selectedServices.length === 0) || (jobType === 'redo' && !selectedPastJob)) && (
-              <div className="text-xs text-gray-500 text-center py-2">No jobs scheduled for this date</div>
+              <div className="text-xs text-gray-500 text-center py-2">{t('app.createJob.noJobsThisDate', 'No jobs scheduled for this date')}</div>
             )}
           </div>
         </div>
@@ -346,6 +350,8 @@ interface CreateJobProps {
 }
 
 export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false }: CreateJobProps) {
+  const { t, locale } = useAppI18n()
+  const companyCountryCode = useCompanyCountryCode()
   const [services, setServices] = useState<Service[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -820,8 +826,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
           <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden animate-slideDown" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
               <div className="space-y-0.5">
-                <h2 className="text-2xl font-bold text-primary-800 tracking-tight">Create Job</h2>
-                <p className="text-sm text-gray-500 font-medium">Schedule a one-time job</p>
+                <h2 className="text-2xl font-bold text-primary-800 tracking-tight">{t('app.jobs.create.title')}</h2>
+                <p className="text-sm text-gray-500 font-medium">{t('app.createJob.subtitle', 'Schedule a one-time job')}</p>
               </div>
               <button onClick={onClose} className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all duration-200 ease-out shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group">
                 <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
@@ -830,7 +836,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-white to-gray-50/50">
               {/* Client */}
               <div className="space-y-4">
-                <label className="block text-xs font-semibold text-primary-700 mb-2">Client *</label>
+                <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.clientRequired', 'Client *')}</label>
                 {selectedClient ? (
                   <div className="bg-gray-50 rounded-lg p-4">
                     <div className="flex items-start justify-between">
@@ -893,18 +899,18 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               </div>
               {/* Services */}
               <div className="space-y-4">
-                {!selectedClient && !isAddingNewClient ? <div className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg">Select a client first</div> : (
+                {!selectedClient && !isAddingNewClient ? <div className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg">{t('app.createJob.selectClientFirst', 'Select a client first')}</div> : (
                   <>
-                    <label className="block text-xs font-semibold text-primary-700 mb-2">Services *</label>
+                    <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.servicesRequired', 'Services *')}</label>
                     <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
-                      <input type="text" value={serviceSearch} onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }} onFocus={() => setShowServiceDropdown(true)} placeholder="Search for services..." className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                      <input type="text" value={serviceSearch} onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }} onFocus={() => setShowServiceDropdown(true)} placeholder={t('app.createJob.searchServices', 'Search for services...')} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
                     </div>
                     {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
                       <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-60 overflow-y-auto" style={{ position: 'fixed', top: serviceDropdownRect.bottom + 8, left: serviceDropdownRect.left, width: serviceDropdownRect.width, zIndex: 9999 }}>
                         {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
                           <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
                             <div className="text-sm font-semibold text-primary-800">{service.title}</div>
-                            <div className="text-xs text-gray-500">{service.price} DKK · {service.duration_minutes} min</div>
+                            <div className="text-xs text-gray-500">{formatMoney(Number(service.price) || 0, companyCountryCode)} · {service.duration_minutes} {t('app.createJob.minutesUnit', 'min')}</div>
                           </button>
                         ))}
                       </div>,
@@ -917,9 +923,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="text-sm font-semibold text-primary-800">{service.title}</div>
                             <div className="flex items-center gap-2">
                               <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500">kr.</span>
+                              <span className="text-xs text-gray-500">{t('app.createJob.currencyUnit', 'kr.')}</span>
                               <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500">min</span>
+                              <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
                               <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
                             </div>
                           </div>
@@ -952,7 +958,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
                           >
                             <UserIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>Assign employee</span>
+                            <span>{t('app.createJob.assignEmployee', 'Assign employee')}</span>
                             <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
                           </button>
                         )}
@@ -990,7 +996,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
                           >
                             <ClockIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>Add time</span>
+                            <span>{t('app.createJob.addTime', 'Add time')}</span>
                             <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
                           </button>
                         )}
@@ -1013,7 +1019,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
                           >
                             <DocumentTextIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>Add note</span>
+                            <span>{t('app.createJob.addNote', 'Add note')}</span>
                             <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
                           </button>
                         )}
@@ -1027,14 +1033,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               {/* Date selector - only difference from subscription: last step right after employee/time/note buttons; only when service picked */}
               {selectedServices.length > 0 && (
                 <div className="space-y-2 pt-4">
-                  <label className="block text-xs font-semibold text-primary-700 mb-2">Date *</label>
+                  <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.dateRequired', 'Date *')}</label>
                   <input type="date" value={jobDate ? String(jobDate).split('T')[0] : ''} onChange={e => setJobDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
                 </div>
               )}
 
               <div className="flex justify-end pt-6 border-t border-gray-100">
                 <button type="button" onClick={() => handleSubmitJob()} disabled={(!selectedClient && !isAddingNewClient) || selectedServices.length === 0 || !selectedUserId || !jobDate || isSubmitting} className="px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20">
-                  {isSubmitting ? 'Creating...' : 'Create Job'}
+                  {isSubmitting ? t('app.jobs.create.creating') : t('app.jobs.create.createJob')}
                 </button>
               </div>
             </div>
@@ -1042,28 +1048,28 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         </div>
         {/* Time modal — portal so it escapes the backdrop's onClick and the card's CSS transform stacking context */}
         {typeof document !== 'undefined' && createPortal(
-          <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title="Set Time" description="Set the scheduled time for this job" confirmLabel="Save Time">
+          <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title={t('app.createJob.setTime', 'Set Time')} description={t('app.createJob.setTimeDesc', 'Set the scheduled time for this job')} confirmLabel={t('app.createJob.saveTime', 'Save Time')}>
             <div className="space-y-3">
               <div className="flex items-center space-x-1 bg-gray-100 rounded p-0.5">
-                <button type="button" onClick={() => { setIsTimeRangeMode(false); setPendingTimeTo('') }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${!isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Single Time</button>
-                <button type="button" onClick={() => { setIsTimeRangeMode(true); if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom) }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>Time Range</button>
+                <button type="button" onClick={() => { setIsTimeRangeMode(false); setPendingTimeTo('') }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${!isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>{t('app.createJob.singleTime', 'Single Time')}</button>
+                <button type="button" onClick={() => { setIsTimeRangeMode(true); if (!pendingTimeTo && pendingTimeFrom) setPendingTimeTo(pendingTimeFrom) }} className={`flex-1 py-1.5 px-2 text-xs font-medium rounded ${isTimeRangeMode ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'}`}>{t('app.createJob.timeRange', 'Time Range')}</button>
               </div>
             {!isTimeRangeMode ? (
-              <TimePicker label="Time" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
+              <TimePicker label={t('app.createJob.timeLabel', 'Time')} value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder={t('app.createJob.timeExample', 'e.g. 09:00')} />
             ) : (
               <div className="space-y-3">
-                <TimePicker label="From" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
-                <TimePicker label="To" value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} placeholder="e.g. 17:00" />
+                <TimePicker label={t('app.createJob.fromLabel', 'From')} value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder={t('app.createJob.timeExample', 'e.g. 09:00')} />
+                <TimePicker label={t('app.createJob.toLabel', 'To')} value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} minTime={pendingTimeFrom} placeholder={t('app.createJob.timeExampleEnd', 'e.g. 17:00')} />
               </div>
             )}
-              <div className="pt-3 border-t border-gray-100"><button type="button" onClick={() => { setPendingTimeFrom(''); setPendingTimeTo(''); setShowTimeModal(false) }} className="w-full py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100">Clear</button></div>
+              <div className="pt-3 border-t border-gray-100"><button type="button" onClick={() => { setPendingTimeFrom(''); setPendingTimeTo(''); setShowTimeModal(false) }} className="w-full py-2 px-3 text-xs font-medium text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100">{t('app.createJob.clear', 'Clear')}</button></div>
             </div>
           </ConfirmModal>
         , document.body)}
         {/* Note modal — also via portal for the same reason */}
         {typeof document !== 'undefined' && createPortal(
-          <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title="Add Note" description="Add a note to this job" confirmLabel="Save Note" enableNotification={false}>
-            <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">Note</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder="Enter a note for this job..." rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
+          <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title={t('app.createJob.addNote', 'Add Note')} description={t('app.createJob.addNoteDesc', 'Add a note to this job')} confirmLabel={t('app.createJob.saveNote', 'Save Note')} enableNotification={false}>
+            <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.note', 'Note')}</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder={t('app.createJob.notePlaceholder', 'Enter a note for this job...')} rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
           </ConfirmModal>
         , document.body)}
       </>
@@ -1076,7 +1082,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       <div className="fixed right-0 top-0 h-full w-[520px] bg-white shadow-2xl z-50 flex flex-col animate-slideInRight">
         <div className="relative bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 px-6 py-5">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Create New Job</h2>
+            <h2 className="text-lg font-bold text-gray-900">{t('app.createJob.title', 'Create New Job')}</h2>
           <button
             onClick={onClose}
               className="w-9 h-9 bg-white rounded-lg flex items-center justify-center hover:bg-gray-100 transition-all duration-200 ease-out shadow-sm border border-gray-200 hover:shadow-md"
@@ -1111,8 +1117,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                   </div>
                   <div className="text-xs text-gray-500 truncate mt-0.5">
                     {selectedClient
-                      ? (selectedClient.address ? `${selectedClient.address}, ${selectedClient.city}` : 'No address')
-                      : (newClientData.address ? `${newClientData.address}, ${newClientData.city}` : 'No address')
+                      ? (selectedClient.address ? `${selectedClient.address}, ${selectedClient.city}` : t('app.createJob.noAddress', 'No address'))
+                      : (newClientData.address ? `${newClientData.address}, ${newClientData.city}` : t('app.createJob.noAddress', 'No address'))
                     }
                   </div>
                 </div>
@@ -1131,7 +1137,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                   {selectedClient ? (
                     <div className="space-y-4">
                       <div className="flex items-center justify-between pb-2 border-b border-gray-100">
-                        <h3 className="text-sm font-medium text-gray-900">Client Information</h3>
+                      <h3 className="text-sm font-medium text-gray-900">{t('app.createJob.clientInformation', 'Client Information')}</h3>
                         <div className="flex items-center space-x-2">
                           <button
                             onClick={() => {
@@ -1153,7 +1159,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             }}
                             className="text-xs text-blue-600 hover:text-blue-700 transition-colors duration-150 ease-out"
                           >
-                            {isEditingClient ? 'Cancel' : 'Edit'}
+                            {isEditingClient ? t('app.common.cancel') : t('settings.user.edit', 'Edit')}
                           </button>
                           <button
                             onClick={() => { setSelectedClient(null); setClientSearch(''); setIsEditingClient(false) }}
@@ -1166,7 +1172,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       {/* Client Type Selector (only in edit mode) */}
                       {isEditingClient && (
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Client Type</label>
+                          <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.clientType', 'Client Type')}</label>
                           <div className="flex bg-gray-100 rounded p-0.5">
                             <button
                               type="button"
@@ -1175,7 +1181,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 editingClientData.client_type === 'person' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
                               }`}
                             >
-                              Private Person
+                              {t('app.createJob.privatePerson', 'Private Person')}
                             </button>
                             <button
                               type="button"
@@ -1184,7 +1190,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 editingClientData.client_type === 'company' ? 'bg-white text-gray-900' : 'text-gray-600 hover:text-gray-900'
                               }`}
                             >
-                              Company
+                              {t('app.createJob.company', 'Company')}
                             </button>
                           </div>
                         </div>
@@ -1194,7 +1200,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       {isEditingClient && editingClientData.client_type === 'company' && (
                         <div className="space-y-3">
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Company Name</label>
+                            <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.companyName', 'Company Name')}</label>
                             <input
                               type="text"
                               value={editingClientData.name}
@@ -1203,7 +1209,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Company Number</label>
+                            <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.companyNumber', 'Company Number')}</label>
                             <input
                               type="text"
                               value={editingClientData.company_number}
@@ -1218,7 +1224,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       {isEditingClient && editingClientData.client_type === 'person' && (
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">First Name</label>
+                            <label className="block text-xs text-gray-500 mb-1.5">{t('settings.user.firstName')}</label>
                             <input
                               type="text"
                               value={editingClientData.name}
@@ -1227,7 +1233,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-gray-500 mb-1.5">Last Name</label>
+                            <label className="block text-xs text-gray-500 mb-1.5">{t('settings.user.lastName')}</label>
                             <input
                               type="text"
                               value={editingClientData.last_name}
@@ -1258,7 +1264,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
                       {/* Address fields (show in both view and edit modes) */}
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1.5">Address</label>
+                        <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.address', 'Address')}</label>
                         <input
                           type="text"
                           value={isEditingClient ? editingClientData.address : (selectedClient.address || '')}
@@ -1273,7 +1279,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Zip Code</label>
+                          <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.zipCode', 'Zip Code')}</label>
                           <input
                             type="text"
                             value={isEditingClient ? editingClientData.zip_code : (selectedClient.zip_code || '')}
@@ -1287,7 +1293,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">City</label>
+                          <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.city', 'City')}</label>
                           <input
                             type="text"
                             value={isEditingClient ? editingClientData.city : (selectedClient.city || '')}
@@ -1303,7 +1309,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Email</label>
+                          <label className="block text-xs text-gray-500 mb-1.5">{t('settings.user.email')}</label>
                           <input
                             type="email"
                             value={isEditingClient ? editingClientData.email : (selectedClient.email || '')}
@@ -1317,7 +1323,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1.5">Phone</label>
+                          <label className="block text-xs text-gray-500 mb-1.5">{t('app.createJob.phone', 'Phone')}</label>
                           <input
                             type="tel"
                             value={isEditingClient ? editingClientData.phone : (selectedClient.phone || '')}
@@ -1379,7 +1385,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             }
                             className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150 ease-out"
                           >
-                            Save Changes & Continue
+                            {t('app.createJob.saveChangesContinue', 'Save Changes & Continue')}
                           </button>
                         </div>
                       )}
@@ -1405,19 +1411,19 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           setIsAddingNewClient(false)
                           setNewClientData(initialNewClientData)
                         }}
-                        saveLabel="Save & Select Client"
+                        saveLabel={t('app.createJob.saveSelectClient', 'Save & Select Client')}
                       />
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <h3 className="text-sm font-medium text-gray-900 pb-2 border-b border-gray-100">Select Client</h3>
+                      <h3 className="text-sm font-medium text-gray-900 pb-2 border-b border-gray-100">{t('app.createJob.selectClient', 'Select Client')}</h3>
                   <div className="relative dropdown-container">
                     <input
                       type="text"
                       value={clientSearch}
                           onChange={(e) => { setClientSearch(e.target.value); setShowClientDropdown(true) }}
                       onFocus={() => setShowClientDropdown(true)}
-                      placeholder="Search for a client..."
+                      placeholder={t('app.createJob.searchClient', 'Search for a client...')}
                           className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm bg-white"
                     />
                     {showClientDropdown && (
@@ -1437,7 +1443,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                       }
                                     </div>
                                     <div className="text-xs text-gray-500 mt-0.5">
-                                {client.address ? `${client.address}, ${client.city}` : 'No address'}
+                                {client.address ? `${client.address}, ${client.city}` : t('app.createJob.noAddress', 'No address')}
                               </div>
                             </button>
                                 ))}
@@ -1625,7 +1631,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                     className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-100 transition-colors duration-150 ease-out"
                                   >
                                     <div className="text-sm font-medium text-gray-900">{service.title}</div>
-                                    <div className="text-xs text-gray-500 mt-0.5">{service.price} DKK • {service.duration_minutes}min</div>
+                                    <div className="text-xs text-gray-500 mt-0.5">{formatMoney(Number(service.price) || 0, companyCountryCode)} • {service.duration_minutes}min</div>
                                   </button>
                                 ))}
                                 <button
@@ -2196,7 +2202,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               ) : (
                 <>
                   <TimePicker label="From" value={pendingTimeFrom} onChange={setPendingTimeFrom} placeholder="e.g. 09:00" />
-                  <TimePicker label="To" value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} placeholder="e.g. 17:00" />
+                  <TimePicker label="To" value={pendingTimeTo} onChange={setPendingTimeTo} disabled={!pendingTimeFrom} minTime={pendingTimeFrom} placeholder="e.g. 17:00" />
                 </>
               )}
             </div>

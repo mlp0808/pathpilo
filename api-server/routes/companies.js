@@ -1,9 +1,16 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
-const { sendEmail } = require('../utils/email');
+const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
 
 const router = express.Router();
+const DEFAULT_COUNTRY_CODE = 'DK';
+const DEFAULT_LANGUAGE_CODE = 'en';
+
+function normalizeCountryCode(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized.length === 2 ? normalized : DEFAULT_COUNTRY_CODE;
+}
 
 function buildInvitationEmail({ email, companyName, inviterName, role, inviteLink, expiresAt }) {
   const rolePretty = role === 'owner' ? 'Owner' : role === 'manager' ? 'Manager' : 'Employee';
@@ -37,7 +44,7 @@ function buildInvitationEmail({ email, companyName, inviterName, role, inviteLin
 
           <!-- Card body -->
           <tr>
-            <td style="background:#ffffff;padding:40px 36px 36px;border-left:1px solid #e8ede8;border-right:1px solid #e8ede8;">
+            <td style="background:#ffffff;padding:40px 36px 36px;border-left:1px solid #e8ede8;border-right:1px solid #e8ede8;border-bottom:1px solid #e8ede8;border-radius:0 0 16px 16px;">
 
               <!-- Green accent line -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
@@ -98,20 +105,8 @@ function buildInvitationEmail({ email, companyName, inviterName, role, inviteLin
                 Button not working? Copy and paste this into your browser:<br/>
                 <a href="${inviteLink}" style="color:${dark};word-break:break-all;">${inviteLink}</a>
               </p>
+              ${STANDARD_FOOTER_PLACEHOLDER}
 
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background:${dark};border-radius:0 0 16px 16px;padding:20px 36px;text-align:left;">
-              <p style="margin:0;font-size:12px;color:#7aacac;line-height:1.6;">
-                You received this because someone invited you to ${fromName}.
-                If this was unexpected, you can safely ignore it.
-              </p>
-              <p style="margin:8px 0 0;font-size:11px;color:#4a7272;">
-                &copy; ${new Date().getFullYear()} ${fromName}
-              </p>
             </td>
           </tr>
 
@@ -182,6 +177,7 @@ router.get('/', authenticateToken, async (req, res) => {
         c.id,
         c.name,
         COALESCE(c.slug, LOWER(REGEXP_REPLACE(c.name, '[^a-z0-9]+', '-', 'g'))) as slug,
+        c.country_code,
         uc.role as user_role,
         c.owner_id,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner,
@@ -197,6 +193,7 @@ router.get('/', authenticateToken, async (req, res) => {
         id: c.id,
         name: c.name,
         slug: c.slug,
+        countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
         role: c.user_role,
         isOwner: c.is_owner
       })),
@@ -216,7 +213,7 @@ router.get('/slug/:slug', async (req, res) => {
     const userId = req.user.userId;
 
     const result = await pool.query(`
-      SELECT c.id, c.name, c.slug, c.suspended_at
+      SELECT c.id, c.name, c.slug, c.suspended_at, c.country_code
       FROM companies c
       JOIN user_companies uc ON uc.company_id = c.id
       WHERE uc.user_id = $1 AND c.slug = $2
@@ -232,6 +229,7 @@ router.get('/slug/:slug', async (req, res) => {
         id:          company.id,
         name:        company.name,
         slug:        company.slug,
+        countryCode: company.country_code || DEFAULT_COUNTRY_CODE,
         suspendedAt: company.suspended_at || null,
       }
     });
@@ -404,7 +402,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
 
     // Get company details including slug
     const companyResult = await pool.query(
-      'SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, \'[^a-z0-9]+\', \'-\', \'g\'))) as slug, owner_id FROM companies WHERE id = $1',
+      'SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, \'[^a-z0-9]+\', \'-\', \'g\'))) as slug, owner_id, country_code FROM companies WHERE id = $1',
       [targetCompanyId]
     );
     const company = companyResult.rows[0];
@@ -427,6 +425,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
         c.id,
         c.name,
         COALESCE(c.slug, LOWER(REGEXP_REPLACE(c.name, '[^a-z0-9]+', '-', 'g'))) as slug,
+        c.country_code,
         uc.role as user_role,
         c.owner_id,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
@@ -440,13 +439,14 @@ router.post('/switch', authenticateToken, async (req, res) => {
       id: c.id,
       name: c.name,
       slug: c.slug,
+      countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
       role: c.user_role,
       isOwner: c.is_owner
     }));
 
     // Get user details first
     const userResult = await pool.query(
-      'SELECT id, first_name, last_name, email, role FROM users WHERE id = $1',
+      'SELECT id, first_name, last_name, email, role, language_code FROM users WHERE id = $1',
       [userId]
     );
     const user = userResult.rows[0];
@@ -478,6 +478,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         email: user.email,
+        languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
         role: userRole,
         companyId: company.id,
         companyName: company.name,
@@ -486,6 +487,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
           id: company.id,
           name: company.name,
           slug: company.slug,
+          countryCode: company.country_code || DEFAULT_COUNTRY_CODE,
           role: userRole,
           isOwner: company.owner_id === userId
         }
@@ -536,7 +538,11 @@ router.get('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_start_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_end_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS route_locations_enabled BOOLEAN DEFAULT TRUE');
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`);
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
     } catch (e) { /* ignore */ }
+
+    const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
 
     const companyResult = await pool.query(
       'SELECT * FROM companies WHERE id = $1',
@@ -548,12 +554,17 @@ router.get('/profile', authenticateToken, async (req, res) => {
     }
 
     const company = companyResult.rows[0];
+    const countryCode = company.country_code || DEFAULT_COUNTRY_CODE;
+    const effectiveTimezone = normalizeCompanyTimezone(company.timezone, countryCode);
     res.json({
       company: {
         id: company.id,
         name: company.name,
         slug: company.slug || '',
         country: company.country,
+        countryCode,
+        timezone: company.timezone || null,
+        effectiveTimezone,
         cvrNumber: company.cvr_number,
         address: company.address,
         city: company.city,
@@ -598,25 +609,59 @@ router.put('/profile', authenticateToken, async (req, res) => {
       }
     }
 
-    const { name, country, cvrNumber, address, city, zipCode, defaultStartAddress, defaultEndAddress, routeLocationsEnabled } = req.body;
+    const {
+      name,
+      country,
+      countryCode,
+      timezone,
+      cvrNumber,
+      address,
+      city,
+      zipCode,
+      defaultStartAddress,
+      defaultEndAddress,
+      routeLocationsEnabled,
+    } = req.body;
+
+    const { isValidIanaTimeZone } = require('../utils/companyTimezone');
 
     // Ensure columns exist
     try {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_start_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_end_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS route_locations_enabled BOOLEAN DEFAULT TRUE');
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`);
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
     } catch (e) { /* ignore */ }
+
+    const hasTimezoneKey = Object.prototype.hasOwnProperty.call(req.body, 'timezone');
+    let timezoneParam = null;
+    if (hasTimezoneKey) {
+      if (timezone === null || String(timezone).trim() === '') {
+        timezoneParam = null;
+      } else {
+        const tz = String(timezone).trim();
+        if (!isValidIanaTimeZone(tz)) {
+          return res.status(400).json({
+            error: 'Invalid timezone. Use an IANA name such as Europe/Copenhagen or America/Los_Angeles.',
+          });
+        }
+        timezoneParam = tz;
+      }
+    }
 
     const locationsEnabled = routeLocationsEnabled === undefined ? undefined : Boolean(routeLocationsEnabled);
 
     await pool.query(
-      `UPDATE companies SET name = $1, country = $2, cvr_number = $3, address = $4, city = $5, zip_code = $6,
-        default_start_address = $7, default_end_address = $8,
-        route_locations_enabled = COALESCE($9, route_locations_enabled, TRUE),
-        updated_at = CURRENT_TIMESTAMP WHERE id = $10`,
+      `UPDATE companies SET name = $1, country = $2, country_code = COALESCE($3, country_code, '${DEFAULT_COUNTRY_CODE}'), cvr_number = $4, address = $5, city = $6, zip_code = $7,
+        default_start_address = $8, default_end_address = $9,
+        route_locations_enabled = COALESCE($10, route_locations_enabled, TRUE),
+        timezone = CASE WHEN $12::boolean THEN $11 ELSE timezone END,
+        updated_at = CURRENT_TIMESTAMP WHERE id = $13`,
       [
         name != null ? String(name).trim() : null,
         country != null ? String(country).trim() : null,
+        countryCode != null ? normalizeCountryCode(countryCode) : null,
         cvrNumber != null ? String(cvrNumber).trim() : null,
         address != null ? String(address).trim() : null,
         city != null ? String(city).trim() : null,
@@ -624,6 +669,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
         defaultStartAddress != null ? String(defaultStartAddress).trim() : null,
         defaultEndAddress != null ? String(defaultEndAddress).trim() : null,
         locationsEnabled,
+        timezoneParam,
+        hasTimezoneKey,
         companyId,
       ]
     );
@@ -755,7 +802,7 @@ router.post('/:companyId/invite', authenticateToken, async (req, res) => {
     const { html, text, subject } = buildInvitationEmail({ email, companyName, inviterName, role: role || 'employee', inviteLink: invitationUrl, expiresAt });
 
     try {
-      await sendEmail({ to: email, subject, html, text });
+      await sendEmail({ to: email, subject, html, text, companyId: parseInt(companyId, 10) });
       console.log(`✅ Invitation email sent to ${email} for company ${companyName}`);
     } catch (emailErr) {
       console.error('⚠️ Invitation saved but email failed:', emailErr.message || emailErr);
@@ -870,7 +917,7 @@ router.post('/:companyId/invitations/:invitationId/resend', authenticateToken, a
       expiresAt: newExpiry,
     });
 
-    await sendEmail({ to: invitation.email, subject, html, text });
+    await sendEmail({ to: invitation.email, subject, html, text, companyId: parseInt(companyId, 10) });
     console.log(`✅ Invitation resent to ${invitation.email}`);
 
     res.json({ message: 'Invitation resent successfully' });
@@ -884,8 +931,14 @@ router.post('/:companyId/invitations/:invitationId/resend', authenticateToken, a
 router.put('/:companyId', authenticateToken, async (req, res) => {
   try {
     const { companyId } = req.params;
-    const { name, country, cvrNumber, address, city, zipCode, slug: requestedSlug } = req.body;
+    const { name, country, countryCode, cvrNumber, address, city, zipCode, slug: requestedSlug, timezone } = req.body;
     const userId = req.user.userId;
+
+    try {
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
+    } catch (e) { /* ignore */ }
+
+    const { isValidIanaTimeZone } = require('../utils/companyTimezone');
 
     // Verify user is owner of the company
     const ownerCheck = await pool.query(`
@@ -930,23 +983,43 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       }
     }
 
+    let nextTimezone = currentCompany.timezone;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'timezone')) {
+      if (timezone === null || String(timezone).trim() === '') {
+        nextTimezone = null;
+      } else {
+        const tz = String(timezone).trim();
+        if (!isValidIanaTimeZone(tz)) {
+          return res.status(400).json({
+            error: 'Invalid timezone. Use an IANA name such as Europe/Copenhagen or America/Los_Angeles.',
+          });
+        }
+        nextTimezone = tz;
+      }
+    }
+
     const result = await pool.query(`
       UPDATE companies
-      SET name = $1, slug = $2, country = $3, cvr_number = $4, address = $5, city = $6, zip_code = $7, updated_at = NOW()
-      WHERE id = $8
-      RETURNING id, name, slug, country, cvr_number as "cvrNumber", address, city, zip_code as "zipCode"
+      SET name = $1, slug = $2, country = $3, country_code = COALESCE($4, country_code, '${DEFAULT_COUNTRY_CODE}'),
+          cvr_number = $5, address = $6, city = $7, zip_code = $8, timezone = $9, updated_at = NOW()
+      WHERE id = $10
+      RETURNING id, name, slug, country, country_code, timezone, cvr_number as "cvrNumber", address, city, zip_code as "zipCode"
     `, [
       newName,
       slug,
       country != null ? String(country).trim() : null,
+      countryCode != null ? normalizeCountryCode(countryCode) : null,
       cvrNumber != null ? String(cvrNumber).trim() : null,
       address != null ? String(address).trim() : null,
       city != null ? String(city).trim() : null,
       zipCode != null ? String(zipCode).trim() : null,
+      nextTimezone,
       companyId
     ]);
 
+    const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
     const company = result.rows[0];
+    const cc = company.country_code || DEFAULT_COUNTRY_CODE;
     res.json({
       message: 'Company updated successfully',
       company: {
@@ -954,6 +1027,9 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
         name: company.name,
         slug: company.slug,
         country: company.country,
+        countryCode: cc,
+        timezone: company.timezone || null,
+        effectiveTimezone: normalizeCompanyTimezone(company.timezone, cc),
         cvrNumber: company.cvrNumber,
         address: company.address,
         city: company.city,
@@ -969,7 +1045,7 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
 // POST /api/companies - Create new company (admin only)
 router.post('/', async (req, res) => {
   try {
-    const { name, ownerEmail, slug: requestedSlug } = req.body;
+    const { name, ownerEmail, slug: requestedSlug, countryCode } = req.body;
     const userId = req.user.userId;
 
     // Check if user is admin
@@ -1007,10 +1083,10 @@ router.post('/', async (req, res) => {
 
     // Create company
     const result = await pool.query(`
-      INSERT INTO companies (name, slug, owner_id)
-      VALUES ($1, $2, $3)
+      INSERT INTO companies (name, slug, owner_id, country_code)
+      VALUES ($1, $2, $3, $4)
       RETURNING *
-    `, [name, slug, ownerId]);
+    `, [name, slug, ownerId, normalizeCountryCode(countryCode)]);
 
     const company = result.rows[0];
 

@@ -6,6 +6,7 @@ import AppLayout from '../../components/AppLayout'
 import { useUser } from '../../hooks/useUser'
 import { apiUrl } from '../../utils/api'
 import { UserPlusIcon, EllipsisVerticalIcon, Cog6ToothIcon } from '@heroicons/react/24/outline'
+import { useAppI18n } from '../../components/I18nProvider'
 
 interface User {
   id: number
@@ -25,6 +26,7 @@ interface PendingInvitation {
 }
 
 export default function TeamPage() {
+  const { t, locale } = useAppI18n()
   const { user: currentUser } = useUser()
   const router = useRouter()
   const params = useParams()
@@ -55,12 +57,12 @@ export default function TeamPage() {
       const token = localStorage.getItem('token')
       const response = await fetch(apiUrl('/users'), { headers: { Authorization: `Bearer ${token}` } })
       const contentType = response.headers.get('content-type')
-      if (!contentType?.includes('application/json')) { setError('Invalid server response'); return }
+      if (!contentType?.includes('application/json')) { setError(t('app.team.invalidServerResponse')); return }
       const data = await response.json()
       if (response.ok) setUsers(data.users || [])
-      else setError(data.error || 'Failed to fetch team members')
+      else setError(data.error || t('app.team.errFetch'))
     } catch {
-      setError('Network error: Failed to fetch team members')
+      setError(t('app.team.errNetworkFetch'))
     } finally {
       setLoading(false)
     }
@@ -81,7 +83,7 @@ export default function TeamPage() {
   }
 
   const handleAddEmployee = async () => {
-    if (!emailInput.trim() || !currentUser?.companyId) { setError('Please enter an email address'); return }
+    if (!emailInput.trim() || !currentUser?.companyId) { setError(t('app.team.errEmailRequired')); return }
     setIsSubmitting(true)
     setError('')
     try {
@@ -97,10 +99,10 @@ export default function TeamPage() {
         setEmailInput('')
         setShowAddModal(false)
       } else {
-        setError(data.error || 'Failed to send invitation')
+        setError(data.error || t('app.team.errInvite'))
       }
     } catch {
-      setError('Network error: Failed to send invitation')
+      setError(t('app.team.errNetworkInvite'))
     } finally {
       setIsSubmitting(false)
     }
@@ -120,10 +122,10 @@ export default function TeamPage() {
         setTimeout(() => setResendSuccess(null), 3000)
       } else {
         const d = await response.json()
-        alert(d.error || 'Failed to resend invitation')
+        alert(d.error || t('app.team.errResend'))
       }
     } catch {
-      alert('Failed to resend invitation. Please try again.')
+      alert(t('app.team.errResendNetwork'))
     } finally {
       setResendingId(null)
     }
@@ -131,7 +133,7 @@ export default function TeamPage() {
 
   const handleRemoveInvitation = async (invId: number, email: string) => {
     if (!currentUser?.companyId) return
-    if (!confirm(`Remove the pending invitation for ${email}?`)) return
+    if (!confirm(t('app.team.confirmRemoveInvite').replace('{{email}}', email))) return
     setRemovingInviteId(invId)
     try {
       const token = localStorage.getItem('token')
@@ -153,7 +155,7 @@ export default function TeamPage() {
   }
 
   const handleRemoveUser = async (userId: number, userName: string) => {
-    if (!confirm(`Remove ${userName} from this company? Their account will remain active.`)) return
+    if (!confirm(t('app.team.confirmRemoveUser').replace('{{name}}', userName))) return
     setRemovingUserId(userId)
     setOpenDropdownId(null)
     try {
@@ -163,9 +165,9 @@ export default function TeamPage() {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (response.ok) fetchUsers()
-      else { const d = await response.json(); alert(d.error || 'Failed to remove user') }
+      else { const d = await response.json(); alert(d.error || t('app.team.errRemoveUser')) }
     } catch {
-      alert('Failed to remove user. Please try again.')
+      alert(t('app.team.errRemoveUserNetwork'))
     } finally {
       setRemovingUserId(null)
     }
@@ -174,15 +176,15 @@ export default function TeamPage() {
   const getRoleBadge = (role: string) => {
     switch (role) {
       case 'owner': case 'company-owner':
-        return { label: 'Owner', cls: 'bg-purple-100 text-purple-800' }
+        return { label: t('app.role.owner'), cls: 'bg-purple-100 text-purple-800' }
       case 'manager':
-        return { label: 'Manager', cls: 'bg-green-100 text-accent-700' }
+        return { label: t('app.role.manager'), cls: 'bg-green-100 text-accent-700' }
       default:
-        return { label: 'Employee', cls: 'bg-green-100 text-green-800' }
+        return { label: t('app.role.employee'), cls: 'bg-green-100 text-green-800' }
     }
   }
 
-  const formatDate = (d: string) => new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  const formatDate = (d: string) => new Date(d).toLocaleDateString(locale === 'da' ? 'da-DK' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 
   const managementUsers = users.filter(u => u.role === 'owner' || u.role === 'company-owner' || u.role === 'manager')
   const employeeUsers = users.filter(u => u.role === 'employee')
@@ -204,8 +206,8 @@ export default function TeamPage() {
       <div>
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Team</h1>
-          <p className="text-sm text-gray-600 mt-1">Manage your team members and their roles</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t('app.team.title')}</h1>
+          <p className="text-sm text-gray-600 mt-1">{t('app.team.subtitle')}</p>
         </div>
 
         {error && (
@@ -215,9 +217,9 @@ export default function TeamPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div>
-                <p className="text-sm font-medium text-red-800">Error</p>
+                <p className="text-sm font-medium text-red-800">{t('app.team.errorTitle')}</p>
                 <p className="text-sm text-red-700 mt-1">{error}</p>
-                <button onClick={fetchUsers} className="mt-2 text-sm font-medium text-red-800 hover:underline">Try again</button>
+                <button onClick={fetchUsers} className="mt-2 text-sm font-medium text-red-800 hover:underline">{t('app.team.tryAgain')}</button>
               </div>
             </div>
           </div>
@@ -236,7 +238,9 @@ export default function TeamPage() {
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
-                {tab === 'management' ? `Management (${managementUsers.length})` : `Employees (${employeeUsers.length})`}
+                {tab === 'management'
+                  ? t('app.team.tabManagement').replace('{{count}}', String(managementUsers.length))
+                  : t('app.team.tabEmployees').replace('{{count}}', String(employeeUsers.length))}
               </button>
             ))}
           </nav>
@@ -246,12 +250,12 @@ export default function TeamPage() {
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-medium text-gray-900">
-              {activeTab === 'management' ? 'Management Team' : 'Employees'}
+              {activeTab === 'management' ? t('app.team.sectionManagement') : t('app.team.sectionEmployees')}
             </h2>
             <p className="text-sm text-gray-600">
               {activeTab === 'management'
-                ? 'Owners and managers with administrative access'
-                : 'Team members with standard access'}
+                ? t('app.team.sectionManagementDesc')
+                : t('app.team.sectionEmployeesDesc')}
             </p>
           </div>
           {activeTab === 'employees' && (
@@ -262,7 +266,7 @@ export default function TeamPage() {
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              Add Employee
+              {t('app.team.addEmployee')}
             </button>
           )}
         </div>
@@ -275,12 +279,12 @@ export default function TeamPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0Zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0Z" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No {activeTab === 'management' ? 'managers' : 'employees'} yet</h3>
-            <p className="text-gray-500 mb-6">{activeTab === 'management' ? 'Managers and owners will appear here' : 'Employees will appear here'}</p>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">{activeTab === 'management' ? t('app.team.emptyManagersTitle') : t('app.team.emptyEmployeesTitle')}</h3>
+            <p className="text-gray-500 mb-6">{activeTab === 'management' ? t('app.team.emptyManagersDesc') : t('app.team.emptyEmployeesDesc')}</p>
             {activeTab === 'employees' && (
               <button onClick={() => setShowAddModal(true)} className="inline-flex items-center px-4 py-2 bg-accent-500 text-white rounded-lg hover:bg-accent-600 transition-colors">
                 <UserPlusIcon className="w-4 h-4 mr-2" />
-                Invite Employee
+                {t('app.team.inviteEmployee')}
               </button>
             )}
           </div>
@@ -289,14 +293,14 @@ export default function TeamPage() {
             <table className="min-w-full divide-y divide-gray-300">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colName')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colEmail')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colRole')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colJoined')}</th>
                   {listPending.length > 0 && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invitation Link</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colInvitationLink')}</th>
                   )}
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('app.team.colActions')}</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -310,12 +314,12 @@ export default function TeamPage() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
                         </div>
-                        <span className="text-sm font-medium text-gray-500 italic">Awaiting signup</span>
+                        <span className="text-sm font-medium text-gray-500 italic">{t('app.team.awaitingSignup')}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{inv.email}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Pending</span>
+                      <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">{t('app.team.pending')}</span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">—</td>
                     {listPending.length > 0 && (
@@ -331,7 +335,7 @@ export default function TeamPage() {
                           <button
                             onClick={() => navigator.clipboard.writeText(inv.invitationUrl)}
                             className="text-accent-500 hover:text-accent-600 transition-colors flex-shrink-0"
-                            title="Copy link"
+                            title={t('app.team.copyLinkTitle')}
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -347,7 +351,7 @@ export default function TeamPage() {
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
-                            Sent!
+                            {t('app.team.sent')}
                           </span>
                         ) : (
                           <button
@@ -361,14 +365,14 @@ export default function TeamPage() {
                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                                 </svg>
-                                Sending…
+                                {t('app.team.sending')}
                               </>
                             ) : (
                               <>
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                                 </svg>
-                                Resend
+                                {t('app.team.resend')}
                               </>
                             )}
                           </button>
@@ -378,7 +382,7 @@ export default function TeamPage() {
                           onClick={() => handleRemoveInvitation(inv.id, inv.email)}
                           disabled={removingInviteId === inv.id || resendingId === inv.id}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
-                          title="Remove invitation"
+                          title={t('app.team.removeInviteTitle')}
                         >
                           {removingInviteId === inv.id ? (
                             <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -390,7 +394,7 @@ export default function TeamPage() {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                             </svg>
                           )}
-                          Remove
+                          {t('app.team.remove')}
                         </button>
                       </div>
                     </td>
@@ -413,7 +417,7 @@ export default function TeamPage() {
                           </div>
                           <div className="text-sm font-medium text-gray-900">
                             {user.first_name} {user.last_name}
-                            {isSelf && <span className="ml-1.5 text-xs text-gray-400">(you)</span>}
+                            {isSelf && <span className="ml-1.5 text-xs text-gray-400">{t('app.team.you')}</span>}
                           </div>
                         </div>
                       </td>
@@ -435,7 +439,7 @@ export default function TeamPage() {
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
                           >
                             <Cog6ToothIcon className="w-3.5 h-3.5" />
-                            Settings
+                            {t('settings.sidebar.title')}
                           </button>
 
                           {/* Three-dot menu — only for non-owners and non-self */}
@@ -457,7 +461,7 @@ export default function TeamPage() {
                                       disabled={removingUserId === user.id}
                                       className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                                     >
-                                      {removingUserId === user.id ? 'Removing…' : 'Remove from company'}
+                                      {removingUserId === user.id ? t('app.team.removing') : t('app.team.removeFromCompany')}
                                     </button>
                                   </div>
                                 </>
@@ -479,7 +483,7 @@ export default function TeamPage() {
           <div className="fixed inset-0 bg-gray-600 bg-opacity-50 z-50 flex items-center justify-center">
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">Add Employee</h3>
+                <h3 className="text-lg font-medium text-gray-900">{t('app.team.modalAddTitle')}</h3>
                 <button onClick={() => { setShowAddModal(false); setEmailInput(''); setError('') }} className="text-gray-400 hover:text-gray-500">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -494,14 +498,14 @@ export default function TeamPage() {
               )}
 
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">{t('settings.user.email')}</label>
                 <input
                   type="email"
                   value={emailInput}
                   onChange={e => setEmailInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAddEmployee()}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
-                  placeholder="employee@example.com"
+                  placeholder={t('app.team.modalEmailPlaceholder')}
                   disabled={isSubmitting}
                   autoFocus
                 />
@@ -513,14 +517,14 @@ export default function TeamPage() {
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
                   disabled={isSubmitting}
                 >
-                  Cancel
+                  {t('app.team.modalCancel')}
                 </button>
                 <button
                   onClick={handleAddEmployee}
                   disabled={isSubmitting || !emailInput.trim()}
                   className="px-4 py-2 text-sm font-medium text-white bg-accent-500 rounded-lg hover:bg-accent-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting ? 'Sending…' : 'Send Invitation'}
+                  {isSubmitting ? t('app.team.modalSending') : t('app.team.modalSendInvitation')}
                 </button>
               </div>
             </div>

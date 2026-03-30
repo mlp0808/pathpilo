@@ -18,8 +18,18 @@ interface VideoGuide {
   description: string
   duration: string
   videoId: string
+  languageCode: string
   sortOrder: number
   createdAt: string
+}
+
+const normalizeLang = (value: unknown): string => {
+  const raw = String(value || '').trim().toLowerCase()
+  if (raw.startsWith('da')) return 'da'
+  if (raw.startsWith('de')) return 'de'
+  if (raw.startsWith('sv')) return 'sv'
+  if (raw.startsWith('no') || raw.startsWith('nb') || raw.startsWith('nn')) return 'no'
+  return 'en'
 }
 
 export default function AdminVideoGuidesPage() {
@@ -30,11 +40,13 @@ export default function AdminVideoGuidesPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingVideo, setEditingVideo] = useState<VideoGuide | null>(null)
+  const [selectedLanguage, setSelectedLanguage] = useState('en')
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     duration: '0:00',
     videoId: '',
+    languageCode: 'en',
   })
   const [saving, setSaving] = useState(false)
 
@@ -63,7 +75,6 @@ export default function AdminVideoGuidesPage() {
 
     if (checkAuth()) {
       setIsAuthenticated(true)
-      fetchVideos()
     }
   }, [router])
 
@@ -76,13 +87,21 @@ export default function AdminVideoGuidesPage() {
         return
       }
 
-      const response = await fetch(apiUrl('/admin/video-guides'), {
+      const response = await fetch(
+        apiUrl(`/admin/video-guides?languageCode=${encodeURIComponent(selectedLanguage)}&language_code=${encodeURIComponent(selectedLanguage)}`),
+        {
         headers: { Authorization: `Bearer ${token}` },
-      })
+        }
+      )
       const data = await response.json()
 
       if (response.ok) {
-        setVideos(data.videos)
+        const normalized = (Array.isArray(data.videos) ? data.videos : []).map((v: any) => ({
+          ...v,
+          languageCode: normalizeLang(v.languageCode || v.language_code || 'en'),
+        }))
+        // Frontend guard: if backend returns mixed languages, keep selected only.
+        setVideos(normalized.filter((v: VideoGuide) => v.languageCode === selectedLanguage))
       } else {
         setError(data.error || 'Failed to fetch video guides')
       }
@@ -95,7 +114,7 @@ export default function AdminVideoGuidesPage() {
 
   const openAddForm = () => {
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '' })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage })
     setShowForm(true)
   }
 
@@ -106,6 +125,7 @@ export default function AdminVideoGuidesPage() {
       description: video.description || '',
       duration: video.duration || '0:00',
       videoId: video.videoId,
+      languageCode: video.languageCode || 'en',
     })
     setShowForm(true)
   }
@@ -113,7 +133,7 @@ export default function AdminVideoGuidesPage() {
   const closeForm = () => {
     setShowForm(false)
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '' })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -132,6 +152,8 @@ export default function AdminVideoGuidesPage() {
         description: formData.description,
         duration: formData.duration,
         videoId: formData.videoId,
+        languageCode: formData.languageCode,
+        language_code: formData.languageCode,
       })
 
       const response = await fetch(url, {
@@ -180,6 +202,11 @@ export default function AdminVideoGuidesPage() {
       alert('Network error. Please try again.')
     }
   }
+
+  useEffect(() => {
+    if (isAuthenticated) fetchVideos()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLanguage, isAuthenticated])
 
   if (!isAuthenticated) {
     return (
@@ -239,16 +266,29 @@ export default function AdminVideoGuidesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Video Guides</h1>
             <p className="text-gray-600 mt-1">
-              Manage videos shown in the Get Started modal
+              Manage videos shown in the Get Started modal by language
             </p>
           </div>
-          <button
-            onClick={openAddForm}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white font-medium rounded-lg transition-colors"
-          >
-            <PlusIcon className="w-5 h-5" />
-            Add video
-          </button>
+          <div className="flex items-center gap-3">
+            <select
+              value={selectedLanguage}
+              onChange={(e) => setSelectedLanguage(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm"
+            >
+              <option value="en">English</option>
+              <option value="da">Danish</option>
+              <option value="de">German</option>
+              <option value="sv">Swedish</option>
+              <option value="no">Norwegian</option>
+            </select>
+            <button
+              onClick={openAddForm}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-accent-500 hover:bg-accent-600 text-white font-medium rounded-lg transition-colors"
+            >
+              <PlusIcon className="w-5 h-5" />
+              Add video
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -271,7 +311,7 @@ export default function AdminVideoGuidesPage() {
             <PlayIcon className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <p className="text-gray-600 mb-4">No video guides yet.</p>
             <p className="text-sm text-gray-500 mb-6">
-              Add videos to show in the Get Started modal. Use YouTube video IDs (e.g. from the share URL).
+              Add videos to show in the Get Started modal. If no videos exist for a language, users will see English videos.
             </p>
             <button
               onClick={openAddForm}
@@ -306,7 +346,7 @@ export default function AdminVideoGuidesPage() {
                   {video.description && (
                     <p className="text-sm text-gray-500 mt-1 line-clamp-2">{video.description}</p>
                   )}
-                  <p className="text-xs text-gray-400 mt-1">{video.duration}</p>
+                <p className="text-xs text-gray-400 mt-1">{video.duration} · {(video.languageCode || 'en').toUpperCase()}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
@@ -366,6 +406,21 @@ export default function AdminVideoGuidesPage() {
                   placeholder="Short description shown under the title"
                   rows={3}
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Language *</label>
+                <select
+                  value={formData.languageCode}
+                  onChange={(e) => setFormData({ ...formData, languageCode: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                  required
+                >
+                  <option value="en">English</option>
+                  <option value="da">Danish</option>
+                  <option value="de">German</option>
+                  <option value="sv">Swedish</option>
+                  <option value="no">Norwegian</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Duration</label>

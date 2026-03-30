@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react'
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline'
 import { useUser } from '../hooks/useUser'
 import { apiUrl } from '../utils/api'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
+import { useAppI18n } from './I18nProvider'
 
 interface Service {
   id: number
@@ -26,7 +29,9 @@ interface CreateJobModalProps {
 }
 
 export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId, clientName }: CreateJobModalProps) {
+  const { t } = useAppI18n()
   const { user } = useUser()
+  const companyCountryCode = useCompanyCountryCode(user)
   const [createdJobId, setCreatedJobId] = useState<number | null>(null)
   const [title, setTitle] = useState('')
   const [services, setServices] = useState<Service[]>([])
@@ -73,10 +78,10 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
       if (response.ok) {
         setServices(data.services)
       } else {
-        setError('Failed to load services')
+        setError(t('app.jobs.create.errLoadServices'))
       }
     } catch (error) {
-      setError('Network error: Failed to load services')
+      setError(t('app.jobs.create.errNetworkLoadServices'))
       console.error('Services fetch error:', error)
     } finally {
       setLoadingServices(false)
@@ -138,28 +143,25 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
   }
 
   const formatPrice = (price: number) => {
-    if (typeof price !== 'number' || isNaN(price)) return '0 DKK'
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'DKK'
-    }).format(price)
+    if (typeof price !== 'number' || isNaN(price)) return formatMoney(0, companyCountryCode)
+    return formatMoney(price, companyCountryCode)
   }
 
   const handleSubmitJob = async (e: React.FormEvent) => {
     e.preventDefault()
     
     if (!title.trim()) {
-      setError('Job title is required')
+      setError(t('app.jobs.create.errTitleRequired'))
       return
     }
     
     if (selectedServices.length === 0) {
-      setError('At least one service is required')
+      setError(t('app.jobs.create.errServiceRequired'))
       return
     }
     
     if (!jobDate) {
-      setError('Job date is required')
+      setError(t('app.jobs.create.errDateRequired'))
       return
     }
 
@@ -225,8 +227,8 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Create Job</h2>
-            <p className="text-sm text-gray-600 mt-1">for {clientName}</p>
+            <h2 className="text-lg font-semibold text-gray-900">{t('app.jobs.create.title')}</h2>
+            <p className="text-sm text-gray-600 mt-1">{t('app.jobs.create.forClient').replace('{{name}}', clientName)}</p>
           </div>
           <button
             onClick={handleCancel}
@@ -247,7 +249,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
           {/* Title Field */}
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-gray-900 mb-2">
-              Job Title <span className="text-red-500">*</span>
+              {t('app.jobs.create.jobTitle')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -256,14 +258,14 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
               onChange={(e) => setTitle(e.target.value)}
               required
               className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-              placeholder="e.g. Monthly Window Cleaning"
+              placeholder={t('app.jobs.create.jobTitlePlaceholder')}
             />
           </div>
 
           {/* Add Service Field */}
           <div className="relative">
             <label htmlFor="service-search" className="block text-sm font-medium text-gray-900 mb-2">
-              Add Service
+              {t('app.jobs.create.addService')}
             </label>
             <div className="relative">
               <input
@@ -276,7 +278,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
                 }}
                 onFocus={() => setShowServiceDropdown(true)}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="Search and select services..."
+                placeholder={t('app.jobs.create.searchPlaceholder')}
                 disabled={loadingServices}
               />
               {loadingServices && (
@@ -291,7 +293,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
               <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
                 {filteredServices.length === 0 ? (
                   <div className="px-4 py-3 text-sm text-gray-500">
-                    {searchTerm ? 'No services found matching your search' : 'No services available'}
+                    {searchTerm ? t('app.jobs.create.noServicesSearch') : t('app.jobs.create.noServicesEmpty')}
                   </div>
                 ) : (
                   filteredServices.map((service) => (
@@ -321,7 +323,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
           {selectedServices.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-900 mb-2">
-                Selected Services
+                {t('app.jobs.create.selectedServices')}
               </label>
               <div className="space-y-2">
                 {selectedServices.map((service) => (
@@ -348,7 +350,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
                         </div>
                         
                         <div className="flex items-center gap-1">
-                          <span className="text-xs text-gray-600">Time:</span>
+                          <span className="text-xs text-gray-600">{t('app.jobs.create.time')}</span>
                           <input
                             type="number"
                             value={service.customDuration || service.duration_minutes}
@@ -399,7 +401,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
               onClick={handleCancel}
               className="flex-1 bg-gray-100 text-gray-700 py-3 px-6 rounded-lg text-sm font-semibold hover:bg-gray-200 focus:ring-2 focus:ring-gray-500/20 focus:ring-offset-2 transition-all duration-200"
             >
-              Cancel
+              {t('app.jobs.create.cancel')}
             </button>
             {createdJobId ? (
               <button
@@ -407,7 +409,7 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
                 onClick={onClose}
                 className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-6 rounded-lg text-sm font-semibold hover:from-green-700 hover:to-green-800 focus:ring-2 focus:ring-green-500/20 focus:ring-offset-2 transition-all duration-200 shadow-lg hover:shadow-xl hover:shadow-green-500/25"
               >
-                Done
+                {t('app.jobs.create.done')}
               </button>
             ) : (
               <button
@@ -418,10 +420,10 @@ export default function CreateJobModal({ isOpen, onClose, onJobCreated, clientId
                 {isSubmitting ? (
                   <span className="flex items-center justify-center space-x-2">
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    <span>Creating...</span>
+                    <span>{t('app.jobs.create.creating')}</span>
                   </span>
                 ) : (
-                  'Create Job'
+                  t('app.jobs.create.createJob')
                 )}
               </button>
             )}

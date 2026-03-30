@@ -3,6 +3,9 @@
 import { useState } from 'react'
 import { XMarkIcon, PlusIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { getCountryRule } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
+import { useAppI18n } from './I18nProvider'
 
 interface Service {
   title: string
@@ -18,6 +21,9 @@ interface AddServiceModalProps {
 }
 
 export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: AddServiceModalProps) {
+  const { t } = useAppI18n()
+  const companyCountryCode = useCompanyCountryCode()
+  const priceCurrency = getCountryRule(companyCountryCode).defaultCurrency
   const [currentService, setCurrentService] = useState<Service>({
     title: '',
     price: '',
@@ -75,10 +81,10 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
         onServiceAdded()
         onClose()
       } else {
-        setError(data.error || 'Failed to create service')
+        setError(data.error || t('app.services.errCreate', 'Failed to create service'))
       }
     } catch (error) {
-      setError('Network error: Failed to create service')
+      setError(t('app.services.errNetworkCreate', 'Network error: Failed to create service'))
       console.error('Service creation error:', error)
     } finally {
       setIsSubmitting(false)
@@ -103,7 +109,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
       <div className="bg-white rounded-xl shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Add Service</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{t('app.services.addTitle', 'Add Service')}</h2>
           <button
             onClick={handleCancel}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -123,7 +129,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
           {/* Service Title */}
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-gray-900 mb-2">
-              Service title <span className="text-red-500">*</span>
+              {t('app.services.serviceTitle', 'Service title')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -133,14 +139,14 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
               onChange={handleInputChange}
               required
               className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-              placeholder="e.g. Window Cleaning"
+              placeholder={t('app.services.placeholderTitle', 'e.g. Window Cleaning')}
             />
           </div>
 
           {/* Price */}
           <div>
             <label htmlFor="price" className="block text-sm font-medium text-gray-900 mb-2">
-              Price (DKK) <span className="text-red-500">*</span>
+              Price ({priceCurrency}) <span className="text-red-500">*</span>
             </label>
             <input
               type="number"
@@ -160,7 +166,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label htmlFor="duration_hours" className="block text-sm font-medium text-gray-900 mb-2">
-                Hours <span className="text-red-500">*</span>
+                {t('app.services.hours', 'Hours')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -171,12 +177,12 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
                 required
                 min="0"
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="e.g. 1"
+                placeholder={t('app.services.placeholderHours', 'e.g. 1')}
               />
             </div>
             <div>
               <label htmlFor="duration_minutes" className="block text-sm font-medium text-gray-900 mb-2">
-                Minutes <span className="text-red-500">*</span>
+                {t('app.services.minutes', 'Minutes')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -188,7 +194,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
                 min="0"
                 max="59"
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="e.g. 30"
+                placeholder={t('app.services.placeholderMinutes', 'e.g. 30')}
               />
             </div>
           </div>
@@ -207,7 +213,7 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
               onClick={handleCancel}
               className="flex-1 bg-gray-100 text-gray-700 py-3 px-6 rounded-lg text-sm font-semibold hover:bg-gray-200 focus:ring-2 focus:ring-gray-500/20 focus:ring-offset-2 transition-all duration-200"
             >
-              Cancel
+              {t('app.services.cancel', 'Cancel')}
             </button>
             <button
               type="submit"
@@ -217,10 +223,10 @@ export default function AddServiceModal({ isOpen, onClose, onServiceAdded }: Add
               {isSubmitting ? (
                 <span className="flex items-center justify-center space-x-2">
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  <span>Adding...</span>
+                  <span>{t('app.services.adding', 'Adding...')}</span>
                 </span>
               ) : (
-                'Add Service'
+                t('app.services.add', 'Add Service')
               )}
             </button>
           </div>

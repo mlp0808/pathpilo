@@ -1,21 +1,38 @@
+'use client'
+
+import Image from 'next/image'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { marketingImages } from '../config/marketingImages'
+import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
 
 export default function Footer() {
+  const pathname = usePathname()
+  const locale = getLocaleFromPathname(pathname || '/')
+  const da = locale === 'da'
+  const navHref = (href: string) => withLocalePath(locale, href)
+  const loginHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/login')
+  const registerHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
+
   return (
     <footer className="bg-primary-800 text-white">
       <div className="max-w-7xl mx-auto px-6 py-16">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
           {/* Brand Column */}
           <div className="col-span-1 md:col-span-2">
-            <Link href="/" className="flex items-center space-x-2 mb-4">
-              <div className="w-10 h-10 bg-gradient-to-br from-accent-400 to-accent-600 rounded-xl flex items-center justify-center">
-                <span className="text-white font-bold text-xl">P</span>
-              </div>
-              <span className="text-2xl font-bold">PathPilo</span>
+            <Link href={navHref('/')} className="mb-4 inline-flex items-center">
+              <Image
+                src={marketingImages.brand.logoFooterWhite}
+                alt="PathPilo"
+                width={180}
+                height={44}
+                className="h-10 w-auto"
+              />
             </Link>
             <p className="text-gray-300 mb-6 max-w-md">
-              The complete service management platform for mobile service businesses. 
-              Streamline scheduling, client management, and team coordination.
+              {da
+                ? 'Den komplette serviceplatform til mobile servicevirksomheder. Effektivisér planlægning, kundestyring og teamkoordinering.'
+                : 'The complete service management platform for mobile service businesses. Streamline scheduling, client management, and team coordination.'}
             </p>
             <div className="flex space-x-4">
               {/* Social links placeholder */}
@@ -34,25 +51,15 @@ export default function Footer() {
 
           {/* Product Links */}
           <div>
-            <h3 className="font-semibold text-lg mb-4">Product</h3>
+            <h3 className="font-semibold text-lg mb-4">{da ? 'Produkt' : 'Product'}</h3>
             <ul className="space-y-2">
               <li>
-                <Link href="/features" className="text-gray-300 hover:text-white transition-colors">
-                  Features
+                <Link href={navHref('/about')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Om os' : 'About'}
                 </Link>
               </li>
               <li>
-                <Link href="/pricing" className="text-gray-300 hover:text-white transition-colors">
-                  Pricing
-                </Link>
-              </li>
-              <li>
-                <Link href="/about" className="text-gray-300 hover:text-white transition-colors">
-                  About
-                </Link>
-              </li>
-              <li>
-                <Link href="/faq" className="text-gray-300 hover:text-white transition-colors">
+                <Link href={navHref('/faq')} className="text-gray-300 hover:text-white transition-colors">
                   FAQ
                 </Link>
               </li>
@@ -61,26 +68,26 @@ export default function Footer() {
 
           {/* Resources Links */}
           <div>
-            <h3 className="font-semibold text-lg mb-4">Resources</h3>
+            <h3 className="font-semibold text-lg mb-4">{da ? 'Ressourcer' : 'Resources'}</h3>
             <ul className="space-y-2">
               <li>
-                <Link href="/contact" className="text-gray-300 hover:text-white transition-colors">
-                  Contact Us
+                <Link href={navHref('/contact')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Kontakt os' : 'Contact Us'}
                 </Link>
               </li>
               <li>
-                <a href="https://app.pathpilo.com/login" className="text-gray-300 hover:text-white transition-colors">
-                  Sign In
+                <a href={loginHref} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Log ind' : 'Sign In'}
                 </a>
               </li>
               <li>
-                <a href="https://app.pathpilo.com/register" className="text-gray-300 hover:text-white transition-colors">
-                  Sign Up
+                <a href={registerHref} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Kom i gang gratis' : 'Get Started Free'}
                 </a>
               </li>
               <li>
                 <Link href="#" className="text-gray-300 hover:text-white transition-colors">
-                  Documentation
+                  {da ? 'Dokumentation' : 'Documentation'}
                 </Link>
               </li>
             </ul>
@@ -90,12 +97,12 @@ export default function Footer() {
         {/* Bottom Bar */}
         <div className="border-t border-primary-700 pt-8 flex flex-col md:flex-row justify-between items-center">
           <p className="text-gray-400 text-sm mb-4 md:mb-0">
-            © {new Date().getFullYear()} PathPilo. All rights reserved.
+            © {new Date().getFullYear()} PathPilo. {da ? 'Alle rettigheder forbeholdes.' : 'All rights reserved.'}
           </p>
           <div className="flex space-x-6 text-sm text-gray-400">
-            <Link href="#" className="hover:text-white transition-colors">Privacy Policy</Link>
-            <Link href="#" className="hover:text-white transition-colors">Terms of Service</Link>
-            <Link href="#" className="hover:text-white transition-colors">Cookie Policy</Link>
+            <Link href="#" className="hover:text-white transition-colors">{da ? 'Privatlivspolitik' : 'Privacy Policy'}</Link>
+            <Link href="#" className="hover:text-white transition-colors">{da ? 'Servicevilkår' : 'Terms of Service'}</Link>
+            <Link href="#" className="hover:text-white transition-colors">{da ? 'Cookiepolitik' : 'Cookie Policy'}</Link>
           </div>
         </div>
       </div>

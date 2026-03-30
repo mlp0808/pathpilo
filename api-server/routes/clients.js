@@ -2,6 +2,22 @@ const express = require('express');
 const { pool } = require('../utils/database');
 
 const router = express.Router();
+const COUNTRY_TAX_DEFAULTS = {
+  DK: 25,
+  SE: 25,
+  NO: 25,
+  DE: 19,
+  GB: 20,
+  US: 0,
+};
+const COUNTRY_CURRENCY_DEFAULTS = {
+  DK: 'DKK',
+  SE: 'SEK',
+  NO: 'NOK',
+  DE: 'EUR',
+  GB: 'GBP',
+  US: 'USD',
+};
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -34,6 +50,25 @@ const getActiveCompanyId = (req) => {
 
   return { companyId: activeCompanyId };
 };
+
+// GET /api/clients/invoice-defaults - Country-based tax defaults
+router.get('/invoice-defaults', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const companyRes = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyId]);
+    const countryCode = String(companyRes.rows[0]?.country_code || 'DK').toUpperCase();
+    const defaultTaxRate = COUNTRY_TAX_DEFAULTS[countryCode] ?? COUNTRY_TAX_DEFAULTS.DK;
+    const defaultCurrency = COUNTRY_CURRENCY_DEFAULTS[countryCode] || COUNTRY_CURRENCY_DEFAULTS.DK;
+    return res.json({ countryCode, defaultTaxRate, defaultCurrency });
+  } catch (error) {
+    console.error('Error fetching invoice defaults:', error);
+    return res.status(500).json({ error: 'Failed to fetch invoice defaults' });
+  }
+});
 
 // GET /api/clients - Get all clients for company
 router.get('/', authenticateToken, async (req, res) => {

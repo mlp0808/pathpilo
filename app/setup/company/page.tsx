@@ -1,15 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
 import { useUser } from '../../hooks/useUser'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
+import { countryRules, getCountryRule } from '../../config/countryRules'
+import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
 
 export default function CompanySetupPage() {
   const { user } = useUser()
   const [formData, setFormData] = useState({
-    country: '',
+    country: countryRules.DK.countryName,
+    countryCode: 'DK',
+    timezone: getDefaultTimezoneForCountry('DK'),
     name: '',
     cvrNumber: '',
     address: '',
@@ -20,19 +24,79 @@ export default function CompanySetupPage() {
   const [error, setError] = useState('')
   const [isUpdating, setIsUpdating] = useState(false)
   const router = useRouter()
+  /** Prevents a slow /companies/profile response from overwriting country/address after the user already edited */
+  const formTouchedRef = useRef(false)
+
+  const markFormTouched = () => {
+    formTouchedRef.current = true
+  }
 
   useEffect(() => {
-    if (user && user.companyId) {
-      setIsUpdating(true)
-      const companyName = user.companyName ?? ''
-      if (companyName) setFormData(prev => ({ ...prev, name: companyName }))
+    if (!user?.companyId) return
+    setIsUpdating(true)
+    const companyName = user.companyName ?? ''
+    if (companyName && !formTouchedRef.current) {
+      setFormData(prev => ({ ...prev, name: companyName }))
     }
+
+    const ac = new AbortController()
+    const loadCompany = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/companies/profile'), {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: ac.signal,
+        })
+        if (!res.ok) return
+        const data = await res.json()
+        const c = data.company
+        if (!c) return
+        if (formTouchedRef.current) return
+        const code = (c.countryCode || 'DK') as string
+        const rule = countryRules[code] || countryRules.DK
+        setFormData(prev => ({
+          ...prev,
+          name: c.name || prev.name || companyName,
+          country: c.country || rule.countryName,
+          countryCode: code,
+          timezone:
+            c.timezone ||
+            c.effectiveTimezone ||
+            getDefaultTimezoneForCountry(code),
+          cvrNumber: c.cvrNumber || '',
+          address: c.address || '',
+          city: c.city || '',
+          zipCode: c.zipCode || '',
+        }))
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === 'AbortError') return
+        /* keep defaults */
+      }
+    }
+    loadCompany()
+    return () => ac.abort()
   }, [user])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    markFormTouched()
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
   }
+
+  const handleCountryCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    markFormTouched()
+    const nextCode = e.target.value
+    const rule = countryRules[nextCode] || countryRules.DK
+    setFormData(prev => ({
+      ...prev,
+      countryCode: nextCode,
+      country: rule.countryName,
+      timezone: getDefaultTimezoneForCountry(nextCode),
+    }))
+  }
+
+  const countryRule = getCountryRule(formData.countryCode)
+  const tzSelect = useMemo(() => getTimezoneSelectOptions(formData.countryCode), [formData.countryCode])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,34 +110,45 @@ export default function CompanySetupPage() {
       const endpoint = isUpdating ? `/companies/${user?.companyId}` : '/companies'
 
       // No slug sent — the backend derives it from the name and auto-resolves collisions
+      const payload = {
+        name: formData.name,
+        country: formData.country,
+        countryCode: formData.countryCode,
+        timezone: formData.timezone,
+        cvrNumber: formData.cvrNumber,
+        address: formData.address,
+        city: formData.city,
+        zipCode: formData.zipCode,
+      }
       const response = await fetch(apiUrl(endpoint), {
         method,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       })
 
       const data = await response.json()
 
       if (response.ok) {
-        localStorage.setItem('company', JSON.stringify(data.company))
+        const countryCodeSaved = data.company.countryCode || formData.countryCode
+        const companyForStorage = { ...data.company, countryCode: countryCodeSaved }
+        localStorage.setItem('company', JSON.stringify(companyForStorage))
 
         const userData = localStorage.getItem('user')
         if (userData) {
           const userObj = JSON.parse(userData)
           userObj.companyId = data.company.id
           userObj.companyName = data.company.name
-          if (data.company.slug) {
-            const companyEntry = {
-              id: data.company.id,
-              name: data.company.name,
-              slug: data.company.slug,
-              role: 'owner',
-              isOwner: true,
-            }
-            const existingCompanies = Array.isArray(userObj.companies) ? userObj.companies : []
-            userObj.companies = [companyEntry, ...existingCompanies.filter((c: any) => c?.id !== companyEntry.id)]
-            userObj.activeCompany = companyEntry
+          const companyEntry = {
+            id: data.company.id,
+            name: data.company.name,
+            slug: data.company.slug || '',
+            countryCode: countryCodeSaved,
+            role: 'owner',
+            isOwner: true,
           }
+          const existingCompanies = Array.isArray(userObj.companies) ? userObj.companies : []
+          userObj.companies = [companyEntry, ...existingCompanies.filter((c: any) => c?.id !== companyEntry.id)]
+          userObj.activeCompany = companyEntry
           localStorage.setItem('user', JSON.stringify(userObj))
         }
 
@@ -135,21 +210,61 @@ export default function CompanySetupPage() {
                 )}
 
                 <div className="space-y-5">
-                  {/* Country */}
+                  {/* Country (ISO + display name — same pattern as Business settings) */}
                   <div>
-                    <label htmlFor="country" className="block text-sm font-medium text-gray-900 mb-2">
+                    <label htmlFor="countryCode" className="block text-sm font-medium text-gray-900 mb-2">
                       Country <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="text"
-                      id="country"
-                      name="country"
-                      value={formData.country}
-                      onChange={handleInputChange}
+                    <select
+                      id="countryCode"
+                      name="countryCode"
+                      value={formData.countryCode}
+                      onChange={handleCountryCodeChange}
                       required
-                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                      placeholder="e.g. Denmark"
-                    />
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all hover:border-gray-300 shadow-sm"
+                    >
+                      {Object.values(countryRules).map((rule) => (
+                        <option key={rule.countryCode} value={rule.countryCode}>
+                          {rule.countryName} ({rule.countryCode})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1.5 text-xs text-gray-500">
+                      Used for tax defaults, address labels, and map search in your region.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="timezone" className="block text-sm font-medium text-gray-900 mb-2">
+                      Time zone
+                    </label>
+                    <select
+                      id="timezone"
+                      name="timezone"
+                      value={formData.timezone}
+                      onChange={handleInputChange}
+                      className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all hover:border-gray-300 shadow-sm"
+                    >
+                      <optgroup label="Suggested for your country">
+                        {tzSelect.suggested.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {tzSelect.otherZones.length > 0 && (
+                        <optgroup label="All time zones">
+                          {tzSelect.otherZones.map((z) => (
+                            <option key={z} value={z}>
+                              {z}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <p className="mt-1.5 text-xs text-gray-500">
+                      Defaults from your country (e.g. US → Eastern). Change if your business uses a different zone.
+                    </p>
                   </div>
 
                   {/* Company Name */}
@@ -169,10 +284,11 @@ export default function CompanySetupPage() {
                     />
                   </div>
 
-                  {/* CVR Number */}
+                  {/* Company registration number (label varies by country) */}
                   <div>
                     <label htmlFor="cvrNumber" className="block text-sm font-medium text-gray-900 mb-2">
-                      CVR number <span className="text-gray-400 text-xs">(optional)</span>
+                      {countryRule.companyNumberLabel}{' '}
+                      <span className="text-gray-400 text-xs">(optional)</span>
                     </label>
                     <input
                       type="text"
@@ -193,8 +309,11 @@ export default function CompanySetupPage() {
                     city={formData.city}
                     lat={undefined}
                     lng={undefined}
+                    countryCode={formData.countryCode}
+                    zipLabel={countryRule.postalCodeLabel}
                     placeholder="Start typing an address…"
                     onChange={(data: AddressData) => {
+                      markFormTouched()
                       setFormData(prev => ({
                         ...prev,
                         address: data.address,

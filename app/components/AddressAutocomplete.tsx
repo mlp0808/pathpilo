@@ -33,6 +33,9 @@ interface AddressAutocompleteProps {
   inputClassName?: string
   label?: string
   placeholder?: string
+  countryCode?: string
+  zipLabel?: string
+  cityLabel?: string
 }
 
 export default function AddressAutocomplete({
@@ -45,6 +48,9 @@ export default function AddressAutocomplete({
   inputClassName,
   label = 'Address',
   placeholder = 'Start typing an address...',
+  countryCode,
+  zipLabel = 'Zip code',
+  cityLabel = 'City',
 }: AddressAutocompleteProps) {
   const [query, setQuery] = useState(address || '')
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
@@ -83,8 +89,10 @@ export default function AddressAutocomplete({
     setIsLoading(true)
     try {
       const encoded = encodeURIComponent(q)
+      const countryFilter = String(countryCode || '').trim().toLowerCase()
+      const countryParam = countryFilter.length === 2 ? `&country=${encodeURIComponent(countryFilter)}` : ''
       const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address&limit=5`
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address&limit=5${countryParam}`
       )
       const data = await res.json()
       const results: AddressSuggestion[] = (data.features || []).map((f: {
@@ -113,7 +121,7 @@ export default function AddressAutocomplete({
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [countryCode])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -193,7 +201,7 @@ export default function AddressAutocomplete({
       {/* Zip + City row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">Zip code</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">{zipLabel}</label>
           <input
             type="text"
             value={zip_code}
@@ -206,7 +214,7 @@ export default function AddressAutocomplete({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">City</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">{cityLabel}</label>
           <input
             type="text"
             value={city}

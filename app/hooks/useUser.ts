@@ -8,6 +8,7 @@ interface User {
   firstName: string
   lastName: string
   email: string
+  languageCode?: string
   role: string
   companyId: number | null
   companyName: string | null
@@ -15,6 +16,7 @@ interface User {
     id: number
     name: string
     slug?: string
+    countryCode?: string
     role: string
     isOwner: boolean
   }>
@@ -22,6 +24,7 @@ interface User {
     id: number
     name: string
     slug?: string
+    countryCode?: string
     role: string
     isOwner: boolean
   } | null

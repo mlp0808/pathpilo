@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { useAppI18n } from './I18nProvider'
 
 interface ConfirmModalProps {
   isOpen: boolean
@@ -16,14 +17,16 @@ interface ConfirmModalProps {
   enableNotification?: boolean
   isSubmitting?: boolean
   children?: React.ReactNode
+  /** When this key changes while the modal is open, message & subject are refreshed from defaults (without resetting notify/email). Use for live-updating templates. */
+  syncKey?: string
 }
 
 export default function ConfirmModal({
   isOpen,
   title,
   description,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  confirmLabel,
+  cancelLabel,
   onClose,
   onConfirm,
   defaultMessage = '',
@@ -31,21 +34,48 @@ export default function ConfirmModal({
   defaultEmail = '',
   enableNotification = true,
   isSubmitting = false,
-  children
+  children,
+  syncKey
 }: ConfirmModalProps) {
+  const { t } = useAppI18n()
+  const confirmText = confirmLabel ?? t('app.common.confirm', 'Confirm')
+  const cancelText = cancelLabel ?? t('app.common.cancel', 'Cancel')
   const [notify, setNotify] = useState(false)
   const [message, setMessage] = useState(typeof defaultMessage === 'function' ? (defaultMessage as () => string)() : defaultMessage)
   const [subject, setSubject] = useState(typeof defaultSubject === 'function' ? (defaultSubject as () => string)() : defaultSubject)
   const [email, setEmail] = useState(defaultEmail)
 
+  const defaultMessageRef = useRef(defaultMessage)
+  const defaultSubjectRef = useRef(defaultSubject)
+  const defaultEmailRef = useRef(defaultEmail)
+  defaultMessageRef.current = defaultMessage
+  defaultSubjectRef.current = defaultSubject
+  defaultEmailRef.current = defaultEmail
+
+  const prevSyncKeyRef = useRef(syncKey)
+
   useEffect(() => {
     if (isOpen) {
+      const msg = defaultMessageRef.current
+      const subj = defaultSubjectRef.current
+      const em = defaultEmailRef.current
+      prevSyncKeyRef.current = syncKey
       setNotify(false)
-      setMessage(typeof defaultMessage === 'function' ? (defaultMessage as () => string)() : (defaultMessage || ''))
-      setSubject(typeof defaultSubject === 'function' ? (defaultSubject as () => string)() : (defaultSubject || ''))
-      setEmail(defaultEmail || '')
+      setMessage(typeof msg === 'function' ? (msg as () => string)() : (msg || ''))
+      setSubject(typeof subj === 'function' ? (subj as () => string)() : (subj || ''))
+      setEmail(em || '')
     }
-  }, [isOpen, defaultMessage, defaultSubject, defaultEmail])
+  }, [isOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh message/subject when syncKey changes while modal is open (e.g. time picker updates)
+  useEffect(() => {
+    if (!isOpen || syncKey === prevSyncKeyRef.current) return
+    prevSyncKeyRef.current = syncKey
+    const msg = defaultMessageRef.current
+    const subj = defaultSubjectRef.current
+    setMessage(typeof msg === 'function' ? (msg as () => string)() : (msg || ''))
+    setSubject(typeof subj === 'function' ? (subj as () => string)() : (subj || ''))
+  }, [isOpen, syncKey])
 
   if (!isOpen) return null
 
@@ -71,7 +101,7 @@ export default function ConfirmModal({
                     onChange={(e) => setNotify(e.target.checked)}
                     className="rounded border-gray-300 text-accent-500 focus:ring-accent-500 focus:ring-2"
                   />
-                  <span className="text-sm font-semibold text-primary-700">Notify customer</span>
+                  <span className="text-sm font-semibold text-primary-700">{t('app.modal.notifyCustomer', 'Notify customer')}</span>
                 </label>
                 {notify && (
                   <>
@@ -83,21 +113,21 @@ export default function ConfirmModal({
                       placeholder="client@example.com"
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md hover:border-gray-300"
                     />
-                    <label className="block text-xs font-medium text-gray-500">Subject</label>
+                    <label className="block text-xs font-medium text-gray-500">{t('app.modal.subject', 'Subject')}</label>
                     <input
                       type="text"
                       value={subject}
                       onChange={(e) => setSubject(e.target.value)}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md hover:border-gray-300"
-                      placeholder="Email subject..."
+                      placeholder={t('app.modal.subjectPlaceholder', 'Email subject...')}
                     />
-                    <label className="block text-xs font-medium text-gray-500">Message</label>
+                    <label className="block text-xs font-medium text-gray-500">{t('app.modal.message', 'Message')}</label>
                     <textarea
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
                       rows={4}
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md hover:border-gray-300 resize-none"
-                      placeholder="Email message to customer..."
+                      placeholder={t('app.modal.messagePlaceholder', 'Email message to customer...')}
                     />
                   </>
                 )}
@@ -112,7 +142,7 @@ export default function ConfirmModal({
               className="px-6 py-2.5 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-all duration-200 ease-out rounded-xl hover:bg-gray-100 border border-gray-200 hover:border-gray-300"
               disabled={isSubmitting}
             >
-              {cancelLabel}
+              {cancelText}
             </button>
             <button
               type="button"
@@ -126,10 +156,10 @@ export default function ConfirmModal({
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Saving...
+                  {t('app.common.saving', 'Saving...')}
                 </span>
               ) : (
-                confirmLabel
+                confirmText
               )}
             </button>
           </div>

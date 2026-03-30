@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
@@ -6,119 +7,26 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
-const nodemailer = require('nodemailer');
-const { Resend } = require('resend');
+const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('./api-server/utils/email');
+
+/** Wraps body HTML so the standard footer sits under the message in the white card (requires companyId on send). */
+function wrapCompanyEmailHtml(innerBodyHtml) {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px 12px;background:#eef2f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;border:1px solid #e2e8e0;overflow:hidden;">
+<tr><td style="padding:0;font-size:15px;line-height:1.6;color:#1e293b;">
+<div style="padding:24px 24px 0 24px;">
+${innerBodyHtml}
+${STANDARD_FOOTER_PLACEHOLDER}
+</div>
+</td></tr></table>
+</body></html>`;
+}
 
 const app = express();
 // Express API port (keep separate from Next.js). In dev, default is 3003.
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3003;
-
-// Email (used for sending invoices and notifications)
-const emailTransporter = (() => {
-  const resendApiKey = process.env.RESEND_API_KEY;
-
-  // Use Resend if API key is available (recommended for production)
-  if (resendApiKey) {
-    console.log('✅ Using Resend for email delivery');
-    return new Resend(resendApiKey);
-  }
-
-  // Fallback to SMTP if configured
-  const host = process.env.EMAIL_HOST;
-  const port = process.env.EMAIL_PORT ? parseInt(process.env.EMAIL_PORT, 10) : undefined;
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
-
-  if (host && user && pass) {
-    console.log('📧 Using SMTP for email delivery');
-    return nodemailer.createTransporter({
-      host,
-      port: port || 587,
-      secure: (port || 587) === 465,
-      auth: { user, pass }
-    });
-  }
-
-  // Final fallback: JSON transport for local development
-  console.log('⚠️ No email provider configured. Using JSON transport (emails will not be delivered).');
-  console.log('   Set RESEND_API_KEY for production email delivery.');
-  return nodemailer.createTransport({ jsonTransport: true });
-})();
-
-// Unified email sending function (works with both Resend and nodemailer)
-async function sendEmail(options) {
-  const { to, from, subject, text, html, attachments } = options;
-
-  console.log('📧 Attempting to send email:', { to, from, subject, hasAttachments: !!attachments?.length });
-
-  try {
-    // Check if we're using Resend
-    if (emailTransporter.constructor.name === 'Resend') {
-      // Resend API
-      const emailOptions = {
-        from: from || 'PathPilo <onboarding@resend.dev>',
-        to,
-        subject,
-        text,
-        html,
-        attachments: attachments?.map(att => ({
-          filename: att.filename,
-          content: att.content,
-          type: att.contentType || 'application/octet-stream'
-        }))
-      };
-
-      console.log('📧 Sending via Resend...');
-      console.log('📧 Email options:', { from: emailOptions.from, to: emailOptions.to, subject: emailOptions.subject });
-
-      const result = await emailTransporter.emails.send(emailOptions);
-
-      console.log('✅ Email sent via Resend - Response:', JSON.stringify(result, null, 2));
-
-      // Check if Resend returned an error
-      if (result.error) {
-        console.error('❌ Resend API error:', result.error);
-        throw new Error(`Resend API error: ${result.error.message || 'Unknown error'}`);
-      }
-
-      return result;
-    } else {
-      // Nodemailer API (including JSON transport for dev)
-      const emailOptions = {
-        from,
-        to,
-        subject,
-        text,
-        html,
-        attachments
-      };
-
-      console.log('📧 Sending via nodemailer...');
-      const result = await emailTransporter.sendMail(emailOptions);
-
-      if (emailTransporter.transporter?.options?.jsonTransport) {
-        console.log('📧 JSON Transport result (development mode):', result);
-      } else {
-        console.log('✅ Email sent via nodemailer');
-      }
-
-      return result;
-    }
-  } catch (error) {
-    console.error('❌ Email sending failed:', error);
-
-    // Provide more specific error messages
-    if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
-      console.error('❌ Resend API key is invalid or expired. Check your RESEND_API_KEY in .env');
-    } else if (error.message?.includes('Forbidden') || error.message?.includes('403')) {
-      console.error('❌ Resend API access forbidden. Check your API key permissions');
-    } else if (error.message?.includes('rate limit')) {
-      console.error('❌ Resend rate limit exceeded. Try again later');
-    }
-
-    throw error;
-  }
-}
 
 function renderTemplate(text, vars) {
   if (!text) return '';
@@ -270,6 +178,14 @@ const pool = new Pool({
   user: process.env.DB_USER || 'vevago.app',
   password: process.env.DB_PASSWORD || 'E9n!GdczqusW@43i'
 });
+
+// Shared with api-server: automated job emails + footer countdown (single implementation in api-server/utils)
+const { getPendingAutomationBadgesForJob, runAutomatedEmailTick } = require(path.join(
+  __dirname,
+  'api-server',
+  'utils',
+  'automatedEmails'
+));
 
 // Lightweight DB compatibility patching (non-destructive).
 // This prevents runtime failures when older DBs are missing columns that the app's triggers expect.
@@ -1327,10 +1243,11 @@ app.post('/api/public/lead-forms/:token/submit', async (req, res) => {
             from: process.env.EMAIL_FROM || 'no-reply@vevago.com',
             to: ccEmail,
             subject: 'New Lead Form Submission',
-            html: `
-              <h2>New Lead Received</h2>
-              <p>A new lead has been submitted through your form:</p>
-              <ul>
+            companyId,
+            html: wrapCompanyEmailHtml(`
+              <h2 style="margin:0 0 12px;font-size:20px;color:#111827;">New lead received</h2>
+              <p style="margin:0 0 12px;color:#475569;">A new lead has been submitted through your form:</p>
+              <ul style="margin:0;padding-left:20px;color:#334155;">
                 ${firstName ? `<li><strong>Name:</strong> ${firstName} ${lastName || ''}</li>` : ''}
                 ${email ? `<li><strong>Email:</strong> ${email}</li>` : ''}
                 ${phone ? `<li><strong>Phone:</strong> ${phone}</li>` : ''}
@@ -1342,8 +1259,8 @@ app.post('/api/public/lead-forms/:token/submit', async (req, res) => {
                 ${preferredTime ? `<li><strong>Preferred Time:</strong> ${preferredTime}</li>` : ''}
                 ${message ? `<li><strong>Message:</strong> ${message}</li>` : ''}
               </ul>
-              <p><strong>Lead ID:</strong> ${created.rows[0].id}</p>
-            `
+              <p style="margin:8px 0 0;"><strong>Lead ID:</strong> ${created.rows[0].id}</p>
+            `),
           });
         }
       } catch (emailError) {
@@ -3114,8 +3031,9 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
           await sendEmail({
             to: job.email,
             subject: `Job Updated: ${job.title}`,
-            html: `
-              <h2>Job Update Notification</h2>
+            companyId,
+            html: wrapCompanyEmailHtml(`
+              <h2 style="margin:0 0 12px;font-size:20px;color:#111827;">Job update</h2>
               <p>Dear ${clientName},</p>
               <p>Your job has been updated:</p>
               <ul>
@@ -3125,7 +3043,7 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
               </ul>
               <p>If you have any questions, please contact us.</p>
               <p>Best regards,<br>PathPilo Team</p>
-            `
+            `),
           });
         }
       } catch (emailError) {
@@ -3143,6 +3061,26 @@ app.put('/api/jobs/:jobId', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Job update error:', error);
     res.status(500).json({ error: 'Failed to update job' });
+  }
+});
+
+// Pending automated email ETAs (job slideout footer). Must use same logic as api-server on :8000.
+app.get('/api/jobs/:jobId/automation-badges', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = await getActiveCompanyId(req, res);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const jobId = parseInt(req.params.jobId, 10);
+    if (Number.isNaN(jobId)) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+    const result = await getPendingAutomationBadgesForJob(pool, jobId, companyId);
+    res.json(result);
+  } catch (e) {
+    console.error('automation-badges:', e);
+    res.status(500).json({ error: 'Failed to load automation status' });
   }
 });
 
@@ -3270,56 +3208,28 @@ app.put('/api/jobs/:jobId/status', authenticateToken, async (req, res) => {
       await dbClient.query('COMMIT');
 
       // Send email notification about status change if requested or for important changes
-      if (notify_customer || status === 'completed' || status === 'cancelled') {
+      if (notify_customer && notification_subject && notification_message) {
         try {
           const jobDetails = await pool.query(`
             SELECT j.*, c.first_name, c.last_name, c.email
             FROM jobs j
-            JOIN clients c ON j.client_id = c.id
+            LEFT JOIN clients c ON j.client_id = c.id
             WHERE j.id = $1
           `, [jobId]);
 
-          if (jobDetails.rows.length > 0) {
+          if (jobDetails.rows.length > 0 && jobDetails.rows[0].email) {
             const job = jobDetails.rows[0];
-            const clientName = `${job.first_name} ${job.last_name}`;
-
-            let subject, message;
-            if (notify_customer && notification_subject && notification_message) {
-              // Custom notification
-              subject = notification_subject;
-              message = notification_message;
-            } else {
-              // Default notification based on status
-              subject = `Job Status Update: ${job.title}`;
-              if (status === 'completed') {
-                message = `Your job "${job.title}" has been completed. Thank you for choosing our service!`;
-              } else if (status === 'cancelled') {
-                message = `Your job "${job.title}" scheduled for ${new Date(job.scheduled_date).toLocaleDateString()} has been cancelled.`;
-              } else {
-                message = `Your job "${job.title}" status has been updated to: ${status}`;
-              }
-            }
-
+            const bodyText = notification_message;
             await sendEmail({
               to: job.email,
-              subject: subject,
-              html: `
-                <h2>Job Status Update</h2>
-                <p>Dear ${clientName},</p>
-                <p>${message}</p>
-                <ul>
-                  <li><strong>Job:</strong> ${job.title}</li>
-                  <li><strong>Status:</strong> ${status}</li>
-                  <li><strong>Scheduled Date:</strong> ${new Date(job.scheduled_date).toLocaleDateString()}</li>
-                </ul>
-                <p>If you have any questions, please contact us.</p>
-                <p>Best regards,<br>PathPilo Team</p>
-              `
+              subject: notification_subject,
+              text: bodyText,
+              html: wrapCompanyEmailHtml(bodyText),
+              companyId,
             });
           }
         } catch (emailError) {
           console.error('Failed to send job status email:', emailError);
-          // Don't fail the status update if email fails
         }
       }
 
@@ -3445,8 +3355,9 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
           await sendEmail({
             to: job.email,
             subject: subject,
-            html: `
-              <h2>Job Rescheduled</h2>
+            companyId,
+            html: wrapCompanyEmailHtml(`
+              <h2 style="margin:0 0 12px;font-size:20px;color:#111827;">Job rescheduled</h2>
               <p>Dear ${clientName},</p>
               <p>${message}</p>
               <ul>
@@ -3456,7 +3367,7 @@ app.put('/api/jobs/:jobId/time', authenticateToken, async (req, res) => {
               </ul>
               <p>If you have any questions, please contact us.</p>
               <p>Best regards,<br>PathPilo Team</p>
-            `
+            `),
           });
         }
       } catch (emailError) {
@@ -5314,6 +5225,12 @@ app.get('/api/email-templates', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    try {
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reply_to_email VARCHAR(255)`);
+    } catch (_) {
+      /* ignore */
+    }
+
     const result = await pool.query(
       'SELECT template_type, subject, message FROM email_templates WHERE company_id = $1',
       [companyId]
@@ -5337,8 +5254,17 @@ app.get('/api/email-templates', authenticateToken, async (req, res) => {
       send_invoice: { subject: '', message: '' }
     };
 
+    let repliesToEmail = '';
+    try {
+      const rt = await pool.query('SELECT reply_to_email FROM companies WHERE id = $1', [companyId]);
+      repliesToEmail = rt.rows[0]?.reply_to_email ? String(rt.rows[0].reply_to_email).trim() : '';
+    } catch (_) {
+      /* ignore */
+    }
+
     res.json({
-      templates: { ...defaultTemplates, ...templates }
+      templates: { ...defaultTemplates, ...templates },
+      repliesToEmail,
     });
   } catch (error) {
     console.error('Error fetching email templates:', error);
@@ -5351,7 +5277,8 @@ app.get('/api/email-templates', authenticateToken, async (req, res) => {
           change_employee: { subject: '', message: '' },
           cancel_job: { subject: '', message: '' },
           send_invoice: { subject: '', message: '' }
-        }
+        },
+        repliesToEmail: '',
       });
     }
     res.status(500).json({ error: 'Failed to fetch email templates', details: error.message });
@@ -5367,26 +5294,45 @@ app.put('/api/email-templates', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    const { templates } = req.body;
+    const { templates, repliesToEmail } = req.body;
+    const hasTemplates = templates && typeof templates === 'object';
+    const hasReplyTo = typeof repliesToEmail === 'string';
 
-    if (!templates || typeof templates !== 'object') {
-      return res.status(400).json({ error: 'Templates object is required' });
+    if (!hasTemplates && !hasReplyTo) {
+      return res.status(400).json({ error: 'templates or repliesToEmail required' });
     }
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      for (const [templateType, template] of Object.entries(templates)) {
-        if (!['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice'].includes(templateType)) {
-          continue; // Skip invalid template types
-        }
+      try {
+        await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reply_to_email VARCHAR(255)`);
+      } catch (_) {
+        /* ignore */
+      }
 
-        const subject = template.subject || '';
-        const message = template.message || '';
+      if (hasReplyTo) {
+        const trimmed = repliesToEmail.trim();
+        const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const value = trimmed && SIMPLE_EMAIL_RE.test(trimmed) ? trimmed : null;
+        await client.query(
+          `UPDATE companies SET reply_to_email = $1, updated_at = NOW() WHERE id = $2`,
+          [value, companyId]
+        );
+      }
 
-        // Use INSERT ... ON CONFLICT to upsert
-        await client.query(`
+      if (hasTemplates) {
+        for (const [templateType, template] of Object.entries(templates)) {
+          if (!['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice'].includes(templateType)) {
+            continue; // Skip invalid template types
+          }
+
+          const subject = template.subject || '';
+          const message = template.message || '';
+
+          // Use INSERT ... ON CONFLICT to upsert
+          await client.query(`
           INSERT INTO email_templates (company_id, template_type, subject, message, updated_at)
           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
           ON CONFLICT (company_id, template_type)
@@ -5395,6 +5341,7 @@ app.put('/api/email-templates', authenticateToken, async (req, res) => {
             message = EXCLUDED.message,
             updated_at = CURRENT_TIMESTAMP
         `, [companyId, templateType, subject, message]);
+        }
       }
 
       await client.query('COMMIT');
@@ -6037,6 +5984,7 @@ app.post('/api/invoices/:invoiceId/send-email', authenticateToken, async (req, r
       to: toEmail,
       subject: resolvedSubject,
       text: resolvedMessage,
+      companyId,
       attachments: [
         { filename, content: pdf, contentType: 'application/pdf' }
       ]
@@ -6156,9 +6104,17 @@ app.delete('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
   }
 });
 
+// Run lightweight schema migrations that keep existing databases up to date.
+pool.query(`ALTER TABLE job_logs ADD COLUMN IF NOT EXISTS notification_subject TEXT`).catch(() => {});
+
 // Start server with error handling
 const server = app.listen(port, () => {
   console.log(`🚀 Server running on http://localhost:${port}`);
+  console.log(`📧 Automated job emails: tick every 60s (booking confirmation + day reminder)`);
+  runAutomatedEmailTick(pool);
+  setInterval(() => {
+    runAutomatedEmailTick(pool);
+  }, 60 * 1000);
   console.log(`📊 Registration API: POST http://localhost:${port}/api/auth/register`);
   console.log(`🔐 Login API: POST http://localhost:${port}/api/auth/login`);
   console.log(`🏢 Company API: POST http://localhost:${port}/api/companies`);

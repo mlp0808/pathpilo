@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiUrl } from '../../utils/api'
+import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../../i18n'
 
 interface Invitation {
   id: number
@@ -79,11 +80,14 @@ export default function InvitePage() {
       if (response.ok) {
         if (data.token) localStorage.setItem('token', data.token)
         if (data.user) {
+          const lang = normalizeLocale(data.user.languageCode)
+          localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
           const userData = {
             id: data.user.id,
             firstName: data.user.firstName,
             lastName: data.user.lastName,
             email: data.user.email,
+            languageCode: lang,
             role: data.user.activeCompany?.role || data.user.role || 'employee',
             companyId: data.user.activeCompany?.id || null,
             companyName: data.user.activeCompany?.name || null,

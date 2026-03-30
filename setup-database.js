@@ -59,6 +59,7 @@ async function createSchema() {
         name VARCHAR(255) NOT NULL,
         slug VARCHAR(255) UNIQUE NOT NULL,
         country VARCHAR(100),
+        country_code VARCHAR(2) NOT NULL DEFAULT 'DK',
         cvr_number VARCHAR(50),
         address TEXT,
         city VARCHAR(100),
@@ -76,12 +77,48 @@ async function createSchema() {
         last_name VARCHAR(100) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
+        language_code VARCHAR(10) NOT NULL DEFAULT 'en',
         role VARCHAR(20) NOT NULL DEFAULT 'company-owner' CHECK (role IN ('admin', 'company-owner', 'manager', 'employee')),
       company_id INTEGER REFERENCES companies(id), -- backward compatibility
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+  await safeQuery(`
+    ALTER TABLE companies
+    ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT 'DK'
+  `);
+  await safeQuery(`
+    UPDATE companies
+    SET country_code = CASE
+      WHEN country_code IS NOT NULL AND LENGTH(TRIM(country_code)) = 2 THEN UPPER(TRIM(country_code))
+      WHEN country ILIKE 'denmark' OR country ILIKE 'danmark' THEN 'DK'
+      WHEN country ILIKE 'united states' OR country ILIKE 'usa' OR country ILIKE 'us' THEN 'US'
+      WHEN country ILIKE 'united kingdom' OR country ILIKE 'uk' THEN 'GB'
+      WHEN country ILIKE 'germany' OR country ILIKE 'deutschland' THEN 'DE'
+      WHEN country ILIKE 'sweden' OR country ILIKE 'sverige' THEN 'SE'
+      WHEN country ILIKE 'norway' OR country ILIKE 'norge' THEN 'NO'
+      ELSE 'DK'
+    END
+    WHERE country_code IS NULL OR LENGTH(TRIM(country_code)) <> 2
+  `);
+  await safeQuery(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'
+  `);
+  await safeQuery(`
+    UPDATE users
+    SET language_code = 'en'
+    WHERE language_code IS NULL OR TRIM(language_code) = ''
+  `);
+
+  await safeQuery(`
+    ALTER TABLE companies
+    ADD COLUMN IF NOT EXISTS reply_to_email VARCHAR(255)
+  `);
+
+  await safeQuery(`ALTER TABLE job_logs ADD COLUMN IF NOT EXISTS notification_subject TEXT`);
 
   await safeQuery(`
     ALTER TABLE companies
@@ -231,11 +268,13 @@ async function createSchema() {
         description TEXT,
         duration VARCHAR(20) NOT NULL DEFAULT '0:00',
         video_id VARCHAR(100) NOT NULL,
+        language_code VARCHAR(10) NOT NULL DEFAULT 'en',
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS leads (
@@ -526,6 +565,7 @@ async function createSchema() {
       user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       action VARCHAR(100) NOT NULL,
       description TEXT NOT NULL,
+      notification_subject TEXT,
       notification_message TEXT,
       notification_email VARCHAR(255),
       note_content TEXT,

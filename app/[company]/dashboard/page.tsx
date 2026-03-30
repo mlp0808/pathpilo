@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useLayoutEffect, useCallback } from 'react'
 import AppLayout from '../../components/AppLayout'
 import { useUser } from '../../hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
@@ -8,6 +8,8 @@ import { Bar, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis,
 import { CheckCircleIcon, ClockIcon, CurrencyDollarIcon, UserGroupIcon, ArrowTrendingUpIcon, ArrowTrendingDownIcon } from '@heroicons/react/24/outline'
 import { getLocalTimeZone, today, startOfMonth, endOfMonth, CalendarDate, parseDate } from '@internationalized/date'
 import { DashboardDateRangePicker } from '../../components/date-picker/dashboard-date-range-picker'
+import { formatMoney } from '../../config/countryRules'
+import { markSetupWizardComplete } from '@/app/utils/sessionClient'
 
 interface DashboardStats {
   completedJobs: number
@@ -60,16 +62,62 @@ export default function DashboardPage() {
     end: lastMonthEnd
   })
 
-  // Format price
-  const formatPrice = (price: number) => {
-    if (!price) return '0 kr.'
-    return new Intl.NumberFormat('da-DK', {
-      style: 'currency',
-      currency: 'DKK',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(price).replace('kr', 'kr.')
-  }
+  /** Company country → currency + Intl locale (see `countryRules` / `formatMoney`) */
+  const [companyCountryCode, setCompanyCountryCode] = useState('DK')
+
+  useLayoutEffect(() => {
+    try {
+      const rawCompany = localStorage.getItem('company')
+      if (rawCompany) {
+        const c = JSON.parse(rawCompany)
+        if (c?.countryCode) {
+          setCompanyCountryCode(String(c.countryCode))
+          return
+        }
+      }
+      const u = JSON.parse(localStorage.getItem('user') || '{}')
+      const code =
+        u.activeCompany?.countryCode ||
+        (Array.isArray(u.companies)
+          ? u.companies.find((co: { id?: number }) => co?.id === u.companyId)?.countryCode
+          : undefined)
+      if (code) setCompanyCountryCode(String(code))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    markSetupWizardComplete()
+  }, [])
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/companies/profile'), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) return
+        const data = await res.json()
+        const code = data.company?.countryCode || 'DK'
+        setCompanyCountryCode(String(code))
+      } catch {
+        /* keep cached value */
+      }
+    }
+    load()
+  }, [])
+
+  useEffect(() => {
+    const c = user?.activeCompany?.countryCode
+    if (c) setCompanyCountryCode(String(c))
+  }, [user])
+
+  const formatPrice = useCallback(
+    (price: number) => formatMoney(price, companyCountryCode),
+    [companyCountryCode]
+  )
 
   // Format duration
   const formatDuration = (minutes: number) => {
@@ -253,7 +301,7 @@ export default function DashboardPage() {
     fetchDashboardData()
   }, [user, userLoading, dateRange])
 
-  // Chart tooltip formatter (turnover in DKK)
+  // Chart tooltip formatter (turnover in company currency)
   const chartTooltipFormatter = (value: any) => formatPrice(Number(value))
 
   // Select evenly spaced items for X-axis

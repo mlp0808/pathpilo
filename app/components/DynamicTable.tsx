@@ -1,6 +1,8 @@
 'use client'
 
 import React, { useState } from 'react'
+import { formatMoney } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 
 interface DynamicTableProps {
   data: any[]
@@ -85,7 +87,12 @@ export default function DynamicTable({ data, title, emptyMessage, emptyIcon }: D
     }
     
     if (key.includes('price') || key.includes('amount')) {
-      return <span className="text-sm text-gray-900 font-medium">{value} DKK</span>
+      const n = typeof value === 'number' ? value : parseFloat(String(value))
+      return (
+        <span className="text-sm text-gray-900 font-medium">
+          {Number.isFinite(n) ? formatMoney(n, companyCountryCode) : String(value)}
+        </span>
+      )
     }
     
     if (key.includes('duration') && key.includes('minutes')) {

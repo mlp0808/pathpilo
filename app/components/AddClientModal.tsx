@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import AddressAutocomplete from './AddressAutocomplete'
+import { getCountryRule } from '../config/countryRules'
+import { useAppI18n } from './I18nProvider'
 
 interface Client {
   client_type: 'person' | 'company'
@@ -33,6 +35,17 @@ interface AddClientModalProps {
 }
 
 export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddClientModalProps) {
+  const { t } = useAppI18n()
+  const userCountryCode = (() => {
+    if (typeof window === 'undefined') return 'DK'
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}')
+      return user?.activeCompany?.countryCode || 'DK'
+    } catch {
+      return 'DK'
+    }
+  })()
+  const countryRule = getCountryRule(userCountryCode)
   const [currentClient, setCurrentClient] = useState<Client>({
     client_type: 'person',
     name: '',
@@ -138,10 +151,10 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         onClose()
         onClientAdded()
       } else {
-        setError(data.error || 'Failed to create client')
+        setError(data.error || t('app.clients.add.errCreate'))
       }
     } catch (error) {
-      setError('Network error: Failed to create client')
+      setError(t('app.clients.add.errNetwork'))
       console.error('Client creation error:', error)
     } finally {
       setIsSubmitting(false)
@@ -216,7 +229,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
             {/* Client Type Selector */}
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">
-                Client type
+                {t('app.clients.add.clientType')}
               </label>
               <div className="flex bg-slate-50 rounded-xl p-1 border border-slate-200">
                 <button
@@ -228,7 +241,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       : 'text-slate-500 hover:text-primary-600'
                   }`}
                 >
-                  Private Person
+                  {t('app.clients.add.privatePerson')}
                 </button>
                 <button
                   type="button"
@@ -239,7 +252,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       : 'text-slate-500 hover:text-primary-600'
                   }`}
                 >
-                  Company
+                  {t('app.clients.add.company')}
                 </button>
               </div>
             </div>
@@ -250,7 +263,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 <div className="grid grid-cols-2 gap-4">
                   <div className="group">
                     <label htmlFor="name" className="block text-sm font-medium text-slate-900 mb-2">
-                      Company Name <span className="text-red-500">*</span>
+                      {t('app.clients.add.companyName')} <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
@@ -260,12 +273,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       onChange={handleInputChange}
                       required
                       className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                      placeholder="e.g. ABC Corp"
+                      placeholder={t('app.clients.add.companyNamePlaceholder')}
                     />
                   </div>
                   <div className="group">
                     <label htmlFor="company_number" className="block text-sm font-medium text-slate-900 mb-2">
-                      Company Number
+                      {countryRule.companyNumberLabel}
                     </label>
                     <input
                       type="text"
@@ -289,7 +302,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
                   />
                   <label htmlFor="includeContactPerson" className="ml-2 block text-sm text-slate-900">
-                    Add contact person?
+                    {t('app.clients.add.addContactPerson')}
                   </label>
                 </div>
 
@@ -298,7 +311,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   <div className="grid grid-cols-2 gap-4">
                     <div className="group">
                       <label htmlFor="contact_name" className="block text-sm font-medium text-slate-900 mb-2">
-                        Contact Person Name
+                        {t('app.clients.add.contactPersonName')}
                       </label>
                       <input
                         type="text"
@@ -322,7 +335,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                       <div className="grid grid-cols-2 gap-4">
                         <div className="group">
                           <label htmlFor="name" className="block text-sm font-medium text-slate-900 mb-2">
-                            First Name <span className="text-red-500">*</span>
+                            {t('app.clients.add.firstName')} <span className="text-red-500">*</span>
                           </label>
                           <input
                             type="text"
@@ -332,12 +345,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                             onChange={handleInputChange}
                             required
                             className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                            placeholder="e.g. John"
+                            placeholder={t('app.clients.add.firstNamePlaceholder')}
                           />
                         </div>
                         <div className="group">
                           <label htmlFor="last_name" className="block text-sm font-medium text-slate-900 mb-2">
-                            Last name
+                            {t('app.clients.add.lastName')}
                           </label>
                           <input
                             type="text"
@@ -346,7 +359,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                             value={currentClient.last_name}
                             onChange={handleInputChange}
                             className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                            placeholder="e.g. Smith"
+                            placeholder={t('app.clients.add.lastNamePlaceholder')}
                           />
                         </div>
                       </div>
@@ -371,6 +384,8 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 }))
               }
               placeholder="e.g. Main Street 123"
+              countryCode={userCountryCode}
+              zipLabel={countryRule.postalCodeLabel}
             />
 
             {/* Separate Billing Address Checkbox */}
@@ -384,11 +399,11 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
               />
               <label htmlFor="separateBillingAddress" className="ml-2 block text-sm text-slate-900">
-                Separate billing address?
+                {t('app.clients.add.separateBillingAddress')}
               </label>
               </div>
               <p className="ml-6 text-xs text-slate-500">
-                Use this when the legal/billing address on the invoice should be different from the service address.
+                {t('app.clients.add.separateBillingAddressHelp')}
               </p>
             </div>
 
@@ -397,7 +412,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
               <div className="grid grid-cols-12 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
                 <div className="col-span-6 group">
                   <label htmlFor="billing_address" className="block text-sm font-medium text-primary-900 mb-2">
-                    Billing Address
+                    {t('app.clients.add.billingAddress')}
                   </label>
                   <input
                     type="text"
@@ -411,7 +426,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 </div>
                 <div className="col-span-3 group">
                   <label htmlFor="billing_zip_code" className="block text-sm font-medium text-primary-900 mb-2">
-                    Billing Zip
+                    {countryRule.postalCodeLabel}
                   </label>
                   <input
                     type="text"
@@ -420,12 +435,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     value={currentClient.billing_zip_code}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder="e.g. 2200"
+                    placeholder={t('app.clients.add.billingPostalPlaceholder')}
                   />
                 </div>
                 <div className="col-span-3 group">
                   <label htmlFor="billing_city" className="block text-sm font-medium text-primary-900 mb-2">
-                    Billing City
+                    {t('app.clients.add.billingCity')}
                   </label>
                   <input
                     type="text"
@@ -434,7 +449,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     value={currentClient.billing_city}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder="e.g. Aarhus"
+                    placeholder={t('app.clients.add.billingCityPlaceholder')}
                   />
                 </div>
               </div>
@@ -453,12 +468,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   value={currentClient.email}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                  placeholder="e.g. john@example.com"
+                  placeholder={t('app.clients.add.emailPlaceholder')}
                 />
               </div>
               <div className="group">
                 <label htmlFor="phone" className="block text-sm font-medium text-slate-900 mb-2">
-                  Phone
+                  {t('app.clients.add.phone')}
                 </label>
                 <input
                   type="tel"
@@ -467,7 +482,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                   value={currentClient.phone}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                  placeholder="e.g. +45 12 34 56 78"
+                  placeholder={t('app.clients.add.phonePlaceholder')}
                 />
               </div>
             </div>
@@ -483,11 +498,11 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-slate-300 rounded"
               />
               <label htmlFor="separateBillingContact" className="ml-2 block text-sm text-slate-900">
-                Separate billing contact info?
+                {t('app.clients.add.separateBillingContact')}
               </label>
               </div>
               <p className="ml-6 text-xs text-slate-500">
-                Use this when invoices and payment reminders should go to a different email/phone than the main client.
+                {t('app.clients.add.separateBillingContactHelp')}
               </p>
             </div>
 
@@ -496,7 +511,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
               <div className="grid grid-cols-2 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
                 <div className="group">
                   <label htmlFor="billing_email" className="block text-sm font-medium text-primary-900 mb-2">
-                    Billing Email
+                    {t('app.clients.add.billingEmail')}
                   </label>
                   <input
                     type="email"
@@ -505,12 +520,12 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                     value={currentClient.billing_email}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder="e.g. billing@company.com"
+                    placeholder={t('app.clients.add.billingEmailPlaceholder')}
                   />
                 </div>
                 <div className="group">
                   <label htmlFor="billing_phone" className="block text-sm font-medium text-primary-900 mb-2">
-                    Billing Phone
+                    {t('app.clients.add.billingPhone')}
                   </label>
                   <input
                     type="tel"
@@ -532,7 +547,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 onClick={handleClose}
                 className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 transition-colors"
               >
-                Cancel
+                {t('app.clients.add.cancel')}
               </button>
               <button
                 type="submit"
@@ -542,10 +557,10 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
                 {isSubmitting ? (
                   <span className="flex items-center">
                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"></div>
-                    Adding Client...
+                    {t('app.clients.add.addingClient')}
                   </span>
                 ) : (
-                  'Add Client'
+                  t('app.clients.add.addClient')
                 )}
               </button>
             </div>

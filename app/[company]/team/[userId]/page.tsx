@@ -6,6 +6,7 @@ import AppLayout from '../../../components/AppLayout'
 import { apiUrl } from '../../../utils/api'
 import AddressSearchInput from '../../../components/AddressSearchInput'
 import AddLeaveModal from '../../../components/AddLeaveModal'
+import { useAppI18n } from '../../../components/I18nProvider'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -41,35 +42,29 @@ const DEFAULT_HOURS = {
   thursday_hours: 7.5, friday_hours: 7.0, saturday_hours: 0, sunday_hours: 0,
 }
 
-const CATEGORY_META: Record<LeaveCategory, { label: string; color: string; bg: string; border: string }> = {
-  holiday:       { label: 'Holiday',       color: '#3DD57A', bg: '#F0FDF4', border: '#BBF7D0' },
-  sick:          { label: 'Sick day',      color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' },
-  personal:      { label: 'Personal day',  color: '#3B82F6', bg: '#EFF6FF', border: '#BFDBFE' },
-  public_holiday:{ label: 'Public holiday',color: '#8B5CF6', bg: '#F5F3FF', border: '#DDD6FE' },
-  other:         { label: 'Other',         color: '#6B7280', bg: '#F9FAFB', border: '#E5E7EB' },
-}
-
-const LEAVE_TYPE_META: Record<LeaveType, string> = {
-  full_day:           'Full day',
-  half_day_morning:   'Morning off',
-  half_day_afternoon: 'Afternoon off',
-  custom_hours:       'Custom hours',
+const CATEGORY_META: Record<LeaveCategory, { color: string; bg: string; border: string }> = {
+  holiday:       { color: '#3DD57A', bg: '#F0FDF4', border: '#BBF7D0' },
+  sick:          { color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' },
+  personal:      { color: '#3B82F6', bg: '#EFF6FF', border: '#BFDBFE' },
+  public_holiday:{ color: '#8B5CF6', bg: '#F5F3FF', border: '#DDD6FE' },
+  other:         { color: '#6B7280', bg: '#F9FAFB', border: '#E5E7EB' },
 }
 
 const AVATAR_COLORS = ['#3DD57A','#FF6B6B','#4ECDC4','#45B7D1','#F4A261','#E76F51','#7B2D8B','#2196F3']
 const avatarColor = (id: number) => AVATAR_COLORS[id % AVATAR_COLORS.length]
 
-function roleBadge(role: string) {
+function roleBadge(role: string, t: (key: string, fallback?: string) => string) {
   switch (role) {
-    case 'owner': case 'company-owner': return { label: 'Owner', cls: 'bg-purple-50 text-purple-700 border border-purple-200' }
-    case 'manager': return { label: 'Manager', cls: 'bg-blue-50 text-blue-700 border border-blue-200' }
-    default: return { label: 'Employee', cls: 'bg-gray-100 text-gray-600 border border-gray-200' }
+    case 'owner': case 'company-owner': return { label: t('app.role.owner', 'Owner'), cls: 'bg-purple-50 text-purple-700 border border-purple-200' }
+    case 'manager': return { label: t('app.role.manager', 'Manager'), cls: 'bg-blue-50 text-blue-700 border border-blue-200' }
+    default: return { label: t('app.role.employee', 'Employee'), cls: 'bg-gray-100 text-gray-600 border border-gray-200' }
   }
 }
 
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function EmployeeSettingsPage() {
+  const { t, locale } = useAppI18n()
   const router = useRouter()
   const params = useParams()
   const company = params?.company as string
@@ -172,9 +167,9 @@ export default function EmployeeSettingsPage() {
           use_company_default_location: location.use_company_default_location,
         }),
       })
-      if (!res.ok) { const d = await res.json(); setHoursError(d.error || 'Failed to save') }
+      if (!res.ok) { const d = await res.json(); setHoursError(d.error || t('app.teamMember.errSave', 'Failed to save')) }
       else { setHoursSaved(true); setTimeout(() => setHoursSaved(false), 2500) }
-    } catch { setHoursError('Network error') } finally { setHoursSaving(false) }
+    } catch { setHoursError(t('app.teamMember.errNetwork', 'Network error')) } finally { setHoursSaving(false) }
   }
 
   const saveLocation = async () => {
@@ -190,9 +185,9 @@ export default function EmployeeSettingsPage() {
           use_company_default_location: location.use_company_default_location,
         }),
       })
-      if (!res.ok) { const d = await res.json(); setLocationError(d.error || 'Failed to save') }
+      if (!res.ok) { const d = await res.json(); setLocationError(d.error || t('app.teamMember.errSave', 'Failed to save')) }
       else { setLocationSaved(true); setTimeout(() => setLocationSaved(false), 2500) }
-    } catch { setLocationError('Network error') } finally { setLocationSaving(false) }
+    } catch { setLocationError(t('app.teamMember.errNetwork', 'Network error')) } finally { setLocationSaving(false) }
   }
 
   // ── Leave actions ──────────────────────────────────────────────────────────
@@ -224,9 +219,9 @@ export default function EmployeeSettingsPage() {
     return (
       <AppLayout>
         <div className="text-center py-20">
-          <p className="text-gray-500">Team member not found.</p>
+          <p className="text-gray-500">{t('app.teamMember.notFound', 'Team member not found.')}</p>
           <button onClick={() => router.push(`/${company}/team`)} className="mt-4 text-accent-600 text-sm font-medium hover:underline">
-            ← Back to team
+            {t('app.teamMember.backToTeam', '<- Back to team')}
           </button>
         </div>
       </AppLayout>
@@ -234,7 +229,7 @@ export default function EmployeeSettingsPage() {
   }
 
   const color = avatarColor(member.id)
-  const badge = roleBadge(member.role)
+  const badge = roleBadge(member.role, t)
   const initials = `${member.first_name[0] ?? ''}${member.last_name[0] ?? ''}`.toUpperCase()
 
   return (
@@ -249,7 +244,7 @@ export default function EmployeeSettingsPage() {
           <svg className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
-          Team
+          {t('app.nav.team', 'Team')}
         </button>
 
         {/* Member header */}
@@ -274,18 +269,18 @@ export default function EmployeeSettingsPage() {
           icon={<ClockIcon />}
           iconBg="bg-accent-50"
           iconColor="text-accent-600"
-          title="Work hours"
-          subtitle="Weekly working hours used for capacity planning"
+          title={t('app.teamMember.workHours', 'Work hours')}
+          subtitle={t('app.teamMember.workHoursHelp', 'Weekly working hours used for capacity planning')}
         >
           <div className="space-y-2">
             {([
-              { key: 'monday_hours',    label: 'Monday' },
-              { key: 'tuesday_hours',   label: 'Tuesday' },
-              { key: 'wednesday_hours', label: 'Wednesday' },
-              { key: 'thursday_hours',  label: 'Thursday' },
-              { key: 'friday_hours',    label: 'Friday' },
-              { key: 'saturday_hours',  label: 'Saturday' },
-              { key: 'sunday_hours',    label: 'Sunday' },
+              { key: 'monday_hours',    label: t('app.day.monday', 'Monday') },
+              { key: 'tuesday_hours',   label: t('app.day.tuesday', 'Tuesday') },
+              { key: 'wednesday_hours', label: t('app.day.wednesday', 'Wednesday') },
+              { key: 'thursday_hours',  label: t('app.day.thursday', 'Thursday') },
+              { key: 'friday_hours',    label: t('app.day.friday', 'Friday') },
+              { key: 'saturday_hours',  label: t('app.day.saturday', 'Saturday') },
+              { key: 'sunday_hours',    label: t('app.day.sunday', 'Sunday') },
             ] as { key: keyof typeof hours; label: string }[]).map(({ key, label }) => {
               const val = hours[key]
               const isOff = val === 0
@@ -317,7 +312,7 @@ export default function EmployeeSettingsPage() {
                     </div>
                     <span
                       className={`w-2 h-2 rounded-full flex-shrink-0 ${isOff ? 'bg-gray-200' : 'bg-accent-400'}`}
-                      title={isOff ? 'Day off' : `${val}h working day`}
+                      title={isOff ? t('app.teamMember.dayOff', 'Day off') : `${val}h ${t('app.teamMember.workingDay', 'working day')}`}
                     />
                   </div>
                 </div>
@@ -326,13 +321,13 @@ export default function EmployeeSettingsPage() {
           </div>
           <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
             <p className="text-xs text-gray-400">
-              Total: <span className="font-semibold text-gray-600">
-                {Object.values(hours).reduce((s, v) => s + v, 0).toFixed(1)}h / week
+              {t('app.teamMember.total', 'Total:')} <span className="font-semibold text-gray-600">
+                {Object.values(hours).reduce((s, v) => s + v, 0).toFixed(1)}h / {t('app.teamMember.week', 'week')}
               </span>
             </p>
             <div className="flex items-center gap-3">
               {hoursError && <p className="text-sm text-red-600">{hoursError}</p>}
-              <SaveButton saving={hoursSaving} saved={hoursSaved} onClick={saveHours} />
+              <SaveButton saving={hoursSaving} saved={hoursSaved} onClick={saveHours} t={t} />
             </div>
           </div>
         </SectionCard>
@@ -342,13 +337,13 @@ export default function EmployeeSettingsPage() {
           icon={<MapPinIcon />}
           iconBg="bg-blue-50"
           iconColor="text-blue-600"
-          title="Route locations"
-          subtitle="Start and end point for daily routes"
+          title={t('app.teamMember.routeLocations', 'Route locations')}
+          subtitle={t('app.teamMember.routeLocationsHelp', 'Start and end point for daily routes')}
         >
           {!routeLocationsEnabled ? (
             <div className="py-4 px-4 bg-amber-50 border border-amber-200 rounded-xl">
-              <p className="text-sm text-amber-800 font-medium">Start & end locations are disabled</p>
-              <p className="text-xs text-amber-700 mt-1">Your company has turned off this feature. An admin can enable it in Settings → Business.</p>
+              <p className="text-sm text-amber-800 font-medium">{t('app.teamMember.routeDisabledTitle', 'Start & end locations are disabled')}</p>
+              <p className="text-xs text-amber-700 mt-1">{t('app.teamMember.routeDisabledHelp', 'Your company has turned off this feature. An admin can enable it in Settings -> Business.')}</p>
             </div>
           ) : (
             <>
@@ -365,9 +360,11 @@ export default function EmployeeSettingsPage() {
               </div>
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-900">Use company default</p>
+              <p className="text-sm font-medium text-gray-900">{t('app.teamMember.useCompanyDefault', 'Use company default')}</p>
               <p className="text-[11px] text-gray-400 mt-0.5">
-                {companyDefaultStart ? `Starts at: ${companyDefaultStart}` : 'No company default set — configure in Business Settings'}
+                {companyDefaultStart
+                  ? `${t('app.teamMember.startsAt', 'Starts at:')} ${companyDefaultStart}`
+                  : t('app.teamMember.noCompanyDefault', 'No company default set - configure in Business Settings')}
               </p>
             </div>
           </label>
@@ -375,20 +372,20 @@ export default function EmployeeSettingsPage() {
           {!location.use_company_default_location && (
             <div className="space-y-4 mt-4">
               <AddressSearchInput
-                label="Start location"
+                label={t('app.teamMember.startLocation', 'Start location')}
                 dotColor="#3DD57A"
                 value={location.start_address}
                 onChange={v => setLocation(prev => ({ ...prev, start_address: v }))}
-                placeholder="Search for a start address…"
+                placeholder={t('app.teamMember.searchStartAddress', 'Search for a start address...')}
               />
               <AddressSearchInput
-                label="End location"
+                label={t('app.teamMember.endLocation', 'End location')}
                 dotColor="#F87171"
                 value={location.end_address}
                 onChange={v => setLocation(prev => ({ ...prev, end_address: v }))}
-                placeholder="Leave empty to use start location"
+                placeholder={t('app.teamMember.leaveEmptyUseStart', 'Leave empty to use start location')}
               />
-              <p className="text-[11px] text-gray-400">If end location is empty, the route ends at the start location.</p>
+              <p className="text-[11px] text-gray-400">{t('app.teamMember.endLocationHelp', 'If end location is empty, the route ends at the start location.')}</p>
             </div>
           )}
 
@@ -397,14 +394,14 @@ export default function EmployeeSettingsPage() {
               {companyDefaultStart && (
                 <div className="flex items-center gap-2 text-sm text-gray-600">
                   <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0" />
-                  <span className="text-gray-400 w-10">Start</span>
+                  <span className="text-gray-400 w-10">{t('app.teamMember.start', 'Start')}</span>
                   <span>{companyDefaultStart}</span>
                 </div>
               )}
               {companyDefaultEnd && (
                 <div className="flex items-center gap-2 text-sm text-gray-600">
                   <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
-                  <span className="text-gray-400 w-10">End</span>
+                  <span className="text-gray-400 w-10">{t('app.teamMember.end', 'End')}</span>
                   <span>{companyDefaultEnd}</span>
                 </div>
               )}
@@ -413,7 +410,7 @@ export default function EmployeeSettingsPage() {
 
           {locationError && <p className="mt-3 text-sm text-red-600">{locationError}</p>}
           <div className="flex justify-end mt-4">
-            <SaveButton saving={locationSaving} saved={locationSaved} onClick={saveLocation} />
+            <SaveButton saving={locationSaving} saved={locationSaved} onClick={saveLocation} t={t} />
           </div>
             </>
           )}
@@ -424,13 +421,13 @@ export default function EmployeeSettingsPage() {
           icon={<CalendarIcon />}
           iconBg="bg-orange-50"
           iconColor="text-orange-500"
-          title="Time off & leave"
-          subtitle="Manage holidays, sick days, and absences"
+          title={t('app.teamMember.timeOffTitle', 'Time off & leave')}
+          subtitle={t('app.teamMember.timeOffSubtitle', 'Manage holidays, sick days, and absences')}
           extra={
             <div className="flex items-center gap-2">
               {upcomingLeave.length > 0 && (
                 <span className="text-xs font-semibold text-orange-500 bg-orange-50 border border-orange-200 px-2.5 py-1 rounded-full">
-                  {upcomingLeave.length} upcoming
+                  {upcomingLeave.length} {t('app.teamMember.upcoming', 'upcoming')}
                 </span>
               )}
               <button
@@ -441,7 +438,7 @@ export default function EmployeeSettingsPage() {
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
                 </svg>
-                Add
+                {t('app.teamMember.add', 'Add')}
               </button>
             </div>
           }
@@ -451,7 +448,7 @@ export default function EmployeeSettingsPage() {
             {(Object.entries(CATEGORY_META) as [LeaveCategory, typeof CATEGORY_META[LeaveCategory]][]).map(([key, meta]) => (
               <div key={key} className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: meta.color }} />
-                <span className="text-xs text-gray-500">{meta.label}</span>
+                <span className="text-xs text-gray-500">{t(`app.teamMember.leaveCategory.${key}`, key)}</span>
               </div>
             ))}
           </div>
@@ -462,6 +459,8 @@ export default function EmployeeSettingsPage() {
             month={calendarMonth.month}
             leaveByDate={leaveByDate}
             onDayClick={openLeaveModal}
+            locale={locale}
+            t={t}
             onPrev={() => setCalendarMonth(m => {
               const d = new Date(m.year, m.month - 1, 1)
               return { year: d.getFullYear(), month: d.getMonth() }
@@ -475,10 +474,10 @@ export default function EmployeeSettingsPage() {
           {/* Upcoming leave list */}
           {upcomingLeave.length > 0 && (
             <div className="mt-6">
-              <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Upcoming</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">{t('app.teamMember.upcoming', 'Upcoming')}</p>
               <div className="space-y-2">
                 {upcomingLeave.map(entry => (
-                  <LeaveRow key={entry.id} entry={entry} onClick={() => openLeaveModal(entry.leave_date)} />
+                  <LeaveRow key={entry.id} entry={entry} onClick={() => openLeaveModal(entry.leave_date)} locale={locale} t={t} />
                 ))}
               </div>
             </div>
@@ -487,10 +486,10 @@ export default function EmployeeSettingsPage() {
           {/* Past leave */}
           {pastLeave.length > 0 && (
             <div className="mt-5">
-              <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Recent past</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">{t('app.teamMember.recentPast', 'Recent past')}</p>
               <div className="space-y-2 opacity-60">
                 {pastLeave.map(entry => (
-                  <LeaveRow key={entry.id} entry={entry} onClick={() => openLeaveModal(entry.leave_date)} />
+                  <LeaveRow key={entry.id} entry={entry} onClick={() => openLeaveModal(entry.leave_date)} locale={locale} t={t} />
                 ))}
               </div>
             </div>
@@ -498,7 +497,7 @@ export default function EmployeeSettingsPage() {
 
           {upcomingLeave.length === 0 && pastLeave.length === 0 && (
             <div className="mt-4 text-center py-6 border-2 border-dashed border-gray-100 rounded-xl">
-              <p className="text-sm text-gray-400">No leave recorded. Click any day on the calendar to add.</p>
+              <p className="text-sm text-gray-400">{t('app.teamMember.noLeave', 'No leave recorded. Click any day on the calendar to add.')}</p>
             </div>
           )}
         </SectionCard>
@@ -521,12 +520,16 @@ export default function EmployeeSettingsPage() {
 // ─── Calendar ────────────────────────────────────────────────────────────────
 
 function LeaveCalendar({
-  year, month, leaveByDate, onDayClick, onPrev, onNext,
+  year, month, leaveByDate, onDayClick, onPrev, onNext, locale, t,
 }: {
   year: number; month: number; leaveByDate: Record<string, LeaveEntry>
   onDayClick: (date: string) => void; onPrev: () => void; onNext: () => void
+  locale: string
+  t: (key: string, fallback?: string) => string
 }) {
-  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
+  const monthNames = Array.from({ length: 12 }).map((_, i) =>
+    new Date(2000, i, 1).toLocaleDateString(locale === 'da' ? 'da-DK' : 'en-US', { month: 'long' })
+  )
   const today = new Date(); today.setHours(0,0,0,0)
   const firstDay = new Date(year, month, 1)
   const lastDay = new Date(year, month + 1, 0)
@@ -565,7 +568,15 @@ function LeaveCalendar({
 
       {/* Day-of-week headers */}
       <div className="grid grid-cols-7 border-b border-gray-100">
-        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+        {[
+          t('app.day.short.monday', 'Mon'),
+          t('app.day.short.tuesday', 'Tue'),
+          t('app.day.short.wednesday', 'Wed'),
+          t('app.day.short.thursday', 'Thu'),
+          t('app.day.short.friday', 'Fri'),
+          t('app.day.short.saturday', 'Sat'),
+          t('app.day.short.sunday', 'Sun'),
+        ].map(d => (
           <div key={d} className="py-2 text-center text-[10px] font-bold uppercase tracking-wide text-gray-400">{d}</div>
         ))}
       </div>
@@ -596,7 +607,9 @@ function LeaveCalendar({
                 ${isToday && !entry ? 'ring-2 ring-accent-400 text-accent-600 font-bold' : ''}
               `}
               style={entry ? { background: meta?.color } : undefined}
-              title={entry ? `${meta?.label} — ${LEAVE_TYPE_META[entry.leave_type]}${entry.note ? `: ${entry.note}` : ''}` : 'Click to add leave'}
+              title={entry
+                ? `${t(`app.teamMember.leaveCategory.${entry.category}`, entry.category)} - ${t(`app.teamMember.leaveType.${entry.leave_type}`, entry.leave_type)}${entry.note ? `: ${entry.note}` : ''}`
+                : t('app.teamMember.clickAddLeave', 'Click to add leave')}
             >
               {day}
               {entry && entry.leave_type !== 'full_day' && (
@@ -616,10 +629,20 @@ function LeaveCalendar({
 
 // ─── Leave list row ───────────────────────────────────────────────────────────
 
-function LeaveRow({ entry, onClick }: { entry: LeaveEntry; onClick: () => void }) {
+function LeaveRow({
+  entry,
+  onClick,
+  locale,
+  t,
+}: {
+  entry: LeaveEntry
+  onClick: () => void
+  locale: string
+  t: (key: string, fallback?: string) => string
+}) {
   const meta = CATEGORY_META[entry.category]
   const d = new Date(entry.leave_date + 'T00:00:00')
-  const dateLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  const dateLabel = d.toLocaleDateString(locale === 'da' ? 'da-DK' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 
   return (
     <button
@@ -631,7 +654,7 @@ function LeaveRow({ entry, onClick }: { entry: LeaveEntry; onClick: () => void }
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-gray-900">{dateLabel}</p>
         <p className="text-xs text-gray-500">
-          {meta.label} · {LEAVE_TYPE_META[entry.leave_type]}
+          {t(`app.teamMember.leaveCategory.${entry.category}`, entry.category)} · {t(`app.teamMember.leaveType.${entry.leave_type}`, entry.leave_type)}
           {entry.leave_type === 'custom_hours' && entry.hours_off ? ` (${entry.hours_off}h)` : ''}
           {entry.note ? ` · ${entry.note}` : ''}
         </p>
@@ -669,7 +692,17 @@ function SectionCard({ icon, iconBg, iconColor, title, subtitle, extra, children
   )
 }
 
-function SaveButton({ saving, saved, onClick }: { saving: boolean; saved: boolean; onClick: () => void }) {
+function SaveButton({
+  saving,
+  saved,
+  onClick,
+  t,
+}: {
+  saving: boolean
+  saved: boolean
+  onClick: () => void
+  t: (key: string, fallback?: string) => string
+}) {
   return (
     <button
       type="button"
@@ -682,10 +715,10 @@ function SaveButton({ saving, saved, onClick }: { saving: boolean; saved: boolea
       }}
     >
       {saving ? (
-        <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>Saving…</>
+        <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('app.common.saving', 'Saving...')}</>
       ) : saved ? (
-        <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>Saved</>
-      ) : 'Save changes'}
+        <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>{t('app.teamMember.saved', 'Saved')}</>
+      ) : t('settings.business.save', 'Save changes')}
     </button>
   )
 }

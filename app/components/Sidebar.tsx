@@ -17,6 +17,8 @@ import {
   RocketLaunchIcon
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { clearClientLocaleStorage } from '../i18n'
+import { useAppI18n } from './I18nProvider'
 import VideoGuideModal from './VideoGuideModal'
 
 interface Company {
@@ -44,7 +46,16 @@ interface SidebarProps {
   onSettingsClick?: () => void
 }
 
+function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'app.role.admin' | 'app.role.employee' {
+  const r = String(role || '').toLowerCase()
+  if (r === 'owner') return 'app.role.owner'
+  if (r === 'manager') return 'app.role.manager'
+  if (r === 'admin') return 'app.role.admin'
+  return 'app.role.employee'
+}
+
 export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
+  const { t } = useAppI18n()
   const pathname = usePathname()
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
@@ -84,6 +95,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   }, [isCompanyDropdownOpen])
 
   const handleLogout = () => {
+    clearClientLocaleStorage()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     sessionStorage.removeItem('pathpilo_video_guide_dismissed')
@@ -123,6 +135,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
           firstName: data.user.firstName,
           lastName: data.user.lastName,
           email: data.user.email,
+          languageCode: data.user.languageCode,
           role: data.user.role,
           companyId: data.user.companyId,
           companyName: data.user.companyName,
@@ -158,19 +171,19 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
     icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
     children?: Array<{ name: string; href: string }>
   }> = [
-    { name: 'Dashboard', href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
+    { name: t('app.nav.dashboard', 'Dashboard'), href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
     {
-      name: 'Jobs',
+      name: t('app.nav.jobs', 'Jobs'),
       icon: ClipboardDocumentListIcon,
       children: [
-        { name: 'Overview', href: jobsBase },
-        { name: 'Completed', href: `${jobsBase}/completed` },
+        { name: t('app.nav.jobsOverview', 'Overview'), href: jobsBase },
+        { name: t('app.nav.jobsCompleted', 'Completed'), href: `${jobsBase}/completed` },
       ],
     },
-    { name: 'Clients', href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
-    { name: 'Leads', href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
-    { name: 'Team', href: companySlug ? `/${companySlug}/team` : '/team', icon: UsersIcon },
-    { name: 'Services', href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
+    { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
+    { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
+    { name: t('app.nav.team', 'Team'), href: companySlug ? `/${companySlug}/team` : '/team', icon: UsersIcon },
+    { name: t('app.nav.services', 'Services'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
 
   return (
@@ -190,7 +203,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
           className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
         >
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
-          <span className="text-xs font-medium">Logout</span>
+          <span className="text-xs font-medium">{t('app.sidebar.logout', 'Logout')}</span>
         </button>
       </div>
 
@@ -342,9 +355,9 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
                     >
                       <div className="flex items-center justify-between">
                         <span className="truncate">{company.name}</span>
-                        {isActive && <span className="ml-2 text-accent-400 text-[10px]">Active</span>}
+                        {isActive && <span className="ml-2 text-accent-400 text-[10px]">{t('app.sidebar.active', 'Active')}</span>}
                       </div>
-                      <div className="text-[10px] text-gray-500 mt-0.5 capitalize">{company.role}</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{t(roleLabelKey(company.role), company.role)}</div>
                     </button>
                   )
                 })}
@@ -361,7 +374,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold text-sm rounded-xl shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 transition-all duration-200"
         >
           <RocketLaunchIcon className="w-5 h-5" />
-          <span>Get started</span>
+          <span>{t('app.sidebar.getStarted', 'Get started')}</span>
         </button>
       </div>
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../utils/database');
-const { sendEmail } = require('../utils/email');
+const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
 
 const router = express.Router();
 
@@ -119,22 +119,12 @@ function buildInvitationEmail({ email, companyName, inviterName, role, inviteLin
                       If the button doesn't work, copy and paste this link into your browser:<br/>
                       <a href="${inviteLink}" style="color:#6366f1;word-break:break-all;">${inviteLink}</a>
                     </p>
+                    ${STANDARD_FOOTER_PLACEHOLDER}
 
                   </td>
                 </tr>
               </table>
 
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:28px 0 0;text-align:center;">
-              <p style="margin:0;font-size:12px;color:#9ca3af;">
-                You received this email because someone invited you to ${fromName}.<br/>
-                If this wasn't expected, you can safely ignore it.
-              </p>
-              <p style="margin:8px 0 0;font-size:12px;color:#c4c4cc;">&copy; ${new Date().getFullYear()} ${fromName}. All rights reserved.</p>
             </td>
           </tr>
 
@@ -267,7 +257,7 @@ router.post('/companies/:companyId/invite', async (req, res) => {
     const { html, text, subject } = buildInvitationEmail({ email, companyName, inviterName, role, inviteLink, expiresAt });
 
     try {
-      await sendEmail({ to: email, subject, html, text });
+      await sendEmail({ to: email, subject, html, text, companyId: parseInt(companyId, 10) });
       console.log(`✅ Invitation email sent to ${email} for ${companyName}`);
     } catch (emailErr) {
       console.error('⚠️ Invitation created but email failed to send:', emailErr.message || emailErr);

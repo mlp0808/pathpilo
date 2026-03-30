@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
+import { getCountryRule } from '@/app/config/countryRules'
 import Link from 'next/link'
 import { ArrowLeftIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 
@@ -70,6 +71,17 @@ export default function EditInvoicePage() {
     description: '',
     show_completed_date: false,
   })
+  const countryCode = typeof window !== 'undefined'
+    ? (() => {
+        try {
+          const user = JSON.parse(localStorage.getItem('user') || '{}')
+          return user?.activeCompany?.countryCode || 'DK'
+        } catch {
+          return 'DK'
+        }
+      })()
+    : 'DK'
+  const countryRule = getCountryRule(countryCode)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -275,7 +287,7 @@ export default function EditInvoicePage() {
                       </select>
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">Tax rate (%)</label>
+                      <label className="mb-1.5 block text-sm font-medium text-gray-700">{countryRule.taxLabel} (%)</label>
                       <input
                         type="number"
                         min={0}

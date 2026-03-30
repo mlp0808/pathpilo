@@ -45,4 +45,15 @@ npm run db:reset
 ## Production
 See `DEPLOYMENT.md` (ports: Next.js 3005, API 3003).
 
+## Country and Language configuration
+
+- Company-level country behavior is controlled by `companies.country_code` (ISO-2, default `DK`).
+- User-level interface language is controlled by `users.language_code` (default `en`).
+- Translation files live in `app/i18n/messages/` and must keep the same keys across locales.
+- Validate translation key parity with:
+```bash
+npm run i18n:check
+```
+- Country-dependent behavior (postal labels, tax defaults, map bias) is centralized in `app/config/countryRules.ts`.
+
 

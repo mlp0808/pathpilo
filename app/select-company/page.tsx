@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../utils/api'
+import { clearClientLocaleStorage } from '../i18n'
 
 interface Company {
   id: number
@@ -66,6 +67,7 @@ export default function SelectCompanyPage() {
   }
 
   const handleLogout = () => {
+    clearClientLocaleStorage()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     router.push('/login')

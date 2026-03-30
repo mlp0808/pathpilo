@@ -25,6 +25,36 @@ function authenticateToken(req, res, next) {
 
 router.use(authenticateToken);
 
+// GET /profile - Get user profile
+router.get('/profile', async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const result = await pool.query(
+      'SELECT id, first_name, last_name, email, role, language_code FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    res.json({
+      user: {
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        role: user.role,
+        languageCode: user.language_code || 'en',
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
 // GET /api/users - Get company users (non-admin endpoint)
 router.get('/', async (req, res) => {
   try {
@@ -72,7 +102,7 @@ router.get('/', async (req, res) => {
 router.put('/profile', async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { firstName, lastName, email } = req.body;
+    const { firstName, lastName, email, languageCode } = req.body;
 
     if (!firstName || !lastName || !email) {
       return res.status(400).json({ error: 'First name, last name, and email are required' });
@@ -88,8 +118,14 @@ router.put('/profile', async (req, res) => {
     }
 
     const result = await pool.query(
-      'UPDATE users SET first_name = $1, last_name = $2, email = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING id, first_name, last_name, email, role',
-      [firstName.trim(), lastName.trim(), email.trim(), userId]
+      'UPDATE users SET first_name = $1, last_name = $2, email = $3, language_code = COALESCE($4, language_code, \'en\'), updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING id, first_name, last_name, email, role, language_code',
+      [
+        firstName.trim(),
+        lastName.trim(),
+        email.trim(),
+        languageCode ? String(languageCode).trim().toLowerCase() : null,
+        userId
+      ]
     );
 
     if (result.rows.length === 0) {
@@ -102,6 +138,7 @@ router.put('/profile', async (req, res) => {
       firstName: user.first_name,
       lastName: user.last_name,
       email: user.email,
+      languageCode: user.language_code || 'en',
       role: user.role
     };
 

@@ -3,12 +3,180 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { pool } = require('../utils/database');
-const { sendEmail } = require('../utils/email');
+const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
 
 const router = express.Router();
 
 // JWT Secret - should be in environment variables
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const DEFAULT_LANGUAGE_CODE = 'en';
+const DEFAULT_COUNTRY_CODE = 'DK';
+const REGISTRATION_CODE_TTL_MINUTES = 15;
+
+pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT '${DEFAULT_LANGUAGE_CODE}'`)
+  .catch((err) => console.error('[auth] language_code column check failed:', err.message));
+pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`)
+  .catch((err) => console.error('[auth] country_code column check failed:', err.message));
+
+pool.query(`
+  CREATE TABLE IF NOT EXISTS registration_verification_codes (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(320) NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    verify_token_hash VARCHAR(255),
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).catch((err) => console.error('[auth] registration_verification_codes table check failed:', err.message));
+
+pool.query(`
+  CREATE INDEX IF NOT EXISTS idx_registration_verification_codes_email
+  ON registration_verification_codes (email)
+`).catch((err) => console.error('[auth] registration_verification_codes email index check failed:', err.message));
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function maskEmail(email) {
+  const normalized = normalizeEmail(email);
+  const [localPart, domainPart] = normalized.split('@');
+  if (!localPart || !domainPart) return normalized;
+  const visible = localPart.slice(0, 2);
+  return `${visible}${'*'.repeat(Math.max(1, localPart.length - 2))}@${domainPart}`;
+}
+
+function generateRegistrationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+// POST /api/auth/register/send-code
+router.post('/register/send-code', async (req, res) => {
+  const { email } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    return res.status(400).json({ error: 'A valid email is required' });
+  }
+
+  try {
+    const existingUser = await pool.query('SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1', [normalizedEmail]);
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
+
+    const code = generateRegistrationCode();
+    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+    const expiresAt = new Date(Date.now() + REGISTRATION_CODE_TTL_MINUTES * 60 * 1000);
+
+    await pool.query(
+      `DELETE FROM registration_verification_codes
+       WHERE email = $1 AND consumed_at IS NULL`,
+      [normalizedEmail]
+    );
+
+    await pool.query(
+      `INSERT INTO registration_verification_codes (email, code_hash, expires_at)
+       VALUES ($1, $2, $3)`,
+      [normalizedEmail, codeHash, expiresAt]
+    );
+
+    await sendEmail({
+      to: normalizedEmail,
+      subject: 'Your PathPilo verification code',
+      html: `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify your email</title></head>
+<body style="margin:0;padding:0;background:#F4F7F4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F4F7F4;padding:36px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);max-width:560px;width:100%;">
+        <tr>
+          <td style="padding:32px 36px 8px;">
+            <h1 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#111827;">Confirm your email address</h1>
+            <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#6b7280;">
+              Enter this code on the registration page to continue creating your account. The code expires in ${REGISTRATION_CODE_TTL_MINUTES} minutes.
+            </p>
+            <div style="margin:0 0 16px;padding:14px 16px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:12px;text-align:center;">
+              <span style="display:inline-block;font-size:30px;letter-spacing:6px;font-weight:800;color:#065f46;">${code}</span>
+            </div>
+            <p style="margin:0 0 12px;font-size:12px;color:#9ca3af;">
+              If you didn't request this, you can ignore this email.
+            </p>
+            ${STANDARD_FOOTER_PLACEHOLDER}
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim(),
+      text: `Confirm your email address\n\nYour PathPilo verification code is: ${code}\n\nThe code expires in ${REGISTRATION_CODE_TTL_MINUTES} minutes.`,
+      fromName: process.env.FROM_NAME || 'PathPilo',
+    });
+
+    return res.status(200).json({
+      message: 'Verification code sent',
+      expiresInMinutes: REGISTRATION_CODE_TTL_MINUTES,
+      email: maskEmail(normalizedEmail),
+    });
+  } catch (error) {
+    console.error('[auth] register/send-code error:', error);
+    return res.status(500).json({ error: 'Failed to send verification code' });
+  }
+});
+
+// POST /api/auth/register/verify-code
+router.post('/register/verify-code', async (req, res) => {
+  const { email, code } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  const cleanCode = String(code || '').trim();
+  if (!normalizedEmail || !cleanCode) {
+    return res.status(400).json({ error: 'Email and code are required' });
+  }
+
+  try {
+    const rowRes = await pool.query(
+      `SELECT id, code_hash, expires_at
+       FROM registration_verification_codes
+       WHERE email = $1 AND consumed_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [normalizedEmail]
+    );
+    if (rowRes.rows.length === 0) {
+      return res.status(400).json({ error: 'No active verification code found. Request a new code.' });
+    }
+
+    const row = rowRes.rows[0];
+    if (new Date() > new Date(row.expires_at)) {
+      return res.status(400).json({ error: 'Verification code expired. Request a new code.' });
+    }
+
+    const providedHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+    if (providedHash !== row.code_hash) {
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
+
+    const verifyTokenRaw = crypto.randomBytes(32).toString('hex');
+    const verifyTokenHash = crypto.createHash('sha256').update(verifyTokenRaw).digest('hex');
+    await pool.query(
+      `UPDATE registration_verification_codes
+       SET verify_token_hash = $1
+       WHERE id = $2`,
+      [verifyTokenHash, row.id]
+    );
+
+    return res.status(200).json({
+      message: 'Email verified',
+      verificationToken: verifyTokenRaw,
+    });
+  } catch (error) {
+    console.error('[auth] register/verify-code error:', error);
+    return res.status(500).json({ error: 'Failed to verify code' });
+  }
+});
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
@@ -17,18 +185,40 @@ router.post('/register', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { firstName, lastName, email, password, invitationToken, trialToken } = req.body;
+    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken } = req.body;
+    const normalizedLanguageCode = String(languageCode || DEFAULT_LANGUAGE_CODE).trim().toLowerCase() || DEFAULT_LANGUAGE_CODE;
+    const normalizedEmail = normalizeEmail(email);
 
     console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken, hasTrial: !!trialToken });
 
     // Validate input
-    if (!firstName || !lastName || !email || !password) {
+    if (!firstName || !lastName || !email || !password || !verificationToken) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'All fields are required' });
+      return res.status(400).json({ error: 'All fields including verification are required' });
+    }
+
+    const verificationTokenHash = crypto.createHash('sha256').update(String(verificationToken)).digest('hex');
+    const verifyRes = await client.query(
+      `SELECT id, expires_at
+       FROM registration_verification_codes
+       WHERE email = $1
+         AND verify_token_hash = $2
+         AND consumed_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [normalizedEmail, verificationTokenHash]
+    );
+    if (verifyRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Email is not verified. Please verify your code first.' });
+    }
+    if (new Date() > new Date(verifyRes.rows[0].expires_at)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Verification expired. Please request a new code.' });
     }
 
     // Check if user already exists
-    const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
+    const existingUser = await client.query('SELECT id FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
     if (existingUser.rows.length > 0) {
       await client.query('ROLLBACK');
       // If they're registering via an invitation, tell the frontend to send them to login instead
@@ -72,7 +262,7 @@ router.post('/register', async (req, res) => {
           AND ci.status = 'pending'
           AND ci.email = $2
           AND ci.expires_at > NOW()
-      `, [invitationToken, email]);
+      `, [invitationToken, normalizedEmail]);
 
       if (inviteResult.rows.length === 0) {
         await client.query('ROLLBACK');
@@ -86,8 +276,8 @@ router.post('/register', async (req, res) => {
 
       // Create user (no company_id, will be linked via user_companies)
       const userResult = await client.query(
-        'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, first_name, last_name, email, role, created_at',
-        [firstName, lastName, email, passwordHash, userRole]
+        'INSERT INTO users (first_name, last_name, email, password_hash, role, language_code) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, first_name, last_name, email, role, language_code, created_at',
+        [firstName, lastName, normalizedEmail, passwordHash, userRole, normalizedLanguageCode]
       );
       user = userResult.rows[0];
 
@@ -107,8 +297,8 @@ router.post('/register', async (req, res) => {
       // PATH 1: Normal registration - Create user + company
       // Create user first
       const userResult = await client.query(
-        'INSERT INTO users (first_name, last_name, email, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, first_name, last_name, email, role, created_at',
-        [firstName, lastName, email, passwordHash, 'company-owner']
+        'INSERT INTO users (first_name, last_name, email, password_hash, role, language_code) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, first_name, last_name, email, role, language_code, created_at',
+        [firstName, lastName, normalizedEmail, passwordHash, 'company-owner', normalizedLanguageCode]
       );
       user = userResult.rows[0];
       userRole = 'owner';
@@ -134,8 +324,8 @@ router.post('/register', async (req, res) => {
 
       // Create company with user as owner
       const companyResult = await client.query(
-        'INSERT INTO companies (name, slug, owner_id) VALUES ($1, $2, $3) RETURNING id, name, slug',
-        [generatedCompanyName, companySlug, user.id]
+        'INSERT INTO companies (name, slug, owner_id, country_code) VALUES ($1, $2, $3, $4) RETURNING id, name, slug, country_code',
+        [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE]
       );
       const company = companyResult.rows[0];
       companyId = company.id;
@@ -147,14 +337,19 @@ router.post('/register', async (req, res) => {
         [user.id, companyId, 'owner']
       );
 
-      // Apply trial expiry if user registered with a valid trial token
+      // Apply trial expiry for ALL normal registrations.
+      // - If trial token exists: use the token's configured trial_days
+      // - Otherwise: default to 14 days (same company expires_at mechanism)
+      const appliedTrialDays = trialRecord?.trial_days || 14;
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + appliedTrialDays);
+      await client.query(
+        'UPDATE companies SET expires_at = $1 WHERE id = $2',
+        [expiresAt, companyId]
+      );
+
+      // If registration came from a trial invite, mark it consumed
       if (trialRecord) {
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + trialRecord.trial_days);
-        await client.query(
-          'UPDATE companies SET expires_at = $1 WHERE id = $2',
-          [expiresAt, companyId]
-        );
         await client.query(
           `UPDATE trial_invites
            SET registered_at = NOW(), registered_user_id = $1, registered_company_id = $2
@@ -163,6 +358,13 @@ router.post('/register', async (req, res) => {
         );
       }
     }
+
+    await client.query(
+      `UPDATE registration_verification_codes
+       SET consumed_at = NOW()
+       WHERE id = $1`,
+      [verifyRes.rows[0].id]
+    );
 
     await client.query('COMMIT');
 
@@ -182,7 +384,7 @@ router.post('/register', async (req, res) => {
 
     // Fetch company with slug so the frontend can redirect properly
     const companyResult = await pool.query(
-      `SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, '[^a-z0-9]+', '-', 'g'))) AS slug FROM companies WHERE id = $1`,
+      `SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, '[^a-z0-9]+', '-', 'g'))) AS slug, country_code FROM companies WHERE id = $1`,
       [companyId]
     );
     const company = companyResult.rows[0] || { id: companyId, name: companyName, slug: null };
@@ -191,6 +393,7 @@ router.post('/register', async (req, res) => {
       id: company.id,
       name: company.name,
       slug: company.slug,
+      countryCode: company.country_code || DEFAULT_COUNTRY_CODE,
       role: userRole,
     };
 
@@ -202,6 +405,7 @@ router.post('/register', async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         email: user.email,
+        languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
         role: userRole,
         companyId: company.id,
         companyName: company.name,
@@ -259,7 +463,7 @@ router.post('/login', async (req, res) => {
 
     // Find user
     const userResult = await pool.query(`
-      SELECT id, first_name, last_name, email, password_hash, role
+      SELECT id, first_name, last_name, email, password_hash, role, language_code
       FROM users
       WHERE email = $1
     `, [email]);
@@ -284,6 +488,7 @@ router.post('/login', async (req, res) => {
         COALESCE(c.slug, LOWER(REGEXP_REPLACE(c.name, '[^a-z0-9]+', '-', 'g'))) as slug,
         uc.role as user_role,
         c.owner_id,
+        c.country_code,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
       FROM user_companies uc
       JOIN companies c ON uc.company_id = c.id
@@ -328,11 +533,13 @@ router.post('/login', async (req, res) => {
         firstName: user.first_name,
         lastName: user.last_name,
         email: user.email,
+        languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
         role: user.role,
         companies: companies.map(c => ({
           id: c.id,
           name: c.name,
           slug: c.slug,
+          countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
           role: c.user_role,
           isOwner: c.is_owner
         }))
@@ -345,6 +552,7 @@ router.post('/login', async (req, res) => {
         id: activeCompany.id,
         name: activeCompany.name,
         slug: activeCompany.slug,
+        countryCode: activeCompany.country_code || DEFAULT_COUNTRY_CODE,
         role: activeCompany.user_role,
         isOwner: activeCompany.is_owner
       };
@@ -446,12 +654,7 @@ router.post('/forgot-password', async (req, res) => {
             <p style="margin:0;font-size:12px;color:#D1D5DB;word-break:break-all;">
               Or copy this link: ${resetUrl}
             </p>
-          </td>
-        </tr>
-        <!-- Footer -->
-        <tr>
-          <td style="background:#F9FAFB;padding:20px 40px;border-top:1px solid #F3F4F6;text-align:center;">
-            <p style="margin:0;font-size:12px;color:#9CA3AF;">© ${new Date().getFullYear()} ${fromName}. All rights reserved.</p>
+            ${STANDARD_FOOTER_PLACEHOLDER}
           </td>
         </tr>
       </table>

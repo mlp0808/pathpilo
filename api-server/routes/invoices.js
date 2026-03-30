@@ -402,6 +402,7 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
       subject: (subject && String(subject).trim()) || `Invoice ${invoice.invoice_number || invoiceId}`,
       text: text && String(text).trim() ? String(text).trim() : `Please find your invoice ${invoice.invoice_number || invoiceId} attached.`,
       attachments: [{ filename, content: pdfBuffer, type: 'application/pdf' }],
+      companyId: companyAccess.companyId,
     });
     // Optionally mark as sent
     await pool.query(

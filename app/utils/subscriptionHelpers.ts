@@ -3,6 +3,8 @@
 //  and SubscriptionSlideout (and any future subscription views).
 // ─────────────────────────────────────────────────────────────
 
+import { formatMoney as formatMoneyFromCountry } from '../config/countryRules'
+
 export const DAY_NAMES = [
   'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
 ]
@@ -74,10 +76,9 @@ export function fmtDate(d: Date): string {
   })
 }
 
-export function fmtMoney(n: number): string {
-  return new Intl.NumberFormat('da-DK', {
-    style: 'currency', currency: 'DKK', maximumFractionDigits: 0,
-  }).format(n)
+/** Formats amounts using the active company’s currency (via country code). */
+export function fmtMoney(n: number, countryCode?: string | null): string {
+  return formatMoneyFromCountry(n, countryCode)
 }
 
 // ── shared types ──────────────────────────────────────────────

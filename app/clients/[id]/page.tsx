@@ -11,6 +11,8 @@ import SubscriptionSlideout from '../../components/SubscriptionSlideout'
 import CreateSubscription from '../../components/CreateSubscription'
 import SendInvoiceModal from '../../components/SendInvoiceModal'
 import { apiUrl } from '../../utils/api'
+import { useAppI18n } from '../../components/I18nProvider'
+import type { MessageKey } from '../../i18n'
 
 interface Client {
   id: number
@@ -36,22 +38,6 @@ type TabId = 'jobs' | 'subscriptions' | 'invoices' | 'settings'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function fmtDate(d: string) {
-  if (!d) return '—'
-  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-function fmtDateShort(d: string) {
-  if (!d) return '—'
-  const date = new Date(d)
-  const now = new Date()
-  const isToday = date.toDateString() === now.toDateString()
-  const isYesterday = date.toDateString() === new Date(now.getTime() - 86400000).toDateString()
-  if (isToday) return 'Today'
-  if (isYesterday) return 'Yesterday'
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-}
-
 function fmtMoney(amount: number, currency = 'DKK') {
   return new Intl.NumberFormat('da-DK', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
 }
@@ -62,20 +48,34 @@ function getInitials(name: string, lastName?: string | null) {
 
 // ─── sub-components ──────────────────────────────────────────────────────────
 
+const STATUS_STYLE: Record<string, string> = {
+  scheduled: 'bg-blue-50 text-blue-700',
+  'in-progress': 'bg-amber-50 text-amber-700',
+  completed: 'bg-green-50 text-green-700',
+  cancelled: 'bg-gray-100 text-gray-500',
+  paid: 'bg-green-50 text-green-700',
+  sent: 'bg-blue-50 text-blue-700',
+  draft: 'bg-amber-50 text-amber-700',
+  overdue: 'bg-red-50 text-red-600',
+}
+
+const STATUS_I18N: Record<string, MessageKey> = {
+  scheduled: 'app.jobStatus.scheduled',
+  'in-progress': 'app.jobStatus.inProgress',
+  completed: 'app.jobStatus.completed',
+  cancelled: 'app.jobStatus.cancelled',
+  paid: 'app.jobStatus.paid',
+  sent: 'app.jobStatus.sent',
+  draft: 'app.jobStatus.draft',
+  overdue: 'app.jobStatus.overdue',
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    scheduled: 'bg-blue-50 text-blue-700',
-    'in-progress': 'bg-amber-50 text-amber-700',
-    completed: 'bg-green-50 text-green-700',
-    cancelled: 'bg-gray-100 text-gray-500',
-    paid: 'bg-green-50 text-green-700',
-    sent: 'bg-blue-50 text-blue-700',
-    draft: 'bg-amber-50 text-amber-700',
-    overdue: 'bg-red-50 text-red-600',
-  }
+  const { t } = useAppI18n()
+  const label = STATUS_I18N[status] ? t(STATUS_I18N[status]) : status.charAt(0).toUpperCase() + status.slice(1).replace(/-/g, ' ')
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${map[status] || 'bg-gray-100 text-gray-500'}`}>
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-500'}`}>
+      {label}
     </span>
   )
 }
@@ -114,6 +114,8 @@ function EmptyState({ icon, title, subtitle, action }: { icon: React.ReactNode; 
 // ─── main component ───────────────────────────────────────────────────────────
 
 export default function ClientDetailPage() {
+  const { t, locale } = useAppI18n()
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
   const params = useParams()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -176,8 +178,8 @@ export default function ClientDetailPage() {
       const res = await fetch(apiUrl(`/clients/${clientId}`), { headers: { Authorization: `Bearer ${token}` } })
       const data = await res.json()
       if (res.ok && data.client) setClient(data.client)
-      else setError(data.error || 'Failed to load client')
-    } catch { setError('Network error') }
+      else setError(data.error || t('app.clientDetail.errLoad'))
+    } catch { setError(t('app.clientDetail.networkError')) }
     finally { setLoading(false) }
   }
 
@@ -252,14 +254,14 @@ export default function ClientDetailPage() {
   // ── client actions ─────────────────────────────────────────────────────────
   const handleDeleteClient = async () => {
     if (!client) return
-    if (!confirm(`Delete ${client.name}${client.last_name ? ' ' + client.last_name : ''}?\n\nThis will anonymize their data and delete all jobs and subscriptions. Invoices are preserved. This cannot be undone.`)) return
+    if (!confirm(t('app.clientDetail.confirmDelete').replace('{{name}}', `${client.name}${client.last_name ? ' ' + client.last_name : ''}`))) return
     try {
       setIsDeletingClient(true)
       const token = localStorage.getItem('token')
       const res = await fetch(apiUrl(`/clients/${clientId}`), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
       if (res.ok) goBackToClients()
-      else { const d = await res.json(); alert(d.error || 'Failed to delete') }
-    } catch { alert('Failed to delete client') }
+      else { const d = await res.json(); alert(d.error || t('app.clientDetail.errDelete')) }
+    } catch { alert(t('app.clientDetail.errDelete')) }
     finally { setIsDeletingClient(false) }
   }
 
@@ -378,8 +380,8 @@ export default function ClientDetailPage() {
       <AppLayout>
         <div className="flex items-center justify-center h-64 text-center">
           <div>
-            <p className="text-sm text-gray-500 mb-4">{error || 'Client not found'}</p>
-            <button onClick={goBackToClients} className="text-sm text-primary-500 underline">Back to clients</button>
+            <p className="text-sm text-gray-500 mb-4">{error || t('app.clientDetail.notFound')}</p>
+            <button onClick={goBackToClients} className="text-sm text-primary-500 underline">{t('app.clientDetail.back')}</button>
           </div>
         </div>
       </AppLayout>
@@ -391,16 +393,29 @@ export default function ClientDetailPage() {
   const location = [client.address, client.zip_code, client.city].filter(Boolean).join(', ')
   const billingLocation = [client.billing_address, client.billing_zip_code, client.billing_city].filter(Boolean).join(', ')
 
+  const fmtDate = (d: string) => {
+    if (!d) return '—'
+    return new Date(d).toLocaleDateString(dateLocale, { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  const fmtDateShort = (d: string) => {
+    if (!d) return '—'
+    const date = new Date(d)
+    const now = new Date()
+    if (date.toDateString() === now.toDateString()) return t('app.date.today')
+    if (date.toDateString() === new Date(now.getTime() - 86400000).toDateString()) return t('app.date.yesterday')
+    return date.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' })
+  }
+
   const filteredJobs = jobs.filter(j => jobFilter === 'all' ? true : j.status === jobFilter)
   const scheduledCount = jobs.filter(j => j.status === 'scheduled').length
   const completedCount = jobs.filter(j => j.status === 'completed').length
   const cancelledCount = jobs.filter(j => j.status === 'cancelled').length
 
   const tabs: { id: TabId; label: string; count?: number }[] = [
-    { id: 'jobs', label: 'Jobs', count: jobs.length },
-    { id: 'subscriptions', label: 'Subscriptions', count: subscriptions.length },
-    { id: 'invoices', label: 'Invoices', count: invoices.length },
-    { id: 'settings', label: 'Settings' },
+    { id: 'jobs', label: t('app.clientDetail.tabJobs'), count: jobs.length },
+    { id: 'subscriptions', label: t('app.clientDetail.tabSubscriptions'), count: subscriptions.length },
+    { id: 'invoices', label: t('app.clientDetail.tabInvoices'), count: invoices.length },
+    { id: 'settings', label: t('app.clientDetail.tabSettings') },
   ]
 
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -416,7 +431,7 @@ export default function ClientDetailPage() {
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
-          All clients
+          {t('app.clientDetail.back')}
         </button>
       </div>
 
@@ -438,9 +453,9 @@ export default function ClientDetailPage() {
               </div>
               <h1 className="font-bold text-base text-primary-500 leading-snug">{fullName}</h1>
               {client.client_type === 'company' && (
-                <span className="mt-1 text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Company</span>
+                <span className="mt-1 text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">{t('app.clientsList.company')}</span>
               )}
-              <p className="text-[11px] text-gray-400 mt-1">Since {fmtDate(client.created_at)}</p>
+              <p className="text-[11px] text-gray-400 mt-1">{t('app.clientDetail.since').replace('{{date}}', fmtDate(client.created_at))}</p>
             </div>
 
             {/* Contact details */}
@@ -476,15 +491,15 @@ export default function ClientDetailPage() {
             <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 text-center">
               <div>
                 <div className="text-lg font-bold text-primary-500">{jobs.length}</div>
-                <div className="text-[10px] text-gray-400">Jobs</div>
+                <div className="text-[10px] text-gray-400">{t('app.clientDetail.statsJobs')}</div>
               </div>
               <div>
                 <div className="text-lg font-bold text-primary-500">{subscriptions.filter(s => s.is_active).length}</div>
-                <div className="text-[10px] text-gray-400">Active sub</div>
+                <div className="text-[10px] text-gray-400">{t('app.clientDetail.statsActiveSub')}</div>
               </div>
               <div>
                 <div className="text-lg font-bold text-primary-500">{invoices.length}</div>
-                <div className="text-[10px] text-gray-400">Invoices</div>
+                <div className="text-[10px] text-gray-400">{t('app.clientDetail.statsInvoices')}</div>
               </div>
             </div>
 
@@ -497,7 +512,7 @@ export default function ClientDetailPage() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
-                Edit client
+                {t('app.clientDetail.editClient')}
               </button>
 
               {/* 3-dot / delete */}
@@ -509,7 +524,7 @@ export default function ClientDetailPage() {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01" />
                   </svg>
-                  More options
+                  {t('app.clientDetail.moreOptions')}
                 </button>
                 {showClientMenu && (
                   <div className="absolute bottom-10 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
@@ -518,7 +533,7 @@ export default function ClientDetailPage() {
                       disabled={isDeletingClient}
                       className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
                     >
-                      {isDeletingClient ? 'Deleting…' : 'Delete client…'}
+                      {isDeletingClient ? t('app.clientDetail.deleting') : t('app.clientDetail.deleteClient')}
                     </button>
                   </div>
                 )}
@@ -539,7 +554,7 @@ export default function ClientDetailPage() {
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
-              All clients
+              {t('app.clientDetail.back')}
             </button>
             <div className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-4 mb-4">
               <div className="w-12 h-12 rounded-2xl bg-[#BFD1C5] text-primary-500 flex items-center justify-center text-lg font-bold flex-shrink-0">
@@ -553,7 +568,7 @@ export default function ClientDetailPage() {
                 <h1 className="font-bold text-base text-primary-500 truncate">{fullName}</h1>
                 <div className="text-xs text-gray-400 truncate">{client.email || client.phone || location || '—'}</div>
               </div>
-              <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-primary-500 px-3 py-1.5 border border-gray-200 rounded-xl hover:bg-gray-50">Edit</button>
+              <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-primary-500 px-3 py-1.5 border border-gray-200 rounded-xl hover:bg-gray-50">{t('app.clientDetail.edit')}</button>
             </div>
           </div>
 
@@ -588,10 +603,10 @@ export default function ClientDetailPage() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1">
                 {[
-                  { id: 'all', label: `All (${jobs.length})` },
-                  { id: 'scheduled', label: `Scheduled (${scheduledCount})` },
-                  { id: 'completed', label: `Done (${completedCount})` },
-                  { id: 'cancelled', label: `Cancelled (${cancelledCount})` },
+                  { id: 'all', label: t('app.clientDetail.jobFilterAll').replace('{{count}}', String(jobs.length)) },
+                  { id: 'scheduled', label: t('app.clientDetail.jobFilterScheduled').replace('{{count}}', String(scheduledCount)) },
+                  { id: 'completed', label: t('app.clientDetail.jobFilterDone').replace('{{count}}', String(completedCount)) },
+                  { id: 'cancelled', label: t('app.clientDetail.jobFilterCancelled').replace('{{count}}', String(cancelledCount)) },
                 ].map(f => (
                   <button
                     key={f.id}
@@ -611,7 +626,7 @@ export default function ClientDetailPage() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                New job
+                {t('app.clientDetail.newJob')}
               </button>
             </div>
 
@@ -641,7 +656,7 @@ export default function ClientDetailPage() {
                       {/* Date block */}
                       <div className="w-12 text-center flex-shrink-0">
                         <div className="text-[10px] text-gray-400 uppercase font-medium">
-                          {job.scheduled_date ? new Date(job.scheduled_date).toLocaleDateString('en-GB', { month: 'short' }) : ''}
+                          {job.scheduled_date ? new Date(job.scheduled_date).toLocaleDateString(dateLocale, { month: 'short' }) : ''}
                         </div>
                         <div className="text-lg font-bold text-primary-500 leading-none">
                           {job.scheduled_date ? new Date(job.scheduled_date).getDate() : '—'}
@@ -671,7 +686,7 @@ export default function ClientDetailPage() {
                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                               </svg>
-                              Subscription
+                              {t('app.clientDetail.subscriptionBadge')}
                             </span>
                           )}
                         </div>
@@ -708,11 +723,11 @@ export default function ClientDetailPage() {
               <div className="bg-white border border-gray-200 rounded-2xl">
                 <EmptyState
                   icon={<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>}
-                  title="No subscriptions"
-                  subtitle="Create recurring jobs with a subscription"
+                  title={t('app.clientDetail.noSubscriptions')}
+                  subtitle={t('app.clientDetail.subscriptionsHint')}
                   action={
                     <button onClick={() => setIsCreateSubOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors">
-                      Create subscription
+                      {t('app.clientDetail.createSubscription')}
                     </button>
                   }
                 />
@@ -741,11 +756,11 @@ export default function ClientDetailPage() {
                           <div className="flex items-center gap-2 mb-1">
                             <span className="font-semibold text-sm text-primary-500">{sub.title}</span>
                             {isInactive ? (
-                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">Inactive</span>
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full">{t('app.clientDetail.inactive')}</span>
                             ) : isPaused ? (
-                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">Paused from {sub.paused_at}</span>
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">{t('app.clientDetail.pausedFrom').replace('{{date}}', sub.paused_at)}</span>
                             ) : (
-                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-green-50 text-green-700 rounded-full">Active</span>
+                              <span className="text-[11px] font-semibold px-2 py-0.5 bg-green-50 text-green-700 rounded-full">{t('app.clientDetail.active')}</span>
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-gray-400">

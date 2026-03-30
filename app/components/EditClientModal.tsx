@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import AddressAutocomplete from './AddressAutocomplete'
+import { getCountryRule } from '../config/countryRules'
+import { useAppI18n } from './I18nProvider'
 
 interface Client {
   id: number
@@ -33,6 +35,17 @@ interface EditClientModalProps {
 }
 
 export default function EditClientModal({ isOpen, onClose, onClientUpdated, client }: EditClientModalProps) {
+  const { t } = useAppI18n()
+  const userCountryCode = (() => {
+    if (typeof window === 'undefined') return 'DK'
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}')
+      return user?.activeCompany?.countryCode || 'DK'
+    } catch {
+      return 'DK'
+    }
+  })()
+  const countryRule = getCountryRule(userCountryCode)
   const [currentClient, setCurrentClient] = useState({
     client_type: 'person' as 'person' | 'company',
     name: '',
@@ -159,7 +172,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
       <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Edit Client</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{t('app.clients.edit.title')}</h2>
           <button
             onClick={handleCancel}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -180,7 +193,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label htmlFor="first_name" className="block text-sm font-medium text-gray-900 mb-2">
-                Name <span className="text-red-500">*</span>
+                {t('app.clients.edit.name')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
@@ -190,12 +203,12 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 onChange={handleInputChange}
                 required
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="First name"
+                placeholder={t('app.clients.edit.firstNamePlaceholder')}
               />
             </div>
             <div>
               <label htmlFor="last_name" className="block text-sm font-medium text-gray-900 mb-2">
-                Last name
+                {t('app.clients.edit.lastName')}
               </label>
               <input
                 type="text"
@@ -204,7 +217,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 value={currentClient.last_name}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="Last name"
+                placeholder={t('app.clients.edit.lastNamePlaceholder')}
               />
             </div>
           </div>
@@ -212,7 +225,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
           {/* Country */}
           <div>
             <label htmlFor="country" className="block text-sm font-medium text-gray-900 mb-2">
-              Country
+              {t('app.clients.edit.country')}
             </label>
             <input
               type="text"
@@ -221,7 +234,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               value={currentClient.country}
               onChange={handleInputChange}
               className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-              placeholder="e.g. Denmark"
+              placeholder={t('app.clients.edit.countryPlaceholder')}
             />
           </div>
 
@@ -242,14 +255,16 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 lng: data.lng ?? null,
               }))
             }
-            placeholder="Street address"
+            placeholder={t('app.clients.edit.streetPlaceholder')}
+            countryCode={userCountryCode}
+            zipLabel={countryRule.postalCodeLabel}
           />
 
           {/* Contact Information */}
           <div className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-900 mb-2">
-                Email
+                {t('app.clients.edit.email')}
               </label>
               <input
                 type="email"
@@ -258,12 +273,12 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 value={currentClient.email}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="client@example.com"
+                placeholder={t('app.clients.edit.emailPlaceholder')}
               />
             </div>
             <div>
               <label htmlFor="phone" className="block text-sm font-medium text-gray-900 mb-2">
-                Phone
+                {t('app.clients.edit.phone')}
               </label>
               <input
                 type="tel"
@@ -272,7 +287,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 value={currentClient.phone}
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="+45 1234 5678"
+                placeholder={t('app.clients.edit.phonePlaceholder')}
               />
             </div>
           </div>
@@ -287,18 +302,18 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
             />
             <label htmlFor="separate_billing_address" className="ml-2 block text-sm text-gray-900">
-              Separate billing address?
+              {t('app.clients.edit.separateBillingAddress')}
             </label>
           </div>
 
           {/* Billing Address Fields */}
           {separateBillingAddress && (
             <div className="space-y-4 bg-gray-50 p-4 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-900">Billing Address</h3>
+              <h3 className="text-sm font-medium text-gray-900">{t('app.clients.edit.billingAddressHeading')}</h3>
               <div className="grid grid-cols-12 gap-4">
                 <div className="col-span-6">
                   <label htmlFor="billing_address" className="block text-sm font-medium text-gray-900 mb-2">
-                    Address
+                    {t('app.clients.edit.address')}
                   </label>
                   <input
                     type="text"
@@ -307,12 +322,12 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                     value={currentClient.billing_address}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                    placeholder="Billing street address"
+                    placeholder={t('app.clients.edit.billingStreetPlaceholder')}
                   />
                 </div>
                 <div className="col-span-3">
                   <label htmlFor="billing_zip_code" className="block text-sm font-medium text-gray-900 mb-2">
-                    Zip
+                    {countryRule.postalCodeLabel}
                   </label>
                   <input
                     type="text"
@@ -321,12 +336,12 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                     value={currentClient.billing_zip_code}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                    placeholder="1234"
+                    placeholder={t('app.clients.edit.billingPostalPlaceholder')}
                   />
                 </div>
                 <div className="col-span-3">
                   <label htmlFor="billing_city" className="block text-sm font-medium text-gray-900 mb-2">
-                    City
+                    {t('app.clients.edit.city')}
                   </label>
                   <input
                     type="text"
@@ -335,7 +350,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                     value={currentClient.billing_city}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                    placeholder="Copenhagen"
+                    placeholder={t('app.clients.edit.cityPlaceholder')}
                   />
                 </div>
               </div>
@@ -352,18 +367,18 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
             />
             <label htmlFor="separate_billing_contact" className="ml-2 block text-sm text-gray-900">
-              Separate billing contact info?
+              {t('app.clients.edit.separateBillingContact')}
             </label>
           </div>
 
           {/* Billing Contact Fields */}
           {separateBillingContact && (
             <div className="space-y-4 bg-gray-50 p-4 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-900">Billing Contact</h3>
+              <h3 className="text-sm font-medium text-gray-900">{t('app.clients.edit.billingContactHeading')}</h3>
               <div className="space-y-4">
                 <div>
                   <label htmlFor="billing_email" className="block text-sm font-medium text-gray-900 mb-2">
-                    Email
+                    {t('app.clients.edit.email')}
                   </label>
                   <input
                     type="email"
@@ -372,12 +387,12 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                     value={currentClient.billing_email}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                    placeholder="billing@example.com"
+                    placeholder={t('app.clients.edit.billingEmailPlaceholder')}
                   />
                 </div>
                 <div>
                   <label htmlFor="billing_phone" className="block text-sm font-medium text-gray-900 mb-2">
-                    Phone
+                    {t('app.clients.edit.phone')}
                   </label>
                   <input
                     type="tel"
@@ -386,7 +401,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                     value={currentClient.billing_phone}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-                    placeholder="+45 1234 5678"
+                    placeholder={t('app.clients.edit.phonePlaceholder')}
                   />
                 </div>
               </div>
@@ -400,7 +415,7 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               onClick={handleCancel}
               className="flex-1 bg-gray-100 text-gray-700 py-3 px-6 rounded-lg text-sm font-semibold hover:bg-gray-200 focus:ring-2 focus:ring-gray-500/20 focus:ring-offset-2 transition-all duration-200"
             >
-              Cancel
+              {t('app.clients.edit.cancel')}
             </button>
             <button
               type="submit"
@@ -410,10 +425,10 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
               {isSubmitting ? (
                 <span className="flex items-center justify-center space-x-2">
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  <span>Updating...</span>
+                  <span>{t('app.clients.edit.updating')}</span>
                 </span>
               ) : (
-                'Update Client'
+                t('app.clients.edit.updateClient')
               )}
             </button>
           </div>

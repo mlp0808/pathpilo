@@ -1,15 +1,50 @@
 'use client'
 
-import { useState, Suspense } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import {
+  getDashboardHref,
+  getStoredUser,
+  hasCompanyContext,
+  isClientLoggedIn,
+} from '../utils/sessionClient'
+import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../i18n'
 
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteToken = searchParams.get('invite')
+  const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
+
+  const [authChecked, setAuthChecked] = useState(false)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(UI_LOCALE_STORAGE_KEY, requestedLang)
+    } catch {
+      // no-op
+    }
+  }, [requestedLang])
+
+  useEffect(() => {
+    if (!isClientLoggedIn()) {
+      setAuthChecked(true)
+      return
+    }
+    const u = getStoredUser()
+    if (u && hasCompanyContext(u)) {
+      router.replace(getDashboardHref(u))
+      return
+    }
+    if (u && !hasCompanyContext(u)) {
+      router.replace('/setup/company')
+      return
+    }
+    setAuthChecked(true)
+  }, [router])
 
   // ── login state ────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState({ email: '', password: '' })
@@ -96,11 +131,14 @@ function LoginForm() {
         }
 
         // Normal login redirect
+        const lang = normalizeLocale(data.user.languageCode)
+        localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
         const userData = {
           id: data.user.id,
           firstName: data.user.firstName,
           lastName: data.user.lastName,
           email: data.user.email,
+          languageCode: lang,
           role: data.user.activeCompany?.role || data.user.role || 'employee',
           companyId: data.user.activeCompany?.id || data.user.companyId || null,
           companyName: data.user.activeCompany?.name || data.user.companyName || null,
@@ -123,6 +161,17 @@ function LoginForm() {
   }
 
   const isFormValid = formData.email && formData.password
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-page flex flex-col justify-center py-12 px-6">
+        <div className="max-w-md mx-auto w-full text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500" />
+          <p className="mt-2 text-gray-600 text-sm">Loading…</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-page flex flex-col justify-center py-12 px-6">
@@ -294,7 +343,14 @@ function LoginForm() {
               <div className="mt-6 text-center">
                 <p className="text-sm text-gray-500">
                   Don't have an account?{' '}
-                  <Link href={inviteToken ? `/register?invite=${inviteToken}` : '/register'} className="text-primary-500 font-medium hover:underline">
+                  <Link
+                    href={
+                      inviteToken
+                        ? `/register?invite=${inviteToken}&lang=${requestedLang}`
+                        : `/register?lang=${requestedLang}`
+                    }
+                    className="text-primary-500 font-medium hover:underline"
+                  >
                     Sign up
                   </Link>
                 </p>

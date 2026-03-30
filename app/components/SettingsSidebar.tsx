@@ -12,6 +12,8 @@ import {
   BellIcon,
   InboxIcon
 } from '@heroicons/react/24/outline'
+import { useAppI18n } from './I18nProvider'
+import { clearClientLocaleStorage } from '../i18n'
 
 interface SettingsSidebarProps {
   user: {
@@ -24,6 +26,7 @@ interface SettingsSidebarProps {
 
 export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) {
   const pathname = usePathname()
+  const { t } = useAppI18n()
 
   // Extract company slug from URL: /{slug}/settings/... → slug
   // Falls back to empty string for legacy /settings/... routes
@@ -32,6 +35,7 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
   const base = companySlug ? `/${companySlug}/settings` : '/settings'
 
   const handleLogout = () => {
+    clearClientLocaleStorage()
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     sessionStorage.removeItem('pathpilo_video_guide_dismissed')
@@ -39,12 +43,12 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
   }
 
   const settingsNavigation = [
-    { name: 'User', href: `${base}/user`, icon: UserIcon },
-    { name: 'Business', href: `${base}/business`, icon: BuildingOfficeIcon },
-    { name: 'Notifications', href: `${base}/notifications`, icon: BellIcon },
-    { name: 'Lead form', href: `${base}/leads-form`, icon: InboxIcon },
-    { name: 'Billing', href: `${base}/billing`, icon: CreditCardIcon },
-    { name: 'Invoices', href: `${base}/invoices`, icon: DocumentTextIcon },
+    { name: t('settings.sidebar.user', 'User'), href: `${base}/user`, icon: UserIcon },
+    { name: t('settings.sidebar.business', 'Business'), href: `${base}/business`, icon: BuildingOfficeIcon },
+    { name: t('settings.sidebar.notifications', 'Notifications'), href: `${base}/notifications`, icon: BellIcon },
+    { name: t('settings.sidebar.leadForm', 'Lead form'), href: `${base}/leads-form`, icon: InboxIcon },
+    { name: t('settings.sidebar.billing', 'Billing'), href: `${base}/billing`, icon: CreditCardIcon },
+    { name: t('settings.sidebar.invoices', 'Invoices'), href: `${base}/invoices`, icon: DocumentTextIcon },
   ]
 
   return (
@@ -53,16 +57,16 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
         <button onClick={handleLogout} className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors">
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
-          <span className="text-xs font-medium">Logout</span>
+          <span className="text-xs font-medium">{t('settings.sidebar.logout', 'Logout')}</span>
         </button>
-        <span className="text-gray-400 text-xs font-medium">Settings</span>
+        <span className="text-gray-400 text-xs font-medium">{t('settings.sidebar.title', 'Settings')}</span>
       </div>
 
       {/* Back */}
       <div className="px-4 py-3 border-b border-white/10">
         <button onClick={onBack} className="flex items-center space-x-2 text-gray-300 hover:text-white transition-colors">
           <ArrowLeftIcon className="w-4 h-4" />
-          <span className="text-sm font-medium">Back to Dashboard</span>
+          <span className="text-sm font-medium">{t('settings.sidebar.backToDashboard', 'Back to Dashboard')}</span>
         </button>
       </div>
 

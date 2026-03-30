@@ -1,4 +1,8 @@
+'use client'
+
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
 
 interface CTASectionProps {
   title?: string
@@ -19,6 +23,14 @@ export default function CTASection({
   secondaryLink,
   variant = 'default'
 }: CTASectionProps) {
+  const pathname = usePathname()
+  const locale = getLocaleFromPathname(pathname || '/')
+  const localizeHref = (href: string) => {
+    if (href.startsWith('https://app.pathpilo.com/')) return withAppLanguageParam(locale, href)
+    if (href.startsWith('/')) return withLocalePath(locale, href)
+    return href
+  }
+
   const bgClass = variant === 'accent' 
     ? 'bg-gradient-to-br from-accent-500 to-accent-600' 
     : 'bg-gradient-to-br from-primary-50 to-white'
@@ -36,11 +48,11 @@ export default function CTASection({
           {subtitle}
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-          <Link href={primaryLink} className="btn-primary text-lg px-8 py-4">
+          <Link href={localizeHref(primaryLink)} className="btn-primary text-lg px-8 py-4">
             {primaryCTA}
           </Link>
           {secondaryCTA && secondaryLink && (
-            <Link href={secondaryLink} className={`${variant === 'accent' ? 'btn-outline border-white text-white hover:bg-white hover:text-accent-600' : 'btn-secondary'} text-lg px-8 py-4`}>
+            <Link href={localizeHref(secondaryLink)} className={`${variant === 'accent' ? 'btn-outline border-white text-white hover:bg-white hover:text-accent-600' : 'btn-secondary'} text-lg px-8 py-4`}>
               {secondaryCTA}
             </Link>
           )}

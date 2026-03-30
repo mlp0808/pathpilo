@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import { getCountryRule } from '../config/countryRules'
+import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
+import { useAppI18n } from './I18nProvider'
 
 interface Service {
   id: number
@@ -19,6 +22,7 @@ interface EditServiceModalProps {
 }
 
 export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, service }: EditServiceModalProps) {
+  const { t } = useAppI18n()
   const [currentService, setCurrentService] = useState({
     title: '',
     price: '',
@@ -27,6 +31,9 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  const companyCountryCode = useCompanyCountryCode()
+  const priceCurrency = getCountryRule(companyCountryCode).defaultCurrency
 
   // Initialize form when service changes
   useEffect(() => {
@@ -92,10 +99,10 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
         onServiceUpdated()
         onClose()
       } else {
-        setError(data.error || 'Failed to update service')
+        setError(data.error || t('app.services.errUpdate', 'Failed to update service'))
       }
     } catch (error) {
-      setError('Network error: Failed to update service')
+      setError(t('app.services.errNetworkUpdate', 'Network error: Failed to update service'))
       console.error('Service update error:', error)
     } finally {
       setIsSubmitting(false)
@@ -134,7 +141,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
           {/* Service Title */}
           <div>
             <label htmlFor="title" className="block text-sm font-medium text-gray-900 mb-2">
-              Service title <span className="text-red-500">*</span>
+              {t('app.services.serviceTitle', 'Service title')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -144,14 +151,14 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               onChange={handleInputChange}
               required
               className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-              placeholder="e.g. Window Cleaning"
+              placeholder={t('app.services.placeholderTitle', 'e.g. Window Cleaning')}
             />
           </div>
 
           {/* Price */}
           <div>
             <label htmlFor="price" className="block text-sm font-medium text-gray-900 mb-2">
-              Price (DKK) <span className="text-red-500">*</span>
+              {t('app.services.priceLabel', 'Price')} ({priceCurrency}) <span className="text-red-500">*</span>
             </label>
             <input
               type="number"
@@ -163,7 +170,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               min="0"
               step="0.01"
               className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-              placeholder="e.g. 150"
+              placeholder={t('app.services.placeholderPrice', 'e.g. 150')}
             />
           </div>
 
@@ -171,7 +178,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label htmlFor="duration_hours" className="block text-sm font-medium text-gray-900 mb-2">
-                Hours <span className="text-red-500">*</span>
+                {t('app.services.hours', 'Hours')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -182,12 +189,12 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
                 required
                 min="0"
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="e.g. 1"
+                placeholder={t('app.services.placeholderHours', 'e.g. 1')}
               />
             </div>
             <div>
               <label htmlFor="duration_minutes" className="block text-sm font-medium text-gray-900 mb-2">
-                Minutes <span className="text-red-500">*</span>
+                {t('app.services.minutes', 'Minutes')} <span className="text-red-500">*</span>
               </label>
               <input
                 type="number"
@@ -199,7 +206,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
                 min="0"
                 max="59"
                 className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                placeholder="e.g. 30"
+                placeholder={t('app.services.placeholderMinutes', 'e.g. 30')}
               />
             </div>
           </div>
@@ -218,7 +225,7 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               onClick={handleCancel}
               className="flex-1 bg-gray-100 text-gray-700 py-3 px-6 rounded-lg text-sm font-semibold hover:bg-gray-200 focus:ring-2 focus:ring-gray-500/20 focus:ring-offset-2 transition-all duration-200"
             >
-              Cancel
+              {t('app.services.cancel', 'Cancel')}
             </button>
             <button
               type="submit"
@@ -228,10 +235,10 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
               {isSubmitting ? (
                 <span className="flex items-center justify-center space-x-2">
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  <span>Updating...</span>
+                  <span>{t('app.services.updating', 'Updating...')}</span>
                 </span>
               ) : (
-                'Update Service'
+                t('app.services.update', 'Update Service')
               )}
             </button>
           </div>

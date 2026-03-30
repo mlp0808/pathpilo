@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
+import { getCountryRule } from '@/app/config/countryRules'
 import Link from 'next/link'
 import { ArrowLeftIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 
@@ -67,6 +68,24 @@ function NewInvoicePageContent() {
     show_completed_date: false,
     discounts: {} as Record<string, number>,
   })
+  const countryCode = useMemo(() => {
+    if (typeof window === 'undefined') return 'DK'
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}')
+      return user?.activeCompany?.countryCode || 'DK'
+    } catch {
+      return 'DK'
+    }
+  }, [])
+  const countryRule = useMemo(() => getCountryRule(countryCode), [countryCode])
+
+  useEffect(() => {
+    setForm((prev) => ({
+      ...prev,
+      tax_rate: countryRule.defaultTaxRate,
+      currency: countryRule.defaultCurrency || prev.currency,
+    }))
+  }, [countryRule.defaultCurrency, countryRule.defaultTaxRate])
 
   const due_date = useMemo(() => {
     const d = new Date(form.issue_date)
@@ -282,10 +301,12 @@ function NewInvoicePageContent() {
                         <option value="EUR">EUR</option>
                         <option value="USD">USD</option>
                         <option value="GBP">GBP</option>
+                        <option value="SEK">SEK</option>
+                        <option value="NOK">NOK</option>
                       </select>
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">Tax rate (%)</label>
+                      <label className="mb-1.5 block text-sm font-medium text-gray-700">{countryRule.taxLabel} (%)</label>
                       <input
                         type="number"
                         min={0}
@@ -469,7 +490,7 @@ function NewInvoicePageContent() {
                       </div>
                       {form.tax_rate > 0 && (
                         <div className="flex justify-between text-gray-600">
-                          <span>Tax ({form.tax_rate}%)</span>
+                          <span>{countryRule.taxLabel} ({form.tax_rate}%)</span>
                           <span>{formatMoney(taxAmount, form.currency)}</span>
                         </div>
                       )}

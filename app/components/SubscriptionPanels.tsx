@@ -7,13 +7,12 @@
 
 import { CheckCircleIcon, CalendarDaysIcon } from '@heroicons/react/24/outline'
 import {
-  DAY_NAMES,
   ordinal,
   fmtDate,
   fmtMoney,
-  SelectedService,
   ScheduleState,
 } from '../utils/subscriptionHelpers'
+import { useAppI18n } from './I18nProvider'
 
 // ─────────────────────────────────────────────────────────────
 //  SchedulePanel
@@ -27,11 +26,11 @@ interface SchedulePanelProps extends ScheduleState {
   onCustomIntervalChange: (v: string) => void
   onDayOfMonthChange: (v: number) => void
   onIntervalMonthsChange: (v: number) => void
-  // summary stats (optional — only shown when services are selected)
   pricePerVisit?: number
   durationPerVisit?: number
   visitsPerYear?: number
   revenuePerYear?: number
+  countryCode?: string
 }
 
 export function SchedulePanel({
@@ -43,14 +42,36 @@ export function SchedulePanel({
   dayOfMonth, onDayOfMonthChange,
   intervalMonths, onIntervalMonthsChange,
   pricePerVisit = 0, durationPerVisit = 0, visitsPerYear = 0, revenuePerYear = 0,
+  countryCode = 'DK',
 }: SchedulePanelProps) {
+  const { t, locale } = useAppI18n()
   const hasStats = pricePerVisit > 0 || durationPerVisit > 0
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
+  const weekDayNames = Array.from({ length: 7 }).map((_, idx) =>
+    new Date(2024, 0, 7 + idx).toLocaleDateString(dateLocale, { weekday: 'long' })
+  )
+  const weekDayShort = Array.from({ length: 7 }).map((_, idx) =>
+    new Date(2024, 0, 7 + idx).toLocaleDateString(dateLocale, { weekday: 'short' })
+  )
+
+  const weeklyPreview =
+    intervalWeeks === 1
+      ? t('app.subscription.schedule.previewWeeklyOnDay').replace('{{day}}', weekDayNames[dayOfWeek])
+      : t('app.subscription.schedule.previewEveryNWeeksOnDay')
+          .replace('{{n}}', String(intervalWeeks))
+          .replace('{{day}}', weekDayNames[dayOfWeek])
+
+  const monthlyPreview =
+    intervalMonths === 1
+      ? t('app.subscription.schedule.previewMonthlyOrdinal').replace('{{ordinal}}', ordinal(dayOfMonth))
+      : t('app.subscription.schedule.previewEveryNMonthsOrdinal')
+          .replace('{{n}}', String(intervalMonths))
+          .replace('{{ordinal}}', ordinal(dayOfMonth))
 
   return (
     <div className="space-y-5">
-      {/* Starting date */}
       <div>
-        <label className="block text-xs font-semibold text-primary-700 mb-2">Starting date *</label>
+        <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.startingDate')}</label>
         <input
           type="date"
           value={startingDate}
@@ -58,13 +79,12 @@ export function SchedulePanel({
           className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
         />
         <p className="text-xs text-gray-400 mt-1.5">
-          Jobs are generated from this date onward based on the schedule below.
+          {t('app.subscription.schedule.startingDateHelp')}
         </p>
       </div>
 
-      {/* Recurrence type toggle */}
       <div>
-        <label className="block text-xs font-semibold text-primary-700 mb-2">Recurrence type</label>
+        <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.recurrenceType')}</label>
         <div className="flex gap-2">
           {(['weekly', 'monthly'] as const).map(type => (
             <button
@@ -77,19 +97,18 @@ export function SchedulePanel({
                   : 'bg-white border-gray-200 text-gray-600 hover:border-primary-300 hover:text-primary-600'
               }`}
             >
-              {type === 'weekly' ? 'Weekly' : 'Monthly'}
+              {type === 'weekly' ? t('app.subscription.schedule.weekly') : t('app.subscription.schedule.monthly')}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ── WEEKLY controls ── */}
       {recurrenceType === 'weekly' && (
         <>
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">Day of week</label>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.dayOfWeek')}</label>
             <div className="grid grid-cols-7 gap-1">
-              {DAY_NAMES.map((name, idx) => (
+              {weekDayShort.map((name, idx) => (
                 <button
                   key={idx}
                   type="button"
@@ -107,7 +126,7 @@ export function SchedulePanel({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">Repeat every</label>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.repeatEvery')}</label>
             <div className="grid grid-cols-3 gap-2">
               {[1, 2, 3, 4, 6].map(n => (
                 <button
@@ -120,10 +139,9 @@ export function SchedulePanel({
                       : 'bg-white border-gray-200 text-gray-700 hover:border-accent-300 hover:text-accent-600'
                   }`}
                 >
-                  {n === 1 ? 'Weekly' : `${n} weeks`}
+                  {n === 1 ? t('app.subscription.schedule.weeklyShort') : t('app.subscription.schedule.nWeeks').replace('{{n}}', String(n))}
                 </button>
               ))}
-              {/* Custom input in the 6th slot */}
               <div className={`flex items-center gap-1.5 rounded-xl border px-3 transition-all ${
                 customInterval
                   ? 'border-accent-500 bg-accent-50 shadow-md shadow-accent-500/20'
@@ -140,14 +158,14 @@ export function SchedulePanel({
                     const num = parseInt(v)
                     if (!isNaN(num) && num > 0) onIntervalWeeksChange(num)
                   }}
-                  placeholder="Custom"
+                  placeholder={t('app.subscription.schedule.customPlaceholder')}
                   className={`w-full py-2 text-sm font-semibold bg-transparent focus:outline-none text-center ${
                     customInterval ? 'text-accent-600' : 'text-gray-500'
                   }`}
                 />
                 {customInterval && (
                   <span className="text-xs text-accent-600 font-medium whitespace-nowrap">
-                    wk{parseInt(customInterval) > 1 ? 's' : ''}
+                    {parseInt(customInterval) > 1 ? t('app.subscription.schedule.wks') : t('app.subscription.schedule.wk')}
                   </span>
                 )}
               </div>
@@ -156,11 +174,10 @@ export function SchedulePanel({
         </>
       )}
 
-      {/* ── MONTHLY controls ── */}
       {recurrenceType === 'monthly' && (
         <>
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">Day of month</label>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.dayOfMonth')}</label>
             <div className="grid grid-cols-7 gap-1">
               {Array.from({ length: 28 }, (_, i) => i + 1).map(day => (
                 <button
@@ -178,12 +195,12 @@ export function SchedulePanel({
               ))}
             </div>
             <p className="text-xs text-gray-400 mt-1.5">
-              Days 29–31 are clamped to the last day of shorter months.
+              {t('app.subscription.schedule.dayOfMonthHelp')}
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">Repeat every</label>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.repeatEvery')}</label>
             <div className="grid grid-cols-3 gap-2">
               {[1, 2, 3].map(n => (
                 <button
@@ -196,10 +213,9 @@ export function SchedulePanel({
                       : 'bg-white border-gray-200 text-gray-700 hover:border-accent-300 hover:text-accent-600'
                   }`}
                 >
-                  {n === 1 ? 'Monthly' : n === 2 ? 'Every 2 mo.' : 'Quarterly'}
+                  {n === 1 ? t('app.subscription.schedule.monthly') : n === 2 ? t('app.subscription.schedule.every2mo') : t('app.subscription.schedule.quarterly')}
                 </button>
               ))}
-              {/* Custom — full width */}
               <div className={`col-span-3 flex items-center gap-1 rounded-xl border px-3 transition-all ${
                 customInterval
                   ? 'border-accent-500 bg-accent-50'
@@ -216,14 +232,14 @@ export function SchedulePanel({
                     const num = parseInt(v)
                     if (!isNaN(num) && num > 0) onIntervalMonthsChange(num)
                   }}
-                  placeholder="Custom — type any number of months"
+                  placeholder={t('app.subscription.schedule.customMonthsPlaceholder')}
                   className={`w-full py-2.5 text-sm font-semibold bg-transparent focus:outline-none ${
                     customInterval ? 'text-accent-600' : 'text-gray-400'
                   }`}
                 />
                 {customInterval && (
                   <span className="text-xs text-accent-600 font-medium whitespace-nowrap">
-                    month{parseInt(customInterval) > 1 ? 's' : ''}
+                    {parseInt(customInterval) > 1 ? t('app.subscription.schedule.months') : t('app.subscription.schedule.month')}
                   </span>
                 )}
               </div>
@@ -232,33 +248,29 @@ export function SchedulePanel({
         </>
       )}
 
-      {/* Preview card */}
       <div className="bg-gradient-to-br from-accent-50/60 to-white rounded-2xl p-5 border-2 border-accent-200/40 shadow-sm">
-        <div className="text-xs font-bold text-accent-600 uppercase tracking-wider mb-3">Schedule preview</div>
+        <div className="text-xs font-bold text-accent-600 uppercase tracking-wider mb-3">{t('app.subscription.schedule.schedulePreview')}</div>
         <div className="space-y-2">
           <div className="text-base font-bold text-primary-800">
-            {recurrenceType === 'weekly'
-              ? `Every ${intervalWeeks > 1 ? `${intervalWeeks} weeks` : 'week'} on ${DAY_NAMES[dayOfWeek]}`
-              : `Every ${intervalMonths > 1 ? `${intervalMonths} months` : 'month'} on the ${ordinal(dayOfMonth)}`
-            }
+            {recurrenceType === 'weekly' ? weeklyPreview : monthlyPreview}
           </div>
           {startingDate ? (
             <div className="text-sm text-primary-600 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-accent-500 inline-block" />
-              Starting{' '}
-              {new Date(startingDate).toLocaleDateString('en-GB', {
+              {t('app.subscription.schedule.starting')}{' '}
+              {new Date(startingDate).toLocaleDateString(dateLocale, {
                 weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
               })}
             </div>
           ) : (
-            <div className="text-sm text-gray-400 italic">Choose a starting date above</div>
+            <div className="text-sm text-gray-400 italic">{t('app.subscription.schedule.chooseStartingDate')}</div>
           )}
           {hasStats && (
             <div className="mt-3 pt-3 border-t border-accent-200/40 flex flex-wrap gap-4 text-xs text-gray-500">
-              <span><span className="font-semibold text-primary-700">{fmtMoney(pricePerVisit)}</span> per visit</span>
-              <span><span className="font-semibold text-primary-700">{durationPerVisit} min</span> per visit</span>
-              <span><span className="font-semibold text-primary-700">~{visitsPerYear}×</span> per year</span>
-              <span><span className="font-semibold text-primary-700">{fmtMoney(revenuePerYear)}</span> annual revenue</span>
+              <span><span className="font-semibold text-primary-700">{fmtMoney(pricePerVisit, countryCode)}</span> {t('app.subscription.schedule.perVisitStat')}</span>
+              <span><span className="font-semibold text-primary-700">{durationPerVisit} {t('app.subscription.schedule.minPerVisit')}</span> {t('app.subscription.schedule.perVisitStat')}</span>
+              <span><span className="font-semibold text-primary-700">~{visitsPerYear}×</span> {t('app.subscription.schedule.perYearStat')}</span>
+              <span><span className="font-semibold text-primary-700">{fmtMoney(revenuePerYear, countryCode)}</span> {t('app.subscription.schedule.annualRevenue')}</span>
             </div>
           )}
         </div>
@@ -283,6 +295,7 @@ interface ForecastPanelProps {
   selectedUser: { first_name: string; last_name: string } | null
   timeFrom: string
   timeTo: string
+  countryCode?: string
 }
 
 export function ForecastPanel({
@@ -297,18 +310,23 @@ export function ForecastPanel({
   selectedUser,
   timeFrom,
   timeTo,
+  countryCode = 'DK',
 }: ForecastPanelProps) {
+  const { t, locale } = useAppI18n()
   const priceChanged = Math.abs(pricePerVisit - originalPricePerVisit) > 0.01
+  const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
+  const weekDayNames = Array.from({ length: 7 }).map((_, idx) =>
+    new Date(2024, 0, 7 + idx).toLocaleDateString(dateLocale, { weekday: 'long' })
+  )
 
   return (
     <div className="space-y-5">
-      {/* Stats banner */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Per visit', value: fmtMoney(pricePerVisit) },
-          { label: 'Duration', value: `${durationPerVisit} min` },
-          { label: 'Visits / year', value: `~${visitsPerYear}` },
-          { label: 'Annual value', value: fmtMoney(revenuePerYear) },
+          { label: t('app.subscription.forecast.perVisit'), value: fmtMoney(pricePerVisit, countryCode) },
+          { label: t('app.subscription.forecast.duration'), value: `${durationPerVisit} ${t('app.subscription.schedule.minPerVisit')}` },
+          { label: t('app.subscription.forecast.visitsPerYear'), value: `~${visitsPerYear}` },
+          { label: t('app.subscription.forecast.annualValue'), value: fmtMoney(revenuePerYear, countryCode) },
         ].map(stat => (
           <div key={stat.label} className="bg-white rounded-2xl border border-gray-200 px-4 py-3 text-center shadow-sm">
             <div className="text-xs text-gray-400 mb-1">{stat.label}</div>
@@ -317,28 +335,25 @@ export function ForecastPanel({
         ))}
       </div>
 
-      {/* Price change notice */}
       {priceChanged && originalPricePerVisit > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
           <span className="text-amber-500 text-lg leading-none mt-0.5">⚡</span>
           <div>
-            <div className="font-semibold text-amber-800">Price change detected</div>
+            <div className="font-semibold text-amber-800">{t('app.subscription.forecast.priceChangeTitle')}</div>
             <div className="text-amber-700 text-xs mt-0.5">
-              From <strong>{fmtMoney(originalPricePerVisit)}</strong> →{' '}
-              <strong>{fmtMoney(pricePerVisit)}</strong> per visit.
-              All future jobs will reflect the new price. Past completed jobs are unchanged.
+              {t('app.subscription.forecast.priceChangeBody')
+                .replace('{{from}}', fmtMoney(originalPricePerVisit, countryCode))
+                .replace('{{to}}', fmtMoney(pricePerVisit, countryCode))}
             </div>
           </div>
         </div>
       )}
 
-      {/* Timeline */}
       <div className="space-y-1">
-        {/* Past jobs */}
         {pastJobs.length > 0 && (
           <>
             <div className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1 pt-1 pb-2">
-              Past jobs (last {pastJobs.length})
+              {t('app.subscription.forecast.pastJobs').replace('{{n}}', String(pastJobs.length))}
             </div>
             {pastJobs.map((job: any, i: number) => {
               const d = new Date(job.scheduled_date)
@@ -352,10 +367,10 @@ export function ForecastPanel({
                     <div className="text-xs text-gray-400">{fmtDate(d)}</div>
                   </div>
                   <div className="text-sm font-semibold text-gray-400 flex-shrink-0">
-                    {job.total_price ? fmtMoney(job.total_price) : '—'}
+                    {job.total_price ? fmtMoney(job.total_price, countryCode) : '—'}
                   </div>
                   <span className="text-[10px] font-semibold px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full flex-shrink-0">
-                    Done
+                    {t('app.subscription.forecast.done')}
                   </span>
                 </div>
               )
@@ -363,22 +378,20 @@ export function ForecastPanel({
           </>
         )}
 
-        {/* Today divider */}
         {forecastDates.length > 0 && (
           <div className="flex items-center gap-3 py-2">
             <div className="flex-1 h-px bg-primary-200" />
             <span className="text-xs font-bold text-primary-500 px-2 py-0.5 bg-primary-50 border border-primary-200 rounded-full whitespace-nowrap">
-              {pastJobs.length > 0 ? 'Today – changes take effect from here' : 'Upcoming jobs'}
+              {pastJobs.length > 0 ? t('app.subscription.forecast.dividerToday') : t('app.subscription.forecast.dividerUpcoming')}
             </span>
             <div className="flex-1 h-px bg-primary-200" />
           </div>
         )}
 
-        {/* Future projected */}
         {forecastDates.length > 0 ? (
           <>
             <div className="text-xs font-bold text-primary-700 uppercase tracking-wider px-1 pt-1 pb-2">
-              Next {forecastDates.length} projected jobs
+              {t('app.subscription.forecast.nextProjected').replace('{{n}}', String(forecastDates.length))}
             </div>
             {forecastDates.map((date, i) => {
               const isNext = i === 0
@@ -391,19 +404,18 @@ export function ForecastPanel({
                       : 'bg-white border-gray-100 hover:border-accent-200 hover:bg-accent-50/30'
                   }`}
                 >
-                  {/* Date block */}
                   <div className={`w-10 text-center flex-shrink-0 ${isNext ? 'text-accent-600' : 'text-gray-400'}`}>
                     <div className="text-[10px] font-bold uppercase">
-                      {date.toLocaleDateString('en-GB', { month: 'short' })}
+                      {date.toLocaleDateString(dateLocale, { month: 'short' })}
                     </div>
                     <div className="text-lg font-extrabold leading-none">{date.getDate()}</div>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm font-semibold truncate ${isNext ? 'text-primary-700' : 'text-primary-600'}`}>
-                      {subscriptionTitle || 'Subscription job'}
+                      {subscriptionTitle || t('app.subscription.forecast.subscriptionJob')}
                     </div>
                     <div className="text-xs text-gray-400">
-                      {DAY_NAMES[date.getDay()]}
+                      {weekDayNames[date.getDay()]}
                       {timeFrom ? ` · ${timeFrom}${timeTo ? ` – ${timeTo}` : ''}` : ''}
                     </div>
                   </div>
@@ -414,11 +426,11 @@ export function ForecastPanel({
                       </span>
                     )}
                     <div className={`text-sm font-bold ${isNext ? 'text-accent-600' : 'text-primary-700'}`}>
-                      {fmtMoney(pricePerVisit)}
+                      {fmtMoney(pricePerVisit, countryCode)}
                     </div>
                     {isNext && (
                       <span className="text-[10px] font-bold px-2 py-0.5 bg-accent-500 text-white rounded-full">
-                        Next
+                        {t('app.subscription.forecast.next')}
                       </span>
                     )}
                   </div>
@@ -430,7 +442,7 @@ export function ForecastPanel({
           <div className="text-center py-12 text-gray-400">
             <CalendarDaysIcon className="w-10 h-10 mx-auto mb-3 opacity-30" />
             <p className="text-sm font-medium">
-              Set a starting date in the Schedule tab to see the forecast
+              {t('app.subscription.forecast.emptyHint')}
             </p>
           </div>
         )}

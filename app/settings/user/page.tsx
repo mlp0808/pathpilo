@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useUser } from '../../hooks/useUser'
 import { UserIcon, PencilIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
+import { useAppI18n } from '../../components/I18nProvider'
 
 interface UserProfile {
   firstName: string
@@ -11,10 +12,12 @@ interface UserProfile {
   email: string
   role: string
   companyName: string
+  languageCode: 'en' | 'da'
 }
 
 export default function UserSettingsPage() {
   const { user } = useUser()
+  const { t, locale, setLocale } = useAppI18n()
   const [isEditing, setIsEditing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -24,7 +27,8 @@ export default function UserSettingsPage() {
     lastName: '',
     email: '',
     role: '',
-    companyName: ''
+    companyName: '',
+    languageCode: 'en'
   })
 
   useEffect(() => {
@@ -34,7 +38,8 @@ export default function UserSettingsPage() {
         lastName: user.lastName || '',
         email: user.email || '',
         role: user.role || '',
-        companyName: user.companyName || ''
+        companyName: user.companyName || '',
+        languageCode: (user as any).languageCode === 'da' ? 'da' : 'en',
       })
     }
   }, [user])
@@ -64,7 +69,8 @@ export default function UserSettingsPage() {
         body: JSON.stringify({
           firstName: formData.firstName,
           lastName: formData.lastName,
-          email: formData.email
+          email: formData.email,
+          languageCode: formData.languageCode,
         })
       })
 
@@ -74,10 +80,18 @@ export default function UserSettingsPage() {
         throw new Error(data.error || 'Failed to update profile')
       }
 
-      // Update localStorage with new user data
-      localStorage.setItem('user', JSON.stringify(data.user))
+      // Merge profile fields into stored user — API returns only id/name/email/language/role,
+      // not companies/activeCompany; replacing the whole object would trigger setup redirect.
+      try {
+        const existingRaw = localStorage.getItem('user')
+        const existing = existingRaw ? JSON.parse(existingRaw) : {}
+        localStorage.setItem('user', JSON.stringify({ ...existing, ...data.user }))
+      } catch {
+        localStorage.setItem('user', JSON.stringify(data.user))
+      }
+      setLocale(formData.languageCode)
       
-      setSuccess('Profile updated successfully!')
+      setSuccess(t('settings.user.updateSuccess', 'Profile updated successfully!'))
       setIsEditing(false)
       
       // Refresh the page after a short delay to update the user context
@@ -99,7 +113,8 @@ export default function UserSettingsPage() {
         lastName: user.lastName || '',
         email: user.email || '',
         role: user.role || '',
-        companyName: user.companyName || ''
+        companyName: user.companyName || '',
+        languageCode: (user as any).languageCode === 'da' ? 'da' : 'en',
       })
     }
     setIsEditing(false)
@@ -113,7 +128,7 @@ export default function UserSettingsPage() {
         <div className="max-w-4xl mx-auto">
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-gray-600">Loading user data...</p>
+            <p className="mt-2 text-gray-600">{t('settings.user.loading', 'Loading user data...')}</p>
           </div>
         </div>
       </div>
@@ -124,8 +139,8 @@ export default function UserSettingsPage() {
     <div className="p-6">
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">User Settings</h1>
-          <p className="text-gray-600 mt-2">Manage your personal information and preferences.</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t('settings.user.title', 'User Settings')}</h1>
+          <p className="text-gray-600 mt-2">{t('settings.user.subtitle', 'Manage your personal information and preferences.')}</p>
         </div>
 
         {/* Success Message */}
@@ -150,8 +165,8 @@ export default function UserSettingsPage() {
                 <UserIcon className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Personal Information</h2>
-                <p className="text-sm text-gray-500">Update your personal details</p>
+                <h2 className="text-lg font-semibold text-gray-900">{t('settings.user.personalInformation', 'Personal Information')}</h2>
+                <p className="text-sm text-gray-500">{t('settings.user.personalInformationHelp', 'Update your personal details')}</p>
               </div>
             </div>
             
@@ -161,7 +176,7 @@ export default function UserSettingsPage() {
                 className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
               >
                 <PencilIcon className="w-4 h-4 mr-2" />
-                Edit
+                {t('settings.user.edit', 'Edit')}
               </button>
             )}
           </div>
@@ -172,7 +187,7 @@ export default function UserSettingsPage() {
               {/* First Name */}
               <div>
                 <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
-                  First Name
+                  {t('settings.user.firstName', 'First Name')}
                 </label>
                 <input
                   type="text"
@@ -193,7 +208,7 @@ export default function UserSettingsPage() {
               {/* Last Name */}
               <div>
                 <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
-                  Last Name
+                  {t('settings.user.lastName', 'Last Name')}
                 </label>
                 <input
                   type="text"
@@ -214,7 +229,7 @@ export default function UserSettingsPage() {
               {/* Email */}
               <div>
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address
+                  {t('settings.user.email', 'Email Address')}
                 </label>
                 <input
                   type="email"
@@ -235,7 +250,7 @@ export default function UserSettingsPage() {
               {/* Role (Read-only) */}
               <div>
                 <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
-                  Role
+                  {t('settings.user.role', 'Role')}
                 </label>
                 <input
                   type="text"
@@ -250,7 +265,7 @@ export default function UserSettingsPage() {
               {/* Company (Read-only) */}
               <div className="md:col-span-2">
                 <label htmlFor="companyName" className="block text-sm font-medium text-gray-700 mb-2">
-                  Company
+                  {t('settings.user.company', 'Company')}
                 </label>
                 <input
                   type="text"
@@ -260,6 +275,28 @@ export default function UserSettingsPage() {
                   disabled={true}
                   className="w-full px-3 py-2 border border-gray-200 bg-gray-50 text-gray-600 rounded-lg"
                 />
+              </div>
+
+              <div className="md:col-span-2">
+                <label htmlFor="languageCode" className="block text-sm font-medium text-gray-700 mb-2">
+                  {t('settings.user.language', 'Language')}
+                </label>
+                <select
+                  id="languageCode"
+                  name="languageCode"
+                  value={formData.languageCode}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, languageCode: e.target.value === 'da' ? 'da' : 'en' }))}
+                  disabled={!isEditing}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                    isEditing
+                      ? 'border-gray-300 bg-white'
+                      : 'border-gray-200 bg-gray-50 text-gray-600'
+                  }`}
+                >
+                  <option value="en">{t('settings.user.language.en', 'English')}</option>
+                  <option value="da">{t('settings.user.language.da', 'Danish')}</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500">{t('settings.user.languageHelp', 'Choose the language for your own interface.')}</p>
               </div>
             </div>
 
@@ -271,14 +308,14 @@ export default function UserSettingsPage() {
                   onClick={handleCancel}
                   className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
-                  Cancel
+                  {t('settings.user.cancel', 'Cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={loading}
                   className="px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {loading ? 'Saving...' : 'Save Changes'}
+                  {loading ? t('settings.user.saving', 'Saving...') : t('settings.user.save', 'Save Changes')}
                 </button>
               </div>
             )}

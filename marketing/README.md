@@ -1,81 +1,27 @@
-# PathPilo Marketing Website
+# PathPilo marketing site
 
-A standalone marketing website for PathPilo SaaS platform.
+## Dev & build (important)
 
-## 🚀 Quick Start
+Always run commands **from this folder** so Tailwind scans `marketing/app` and not the main app:
 
-### Prerequisites
-- Node.js 18+
-- npm or yarn
-
-### Installation
 ```bash
 cd marketing
 npm install
-```
-
-### Development
-```bash
-npm run dev
-```
-Open [http://localhost:3001](http://localhost:3001) in your browser.
-
-### Production Build
-```bash
+npm run dev    # http://localhost:3003
 npm run build
-npm start
 ```
 
-## 📁 Structure
+Or from the repo root: `npm run dev:marketing` / `npm run build:marketing`.
 
-```
-marketing/
-├── app/
-│   ├── layout.tsx          # Root layout
-│   ├── page.tsx           # Homepage
-│   ├── pricing/
-│   │   └── page.tsx       # Pricing page
-│   └── globals.css        # Global styles
-├── package.json
-├── tailwind.config.js
-├── next.config.js
-├── tsconfig.json
-└── README.md
-```
+If styles look “missing”, you’re usually building from the wrong directory or an old `.next` cache — run `rm -rf .next` (or delete `.next` on Windows) inside `marketing/`, then `npm run build` again.
 
-## 🔗 Links to SaaS App
+Tailwind is pinned via `postcss.config.js` → `marketing/tailwind.config.js` because the monorepo root has its own Tailwind config.
 
-All links to the SaaS application use `https://app.pathpilo.com/` URLs:
-- Login: `https://app.pathpilo.com/login`
-- Register: `https://app.pathpilo.com/register`
-- Dashboard: `https://app.pathpilo.com/dashboard`
+## Images (placeholders)
 
-## 🎨 Styling
+- **Config (paths only):** `app/config/marketingImages.ts`
+- **Files:** `public/images/` — see `public/images/README.md` and `manifest.json`
+- **Regenerate tiny placeholder PNGs:** `npm run placeholders`  
+  (Copies from `public/hero/` into the new layout when those files exist.)
 
-- **Framework**: Tailwind CSS
-- **Components**: Heroicons for icons
-- **Layout**: Responsive design with mobile-first approach
-
-## 🚀 Deployment
-
-Deploy to Vercel, Netlify, or any static hosting service:
-
-```bash
-npm run build
-# Deploy the .next folder
-```
-
-## 📝 Adding New Pages
-
-1. Create new folder in `app/`
-2. Add `page.tsx` file
-3. Update navigation links as needed
-
-Example:
-```
-app/
-├── about/
-│   └── page.tsx    # /about page
-└── contact/
-    └── page.tsx    # /contact page
-```
+Replace any file under `public/images/` with your final asset; **keep the same filename** so you don’t need to edit code.
