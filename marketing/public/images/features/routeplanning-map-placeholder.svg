@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <rect width="1600" height="1000" rx="28" fill="#ECFEFF"/>
+  <rect x="48" y="48" width="1504" height="904" rx="20" fill="#FFFFFF" stroke="#CFFAFE" stroke-width="4"/>
+  <rect x="96" y="96" width="360" height="780" rx="14" fill="#F8FAFC"/>
+  <rect x="486" y="96" width="1018" height="780" rx="14" fill="#E0F2FE"/>
+  <circle cx="620" cy="220" r="14" fill="#0EA5E9"/>
+  <circle cx="760" cy="310" r="14" fill="#0EA5E9"/>
+  <circle cx="900" cy="250" r="14" fill="#0EA5E9"/>
+  <circle cx="1060" cy="390" r="14" fill="#0EA5E9"/>
+  <circle cx="1190" cy="320" r="14" fill="#0EA5E9"/>
+  <circle cx="1320" cy="470" r="14" fill="#0EA5E9"/>
+  <circle cx="1430" cy="390" r="14" fill="#0EA5E9"/>
+  <path d="M620 220L760 310L900 250L1060 390L1190 320L1320 470L1430 390" stroke="#0284C7" stroke-width="7" stroke-linecap="round"/>
+  <path d="M620 420L760 530L900 470L1060 610L1190 540L1320 690L1430 610" stroke="#14B8A6" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="620" cy="420" r="14" fill="#2DD4BF"/>
+  <circle cx="760" cy="530" r="14" fill="#2DD4BF"/>
+  <circle cx="900" cy="470" r="14" fill="#2DD4BF"/>
+  <circle cx="1060" cy="610" r="14" fill="#2DD4BF"/>
+  <circle cx="1190" cy="540" r="14" fill="#2DD4BF"/>
+  <circle cx="1320" cy="690" r="14" fill="#2DD4BF"/>
+  <circle cx="1430" cy="610" r="14" fill="#2DD4BF"/>
+  <rect x="96" y="892" width="670" height="36" rx="10" fill="#E2E8F0"/>
+  <text x="120" y="930" fill="#475569" font-family="Arial, sans-serif" font-size="30">Map Route Comparison Placeholder</text>
+</svg>

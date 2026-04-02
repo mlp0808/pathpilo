@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <rect width="1600" height="1000" rx="28" fill="#0F2748"/>
+  <rect x="48" y="48" width="1504" height="904" rx="20" fill="#F8FAFC"/>
+  <rect x="96" y="96" width="520" height="52" rx="12" fill="#E2E8F0"/>
+  <rect x="96" y="166" width="420" height="28" rx="10" fill="#CBD5E1"/>
+  <rect x="96" y="220" width="660" height="640" rx="18" fill="#E2E8F0"/>
+  <rect x="790" y="96" width="710" height="764" rx="18" fill="#DBEAFE"/>
+  <circle cx="900" cy="220" r="16" fill="#0EA5E9"/>
+  <circle cx="1030" cy="330" r="16" fill="#0EA5E9"/>
+  <circle cx="1170" cy="260" r="16" fill="#0EA5E9"/>
+  <circle cx="1320" cy="400" r="16" fill="#0EA5E9"/>
+  <circle cx="1450" cy="300" r="16" fill="#0EA5E9"/>
+  <path d="M900 220L1030 330L1170 260L1320 400L1450 300" stroke="#0284C7" stroke-width="8" stroke-linecap="round"/>
+  <rect x="790" y="884" width="340" height="36" rx="10" fill="#BFDBFE"/>
+  <rect x="1144" y="884" width="356" height="36" rx="10" fill="#93C5FD"/>
+  <text x="120" y="935" fill="#475569" font-family="Arial, sans-serif" font-size="30">Routeplanning Hero Placeholder</text>
+</svg>

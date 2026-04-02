@@ -655,7 +655,7 @@ export default function DayRoutePanel({
   onJobCardHover,
   baselineMinutesByUser,
 }: DayRoutePanelProps) {
-  const { t } = useAppI18n()
+  const { t, locale } = useAppI18n()
   const focusedRoute = focusUserId != null ? routes.find(r => r.userId === focusUserId) : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)

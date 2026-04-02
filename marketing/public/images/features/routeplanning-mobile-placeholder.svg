@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <rect width="1600" height="1000" rx="28" fill="#F8FAFC"/>
+  <rect x="120" y="80" width="500" height="840" rx="44" fill="#0F172A"/>
+  <rect x="142" y="126" width="456" height="744" rx="30" fill="#FFFFFF"/>
+  <rect x="188" y="180" width="364" height="42" rx="10" fill="#CBD5E1"/>
+  <rect x="188" y="246" width="364" height="82" rx="12" fill="#DBEAFE"/>
+  <rect x="188" y="344" width="364" height="82" rx="12" fill="#DCFCE7"/>
+  <rect x="188" y="442" width="364" height="82" rx="12" fill="#FEE2E2"/>
+  <rect x="188" y="556" width="364" height="64" rx="10" fill="#0EA5E9"/>
+  <rect x="188" y="634" width="364" height="64" rx="10" fill="#1D4ED8"/>
+  <rect x="188" y="712" width="364" height="64" rx="10" fill="#14B8A6"/>
+  <rect x="720" y="120" width="760" height="760" rx="20" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="4"/>
+  <rect x="770" y="182" width="660" height="56" rx="10" fill="#E2E8F0"/>
+  <rect x="770" y="266" width="500" height="36" rx="10" fill="#CBD5E1"/>
+  <rect x="770" y="338" width="660" height="150" rx="14" fill="#EFF6FF"/>
+  <rect x="770" y="510" width="660" height="150" rx="14" fill="#F0FDF4"/>
+  <rect x="770" y="682" width="660" height="150" rx="14" fill="#FEF3C7"/>
+  <text x="770" y="928" fill="#475569" font-family="Arial, sans-serif" font-size="30">Employee Mobile Workflow Placeholder</text>
+</svg>

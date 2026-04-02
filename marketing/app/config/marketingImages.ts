@@ -9,8 +9,10 @@
 
 export const marketingImages = {
   brand: {
-    /** Header logo (replace with your full wordmark or mark) */
+    /** Header logo on light bar */
     logoHeader: '/images/brand/logo-header.png',
+    /** Header logo on dark/transparent bar (true white asset; do not CSS-invert) */
+    logoHeaderWhite: '/images/brand/logo-header-white.png',
     /** White footer logo for dark background footer */
     logoFooterWhite: '/images/brand/logo-footer-white.png',
   },

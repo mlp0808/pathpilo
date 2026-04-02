@@ -2,7 +2,16 @@ import type { MetadataRoute } from 'next'
 
 const SITE_URL = 'https://pathpilo.com'
 const LOCALES = ['en', 'da'] as const
-const ROUTES = ['', '/about', '/pricing', '/faq', '/contact'] as const
+const ROUTES = [
+  '',
+  '/about',
+  '/pricing',
+  '/faq',
+  '/contact',
+  '/features/routeplanning',
+  '/features/subscriptions',
+  '/features/team',
+] as const
 
 function absoluteUrl(path: string): string {
   return `${SITE_URL}${path}`

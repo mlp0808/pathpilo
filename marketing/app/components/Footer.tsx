@@ -54,6 +54,21 @@ export default function Footer() {
             <h3 className="font-semibold text-lg mb-4">{da ? 'Produkt' : 'Product'}</h3>
             <ul className="space-y-2">
               <li>
+                <Link href={navHref('/features/routeplanning')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Routeplanning' : 'Route Planning'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/subscriptions')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Abonnementsopgaver' : 'Subscription tasks'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/team')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Teamstyring' : 'Team management'}
+                </Link>
+              </li>
+              <li>
                 <Link href={navHref('/about')} className="text-gray-300 hover:text-white transition-colors">
                   {da ? 'Om os' : 'About'}
                 </Link>
