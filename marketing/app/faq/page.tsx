@@ -1,16 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
 import CTASection from '../components/CTASection'
 import { ChevronDownIcon } from '@heroicons/react/24/outline'
 import { getLocaleFromPathname, withLocalePath } from '../lib/i18n'
 
-export default function FAQPage() {
-  const pathname = usePathname()
-  const locale = getLocaleFromPathname(pathname || '/')
+type FAQPageProps = {
+  locale: 'en' | 'da'
+}
+
+export default function FAQPage({ locale }: FAQPageProps) {
   const da = locale === 'da'
   const [openIndex, setOpenIndex] = useState<number | null>(0)
 
