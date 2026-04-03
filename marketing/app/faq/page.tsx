@@ -1,6 +1,5 @@
 'use client'
 
-import type { Metadata } from 'next'
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
@@ -9,9 +8,9 @@ import CTASection from '../components/CTASection'
 import { ChevronDownIcon } from '@heroicons/react/24/outline'
 import { getLocaleFromPathname, withLocalePath } from '../lib/i18n'
 
-export default function FAQPage({ locale: localeProp }: { locale?: string }) {
+export default function FAQPage() {
   const pathname = usePathname()
-  const locale = localeProp || getLocaleFromPathname(pathname || '/')
+  const locale = getLocaleFromPathname(pathname || '/')
   const da = locale === 'da'
   const [openIndex, setOpenIndex] = useState<number | null>(0)
 
@@ -122,7 +121,6 @@ export default function FAQPage({ locale: localeProp }: { locale?: string }) {
   return (
     <>
       <Header />
-      
       {/* Hero Section */}
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">
         <div className="max-w-4xl mx-auto px-6 text-center">
@@ -152,9 +150,8 @@ export default function FAQPage({ locale: localeProp }: { locale?: string }) {
                     {faq.question}
                   </h3>
                   <ChevronDownIcon
-                    className={`w-6 h-6 text-gray-400 flex-shrink-0 transition-transform ${
-                      openIndex === index ? 'transform rotate-180' : ''
-                    }`}
+                    className={`w-6 h-6 text-gray-400 flex-shrink-0 transition-transform ${openIndex === index ? 'transform rotate-180' : ''
+                      }`}
                   />
                 </button>
                 {openIndex === index && (
@@ -184,7 +181,7 @@ export default function FAQPage({ locale: localeProp }: { locale?: string }) {
       </section>
 
       {/* CTA Section */}
-      <CTASection 
+      <CTASection
         title={da ? 'Klar til at komme i gang?' : 'Ready to Get Started?'}
         subtitle={da ? 'Bliv en del af hundredvis af servicevirksomheder, der bruger PathPilo til at effektivisere driften.' : 'Join hundreds of service businesses using PathPilo to streamline their operations.'}
         primaryCTA={da ? 'Kom i gang gratis' : 'Get Started Free'}
