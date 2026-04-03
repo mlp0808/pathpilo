@@ -627,6 +627,80 @@ async function createSchema() {
   `);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_invoice_transactions_invoice_id ON invoice_transactions(invoice_id);`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_public_tokens (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id) ON DELETE CASCADE,
+      token VARCHAR(128) NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_invoice_public_tokens_token ON invoice_public_tokens(token);`);
+
+  // Integrations foundation
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_registry (
+      id SERIAL PRIMARY KEY,
+      provider VARCHAR(100) UNIQUE NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS company_integrations (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      provider VARCHAR(100) NOT NULL REFERENCES integration_registry(provider) ON DELETE CASCADE,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(company_id, provider)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_events (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      provider VARCHAR(100) NOT NULL REFERENCES integration_registry(provider) ON DELETE CASCADE,
+      invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+      event_type VARCHAR(100) NOT NULL,
+      status_from VARCHAR(50),
+      status_to VARCHAR(50),
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      error_message TEXT,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_company_integrations_company_id ON company_integrations(company_id)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_integration_events_company_id ON integration_events(company_id, created_at DESC)`);
+
+  await safeQuery(`
+    INSERT INTO integration_registry (provider, title, description, capabilities, is_active)
+    VALUES (
+      'bank_transfer',
+      'Bank transfer',
+      'Accept invoice payments by manual bank transfer.',
+      '["invoice_payment"]'::jsonb,
+      TRUE
+    )
+    ON CONFLICT (provider) DO UPDATE SET
+      title = EXCLUDED.title,
+      description = EXCLUDED.description,
+      capabilities = EXCLUDED.capabilities,
+      is_active = EXCLUDED.is_active,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+
   // Backfill: one payment transaction for invoices that have paid_at/paid_amount but no transactions yet
   await safeQuery(`
     INSERT INTO invoice_transactions (invoice_id, type, amount, description, payment_source, transaction_date)
@@ -720,6 +794,8 @@ async function createSchema() {
     'jobs',
     'recurring_jobs',
     'invoices',
+    'integration_registry',
+    'company_integrations',
     'email_templates',
     'user_company_work_hours'
   ];
@@ -767,6 +843,10 @@ async function resetDatabase() {
 
   // Drop in dependency order (safe with CASCADE)
   const tablesToDrop = [
+    'integration_events',
+    'company_integrations',
+    'integration_registry',
+    'invoice_public_tokens',
     'invoice_items',
     'invoices',
     'email_templates',

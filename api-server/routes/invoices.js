@@ -1,8 +1,12 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 const { pool } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
+const { buildInvoiceCustomerEmailPayload, getWebAppBaseUrl } = require('../utils/invoiceEmail');
+const { resolveClientInvoiceContact } = require('../utils/invoiceClientDisplay');
+const { buildPublicInvoicePayload } = require('../utils/eInvoicePayload');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -32,7 +36,22 @@ const getActiveCompanyId = (req) => {
   return { companyId: activeCompanyId };
 };
 
-// GET /api/invoices - List all invoices for the active company
+const INVOICE_LIST_ALLOWED_STATUSES = new Set([
+  'draft',
+  'sent',
+  'overdue',
+  'paid',
+  'overpaid',
+  'cancelled',
+  'credited',
+]);
+
+function isoDateOnly(value) {
+  const t = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+}
+
+// GET /api/invoices - List all invoices for the active company (optional filters: dateFrom, dateTo on issue_date; status comma-separated; clientId)
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const companyAccess = getActiveCompanyId(req);
@@ -41,14 +60,57 @@ router.get('/', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    const { dateFrom, dateTo, status: statusParam, clientId: clientIdParam } = req.query;
+
+    const conditions = ['i.company_id = $1'];
+    const values = [companyId];
+
+    const df = isoDateOnly(dateFrom);
+    const dt = isoDateOnly(dateTo);
+    if (df) {
+      values.push(df);
+      conditions.push(`i.issue_date >= $${values.length}::date`);
+    }
+    if (dt) {
+      values.push(dt);
+      conditions.push(`i.issue_date <= $${values.length}::date`);
+    }
+
+    if (statusParam !== undefined && statusParam !== null && String(statusParam).trim() !== '') {
+      const raw = Array.isArray(statusParam) ? statusParam : String(statusParam).split(',');
+      const statuses = [
+        ...new Set(
+          raw
+            .map((s) => String(s).trim())
+            .filter((s) => INVOICE_LIST_ALLOWED_STATUSES.has(s)),
+        ),
+      ];
+      if (statuses.length > 0) {
+        values.push(statuses);
+        conditions.push(`i.status = ANY($${values.length}::text[])`);
+      }
+    }
+
+    if (clientIdParam !== undefined && clientIdParam !== null && String(clientIdParam).trim() !== '') {
+      const cid = parseInt(String(clientIdParam), 10);
+      if (!Number.isNaN(cid)) {
+        values.push(cid);
+        conditions.push(`i.client_id = $${values.length}`);
+      }
+    }
+
+    const whereClause = conditions.join(' AND ');
+
     let result;
     try {
-      result = await pool.query(`
+      result = await pool.query(
+        `
         SELECT
           i.id,
           i.invoice_number,
           i.title,
           i.client_id,
+          i.issue_date,
           i.due_date,
           i.total,
           i.currency,
@@ -58,17 +120,21 @@ router.get('/', authenticateToken, async (req, res) => {
           c.last_name as client_last_name
         FROM invoices i
         JOIN clients c ON i.client_id = c.id
-        WHERE i.company_id = $1
-        ORDER BY i.created_at DESC
-      `, [companyId]);
+        WHERE ${whereClause}
+        ORDER BY i.issue_date DESC NULLS LAST, i.created_at DESC
+      `,
+        values,
+      );
     } catch (colErr) {
       if (colErr.code === '42703') {
-        result = await pool.query(`
+        result = await pool.query(
+          `
           SELECT
             i.id,
             i.invoice_number,
             '' as title,
             i.client_id,
+            i.issue_date,
             i.due_date,
             i.total,
             i.currency,
@@ -78,15 +144,17 @@ router.get('/', authenticateToken, async (req, res) => {
             c.last_name as client_last_name
           FROM invoices i
           JOIN clients c ON i.client_id = c.id
-          WHERE i.company_id = $1
-          ORDER BY i.created_at DESC
-        `, [companyId]);
+          WHERE ${whereClause}
+          ORDER BY i.issue_date DESC NULLS LAST, i.created_at DESC
+        `,
+          values,
+        );
       } else {
         throw colErr;
       }
     }
 
-    const invoices = result.rows.map(row => ({
+    const invoices = result.rows.map((row) => ({
       ...row,
       client_name: [row.client_name, row.client_last_name].filter(Boolean).join(' ').trim() || '—',
     }));
@@ -141,10 +209,14 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     WHERE ii.invoice_id = $1
     ORDER BY ii.id ASC
   `, [invoiceId]);
+  const contact = resolveClientInvoiceContact(row);
   return {
     ...row,
     client_name,
     items: itemsResult.rows,
+    invoice_to_address: contact.addressLine,
+    invoice_to_email: contact.email,
+    invoice_to_phone: contact.phone,
   };
 }
 
@@ -214,17 +286,21 @@ function buildInvoicePdf(invoice) {
       doc.font('Helvetica-Bold').text(invoice.client_name || '—', margin, doc.y, { width: 260 });
       doc.font('Helvetica');
       doc.y += 6;
-      const addressLine = [invoice.address, invoice.zip_code, invoice.city].filter(Boolean).join(', ');
+      const addressLine =
+        (invoice.invoice_to_address && String(invoice.invoice_to_address).trim()) ||
+        [invoice.address, invoice.zip_code, invoice.city].filter(Boolean).join(', ');
       if (addressLine) {
         doc.fillColor(gray600).text(addressLine, margin, doc.y, { width: 260 });
         doc.y += 6;
       }
-      if (invoice.email) {
-        doc.text(invoice.email, margin, doc.y, { width: 260 });
+      const billEmail = invoice.invoice_to_email || invoice.email;
+      const billPhone = invoice.invoice_to_phone || invoice.phone;
+      if (billEmail) {
+        doc.text(billEmail, margin, doc.y, { width: 260 });
         doc.y += 5;
       }
-      if (invoice.phone) {
-        doc.text(invoice.phone, margin, doc.y, { width: 260 });
+      if (billPhone) {
+        doc.text(billPhone, margin, doc.y, { width: 260 });
         doc.y += 5;
       }
       const headerLeftEndY = doc.y;
@@ -378,6 +454,134 @@ router.get('/:invoiceId/pdf', authenticateToken, async (req, res) => {
   }
 });
 
+async function ensureInvoicePublicTokensTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_public_tokens (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id) ON DELETE CASCADE,
+      token VARCHAR(128) NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_invoice_public_tokens_token ON invoice_public_tokens(token);`);
+}
+
+async function getOrCreateInvoicePublicToken(invoiceId) {
+  await ensureInvoicePublicTokensTable();
+  const existing = await pool.query('SELECT token FROM invoice_public_tokens WHERE invoice_id = $1', [invoiceId]);
+  if (existing.rows.length > 0) {
+    return existing.rows[0].token;
+  }
+  const token = crypto.randomBytes(32).toString('base64url');
+  await pool.query('INSERT INTO invoice_public_tokens (invoice_id, token) VALUES ($1, $2)', [invoiceId, token]);
+  return token;
+}
+
+async function companyHasPaymentMethods(companyId) {
+  try {
+    const r = await pool.query(
+      `SELECT 1 FROM company_integrations WHERE company_id = $1 AND provider = 'bank_transfer' AND enabled = TRUE LIMIT 1`,
+      [companyId]
+    );
+    return r.rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function loadInvoiceForEInvoice(invoiceId, companyId) {
+  const loaded = await getInvoiceWithItems(invoiceId, companyId);
+  if (!loaded) return null;
+  const total = Number(loaded.total) || 0;
+  let transactions = [];
+  let balance = total;
+  try {
+    const transactionsResult = await pool.query(
+      `
+      SELECT id, type, amount, description, payment_source, transaction_date, created_at
+      FROM invoice_transactions
+      WHERE invoice_id = $1
+      ORDER BY transaction_date ASC, id ASC
+      `,
+      [invoiceId]
+    );
+    let sumCharges = 0;
+    let sumPayments = 0;
+    transactions = (transactionsResult.rows || []).map((t) => {
+      const amount = Number(t.amount) || 0;
+      if (t.type === 'charge') sumCharges += amount;
+      else if (t.type === 'payment') sumPayments += amount;
+      return {
+        id: t.id,
+        type: t.type,
+        amount,
+        description: t.description || '',
+        payment_source: t.payment_source || null,
+        transaction_date: t.transaction_date,
+        created_at: t.created_at,
+      };
+    });
+    balance = Math.round((total + sumCharges - sumPayments) * 100) / 100;
+  } catch (_) {
+    /* no table */
+  }
+  return { ...loaded, transactions, balance };
+}
+
+// POST /api/invoices/:invoiceId/online-link — create or return secure link for client-facing online invoice
+router.post('/:invoiceId/online-link', authenticateToken, async (req, res) => {
+  try {
+    await ensureInvoicePublicTokensTable();
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+
+    const inv = await pool.query(
+      'SELECT id, status FROM invoices WHERE id = $1 AND company_id = $2',
+      [invoiceId, companyId]
+    );
+    if (inv.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const invRow = inv.rows[0];
+    if ((invRow.status || 'draft') === 'draft') {
+      return res.status(400).json({
+        error:
+          'A public client link is only available after the invoice is sent. Use Preview e-invoice while the invoice is still in draft.',
+      });
+    }
+    if (!(await companyHasPaymentMethods(companyId))) {
+      return res.status(400).json({
+        error: 'Add at least one payment method in Extensions before sharing the online invoice.',
+      });
+    }
+
+    const existing = await pool.query(
+      'SELECT token FROM invoice_public_tokens WHERE invoice_id = $1',
+      [invoiceId]
+    );
+    let token;
+    if (existing.rows.length > 0) {
+      token = existing.rows[0].token;
+    } else {
+      token = crypto.randomBytes(32).toString('base64url');
+      await pool.query(
+        'INSERT INTO invoice_public_tokens (invoice_id, token) VALUES ($1, $2)',
+        [invoiceId, token]
+      );
+    }
+
+    const path = `/i/${token}`;
+    res.json({ path });
+  } catch (error) {
+    console.error('Error creating online invoice link:', error);
+    res.status(500).json({ error: 'Failed to create online invoice link' });
+  }
+});
+
 // POST /api/invoices/:invoiceId/send - Send invoice email to client
 router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
   try {
@@ -394,15 +598,31 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
-    const pdfBuffer = await buildInvoicePdf(invoice);
-    const filename = `invoice-${invoice.invoice_number || invoiceId}.pdf`;
+    if ((invoice.status || 'draft') === 'draft' && !(await companyHasPaymentMethods(companyAccess.companyId))) {
+      return res.status(400).json({
+        error: 'Configure at least one payment method in Extensions before sending an invoice.',
+      });
+    }
+    const token = await getOrCreateInvoicePublicToken(parseInt(invoiceId, 10));
+    const eInvoiceUrl = `${getWebAppBaseUrl()}/i/${token}`;
+    const coRow = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyAccess.companyId]);
+    const countryCode = coRow.rows[0]?.country_code || 'DK';
+    const messagePlain = text && String(text).trim() ? String(text).trim() : undefined;
+    const { html, text: textBody } = buildInvoiceCustomerEmailPayload({
+      invoice,
+      companyName: invoice.company_name || '',
+      countryCode,
+      eInvoiceUrl,
+      messagePlain,
+    });
     await sendEmail({
       to: to.trim(),
       cc: cc && String(cc).trim() ? String(cc).trim() : undefined,
       subject: (subject && String(subject).trim()) || `Invoice ${invoice.invoice_number || invoiceId}`,
-      text: text && String(text).trim() ? String(text).trim() : `Please find your invoice ${invoice.invoice_number || invoiceId} attached.`,
-      attachments: [{ filename, content: pdfBuffer, type: 'application/pdf' }],
+      text: textBody,
+      html,
       companyId: companyAccess.companyId,
+      fromName: invoice.company_name || undefined,
     });
     // Optionally mark as sent
     await pool.query(
@@ -416,6 +636,35 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/invoices/:invoiceId/e-invoice — same payload as public digital invoice (auth; for admin preview)
+router.get('/:invoiceId/e-invoice', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+
+    const row = await loadInvoiceForEInvoice(invoiceId, companyId);
+    if (!row) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const integ = await pool.query(
+      `SELECT provider, enabled, config FROM company_integrations WHERE company_id = $1 AND provider = 'bank_transfer'`,
+      [companyId]
+    );
+    const bankRow = integ.rows[0] || null;
+    const hasPaymentMethods = await companyHasPaymentMethods(companyId);
+    const publicInvoice = buildPublicInvoicePayload(row, bankRow);
+    res.json({ invoice: publicInvoice, hasPaymentMethods });
+  } catch (error) {
+    console.error('Error building e-invoice:', error);
+    res.status(500).json({ error: 'Failed to load invoice', details: error.message });
+  }
+});
+
 // GET /api/invoices/:invoiceId - Get single invoice with items
 router.get('/:invoiceId', authenticateToken, async (req, res) => {
   try {
@@ -426,55 +675,15 @@ router.get('/:invoiceId', authenticateToken, async (req, res) => {
     const companyId = companyAccess.companyId;
     const { invoiceId } = req.params;
 
-    const invoiceResult = await pool.query(`
-      SELECT i.*,
-             c.name,
-             c.last_name,
-             c.address,
-             c.zip_code,
-             c.city,
-             c.email,
-             c.phone,
-             c.billing_address,
-             c.billing_zip_code,
-             c.billing_city,
-             c.billing_email,
-             c.billing_phone,
-             co.name as company_name,
-             co.address as company_address,
-             co.city as company_city,
-             co.zip_code as company_zip_code,
-             co.cvr_number as company_cvr_number,
-             u.first_name as created_by_first_name,
-             u.last_name as created_by_last_name
-      FROM invoices i
-      JOIN clients c ON i.client_id = c.id
-      JOIN companies co ON i.company_id = co.id
-      LEFT JOIN users u ON i.created_by = u.id
-      WHERE i.id = $1 AND i.company_id = $2
-    `, [invoiceId, companyId]);
-
-    if (invoiceResult.rows.length === 0) {
+    const loaded = await getInvoiceWithItems(invoiceId, companyId);
+    if (!loaded) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    const row = invoiceResult.rows[0];
-    const client_name = [row.name, row.last_name].filter(Boolean).join(' ').trim() || '—';
+    const row = loaded;
     const created_by_name = row.created_by_first_name && row.created_by_last_name
       ? `${row.created_by_first_name} ${row.created_by_last_name}`
       : null;
-
-    const itemsResult = await pool.query(`
-      SELECT ii.*,
-             j.title as job_title,
-             j.updated_at as job_completed_date,
-             COALESCE(s.title, ii.description) as service_title
-      FROM invoice_items ii
-      JOIN jobs j ON ii.job_id = j.id
-      LEFT JOIN services s ON ii.service_id = s.id
-      WHERE ii.invoice_id = $1
-      ORDER BY ii.id ASC
-    `, [invoiceId]);
 
     const total = Number(row.total) || 0;
     let transactions = [];
@@ -509,9 +718,8 @@ router.get('/:invoiceId', authenticateToken, async (req, res) => {
 
     const invoice = {
       ...row,
-      client_name,
       created_by_name,
-      items: itemsResult.rows,
+      items: row.items,
       transactions,
       balance,
     };
@@ -743,6 +951,20 @@ router.put('/:invoiceId/status', authenticateToken, async (req, res) => {
 
     if (!status || !ALLOWED_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Invalid status. Use: draft, sent, paid, credited, overdue, cancelled' });
+    }
+
+    const existingResult = await pool.query(
+      'SELECT status FROM invoices WHERE id = $1 AND company_id = $2',
+      [invoiceId, companyId]
+    );
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const previousStatus = existingResult.rows[0].status || 'draft';
+    if (previousStatus === 'draft' && status !== 'draft' && !(await companyHasPaymentMethods(companyId))) {
+      return res.status(400).json({
+        error: 'Configure at least one payment method in Extensions before moving this invoice out of draft.',
+      });
     }
 
     const updateFields = ['status = $1', 'updated_at = CURRENT_TIMESTAMP'];

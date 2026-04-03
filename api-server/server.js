@@ -150,6 +150,7 @@ const jobRoutes = require('./routes/jobs');
 const clientRoutes = require('./routes/clients');
 const invoiceRoutes = require('./routes/invoices');
 const subscriptionRoutes = require('./routes/subscriptions');
+const integrationRoutes = require('./routes/integrations');
 const futureRoutes = require('./routes/future');
 const workHoursRoutes = require('./routes/work-hours');
 const adminRoutes = require('./routes/admin');
@@ -160,6 +161,7 @@ const dailyRoutesRoutes = require('./routes/daily-routes');
 const employeeLeaveRoutes = require('./routes/employee-leave');
 const invitationRoutes = require('./routes/invitations');
 const trialRoutes = require('./routes/trial');
+const publicInvoiceRoutes = require('./routes/public-invoices');
 const { runAutomatedEmailTick } = require('./utils/automatedEmails');
 
 // Mount routes
@@ -168,6 +170,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/lead-form', leadFormRoutes);
 app.use('/api/public', publicLeadFormRoutes);
+app.use('/api/public/invoices', publicInvoiceRoutes);
 // Admin routes must be mounted BEFORE /api/admin/users so that
 // GET /api/admin/users hits the admin list endpoint, not the company-users route.
 app.use('/api/admin', adminRoutes);
@@ -178,6 +181,7 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/invoices', invoiceRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/integrations', integrationRoutes);
 app.use('/api/work-hours', workHoursRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/video-guides', videoGuideRoutes);

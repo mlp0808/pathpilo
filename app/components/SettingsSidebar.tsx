@@ -7,10 +7,11 @@ import {
   UserIcon,
   BuildingOfficeIcon,
   CreditCardIcon,
-  DocumentTextIcon,
   ArrowRightOnRectangleIcon,
   BellIcon,
-  InboxIcon
+  InboxIcon,
+  PuzzlePieceIcon,
+  UserGroupIcon
 } from '@heroicons/react/24/outline'
 import { useAppI18n } from './I18nProvider'
 import { clearClientLocaleStorage } from '../i18n'
@@ -45,10 +46,11 @@ export default function SettingsSidebar({ user, onBack }: SettingsSidebarProps) 
   const settingsNavigation = [
     { name: t('settings.sidebar.user', 'User'), href: `${base}/user`, icon: UserIcon },
     { name: t('settings.sidebar.business', 'Business'), href: `${base}/business`, icon: BuildingOfficeIcon },
+    { name: t('settings.sidebar.clients', 'Clients'), href: `${base}/clients`, icon: UserGroupIcon },
     { name: t('settings.sidebar.notifications', 'Notifications'), href: `${base}/notifications`, icon: BellIcon },
     { name: t('settings.sidebar.leadForm', 'Lead form'), href: `${base}/leads-form`, icon: InboxIcon },
     { name: t('settings.sidebar.billing', 'Billing'), href: `${base}/billing`, icon: CreditCardIcon },
-    { name: t('settings.sidebar.invoices', 'Invoices'), href: `${base}/invoices`, icon: DocumentTextIcon },
+    { name: 'Extensions', href: `${base}/extensions`, icon: PuzzlePieceIcon },
   ]
 
   return (

@@ -448,6 +448,8 @@ router.get('/:clientId/invoices', authenticateToken, async (req, res) => {
 });
 
 // POST /api/clients/:clientId/invoices - Create a new invoice for a client
+// Snapshot: line items from completed job services; due_date + payment_terms from body;
+// client/company display on PDF & views resolve live from clients + companies (billing prefs + business settings).
 router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
   let dbClient;
   try {
@@ -536,13 +538,35 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       invoiceTitle = invoiceTitle.slice(0, MAX_TITLE_LEN) + '...';
     }
 
-    const year = new Date().getFullYear();
-    const month = String(new Date().getMonth() + 1).padStart(2, '0');
-    const invoiceCountResult = await dbClient.query(
-      'SELECT COUNT(*) as count FROM invoices WHERE company_id = $1 AND invoice_number LIKE $2',
-      [companyId, `${year}${month}%`]
+    await dbClient
+      .query(
+        `ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1`
+      )
+      .catch(() => {});
+
+    const lock = await dbClient.query(
+      `SELECT invoice_next_number FROM companies WHERE id = $1 FOR UPDATE`,
+      [companyId]
     );
-    const invoiceNumber = `${year}${month}${String(invoiceCountResult.rows[0].count + 1).padStart(4, '0')}`;
+    let nextNum = Number(lock.rows[0]?.invoice_next_number);
+    if (!Number.isFinite(nextNum) || nextNum < 1) nextNum = 1;
+
+    const maxR = await dbClient.query(
+      `SELECT COALESCE(MAX(CAST(invoice_number AS BIGINT)), 0) AS m
+       FROM invoices WHERE company_id = $1 AND invoice_number ~ '^[0-9]+$' AND LENGTH(invoice_number) <= 18`,
+      [companyId]
+    );
+    const maxN = Number(maxR.rows[0].m) || 0;
+    if (nextNum <= maxN) {
+      nextNum = maxN + 1;
+    }
+
+    const invoiceNumber = String(nextNum);
+
+    await dbClient.query(`UPDATE companies SET invoice_next_number = $1 WHERE id = $2`, [
+      nextNum + 1,
+      companyId,
+    ]);
 
     let subtotal = 0;
     const invoiceItems = [];

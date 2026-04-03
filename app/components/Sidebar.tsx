@@ -14,7 +14,8 @@ import {
   ChevronDownIcon,
   BuildingOfficeIcon,
   InboxIcon,
-  RocketLaunchIcon
+  RocketLaunchIcon,
+  DocumentTextIcon
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
@@ -181,6 +182,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
       ],
     },
     { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
+    { name: t('app.nav.invoices', 'Invoices'), href: companySlug ? `/${companySlug}/invoices` : '/invoices', icon: DocumentTextIcon },
     { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
     { name: t('app.nav.team', 'Team'), href: companySlug ? `/${companySlug}/team` : '/team', icon: UsersIcon },
     { name: t('app.nav.services', 'Services'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },

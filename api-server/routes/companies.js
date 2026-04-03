@@ -684,6 +684,227 @@ router.put('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+const DEFAULT_INVOICE_EMAIL_SUBJECT = 'Invoice {invoice_number}';
+const DEFAULT_INVOICE_REMINDER_SUBJECT = 'Reminder: Invoice {invoice_number}';
+
+async function ensureCompanyInvoiceSettingsColumns() {
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_due_days INTEGER DEFAULT 30');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_payment_terms TEXT');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_email_default_subject TEXT');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_email_default_body TEXT');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_subject TEXT');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_body TEXT');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1');
+}
+
+async function resolveProfileCompanyId(req) {
+  const userId = req.user.userId;
+  let companyId = req.user.activeCompanyId;
+  if (!companyId) {
+    const result = await pool.query(
+      'SELECT uc.company_id FROM user_companies uc WHERE uc.user_id = $1 LIMIT 1',
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      return { error: 'No active company found', status: 400 };
+    }
+    companyId = result.rows[0].company_id;
+  } else {
+    const member = await pool.query(
+      'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+      [userId, companyId]
+    );
+    if (member.rows.length === 0) {
+      return { error: 'Not a member of the active company', status: 403 };
+    }
+  }
+  return { companyId };
+}
+
+// GET /api/companies/invoice-defaults — default invoicing options for the active company
+router.get('/invoice-defaults', authenticateToken, async (req, res) => {
+  try {
+    const resolved = await resolveProfileCompanyId(req);
+    if (resolved.error) {
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
+    const { companyId } = resolved;
+    await ensureCompanyInvoiceSettingsColumns();
+
+    const row = (
+      await pool.query(
+        `
+      SELECT
+        invoice_default_due_days,
+        invoice_default_payment_terms,
+        invoice_email_default_subject,
+        invoice_email_default_body,
+        invoice_reminder_default_subject,
+        invoice_reminder_default_body,
+        invoice_next_number
+      FROM companies WHERE id = $1
+    `,
+        [companyId]
+      )
+    ).rows[0];
+
+    const maxRow = await pool.query(
+      `
+      SELECT COALESCE(MAX(CAST(invoice_number AS BIGINT)), 0) AS max_num
+      FROM invoices
+      WHERE company_id = $1
+        AND invoice_number ~ '^[0-9]+$'
+        AND LENGTH(invoice_number) <= 18
+    `,
+      [companyId]
+    );
+    const maxNumericInvoice = Number(maxRow.rows[0].max_num) || 0;
+
+    const defaults = {
+      invoiceDefaultDueDays: row.invoice_default_due_days != null ? Number(row.invoice_default_due_days) : 30,
+      invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
+      invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
+      invoiceEmailDefaultBody: row.invoice_email_default_body || '',
+      invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
+      invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
+      invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
+      maxNumericInvoice,
+    };
+
+    res.json({ defaults });
+  } catch (error) {
+    console.error('Error fetching invoice defaults:', error);
+    res.status(500).json({ error: 'Failed to fetch invoice defaults' });
+  }
+});
+
+// PUT /api/companies/invoice-defaults
+router.put('/invoice-defaults', authenticateToken, async (req, res) => {
+  try {
+    const resolved = await resolveProfileCompanyId(req);
+    if (resolved.error) {
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
+    const { companyId } = resolved;
+    await ensureCompanyInvoiceSettingsColumns();
+
+    const {
+      invoiceDefaultDueDays,
+      invoiceDefaultPaymentTerms,
+      invoiceEmailDefaultSubject,
+      invoiceEmailDefaultBody,
+      invoiceReminderDefaultSubject,
+      invoiceReminderDefaultBody,
+      invoiceNextNumber,
+    } = req.body || {};
+
+    const updates = [];
+    const values = [];
+    let p = 1;
+
+    if (invoiceDefaultDueDays != null && invoiceDefaultDueDays !== '') {
+      const n = parseInt(String(invoiceDefaultDueDays), 10);
+      if (Number.isNaN(n) || n < 1 || n > 3650) {
+        return res.status(400).json({ error: 'Default due days must be between 1 and 3650' });
+      }
+      updates.push(`invoice_default_due_days = $${p++}`);
+      values.push(n);
+    }
+    if (invoiceDefaultPaymentTerms !== undefined) {
+      updates.push(`invoice_default_payment_terms = $${p++}`);
+      values.push(String(invoiceDefaultPaymentTerms ?? ''));
+    }
+    if (invoiceEmailDefaultSubject !== undefined) {
+      updates.push(`invoice_email_default_subject = $${p++}`);
+      values.push(String(invoiceEmailDefaultSubject ?? '').trim() || DEFAULT_INVOICE_EMAIL_SUBJECT);
+    }
+    if (invoiceEmailDefaultBody !== undefined) {
+      updates.push(`invoice_email_default_body = $${p++}`);
+      values.push(String(invoiceEmailDefaultBody ?? ''));
+    }
+    if (invoiceReminderDefaultSubject !== undefined) {
+      updates.push(`invoice_reminder_default_subject = $${p++}`);
+      values.push(String(invoiceReminderDefaultSubject ?? '').trim() || DEFAULT_INVOICE_REMINDER_SUBJECT);
+    }
+    if (invoiceReminderDefaultBody !== undefined) {
+      updates.push(`invoice_reminder_default_body = $${p++}`);
+      values.push(String(invoiceReminderDefaultBody ?? ''));
+    }
+    if (invoiceNextNumber != null && invoiceNextNumber !== '') {
+      const n = parseInt(String(invoiceNextNumber), 10);
+      if (Number.isNaN(n) || n < 1) {
+        return res.status(400).json({ error: 'Next invoice number must be a positive integer' });
+      }
+      const dup = await pool.query(
+        `SELECT 1 FROM invoices WHERE company_id = $1 AND invoice_number = $2 LIMIT 1`,
+        [companyId, String(n)]
+      );
+      if (dup.rows.length > 0) {
+        return res.status(400).json({
+          error: `Invoice number ${n} already exists. Choose a next number that is not already used.`,
+        });
+      }
+      updates.push(`invoice_next_number = $${p++}`);
+      values.push(n);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    values.push(companyId);
+    await pool.query(
+      `UPDATE companies SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${p}`,
+      values
+    );
+
+    const row = (
+      await pool.query(
+        `
+      SELECT
+        invoice_default_due_days,
+        invoice_default_payment_terms,
+        invoice_email_default_subject,
+        invoice_email_default_body,
+        invoice_reminder_default_subject,
+        invoice_reminder_default_body,
+        invoice_next_number
+      FROM companies WHERE id = $1
+    `,
+        [companyId]
+      )
+    ).rows[0];
+
+    const maxRow = await pool.query(
+      `
+      SELECT COALESCE(MAX(CAST(invoice_number AS BIGINT)), 0) AS max_num
+      FROM invoices
+      WHERE company_id = $1
+        AND invoice_number ~ '^[0-9]+$'
+        AND LENGTH(invoice_number) <= 18
+    `,
+      [companyId]
+    );
+    const maxNumericInvoice = Number(maxRow.rows[0].max_num) || 0;
+
+    res.json({
+      defaults: {
+        invoiceDefaultDueDays: row.invoice_default_due_days != null ? Number(row.invoice_default_due_days) : 30,
+        invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
+        invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
+        invoiceEmailDefaultBody: row.invoice_email_default_body || '',
+        invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
+        invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
+        invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
+        maxNumericInvoice,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating invoice defaults:', error);
+    res.status(500).json({ error: 'Failed to update invoice defaults' });
+  }
+});
+
 // GET /api/companies/:companyId/invitations - Get company invitations (team page)
 router.get('/:companyId/invitations', authenticateToken, async (req, res) => {
   try {

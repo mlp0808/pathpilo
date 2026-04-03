@@ -1,12 +1,12 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { ArrowLeftIcon, EllipsisVerticalIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon } from '@heroicons/react/24/outline'
+import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon } from '@heroicons/react/24/outline'
+import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
 
 function formatDate(value: string | undefined): string {
   if (!value) return '—'
@@ -20,33 +20,6 @@ function formatNumber(amount: number | string | undefined): string {
   const n = typeof amount === 'string' ? parseFloat(amount) : amount
   if (isNaN(n)) return '0.00'
   return n.toFixed(2)
-}
-
-function daysBetween(start: string | undefined, end: string | undefined): number {
-  if (!start || !end) return 0
-  const a = new Date(start)
-  const b = new Date(end)
-  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0
-  return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000))
-}
-
-function replacePaymentTermsPlaceholders(
-  template: string,
-  values: { due_date: string; overdue_days: number; invoice_date: string; invoice_number: string }
-): string {
-  if (template == null || typeof template !== 'string') return ''
-  let out = template
-    .replace(/\uFF5B/g, '{')
-    .replace(/\uFF5D/g, '}')
-  const d = String(values.due_date ?? '')
-  const o = String(values.overdue_days ?? 0)
-  const i = String(values.invoice_date ?? '')
-  const n = String(values.invoice_number ?? '')
-  return out
-    .replace(/\{due_date\}/g, d)
-    .replace(/\{overdue_days\}/g, o)
-    .replace(/\{invoice_date\}/g, i)
-    .replace(/\{invoice_number\}/g, n)
 }
 
 const INVOICE_STATUSES = [
@@ -71,10 +44,13 @@ function timelineIndex(status: string | undefined): number {
   return i >= 0 ? i : 0
 }
 
+function applyInvoiceEmailTemplate(template: string, invoiceNumber: string): string {
+  return String(template || '').replace(/\{invoice_number\}/g, invoiceNumber)
+}
+
 export default function InvoicePage() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const router = useRouter()
   const company = params?.company as string
   const id = params?.id as string
 
@@ -97,7 +73,6 @@ export default function InvoicePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusUpdating, setStatusUpdating] = useState(false)
-  const [optionsOpen, setOptionsOpen] = useState(false)
   const [sendModalOpen, setSendModalOpen] = useState(false)
   const [sendConfirmStep, setSendConfirmStep] = useState<'form' | 'confirm'>('form')
   const [sendTo, setSendTo] = useState('')
@@ -107,16 +82,15 @@ export default function InvoicePage() {
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [pdfDownloading, setPdfDownloading] = useState(false)
-  const [otherSystemModalOpen, setOtherSystemModalOpen] = useState(false)
-  const [otherSystemSentDate, setOtherSystemSentDate] = useState('')
-  const [otherSystemSubmitting, setOtherSystemSubmitting] = useState(false)
   const [paymentReceivedModalOpen, setPaymentReceivedModalOpen] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
   const [paymentSource, setPaymentSource] = useState('bank')
   const [paymentSubmitting, setPaymentSubmitting] = useState(false)
   const [paymentError, setPaymentError] = useState<string | null>(null)
-  const optionsRef = useRef<HTMLDivElement>(null)
+  const [onlineInvoiceLoading, setOnlineInvoiceLoading] = useState(false)
+  const [eInvoice, setEInvoice] = useState<PublicInvoicePayload | null>(null)
+  const [hasPaymentMethods, setHasPaymentMethods] = useState(true)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -125,32 +99,37 @@ export default function InvoicePage() {
       setError(!id ? 'Invalid invoice' : 'Not authenticated')
       return
     }
-    fetch(apiUrl(`/invoices/${id}`), {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.invoice) setInvoice(data.invoice)
-        else setError(data.error || 'Invoice not found')
+    let cancelled = false
+    setLoading(true)
+    Promise.all([
+      fetch(apiUrl(`/invoices/${id}`), {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json()),
+      fetch(apiUrl(`/invoices/${id}/e-invoice`), {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json()),
+    ])
+      .then(([invData, eData]) => {
+        if (cancelled) return
+        if (invData.invoice) setInvoice(invData.invoice)
+        else setError(invData.error || 'Invoice not found')
+        if (eData.invoice) {
+          setEInvoice(eData.invoice)
+          setHasPaymentMethods(Boolean(eData.hasPaymentMethods))
+        }
       })
-      .catch(() => setError('Failed to load invoice'))
-      .finally(() => setLoading(false))
+      .catch(() => {
+        if (!cancelled) setError('Failed to load invoice')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [id])
 
-  // Close options menu when clicking outside
-  useEffect(() => {
-    if (!optionsOpen) return
-    const handleClick = (e: MouseEvent) => {
-      if (optionsRef.current && !optionsRef.current.contains(e.target as Node)) {
-        setOptionsOpen(false)
-      }
-    }
-    document.addEventListener('click', handleClick)
-    return () => document.removeEventListener('click', handleClick)
-  }, [optionsOpen])
-
   const openSendModal = () => {
-    setOptionsOpen(false)
     setSendConfirmStep('form')
     const email = (invoice?.billing_email || invoice?.email || '').trim()
     setSendTo(email)
@@ -159,6 +138,24 @@ export default function InvoicePage() {
     setSendCc('')
     setSendError(null)
     setSendModalOpen(true)
+    const invNo = String(invoice?.invoice_number ?? invoice?.id ?? '')
+    const isReminder = (invoice?.status || '') === 'sent'
+    const token = localStorage.getItem('token')
+    if (!token) return
+    fetch(apiUrl('/companies/invoice-defaults'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => res.json())
+      .then((data) => {
+        const d = data.defaults
+        if (!d) return
+        if (isReminder) {
+          setSendSubject(applyInvoiceEmailTemplate(d.invoiceReminderDefaultSubject || '', invNo))
+          setSendBody(d.invoiceReminderDefaultBody || '')
+        } else {
+          setSendSubject(applyInvoiceEmailTemplate(d.invoiceEmailDefaultSubject || '', invNo))
+          setSendBody(d.invoiceEmailDefaultBody || '')
+        }
+      })
+      .catch(() => {})
   }
 
   const handleSendInvoice = async () => {
@@ -213,46 +210,6 @@ export default function InvoicePage() {
       setSendError('Failed to send email. Check the console and ensure the API server is running.')
     } finally {
       setSending(false)
-    }
-  }
-
-  const openOtherSystemModal = () => {
-    setOptionsOpen(false)
-    const today = new Date()
-    setOtherSystemSentDate(today.toISOString().slice(0, 10))
-    setOtherSystemModalOpen(true)
-  }
-
-  const handleMarkSentViaOtherSystem = async () => {
-    const raw = otherSystemSentDate.trim()
-    if (!raw) {
-      alert('Please select the date you sent the invoice.')
-      return
-    }
-    const token = localStorage.getItem('token')
-    if (!token || !id) return
-    setOtherSystemSubmitting(true)
-    try {
-      const res = await fetch(apiUrl(`/invoices/${id}/status`), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: 'sent', sent_at: new Date(raw).toISOString() }),
-      })
-      const data = await res.json()
-      if (res.ok && data.invoice) {
-        setInvoice((prev: any) => (prev ? { ...prev, status: 'sent', sent_at: data.invoice.sent_at } : prev))
-        setOtherSystemModalOpen(false)
-      } else {
-        alert(data.error || 'Failed to update status')
-      }
-    } catch (e) {
-      console.error(e)
-      alert('Failed to update status')
-    } finally {
-      setOtherSystemSubmitting(false)
     }
   }
 
@@ -355,7 +312,6 @@ export default function InvoicePage() {
       alert('Failed to download PDF')
     } finally {
       setPdfDownloading(false)
-      setOptionsOpen(false)
     }
   }
 
@@ -389,9 +345,6 @@ export default function InvoicePage() {
     )
   }
 
-  const items = invoice.items || []
-  const subtotal = Number(invoice.subtotal) || 0
-  const taxAmount = Number(invoice.tax_amount) || 0
   const total = Number(invoice.total) || 0
   const currency = invoice.currency || 'DKK'
   const transactions = invoice.transactions || []
@@ -405,6 +358,34 @@ export default function InvoicePage() {
         })
         return Math.round(b * 100) / 100
       })()
+
+  const isDraft = (invoice.status || 'draft') === 'draft'
+  const cannotLeaveDraftWithoutPayments = isDraft && !hasPaymentMethods
+
+  const openOnlineInvoice = async () => {
+    const token = localStorage.getItem('token')
+    if (!token || !id) return
+    if ((invoice?.status || 'draft') === 'draft') {
+      window.open(`${window.location.origin}/${company}/invoices/${id}/preview`, '_blank', 'noopener,noreferrer')
+      return
+    }
+    setOnlineInvoiceLoading(true)
+    try {
+      const res = await fetch(apiUrl(`/invoices/${id}/online-link`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not open online invoice')
+      const path = typeof data.path === 'string' ? data.path : ''
+      if (!path.startsWith('/')) throw new Error('Invalid response')
+      window.open(`${window.location.origin}${path}`, '_blank', 'noopener,noreferrer')
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not open online invoice')
+    } finally {
+      setOnlineInvoiceLoading(false)
+    }
+  }
 
   const handleStatusChange = async (newStatus: string) => {
     if (newStatus === (invoice?.status || '')) return
@@ -557,145 +538,20 @@ export default function InvoicePage() {
               )
             })()}
 
-            <div className="rounded-xl border border-gray-200 bg-white p-10 shadow-sm print:shadow-none print:border-0">
-              {/* Header: Bill to (left) | Company name (right) */}
-              <div className="flex flex-wrap items-start justify-between gap-6 border-b border-gray-200 pb-6">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">{invoice.client_name || '—'}</p>
-                  {(invoice.address || invoice.zip_code || invoice.city) && (
-                    <p className="mt-1 text-sm text-gray-600">
-                      {[invoice.address, invoice.zip_code, invoice.city].filter(Boolean).join(', ')}
-                    </p>
-                  )}
-                  {invoice.email && <p className="mt-0.5 text-sm text-gray-600">{invoice.email}</p>}
-                  {invoice.phone && <p className="text-sm text-gray-600">{invoice.phone}</p>}
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-semibold text-gray-900">{invoice.company_name || 'Company'}</p>
-                </div>
+            {eInvoice ? (
+              <div className="overflow-hidden rounded-xl border border-gray-200/80 shadow-sm ring-1 ring-black/5">
+                <DigitalInvoiceView
+                  data={eInvoice}
+                  variant="admin"
+                  extensionsHref={company ? `/${company}/settings/extensions` : '/settings/extensions'}
+                  adminPaymentMissing={!hasPaymentMethods}
+                />
               </div>
-
-              {/* Date and Invoice number on one line */}
-              <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-                <p className="text-sm text-gray-700">
-                  Date: <span className="font-semibold text-gray-900">{formatDate(invoice.issue_date)}</span>
-                </p>
-                <p className="text-sm text-gray-700">
-                  Invoice no. <span className="font-semibold text-gray-900">{invoice.invoice_number || id}</span>
-                </p>
+            ) : (
+              <div className="rounded-xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500 shadow-sm">
+                Could not load the digital invoice preview. Try refreshing the page.
               </div>
-
-              {/* Optional description / service heading */}
-              {(invoice.title || invoice.description) && (
-                <div className="mt-4">
-                  {invoice.title && (
-                    <p className="text-base font-semibold text-gray-900">{invoice.title}</p>
-                  )}
-                  {invoice.description && (
-                    <p className={`text-sm text-gray-700 whitespace-pre-wrap ${invoice.title ? 'mt-1' : ''}`}>
-                      {invoice.description}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Items table */}
-              <div className="mt-6 overflow-hidden">
-                <table className="min-w-full">
-                  <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="py-3 pr-4 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Description
-                      </th>
-                      <th className="py-3 px-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Qty
-                      </th>
-                      <th className="py-3 px-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Unit price
-                      </th>
-                      <th className="py-3 pl-4 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                        Amount
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
-                    {items.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-8 text-center text-sm text-gray-500">
-                          No line items
-                        </td>
-                      </tr>
-                    ) : (
-                      items.map((item: any) => {
-                        const desc = item.description || item.service_title || '—'
-                        const showDate = Boolean(invoice.show_completed_date)
-                        const completedDate = showDate && item.job_completed_date ? formatDate(item.job_completed_date) : null
-                        const description = completedDate ? `${desc} - ${completedDate}` : desc
-                        return (
-                          <tr key={item.id} className="text-sm">
-                            <td className="py-3 pr-4 text-gray-900">
-                              {description}
-                            </td>
-                            <td className="py-3 px-2 text-right text-gray-600">
-                              {item.quantity ?? 1}
-                            </td>
-                            <td className="py-3 px-2 text-right text-gray-600">
-                              {formatNumber(item.unit_price)}
-                            </td>
-                            <td className="py-3 pl-4 text-right font-medium text-gray-900">
-                              {formatNumber(item.line_total)}
-                            </td>
-                          </tr>
-                        )
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Totals – right-aligned, total highlighted */}
-              <div className="mt-6 flex justify-end">
-                <div className="w-64 space-y-1.5 text-sm">
-                  <div className="flex justify-between text-gray-600">
-                    <span>Subtotal</span>
-                    <span>{formatNumber(subtotal)}</span>
-                  </div>
-                  {Number(invoice.tax_rate) > 0 && (
-                    <div className="flex justify-between text-gray-600">
-                      <span>VAT ({formatNumber(invoice.tax_rate)}%)</span>
-                      <span>{formatNumber(taxAmount)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between border-t border-gray-200 bg-gray-50 px-3 py-2 font-semibold text-gray-900">
-                    <span>Total {currency}</span>
-                    <span>{formatNumber(total)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment terms (with placeholders replaced) */}
-              {invoice.payment_terms && (
-                <div className="mt-8 border-t border-gray-200 pt-6">
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                    {replacePaymentTermsPlaceholders(invoice.payment_terms, {
-                      due_date: formatDate(invoice.due_date),
-                      overdue_days: daysBetween(invoice.issue_date ?? invoice.created_at, invoice.due_date),
-                      invoice_date: formatDate(invoice.issue_date ?? invoice.created_at),
-                      invoice_number: invoice.invoice_number != null ? String(invoice.invoice_number) : String(invoice.id),
-                    })}
-                  </p>
-                </div>
-              )}
-
-              {/* Footer: company details */}
-              <div className="mt-8 border-t border-gray-200 pt-6 text-center text-xs text-gray-500">
-                {[
-                  invoice.company_name,
-                  [invoice.company_address, invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' / '),
-                  invoice.company_cvr_number && `CVR no. ${invoice.company_cvr_number}`,
-                ].filter(Boolean).join(' / ')}
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Right column: balance timeline / overview, then actions */}
@@ -796,6 +652,26 @@ export default function InvoicePage() {
                     <p className="text-lg font-bold text-green-700 tabular-nums">Paid off</p>
                   )}
                 </div>
+                <div className="mt-4 pt-2">
+                  <button
+                    type="button"
+                    onClick={openOnlineInvoice}
+                    disabled={onlineInvoiceLoading}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-primary-600/25 bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
+                  >
+                    <GlobeAltIcon className="h-5 w-5" aria-hidden />
+                    {onlineInvoiceLoading
+                      ? 'Opening…'
+                      : isDraft
+                        ? 'Preview e-invoice'
+                        : 'Online invoice'}
+                  </button>
+                  <p className="mt-2 text-center text-[11px] text-gray-500 leading-snug">
+                    {isDraft
+                      ? 'Staff-only preview (same as the client view). No public link until the invoice is sent.'
+                      : 'Opens the secure page your client can use to view this invoice and pay with your enabled methods.'}
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -818,47 +694,29 @@ export default function InvoicePage() {
                 Edit
               </Link>
             )}
-            <div className="relative" ref={optionsRef}>
-              <button
-                type="button"
-                onClick={() => setOptionsOpen((v) => !v)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
-              >
-                <EllipsisVerticalIcon className="h-5 w-5" />
-                Options
-              </button>
-              {optionsOpen && (
-                <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-                  <button
-                    type="button"
-                    onClick={openSendModal}
-                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
-                  >
-                    <PaperAirplaneIcon className="h-4 w-4" />
-                    {invoice.status === 'sent' ? 'Remind client' : 'Send to client'}
-                  </button>
-                  {invoice.status !== 'sent' && (
-                    <button
-                      type="button"
-                      onClick={openOtherSystemModal}
-                      className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <PaperAirplaneIcon className="h-4 w-4" />
-                      Send through other system
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleDownloadPdf}
-                    disabled={pdfDownloading}
-                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                  >
-                    <ArrowDownTrayIcon className="h-4 w-4" />
-                    {pdfDownloading ? 'Downloading…' : 'Download as PDF'}
-                  </button>
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={openSendModal}
+              disabled={cannotLeaveDraftWithoutPayments && invoice.status !== 'sent'}
+              title={
+                cannotLeaveDraftWithoutPayments && invoice.status !== 'sent'
+                  ? 'Enable at least one payment method in Extensions before sending.'
+                  : undefined
+              }
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-600 bg-accent-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PaperAirplaneIcon className="h-5 w-5" aria-hidden />
+              {invoice.status === 'sent' ? 'Send reminder' : 'Complete and send'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={pdfDownloading}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50"
+            >
+              <ArrowDownTrayIcon className="h-5 w-5" aria-hidden />
+              {pdfDownloading ? 'Downloading…' : 'Download as PDF'}
+            </button>
           </div>
         </div>
 
@@ -908,8 +766,8 @@ export default function InvoicePage() {
               </h2>
               <p className="mt-1 text-sm text-gray-500">
                 {invoice?.status === 'sent'
-                  ? 'The invoice will be attached as a PDF again. Add an optional message for the reminder.'
-                  : 'The invoice will be attached as a PDF. You can add a subject and message.'}
+                  ? 'Sends another email with a link to the e-invoice. Add an optional reminder message.'
+                  : 'Sends an email in the same style as booking confirmations, with a button to open the e-invoice (no PDF). You can edit the subject and message.'}
               </p>
               <div className="mt-4 space-y-4">
                 <div>
@@ -985,52 +843,6 @@ export default function InvoicePage() {
               </div>
                 </>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Send through other system modal */}
-        {otherSystemModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
-              <h2 className="text-lg font-semibold text-gray-900">Send through other system</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Mark this invoice as sent. Once marked, it cannot be turned back. The date you enter will be shown as the sent date.
-              </p>
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700">When did you send the invoice?</label>
-                <input
-                  type="date"
-                  value={otherSystemSentDate}
-                  onChange={(e) => setOtherSystemSentDate(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
-                />
-              </div>
-              <div className="mt-6 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setOtherSystemModalOpen(false)}
-                  disabled={otherSystemSubmitting}
-                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleMarkSentViaOtherSystem}
-                  disabled={otherSystemSubmitting}
-                  className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
-                >
-                  {otherSystemSubmitting ? (
-                    <>
-                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Updating…
-                    </>
-                  ) : (
-                    'Mark as sent'
-                  )}
-                </button>
-              </div>
             </div>
           </div>
         )}

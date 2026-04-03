@@ -8,6 +8,17 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   outputFileTracingRoot: path.join(__dirname),
+  async headers() {
+    return [
+      {
+        source: "/i/:path*",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+        ],
+      },
+    ]
+  },
   async rewrites() {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
     return [

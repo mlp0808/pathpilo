@@ -87,6 +87,26 @@ function NewInvoicePageContent() {
     }))
   }, [countryRule.defaultCurrency, countryRule.defaultTaxRate])
 
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    fetch(apiUrl('/companies/invoice-defaults'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => res.json())
+      .then((data) => {
+        const d = data.defaults
+        if (!d) return
+        setForm((prev) => ({
+          ...prev,
+          due_days: Number.isFinite(d.invoiceDefaultDueDays) ? d.invoiceDefaultDueDays : prev.due_days,
+          payment_terms:
+            typeof d.invoiceDefaultPaymentTerms === 'string' && d.invoiceDefaultPaymentTerms.trim()
+              ? d.invoiceDefaultPaymentTerms
+              : prev.payment_terms,
+        }))
+      })
+      .catch(() => {})
+  }, [])
+
   const due_date = useMemo(() => {
     const d = new Date(form.issue_date)
     if (isNaN(d.getTime())) return form.issue_date
