@@ -1,6 +1,8 @@
 import { MetadataRoute } from 'next'
+import { getMarketingSiteUrl } from './lib/siteUrl'
 
 export default function robots(): MetadataRoute.Robots {
+  const base = getMarketingSiteUrl()
   return {
     rules: [
       {
@@ -9,6 +11,6 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ['/api/', '/admin/'],
       },
     ],
-    sitemap: 'https://pathpilo.com/sitemap.xml',
+    sitemap: `${base}/sitemap.xml`,
   }
 }

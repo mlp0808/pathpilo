@@ -22,6 +22,11 @@ function resolveLocaleFromRequest(request: NextRequest): 'en' | 'da' {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // Never locale-redirect metadata routes (would turn /sitemap.xml into /en/sitemap.xml → 404)
+  if (pathname === '/sitemap.xml' || pathname === '/robots.txt') {
+    return NextResponse.next()
+  }
+
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/api') ||
@@ -45,5 +50,7 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|sitemap\\.xml|robots\\.txt).*)',
+  ],
 }

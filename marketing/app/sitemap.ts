@@ -1,6 +1,5 @@
 import type { MetadataRoute } from 'next'
-
-const SITE_URL = 'https://pathpilo.com'
+import { getMarketingSiteUrl } from './lib/siteUrl'
 const LOCALES = ['en', 'da'] as const
 const ROUTES = [
   '',
@@ -13,11 +12,12 @@ const ROUTES = [
   '/features/team',
 ] as const
 
-function absoluteUrl(path: string): string {
-  return `${SITE_URL}${path}`
-}
-
 export default function sitemap(): MetadataRoute.Sitemap {
+  const SITE_URL = getMarketingSiteUrl()
+  function absoluteUrl(path: string): string {
+    return `${SITE_URL}${path}`
+  }
+
   const now = new Date()
 
   return ROUTES.flatMap((route) =>
