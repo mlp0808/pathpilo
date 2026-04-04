@@ -19,6 +19,16 @@ function daysBetweenCalendar(start, end) {
   return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+function effectiveInvoiceNumber(invoice) {
+  if (invoice.invoice_number_display != null && String(invoice.invoice_number_display).trim() !== '') {
+    return String(invoice.invoice_number_display).trim();
+  }
+  if (invoice.invoice_number != null && String(invoice.invoice_number).trim() !== '') {
+    return String(invoice.invoice_number).trim();
+  }
+  return String(invoice.id);
+}
+
 function replacePaymentTermsPlaceholders(template, invoice) {
   if (template == null || typeof template !== 'string') return '';
   const out = template.replace(/\uFF5B/g, '{').replace(/\uFF5D/g, '}');
@@ -26,7 +36,7 @@ function replacePaymentTermsPlaceholders(template, invoice) {
   const due_date = formatPdfDate(invoice.due_date);
   const invoice_date = formatPdfDate(issueDate);
   const overdue_days = daysBetweenCalendar(issueDate, invoice.due_date);
-  const invoice_number = invoice.invoice_number != null ? String(invoice.invoice_number) : String(invoice.id);
+  const invoice_number = effectiveInvoiceNumber(invoice);
   return out
     .replace(/\{due_date\}/g, due_date)
     .replace(/\{overdue_days\}/g, String(overdue_days))
@@ -48,7 +58,7 @@ function buildPaymentOptions(companyId, invoice, bankRow) {
   const methods = [];
   if (bankRow && bankRow.enabled) {
     const cfg = bankRow.config || {};
-    const invNo = invoice.invoice_number != null ? String(invoice.invoice_number) : String(invoice.id);
+    const invNo = effectiveInvoiceNumber(invoice);
     const reference = `Invoice number: ${invNo}`;
     methods.push({
       id: 'bank_transfer',
@@ -117,7 +127,7 @@ function buildPublicInvoicePayload(invoice, bankRow) {
   const billTo = resolveClientInvoiceContact(invoice);
 
   return {
-    invoiceNumber: invoice.invoice_number != null ? String(invoice.invoice_number) : String(invoice.id),
+    invoiceNumber: effectiveInvoiceNumber(invoice),
     title: invoice.title || '',
     description: invoice.description || '',
     issueDate: invoice.issue_date,
@@ -178,4 +188,5 @@ module.exports = {
   buildPaymentOptions,
   buildPublicInvoicePayload,
   replacePaymentTermsPlaceholders,
+  effectiveInvoiceNumber,
 };

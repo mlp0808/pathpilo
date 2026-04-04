@@ -599,6 +599,8 @@ async function createSchema() {
     );
   `);
 
+  await safeQuery(`ALTER TABLE invoices ALTER COLUMN invoice_number DROP NOT NULL`);
+
   await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS title VARCHAR(50) DEFAULT ''`);
   await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS paid_amount DECIMAL(10,2)`);
   await safeQuery(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS payment_source VARCHAR(50)`);

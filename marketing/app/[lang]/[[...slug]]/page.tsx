@@ -3,7 +3,7 @@ import type { Metadata } from 'next'
 import HomePage from '../../page'
 import AboutPage from '../../about/page'
 import ContactPage from '../../contact/page'
-import FAQPage from '../../faq/page'
+import FAQContent from '../../faq/FAQContent'
 import PricingPage from '../../pricing/page'
 import RoutePlanningFeaturePage from '../../features/routeplanning/page'
 import SubscriptionsFeaturePage from '../../features/subscriptions/page'
@@ -157,7 +157,7 @@ export default async function LocalizedMarketingPage({
   if (route === '') return <HomePage locale={resolved.lang} />
   if (route === 'about') return <AboutPage locale={resolved.lang} />
   if (route === 'contact') return <ContactPage locale={resolved.lang} />
-  if (route === 'faq') return <FAQPage locale={resolved.lang} />
+  if (route === 'faq') return <FAQContent locale={resolved.lang} />
   if (route === 'pricing') return <PricingPage locale={resolved.lang} />
   if (route === 'features/routeplanning') return <RoutePlanningFeaturePage locale={resolved.lang} />
   if (route === 'features/subscriptions') return <SubscriptionsFeaturePage locale={resolved.lang} />

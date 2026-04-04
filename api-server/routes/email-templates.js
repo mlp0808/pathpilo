@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../utils/database');
+const { getSendInvoiceDefaults, getInvoiceDueReminderDefaults } = require('../utils/companyInvoiceEmailLocale');
 
 const router = express.Router();
 let schemaEnsured = false;
@@ -58,16 +59,15 @@ const DEFAULT_TEMPLATES = {
     subject: 'Your job on {Job date} has been cancelled',
     message: 'Hi {Client first name},\n\nWe are sorry, but your scheduled job on {Job date} has been cancelled.\n\nOriginal time: {Job time from} - {Job time to}\nServices: {Job services}\n\nPlease contact us if you want to rebook.\n\nBest regards,\n{Company name}'
   },
-  send_invoice: {
-    subject: 'Your invoice from {Company name}',
-    message: 'Hi {Client first name},\n\nPlease find your invoice attached.\n\nIf you have any questions, feel free to reply.\n\nBest regards,\n{Company name}'
-  }
+  send_invoice: getSendInvoiceDefaults('US'),
+  invoice_due_reminder: getInvoiceDueReminderDefaults('US'),
 };
 
 const DEFAULT_AUTOMATIONS = {
   // Automations are OFF by default: users must explicitly enable them.
   email_job_created: { enabled: false, lead_value: 5, lead_unit: 'minutes', eligible_since: null },
   email_job_reminder: { enabled: false, lead_value: 24, lead_unit: 'hours', eligible_since: null },
+  email_invoice_due_reminder: { enabled: false, lead_value: 48, lead_unit: 'hours', eligible_since: null },
 };
 
 async function ensureSchema() {
@@ -113,7 +113,8 @@ async function ensureSchema() {
         'change_time',
         'change_employee',
         'cancel_job',
-        'send_invoice'
+        'send_invoice',
+        'invoice_due_reminder'
       ))
     `);
   } catch (_) {
@@ -150,6 +151,45 @@ router.get('/', authenticateToken, async (req, res) => {
       };
     });
 
+    let invFromCompany = null;
+    try {
+      const invCo = await pool.query(
+        `SELECT invoice_email_default_subject, invoice_email_default_body,
+                invoice_reminder_default_subject, invoice_reminder_default_body,
+                country_code
+         FROM companies WHERE id = $1`,
+        [companyId]
+      );
+      invFromCompany = invCo.rows[0] || null;
+    } catch (_) {
+      invFromCompany = null;
+    }
+
+    const countryCode = invFromCompany?.country_code || 'DK';
+    const localeInvoice = {
+      send_invoice: getSendInvoiceDefaults(countryCode),
+      invoice_due_reminder: getInvoiceDueReminderDefaults(countryCode),
+    };
+    const merged = { ...DEFAULT_TEMPLATES, ...localeInvoice, ...templates };
+    if (invFromCompany) {
+      if (!merged.send_invoice?.subject?.trim() && invFromCompany.invoice_email_default_subject) {
+        merged.send_invoice = merged.send_invoice || {};
+        merged.send_invoice.subject = invFromCompany.invoice_email_default_subject;
+      }
+      if (!merged.send_invoice?.message?.trim() && invFromCompany.invoice_email_default_body) {
+        merged.send_invoice = merged.send_invoice || {};
+        merged.send_invoice.message = invFromCompany.invoice_email_default_body;
+      }
+      if (!merged.invoice_due_reminder?.subject?.trim() && invFromCompany.invoice_reminder_default_subject) {
+        merged.invoice_due_reminder = merged.invoice_due_reminder || {};
+        merged.invoice_due_reminder.subject = invFromCompany.invoice_reminder_default_subject;
+      }
+      if (!merged.invoice_due_reminder?.message?.trim() && invFromCompany.invoice_reminder_default_body) {
+        merged.invoice_due_reminder = merged.invoice_due_reminder || {};
+        merged.invoice_due_reminder.message = invFromCompany.invoice_reminder_default_body;
+      }
+    }
+
     const automationResult = await pool.query(
       'SELECT automation_key, enabled, lead_value, lead_unit, eligible_since FROM email_automation_settings WHERE company_id = $1',
       [companyId]
@@ -179,7 +219,7 @@ router.get('/', authenticateToken, async (req, res) => {
     }
 
     res.json({
-      templates: { ...DEFAULT_TEMPLATES, ...templates },
+      templates: merged,
       automationSettings: { ...DEFAULT_AUTOMATIONS, ...automationSettings },
       repliesToEmail,
     });
@@ -229,6 +269,20 @@ router.put('/', authenticateToken, async (req, res) => {
            ON CONFLICT (company_id, template_type)
            DO UPDATE SET subject = EXCLUDED.subject, message = EXCLUDED.message, updated_at = NOW()`,
           [companyId, templateType, subject || '', message || '']
+        );
+      }
+      const si = templates.send_invoice;
+      if (si && typeof si === 'object') {
+        await pool.query(
+          `UPDATE companies SET invoice_email_default_subject = $1, invoice_email_default_body = $2, updated_at = NOW() WHERE id = $3`,
+          [si.subject || '', si.message || '', companyId]
+        );
+      }
+      const ir = templates.invoice_due_reminder;
+      if (ir && typeof ir === 'object') {
+        await pool.query(
+          `UPDATE companies SET invoice_reminder_default_subject = $1, invoice_reminder_default_body = $2, updated_at = NOW() WHERE id = $3`,
+          [ir.subject || '', ir.message || '', companyId]
         );
       }
     }

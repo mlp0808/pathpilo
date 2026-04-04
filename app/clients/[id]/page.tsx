@@ -322,11 +322,11 @@ export default function ClientDetailPage() {
       const res = await fetch(apiUrl('/email-templates'), { headers: { Authorization: `Bearer ${token}` } })
       const data = await res.json().catch(() => ({}))
       const tpl = data?.templates?.send_invoice || {}
-      setSendInvoiceDefaultSubject(tpl.subject || `Invoice ${invoice.invoice_number}`)
+      setSendInvoiceDefaultSubject(tpl.subject || `Invoice ${invoice.invoice_number_display || invoice.invoice_number}`)
       setSendInvoiceDefaultMessage(tpl.message || '')
       setSendInvoiceId(invoice.id)
     } catch {
-      setSendInvoiceDefaultSubject(`Invoice ${invoice.invoice_number}`)
+      setSendInvoiceDefaultSubject(`Invoice ${invoice.invoice_number_display || invoice.invoice_number}`)
       setSendInvoiceDefaultMessage('')
       setSendInvoiceId(invoice.id)
     }
@@ -1017,7 +1017,7 @@ export default function ClientDetailPage() {
                                   </button>
                                   {openInvoiceMenuId === invoice.id && (
                                     <div className="absolute right-0 top-9 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden" onClick={e => e.stopPropagation()}>
-                                      <button onClick={() => { setOpenInvoiceMenuId(null); downloadPdf(invoice.id, invoice.invoice_number) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Download PDF</button>
+                                      <button onClick={() => { setOpenInvoiceMenuId(null); downloadPdf(invoice.id, invoice.invoice_number_display || invoice.invoice_number) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Download PDF</button>
                                       {invoice.status === 'draft' && (
                                         <>
                                           <button onClick={() => { setOpenInvoiceMenuId(null); openSendInvoice(invoice) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Send to client…</button>
@@ -1196,7 +1196,10 @@ export default function ClientDetailPage() {
 
       <SendInvoiceModal
         isOpen={sendInvoiceId !== null}
-        invoiceNumber={invoices.find(i => i.id === sendInvoiceId)?.invoice_number}
+        invoiceNumber={(() => {
+          const inv = invoices.find(i => i.id === sendInvoiceId)
+          return inv ? (inv.invoice_number_display || inv.invoice_number) : undefined
+        })()}
         defaultSubject={sendInvoiceDefaultSubject}
         defaultMessage={sendInvoiceDefaultMessage}
         isSending={sendingInvoice}

@@ -111,9 +111,17 @@ function statusLabel(t: (k: string, f: string) => string, status: string): strin
   return row ? t(row.labelKey, row.fallback) : status
 }
 
+function invoiceStatusBadgeClass(status: string): string {
+  const s = status || 'draft'
+  if (s === 'sent') return 'bg-amber-100 text-amber-900'
+  if (s === 'paid') return 'bg-emerald-100 text-emerald-800'
+  return 'bg-gray-100 text-gray-800'
+}
+
 interface InvoiceRow {
   id: number
   invoice_number: string | null
+  invoice_number_display?: string | null
   title: string | null
   client_id: number
   issue_date?: string
@@ -503,7 +511,7 @@ export default function InvoicesListPage() {
                     <tr key={inv.id} className="border-b border-gray-100 hover:bg-gray-50/80">
                       <td className="px-4 py-3">
                         <Link href={`${base}/${inv.id}`} className="font-medium text-primary-600 hover:underline">
-                          {inv.invoice_number || `#${inv.id}`}
+                          {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
                         </Link>
                       </td>
                       <td className="px-4 py-3 text-gray-800 max-w-[200px] truncate">{inv.title || '—'}</td>
@@ -511,7 +519,9 @@ export default function InvoicesListPage() {
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.issue_date)}</td>
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.due_date || undefined)}</td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex px-2 py-0.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-800">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
+                        >
                           {statusLabel(t, inv.status || 'draft')}
                         </span>
                       </td>

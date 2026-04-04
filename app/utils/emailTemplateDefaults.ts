@@ -83,6 +83,59 @@ const translations: Record<string, Record<string, TemplateLang>> = {
     },
   },
 
+  // ── email_invoice_send (manual first send) ───────────────────────────────
+  email_invoice_send: {
+    en: {
+      subject: 'Invoice {invoice_number} from {Company name}',
+      message:
+        'Hi {Client first name},\n\nYour invoice is ready. Open the e-invoice from the email to view details and payment options.\n\nBest regards,\n{Company name}',
+    },
+    da: {
+      subject: 'Faktura {invoice_number} fra {Company name}',
+      message:
+        'Hej {Client first name},\n\nDin faktura er klar. Åbn e-fakturaen fra mailen for detaljer og betalingsmuligheder.\n\nMed venlig hilsen,\n{Company name}',
+    },
+    sv: {
+      subject: 'Faktura {invoice_number} från {Company name}',
+      message:
+        'Hej {Client first name},\n\nDin faktura är klar. Öppna e-fakturan från mailet för detaljer och betalningsalternativ.\n\nMed vänliga hälsningar,\n{Company name}',
+    },
+    nb: {
+      subject: 'Faktura {invoice_number} fra {Company name}',
+      message:
+        'Hei {Client first name},\n\nFakturaen din er klar. Åpne e-fakturaen fra e-posten for detaljer og betalingsalternativer.\n\nMed vennlig hilsen,\n{Company name}',
+    },
+    de: {
+      subject: 'Rechnung {invoice_number} von {Company name}',
+      message:
+        'Guten Tag {Client first name},\n\nIhre Rechnung ist bereit. Öffnen Sie die E-Rechnung aus der E-Mail für Details und Zahlungsoptionen.\n\nMit freundlichen Grüßen,\n{Company name}',
+    },
+  },
+
+  // ── email_invoice_due_reminder (automated; opening line + email layout) ──
+  email_invoice_due_reminder: {
+    en: {
+      subject: 'Reminder: Invoice {invoice_number}',
+      message: 'This is a friendly reminder that payment is coming due. You can view and pay using the link in the email.',
+    },
+    da: {
+      subject: 'Påmindelse: Faktura {invoice_number}',
+      message: 'Venlig påmindelse om betaling. Du kan se og betale via linket i mailen.',
+    },
+    sv: {
+      subject: 'Påminnelse: Faktura {invoice_number}',
+      message: 'En vänlig påminnelse om betalning. Du kan se och betala via länken i mailet.',
+    },
+    nb: {
+      subject: 'Påminnelse: Faktura {invoice_number}',
+      message: 'En vennlig påminnelse om betaling. Du kan se og betale via lenken i e-posten.',
+    },
+    de: {
+      subject: 'Erinnerung: Rechnung {invoice_number}',
+      message: 'Freundliche Erinnerung an die Zahlung. Sie können die E-Rechnung über den Link in der E-Mail öffnen.',
+    },
+  },
+
   // ── email_date_changed ────────────────────────────────────────────────────
   email_date_changed: {
     en: {
@@ -316,6 +369,20 @@ const templateMeta: Record<string, Pick<MessageTemplate, 'id' | 'kind' | 'channe
     title: 'Before-job reminder',
     description: 'Automated reminder before arrival.',
   },
+  email_invoice_send: {
+    id: 'email_invoice_send',
+    kind: 'template',
+    channel: 'email',
+    title: 'First invoice email',
+    description: 'Default subject and message when you send an invoice to a client (e-invoice link).',
+  },
+  email_invoice_due_reminder: {
+    id: 'email_invoice_due_reminder',
+    kind: 'automated',
+    channel: 'email',
+    title: 'Invoice due reminder',
+    description: 'Automatically reminds the client before the due date if the invoice is still unpaid.',
+  },
   email_date_changed: {
     id: 'email_date_changed',
     kind: 'template',
@@ -363,6 +430,8 @@ const templateMeta: Record<string, Pick<MessageTemplate, 'id' | 'kind' | 'channe
 const TEMPLATE_ORDER = [
   'email_job_created',
   'email_job_reminder',
+  'email_invoice_send',
+  'email_invoice_due_reminder',
   'email_date_changed',
   'email_job_cancelled',
   'email_time_updated',
@@ -411,6 +480,15 @@ export const defaultAutomationSettings: AutomationSetting[] = [
     enabled: false,
     channel: 'email',
     leadValue: 24,
+    leadUnit: 'hours',
+  },
+  {
+    id: 'email_invoice_due_reminder',
+    title: 'Invoice due reminder',
+    description: 'Send an email automatically before the invoice due date if it is still unpaid.',
+    enabled: false,
+    channel: 'email',
+    leadValue: 48,
     leadUnit: 'hours',
   },
   {

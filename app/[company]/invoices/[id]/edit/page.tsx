@@ -67,7 +67,6 @@ export default function EditInvoicePage() {
     tax_rate: 25,
     currency: 'DKK',
     payment_terms: '',
-    notes: '',
     description: '',
     show_completed_date: false,
   })
@@ -114,7 +113,6 @@ export default function EditInvoicePage() {
             tax_rate: Number(inv.tax_rate) ?? 25,
             currency: inv.currency || 'DKK',
             payment_terms: inv.payment_terms || '',
-            notes: inv.notes || '',
             description: inv.description || '',
             show_completed_date: Boolean(inv.show_completed_date),
           })
@@ -145,7 +143,7 @@ export default function EditInvoicePage() {
           tax_rate: form.tax_rate,
           currency: form.currency,
           payment_terms: form.payment_terms,
-          notes: form.notes,
+          notes: '',
           description: form.description.trim() || '',
           show_completed_date: form.show_completed_date,
         }),
@@ -324,7 +322,7 @@ export default function EditInvoicePage() {
               </section>
 
               <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Payment & notes</h2>
+                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Payment</h2>
                 <div className="space-y-4">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-700">Description (on invoice, above table)</label>
@@ -348,16 +346,6 @@ export default function EditInvoicePage() {
                     <p className="mt-1.5 text-xs text-gray-500">
                       Placeholders: {PAYMENT_TERMS_PLACEHOLDERS.join(', ')}
                     </p>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Internal notes (not shown on invoice)</label>
-                    <textarea
-                      value={form.notes}
-                      onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
-                      rows={3}
-                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder="For your reference only..."
-                    />
                   </div>
                 </div>
               </section>
@@ -394,7 +382,7 @@ export default function EditInvoicePage() {
                 <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">Preview</p>
                 <div className="space-y-2 text-sm text-gray-600">
                   <p><span className="font-medium text-gray-700">Client:</span> {invoice.client_name}</p>
-                  <p><span className="font-medium text-gray-700">Invoice no.:</span> {invoice.invoice_number || id}</p>
+                  <p><span className="font-medium text-gray-700">Invoice no.:</span> {invoice.invoice_number_display || invoice.invoice_number || id}</p>
                   <p><span className="font-medium text-gray-700">Issue date:</span> {formatDate(form.issue_date)}</p>
                   <p><span className="font-medium text-gray-700">Due in:</span> {form.due_in_days} days → {formatDate(form.issue_date ? addDays(form.issue_date, form.due_in_days) : '')}</p>
                   <p><span className="font-medium text-gray-700">Total:</span> {formatNumber(invoice.total)} {form.currency}</p>

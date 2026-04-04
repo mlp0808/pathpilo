@@ -5,8 +5,23 @@ const PDFDocument = require('pdfkit');
 const { pool } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
 const { buildInvoiceCustomerEmailPayload, getWebAppBaseUrl } = require('../utils/invoiceEmail');
+const { invoiceCustomerEmailLang } = require('../utils/companyInvoiceEmailLocale');
+const {
+  loadMergedSendInvoiceTemplate,
+  applySendInvoicePlaceholders,
+} = require('../utils/invoiceSendTemplate');
 const { resolveClientInvoiceContact } = require('../utils/invoiceClientDisplay');
 const { buildPublicInvoicePayload } = require('../utils/eInvoicePayload');
+const {
+  scheduleInvoiceDueReminder,
+  cancelScheduledInvoiceReminder,
+  getPendingInvoiceReminder,
+} = require('../utils/invoiceReminderAutomation');
+const {
+  computeNextSequenceNumber,
+  resolveInvoiceNumberDisplay,
+  allocateInvoiceNumberIfDraft,
+} = require('../utils/invoiceNumberAllocation');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -154,9 +169,11 @@ router.get('/', authenticateToken, async (req, res) => {
       }
     }
 
+    const nextPreview = await computeNextSequenceNumber(pool, companyAccess.companyId);
     const invoices = result.rows.map((row) => ({
       ...row,
       client_name: [row.client_name, row.client_last_name].filter(Boolean).join(' ').trim() || '—',
+      invoice_number_display: resolveInvoiceNumberDisplay(row, nextPreview),
     }));
 
     res.json({ invoices });
@@ -210,6 +227,8 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     ORDER BY ii.id ASC
   `, [invoiceId]);
   const contact = resolveClientInvoiceContact(row);
+  const nextPreview = await computeNextSequenceNumber(pool, companyId);
+  const invoice_number_display = resolveInvoiceNumberDisplay(row, nextPreview);
   return {
     ...row,
     client_name,
@@ -217,6 +236,7 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     invoice_to_address: contact.addressLine,
     invoice_to_email: contact.email,
     invoice_to_phone: contact.phone,
+    invoice_number_display,
   };
 }
 
@@ -249,7 +269,12 @@ function replacePaymentTermsPlaceholders(template, invoice) {
   const due_date = formatPdfDate(invoice.due_date);
   const invoice_date = formatPdfDate(issueDate);
   const overdue_days = daysBetween(issueDate, invoice.due_date);
-  const invoice_number = invoice.invoice_number != null ? String(invoice.invoice_number) : String(invoice.id);
+  const invoice_number =
+    invoice.invoice_number_display != null && String(invoice.invoice_number_display).trim() !== ''
+      ? String(invoice.invoice_number_display).trim()
+      : invoice.invoice_number != null
+        ? String(invoice.invoice_number)
+        : String(invoice.id);
   return out
     .replace(/\{due_date\}/g, due_date)
     .replace(/\{overdue_days\}/g, String(overdue_days))
@@ -318,7 +343,7 @@ function buildInvoicePdf(invoice) {
       const line1Y = doc.y;
       doc.fillColor(gray700).text('Date: ', margin, line1Y);
       doc.font('Helvetica-Bold').fillColor(gray900).text(formatPdfDate(invoice.issue_date), margin + 32, line1Y);
-      const numStr = String(invoice.invoice_number || invoice.id);
+      const numStr = String(invoice.invoice_number_display || invoice.invoice_number || invoice.id);
       doc.font('Helvetica-Bold');
       const numW = doc.widthOfString(numStr);
       doc.text(numStr, rightEdge - numW, line1Y);
@@ -446,7 +471,10 @@ router.get('/:invoiceId/pdf', authenticateToken, async (req, res) => {
     }
     const pdfBuffer = await buildInvoicePdf(invoice);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoice_number || invoiceId}.pdf"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="invoice-${invoice.invoice_number_display || invoice.invoice_number || invoiceId}.pdf"`,
+    );
     res.send(pdfBuffer);
   } catch (error) {
     console.error('Error generating invoice PDF:', error);
@@ -590,24 +618,54 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const { invoiceId } = req.params;
-    const { to, subject, text, cc } = req.body;
+    const { to, cc } = req.body;
     if (!to || typeof to !== 'string' || !to.trim()) {
       return res.status(400).json({ error: 'Recipient email (to) is required' });
     }
-    const invoice = await getInvoiceWithItems(invoiceId, companyAccess.companyId);
+    let invoice = await getInvoiceWithItems(invoiceId, companyAccess.companyId);
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
+    const statusBeforeSend = invoice.status || 'draft';
     if ((invoice.status || 'draft') === 'draft' && !(await companyHasPaymentMethods(companyAccess.companyId))) {
       return res.status(400).json({
         error: 'Configure at least one payment method in Extensions before sending an invoice.',
       });
     }
+    if ((invoice.status || 'draft') === 'draft') {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await allocateInvoiceNumberIfDraft(client, companyAccess.companyId, parseInt(invoiceId, 10));
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+      invoice = await getInvoiceWithItems(invoiceId, companyAccess.companyId);
+      if (!invoice) {
+        return res.status(404).json({ error: 'Invoice not found' });
+      }
+    }
     const token = await getOrCreateInvoicePublicToken(parseInt(invoiceId, 10));
     const eInvoiceUrl = `${getWebAppBaseUrl()}/i/${token}`;
     const coRow = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyAccess.companyId]);
     const countryCode = coRow.rows[0]?.country_code || 'DK';
-    const messagePlain = text && String(text).trim() ? String(text).trim() : undefined;
+    const tpl = await loadMergedSendInvoiceTemplate(pool, companyAccess.companyId);
+    const invNo = String(
+      invoice.invoice_number_display ||
+        (invoice.invoice_number != null ? invoice.invoice_number : invoiceId),
+    );
+    const clientFirst = invoice.name && String(invoice.name).trim() ? String(invoice.name).trim() : '';
+    const phCtx = {
+      companyName: invoice.company_name || '',
+      clientFirstName: clientFirst,
+      invoiceNumber: invNo,
+    };
+    const emailSubject = applySendInvoicePlaceholders(tpl.subject, phCtx).trim();
+    const messagePlain = applySendInvoicePlaceholders(tpl.message, phCtx).trim();
     const { html, text: textBody } = buildInvoiceCustomerEmailPayload({
       invoice,
       companyName: invoice.company_name || '',
@@ -618,7 +676,9 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
     await sendEmail({
       to: to.trim(),
       cc: cc && String(cc).trim() ? String(cc).trim() : undefined,
-      subject: (subject && String(subject).trim()) || `Invoice ${invoice.invoice_number || invoiceId}`,
+      subject:
+        emailSubject ||
+        (invoiceCustomerEmailLang(countryCode) === 'da' ? `Faktura ${invNo}` : `Invoice ${invNo}`),
       text: textBody,
       html,
       companyId: companyAccess.companyId,
@@ -629,6 +689,9 @@ router.post('/:invoiceId/send', authenticateToken, async (req, res) => {
       `UPDATE invoices SET status = 'sent', sent_at = COALESCE(sent_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND company_id = $2`,
       [invoiceId, companyAccess.companyId]
     );
+    if (statusBeforeSend === 'draft') {
+      await scheduleInvoiceDueReminder(pool, companyAccess.companyId, parseInt(invoiceId, 10));
+    }
     res.json({ success: true, message: 'Invoice sent' });
   } catch (error) {
     console.error('Error sending invoice email:', error);
@@ -662,6 +725,40 @@ router.get('/:invoiceId/e-invoice', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error building e-invoice:', error);
     res.status(500).json({ error: 'Failed to load invoice', details: error.message });
+  }
+});
+
+// GET /api/invoices/:invoiceId/invoice-reminder — pending automated due reminder (badge)
+router.get('/:invoiceId/invoice-reminder', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+    const pending = await getPendingInvoiceReminder(pool, invoiceId, companyId);
+    res.json({ pending, serverNow: new Date().toISOString() });
+  } catch (error) {
+    console.error('invoice-reminder GET:', error);
+    res.status(500).json({ error: 'Failed to load reminder status' });
+  }
+});
+
+// DELETE /api/invoices/:invoiceId/invoice-reminder — cancel scheduled automated reminder
+router.delete('/:invoiceId/invoice-reminder', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+    await cancelScheduledInvoiceReminder(pool, companyId, parseInt(invoiceId, 10));
+    res.json({ success: true });
+  } catch (error) {
+    console.error('invoice-reminder DELETE:', error);
+    res.status(500).json({ error: 'Failed to cancel reminder' });
   }
 });
 
@@ -724,7 +821,14 @@ router.get('/:invoiceId', authenticateToken, async (req, res) => {
       balance,
     };
 
-    res.json({ invoice });
+    let pendingInvoiceReminder = null;
+    try {
+      pendingInvoiceReminder = await getPendingInvoiceReminder(pool, invoiceId, companyId);
+    } catch (_) {
+      /* optional */
+    }
+
+    res.json({ invoice, pendingInvoiceReminder });
   } catch (error) {
     console.error('Error fetching invoice:', error);
     res.status(500).json({ error: 'Failed to fetch invoice', details: error.message });
@@ -800,6 +904,7 @@ router.post('/:invoiceId/transactions', authenticateToken, async (req, res) => {
           `UPDATE invoices SET status = $1, paid_at = COALESCE(paid_at, $2), updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND company_id = $4`,
           [newStatus, transactionDate, invoiceId, companyId]
         );
+        await cancelScheduledInvoiceReminder(pool, companyId, parseInt(invoiceId, 10));
       }
     } else if (type === 'charge' && balance > 0) {
       newStatus = 'overdue';
@@ -967,6 +1072,20 @@ router.put('/:invoiceId/status', authenticateToken, async (req, res) => {
       });
     }
 
+    if (status === 'sent' && previousStatus === 'draft') {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await allocateInvoiceNumberIfDraft(c, companyId, parseInt(invoiceId, 10));
+        await c.query('COMMIT');
+      } catch (e) {
+        await c.query('ROLLBACK');
+        throw e;
+      } finally {
+        c.release();
+      }
+    }
+
     const updateFields = ['status = $1', 'updated_at = CURRENT_TIMESTAMP'];
     const values = [status];
 
@@ -1017,6 +1136,14 @@ router.put('/:invoiceId/status', authenticateToken, async (req, res) => {
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    if (previousStatus === 'draft' && status === 'sent') {
+      try {
+        await scheduleInvoiceDueReminder(pool, companyId, parseInt(invoiceId, 10));
+      } catch (_) {
+        /* optional */
+      }
     }
 
     res.json({ invoice: result.rows[0] });

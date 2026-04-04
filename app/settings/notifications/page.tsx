@@ -51,17 +51,26 @@ const personalizationTags = [
   '{Job services}',
   '{Job total price}',
   '{Job time range}',
+  '{invoice_number}',
 ]
 
-const emailTemplateTypeById: Record<string, 'change_date' | 'change_time' | 'change_employee' | 'cancel_job'> = {
+const emailTemplateTypeById: Record<
+  string,
+  'change_date' | 'change_time' | 'change_employee' | 'cancel_job' | 'send_invoice'
+> = {
   email_date_changed: 'change_date',
   email_time_updated: 'change_time',
   email_employee_changed: 'change_employee',
   email_job_cancelled: 'cancel_job',
+  email_invoice_send: 'send_invoice',
 }
-const automatedEmailTemplateTypeById: Record<string, 'job_created_confirmation' | 'job_day_reminder'> = {
+const automatedEmailTemplateTypeById: Record<
+  string,
+  'job_created_confirmation' | 'job_day_reminder' | 'invoice_due_reminder'
+> = {
   email_job_created: 'job_created_confirmation',
   email_job_reminder: 'job_day_reminder',
+  email_invoice_due_reminder: 'invoice_due_reminder',
 }
 
 function AutomationSwitch({
@@ -125,7 +134,12 @@ function isLegacyAutomatedOpeningMessage(raw: string | undefined): boolean {
 }
 
 function normalizeAutomationOpeningMessage(templateId: string, message: string, countryCode?: string): string {
-  if (templateId !== 'email_job_created' && templateId !== 'email_job_reminder') return message
+  if (
+    templateId !== 'email_job_created' &&
+    templateId !== 'email_job_reminder' &&
+    templateId !== 'email_invoice_due_reminder'
+  )
+    return message
   if (!isLegacyAutomatedOpeningMessage(message)) return message
   return getDefaultTemplate(templateId, countryCode).message
 }
@@ -246,7 +260,12 @@ export default function NotificationsPage() {
   // When opening automation email editor, strip legacy full-body text
   useEffect(() => {
     if (!editingTemplateId) return
-    if (editingTemplateId !== 'email_job_created' && editingTemplateId !== 'email_job_reminder') return
+    if (
+      editingTemplateId !== 'email_job_created' &&
+      editingTemplateId !== 'email_job_reminder' &&
+      editingTemplateId !== 'email_invoice_due_reminder'
+    )
+      return
     setDraft((prev) => {
       const t = prev.templates.find((x) => x.id === editingTemplateId)
       if (!t) return prev
@@ -573,7 +592,9 @@ export default function NotificationsPage() {
                     ? `${setting.leadValue} min after job is created`
                     : setting.id === 'email_job_reminder'
                       ? `${setting.leadValue} h before midnight (job day)`
-                      : `${setting.leadValue} ${setting.leadUnit}`
+                      : setting.id === 'email_invoice_due_reminder'
+                        ? `${setting.leadValue} h before midnight (due date)`
+                        : `${setting.leadValue} ${setting.leadUnit}`
                 return (
                   <button
                     key={setting.id}
@@ -674,7 +695,9 @@ export default function NotificationsPage() {
               if (isAutomationModal && automationSetting) {
                 const isEmailAutomation =
                   automationSetting.channel === 'email' &&
-                  (automationSetting.id === 'email_job_created' || automationSetting.id === 'email_job_reminder')
+                  (automationSetting.id === 'email_job_created' ||
+                    automationSetting.id === 'email_job_reminder' ||
+                    automationSetting.id === 'email_invoice_due_reminder')
                 return (
                   <>
                     <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 shrink-0">
@@ -712,7 +735,12 @@ export default function NotificationsPage() {
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
-                            step={automationSetting.id === 'email_job_reminder' ? '0.01' : '1'}
+                            step={
+                              automationSetting.id === 'email_job_reminder' ||
+                              automationSetting.id === 'email_invoice_due_reminder'
+                                ? '0.01'
+                                : '1'
+                            }
                             min={0}
                             inputMode="decimal"
                             value={Number.isFinite(automationSetting.leadValue) ? automationSetting.leadValue : 0}
@@ -735,9 +763,12 @@ export default function NotificationsPage() {
                             ? 'Sends after this many minutes. Uses the latest job data at send-time; skipped if the job is cancelled.'
                             : automationSetting.id === 'email_job_reminder'
                               ? 'Hours before midnight (00:00) of the job day. Skipped if that time has already passed when the job is created. Decimals allowed (e.g. 2.5 → 21:30).'
-                              : 'Delay before sending.'}
+                              : automationSetting.id === 'email_invoice_due_reminder'
+                                ? 'Hours before midnight (00:00) of the invoice due date. Only for sent invoices that are still unpaid. Decimals allowed.'
+                                : 'Delay before sending.'}
                         </p>
-                        {automationSetting.id === 'email_job_reminder' && (
+                        {(automationSetting.id === 'email_job_reminder' ||
+                          automationSetting.id === 'email_invoice_due_reminder') && (
                           <p className="mt-0.5 text-[11px] text-gray-400">
                             ≈ {Math.round(automationSetting.leadValue * 60)} min before midnight
                           </p>

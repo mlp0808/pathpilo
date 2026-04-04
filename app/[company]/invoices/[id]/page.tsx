@@ -5,7 +5,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
 import Link from 'next/link'
-import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon } from '@heroicons/react/24/outline'
+import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon, ClockIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
 
 function formatDate(value: string | undefined): string {
@@ -44,8 +44,15 @@ function timelineIndex(status: string | undefined): number {
   return i >= 0 ? i : 0
 }
 
-function applyInvoiceEmailTemplate(template: string, invoiceNumber: string): string {
-  return String(template || '').replace(/\{invoice_number\}/g, invoiceNumber)
+/** Same placeholders as server (Settings → Messages → First invoice email). */
+function applySendInvoicePlaceholders(
+  template: string,
+  ctx: { invoiceNumber: string; companyName: string; clientFirstName: string }
+): string {
+  return String(template || '')
+    .replace(/\{invoice_number\}/g, ctx.invoiceNumber)
+    .replace(/\{Company name\}/g, ctx.companyName)
+    .replace(/\{Client first name\}/g, ctx.clientFirstName)
 }
 
 export default function InvoicePage() {
@@ -91,6 +98,8 @@ export default function InvoicePage() {
   const [onlineInvoiceLoading, setOnlineInvoiceLoading] = useState(false)
   const [eInvoice, setEInvoice] = useState<PublicInvoicePayload | null>(null)
   const [hasPaymentMethods, setHasPaymentMethods] = useState(true)
+  const [pendingInvoiceReminder, setPendingInvoiceReminder] = useState<{ sendAt: string } | null>(null)
+  const [cancelReminderLoading, setCancelReminderLoading] = useState(false)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -111,8 +120,10 @@ export default function InvoicePage() {
     ])
       .then(([invData, eData]) => {
         if (cancelled) return
-        if (invData.invoice) setInvoice(invData.invoice)
-        else setError(invData.error || 'Invoice not found')
+        if (invData.invoice) {
+          setInvoice(invData.invoice)
+          setPendingInvoiceReminder(invData.pendingInvoiceReminder ?? null)
+        } else setError(invData.error || 'Invoice not found')
         if (eData.invoice) {
           setEInvoice(eData.invoice)
           setHasPaymentMethods(Boolean(eData.hasPaymentMethods))
@@ -130,6 +141,7 @@ export default function InvoicePage() {
   }, [id])
 
   const openSendModal = () => {
+    if ((invoice?.status || 'draft') !== 'draft') return
     setSendConfirmStep('form')
     const email = (invoice?.billing_email || invoice?.email || '').trim()
     setSendTo(email)
@@ -138,24 +150,50 @@ export default function InvoicePage() {
     setSendCc('')
     setSendError(null)
     setSendModalOpen(true)
-    const invNo = String(invoice?.invoice_number ?? invoice?.id ?? '')
-    const isReminder = (invoice?.status || '') === 'sent'
+    const invNo = String(
+      invoice?.invoice_number_display || invoice?.invoice_number || invoice?.id || '',
+    )
     const token = localStorage.getItem('token')
     if (!token) return
-    fetch(apiUrl('/companies/invoice-defaults'), { headers: { Authorization: `Bearer ${token}` } })
+    fetch(apiUrl('/email-templates'), { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => res.json())
       .then((data) => {
-        const d = data.defaults
-        if (!d) return
-        if (isReminder) {
-          setSendSubject(applyInvoiceEmailTemplate(d.invoiceReminderDefaultSubject || '', invNo))
-          setSendBody(d.invoiceReminderDefaultBody || '')
-        } else {
-          setSendSubject(applyInvoiceEmailTemplate(d.invoiceEmailDefaultSubject || '', invNo))
-          setSendBody(d.invoiceEmailDefaultBody || '')
-        }
+        const si = data.templates?.send_invoice
+        if (!si) return
+        const companyName = String(invoice?.company_name ?? '')
+        const first = String(invoice?.name ?? '').trim()
+        const ctx = { invoiceNumber: invNo, companyName, clientFirstName: first }
+        setSendSubject(applySendInvoicePlaceholders(si.subject || '', ctx))
+        setSendBody(applySendInvoicePlaceholders(si.message || '', ctx))
       })
       .catch(() => {})
+  }
+
+  const refreshInvoiceReminderStatus = async () => {
+    const token = localStorage.getItem('token')
+    if (!token || !id) return
+    try {
+      const res = await fetch(apiUrl(`/invoices/${id}`), { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
+      if (data.invoice) setPendingInvoiceReminder(data.pendingInvoiceReminder ?? null)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const handleCancelDueReminder = async () => {
+    const token = localStorage.getItem('token')
+    if (!token || !id) return
+    setCancelReminderLoading(true)
+    try {
+      const res = await fetch(apiUrl(`/invoices/${id}/invoice-reminder`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (res.ok) setPendingInvoiceReminder(null)
+    } finally {
+      setCancelReminderLoading(false)
+    }
   }
 
   const handleSendInvoice = async () => {
@@ -178,8 +216,6 @@ export default function InvoicePage() {
         },
         body: JSON.stringify({
           to,
-          subject: sendSubject.trim() || undefined,
-          text: sendBody.trim() || undefined,
           cc: sendCc.trim() || undefined,
         }),
       })
@@ -202,6 +238,7 @@ export default function InvoicePage() {
         setInvoice((prev: any) => (prev ? { ...prev, status: 'sent', sent_at: data.sent_at ?? new Date().toISOString() } : prev))
         setSendModalOpen(false)
         setSendConfirmStep('form')
+        await refreshInvoiceReminderStatus()
       } else {
         setSendError(data.error || 'Failed to send email')
       }
@@ -276,6 +313,8 @@ export default function InvoicePage() {
           return { ...prev, transactions, balance: data.balance, status: data.status }
         })
         setPaymentReceivedModalOpen(false)
+        if (data.balance !== undefined && data.balance <= 0) setPendingInvoiceReminder(null)
+        else await refreshInvoiceReminderStatus()
       } else {
         setPaymentError(data.error || 'Failed to record payment')
       }
@@ -304,7 +343,7 @@ export default function InvoicePage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `invoice-${invoice?.invoice_number || id}.pdf`
+      a.download = `invoice-${invoice?.invoice_number_display || invoice?.invoice_number || id}.pdf`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
@@ -694,20 +733,57 @@ export default function InvoicePage() {
                 Edit
               </Link>
             )}
-            <button
-              type="button"
-              onClick={openSendModal}
-              disabled={cannotLeaveDraftWithoutPayments && invoice.status !== 'sent'}
-              title={
-                cannotLeaveDraftWithoutPayments && invoice.status !== 'sent'
-                  ? 'Enable at least one payment method in Extensions before sending.'
-                  : undefined
-              }
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-600 bg-accent-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <PaperAirplaneIcon className="h-5 w-5" aria-hidden />
-              {invoice.status === 'sent' ? 'Send reminder' : 'Complete and send'}
-            </button>
+            {isDraft && (
+              <button
+                type="button"
+                onClick={openSendModal}
+                disabled={cannotLeaveDraftWithoutPayments}
+                title={
+                  cannotLeaveDraftWithoutPayments
+                    ? 'Enable at least one payment method in Extensions before sending.'
+                    : undefined
+                }
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-600 bg-accent-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <PaperAirplaneIcon className="h-5 w-5" aria-hidden />
+                Complete and send
+              </button>
+            )}
+            {!isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue') && (
+              <div className="w-full rounded-xl border border-gray-200 bg-gray-50/90 px-3 py-3">
+                {pendingInvoiceReminder?.sendAt ? (
+                  <div className="flex items-start gap-2">
+                    <ClockIcon className="h-5 w-5 shrink-0 text-accent-600 mt-0.5" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-900">Due reminder scheduled</p>
+                      <p className="text-xs text-gray-600 mt-0.5">
+                        Sends {new Date(pendingInvoiceReminder.sendAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Manage wording and timing in Settings → Messages. Cancel here if you do not want this email.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCancelDueReminder}
+                      disabled={cancelReminderLoading}
+                      className="shrink-0 rounded-lg border border-gray-300 bg-white p-1.5 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                      title="Cancel scheduled reminder"
+                    >
+                      <XMarkIcon className="h-4 w-4" aria-hidden />
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-600 leading-snug">
+                    Due-date reminders run automatically when enabled under{' '}
+                    <Link href={company ? `/${company}/settings/notifications` : '/settings/notifications'} className="font-medium text-accent-700 underline">
+                      Settings → Messages
+                    </Link>
+                    . Nothing is scheduled for this invoice (already paid, past due time, or automation off).
+                  </p>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={handleDownloadPdf}
@@ -761,13 +837,11 @@ export default function InvoicePage() {
                 </>
               ) : (
                 <>
-              <h2 className="text-lg font-semibold text-gray-900">
-                {invoice?.status === 'sent' ? 'Send reminder to client' : 'Send invoice to client'}
-              </h2>
+              <h2 className="text-lg font-semibold text-gray-900">Send invoice to client</h2>
               <p className="mt-1 text-sm text-gray-500">
-                {invoice?.status === 'sent'
-                  ? 'Sends another email with a link to the e-invoice. Add an optional reminder message.'
-                  : 'Sends an email in the same style as booking confirmations, with a button to open the e-invoice (no PDF). You can edit the subject and message.'}
+                Sends an email with a button to open the e-invoice (no PDF). Subject and message come from your First invoice
+                email template in Settings → Messages (placeholders filled for this client). After sending, you can schedule an
+                automatic due reminder there too.
               </p>
               <div className="mt-4 space-y-4">
                 <div>
@@ -781,23 +855,23 @@ export default function InvoicePage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Subject</label>
+                  <label className="block text-sm font-medium text-gray-700">Subject (preview)</label>
                   <input
                     type="text"
+                    readOnly
                     value={sendSubject}
-                    onChange={(e) => setSendSubject(e.target.value)}
-                    placeholder="e.g. Invoice #123"
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                    placeholder="Loading from template…"
+                    className="mt-1 w-full cursor-default rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Message</label>
+                  <label className="block text-sm font-medium text-gray-700">Message (preview)</label>
                   <textarea
+                    readOnly
                     value={sendBody}
-                    onChange={(e) => setSendBody(e.target.value)}
-                    placeholder="Optional message to include in the email..."
+                    placeholder="Loading from template…"
                     rows={4}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                    className="mt-1 w-full cursor-default resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />
                 </div>
                 <div>

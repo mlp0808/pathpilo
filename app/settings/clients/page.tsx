@@ -7,15 +7,9 @@ import { apiUrl } from '../../utils/api'
 type InvoiceDefaults = {
   invoiceDefaultDueDays: number
   invoiceDefaultPaymentTerms: string
-  invoiceEmailDefaultSubject: string
-  invoiceEmailDefaultBody: string
-  invoiceReminderDefaultSubject: string
-  invoiceReminderDefaultBody: string
   invoiceNextNumber: number
   maxNumericInvoice: number
 }
-
-const PLACEHOLDER_HINT = '{invoice_number}'
 
 export default function ClientSettingsPage() {
   const { t } = useAppI18n()
@@ -26,10 +20,6 @@ export default function ClientSettingsPage() {
   const [form, setForm] = useState<InvoiceDefaults>({
     invoiceDefaultDueDays: 30,
     invoiceDefaultPaymentTerms: '',
-    invoiceEmailDefaultSubject: '',
-    invoiceEmailDefaultBody: '',
-    invoiceReminderDefaultSubject: '',
-    invoiceReminderDefaultBody: '',
     invoiceNextNumber: 1,
     maxNumericInvoice: 0,
   })
@@ -56,10 +46,6 @@ export default function ClientSettingsPage() {
         setForm({
           invoiceDefaultDueDays: data.defaults.invoiceDefaultDueDays ?? 30,
           invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
-          invoiceEmailDefaultSubject: data.defaults.invoiceEmailDefaultSubject ?? '',
-          invoiceEmailDefaultBody: data.defaults.invoiceEmailDefaultBody ?? '',
-          invoiceReminderDefaultSubject: data.defaults.invoiceReminderDefaultSubject ?? '',
-          invoiceReminderDefaultBody: data.defaults.invoiceReminderDefaultBody ?? '',
           invoiceNextNumber: data.defaults.invoiceNextNumber ?? 1,
           maxNumericInvoice: data.defaults.maxNumericInvoice ?? 0,
         })
@@ -92,10 +78,6 @@ export default function ClientSettingsPage() {
         body: JSON.stringify({
           invoiceDefaultDueDays: form.invoiceDefaultDueDays,
           invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
-          invoiceEmailDefaultSubject: form.invoiceEmailDefaultSubject,
-          invoiceEmailDefaultBody: form.invoiceEmailDefaultBody,
-          invoiceReminderDefaultSubject: form.invoiceReminderDefaultSubject,
-          invoiceReminderDefaultBody: form.invoiceReminderDefaultBody,
           invoiceNextNumber: form.invoiceNextNumber,
         }),
       })
@@ -230,76 +212,12 @@ export default function ClientSettingsPage() {
             </div>
           </section>
 
-          <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1">
-              {t('settings.invoices.sectionEmail', 'Sending invoice to client')}
-            </h2>
-            <p className="text-sm text-gray-500 mb-4">
-              {t('settings.invoices.sectionEmailHint', 'Prefills the send dialog. Use')}{' '}
-              <code className="bg-gray-100 px-1 rounded">{PLACEHOLDER_HINT}</code>{' '}
-              {t('settings.invoices.sectionEmailHint2', 'in the subject.')}
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('settings.invoices.emailSubject', 'Default subject')}
-                </label>
-                <input
-                  type="text"
-                  value={form.invoiceEmailDefaultSubject}
-                  onChange={(e) => setForm((f) => ({ ...f, invoiceEmailDefaultSubject: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('settings.invoices.emailBody', 'Default message (optional)')}
-                </label>
-                <p className="text-xs text-gray-500 mb-1">
-                  {t('settings.invoices.emailBodyHint', 'Shown as the intro before the e-invoice button in the email.')}
-                </p>
-                <textarea
-                  value={form.invoiceEmailDefaultBody}
-                  onChange={(e) => setForm((f) => ({ ...f, invoiceEmailDefaultBody: e.target.value }))}
-                  rows={4}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-            </div>
-          </section>
-
-          <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-1">
-              {t('settings.invoices.sectionReminder', 'Reminders')}
-            </h2>
-            <p className="text-sm text-gray-500 mb-4">
-              {t('settings.invoices.sectionReminderHint', 'Defaults when you send a reminder for an invoice that was already sent.')}
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('settings.invoices.reminderSubject', 'Default reminder subject')}
-                </label>
-                <input
-                  type="text"
-                  value={form.invoiceReminderDefaultSubject}
-                  onChange={(e) => setForm((f) => ({ ...f, invoiceReminderDefaultSubject: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {t('settings.invoices.reminderBody', 'Default reminder message')}
-                </label>
-                <textarea
-                  value={form.invoiceReminderDefaultBody}
-                  onChange={(e) => setForm((f) => ({ ...f, invoiceReminderDefaultBody: e.target.value }))}
-                  rows={4}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-            </div>
-          </section>
+          <p className="text-sm text-gray-600 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+            {t(
+              'settings.clients.emailTemplatesHint',
+              'Invoice email wording and the due-date reminder automation are configured under Settings → Messages.'
+            )}
+          </p>
 
           <div className="flex justify-end">
             <button

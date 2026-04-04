@@ -500,7 +500,7 @@ export default function CompletedJobsPage() {
                               onClick={() => router.push(`/${company}/invoices/${inv.id}?from=completed`)}
                             >
                               <td className="whitespace-nowrap px-4 py-3.5 text-sm font-medium text-gray-900">
-                                {inv.invoice_number || '—'}
+                                {inv.invoice_number_display || inv.invoice_number || '—'}
                               </td>
                               <td className="whitespace-nowrap px-4 py-3.5 text-sm text-gray-700" title={inv.title || ''}>
                                 {invoiceTitleDisplay(inv.title)}

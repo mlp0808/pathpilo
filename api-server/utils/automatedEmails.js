@@ -912,48 +912,55 @@ async function runAutomatedEmailTick(pool) {
          AND aes.id IS NULL`
     );
 
-    if (pendingRes.rows.length === 0) return;
-
-    // Group by company so we load templates once per company
-    const byCompany = {};
-    for (const row of pendingRes.rows) {
-      const key = String(row.company_id);
-      if (!byCompany[key]) byCompany[key] = [];
-      byCompany[key].push(row);
-    }
-
-    for (const [companyIdStr, rows] of Object.entries(byCompany)) {
-      let templates;
-      const companyCountryCode = rows[0]?.company_country_code || 'DK';
-      try {
-        templates = await loadTemplatesForCompany(pool, parseInt(companyIdStr, 10), companyCountryCode);
-      } catch (e) {
-        console.error('Failed to load templates for company', companyIdStr, e.message);
-        continue;
+    if (pendingRes.rows.length > 0) {
+      // Group by company so we load templates once per company
+      const byCompany = {};
+      for (const row of pendingRes.rows) {
+        const key = String(row.company_id);
+        if (!byCompany[key]) byCompany[key] = [];
+        byCompany[key].push(row);
       }
 
-      for (const row of rows) {
-        const template =
-          row.automation_key === 'email_job_created'
-            ? templates.job_created_confirmation
-            : templates.job_day_reminder;
-
+      for (const [companyIdStr, rows] of Object.entries(byCompany)) {
+        let templates;
+        const companyCountryCode = rows[0]?.company_country_code || 'DK';
         try {
-          await sendForJob(pool, row, row.automation_key, template);
-          // Remove from queue after successful send
-          await pool.query(
-            `DELETE FROM scheduled_automation_sends WHERE id = $1`,
-            [row.sched_id]
-          );
+          templates = await loadTemplatesForCompany(pool, parseInt(companyIdStr, 10), companyCountryCode);
         } catch (e) {
-          console.error(
-            'Failed to send automation email for job',
-            row.job_id,
-            row.automation_key,
-            e.message || e
-          );
+          console.error('Failed to load templates for company', companyIdStr, e.message);
+          continue;
+        }
+
+        for (const row of rows) {
+          const template =
+            row.automation_key === 'email_job_created'
+              ? templates.job_created_confirmation
+              : templates.job_day_reminder;
+
+          try {
+            await sendForJob(pool, row, row.automation_key, template);
+            // Remove from queue after successful send
+            await pool.query(
+              `DELETE FROM scheduled_automation_sends WHERE id = $1`,
+              [row.sched_id]
+            );
+          } catch (e) {
+            console.error(
+              'Failed to send automation email for job',
+              row.job_id,
+              row.automation_key,
+              e.message || e
+            );
+          }
         }
       }
+    }
+
+    try {
+      const { runInvoiceReminderTick } = require('./invoiceReminderAutomation');
+      await runInvoiceReminderTick(pool);
+    } catch (e) {
+      console.error('Invoice reminder tick:', e.message || e);
     }
   } catch (error) {
     console.error('Automated email tick error:', error.message || error);

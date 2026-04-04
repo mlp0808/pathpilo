@@ -1,11 +1,15 @@
 'use client'
 
-import type { Metadata } from 'next'
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
-import { getLocaleFromPathname, withAppLanguageParam } from '../lib/i18n'
+import {
+  getLocaleFromPathname,
+  isMarketingLocale,
+  withAppLanguageParam,
+} from '../lib/i18n'
+import type { MarketingLocale } from '../lib/i18n'
 import {
   CheckCircleIcon,
   CurrencyDollarIcon,
@@ -16,7 +20,10 @@ import {
 
 export default function PricingPage({ locale: localeProp }: { locale?: string }) {
   const pathname = usePathname()
-  const locale = localeProp || getLocaleFromPathname(pathname || '/')
+  const locale: MarketingLocale =
+    localeProp && isMarketingLocale(localeProp)
+      ? localeProp
+      : getLocaleFromPathname(pathname || '/')
   const da = locale === 'da'
   const [formData, setFormData] = useState({
     name: '',

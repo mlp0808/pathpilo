@@ -1,4 +1,5 @@
 const { STANDARD_FOOTER_PLACEHOLDER } = require('./email');
+const { invoiceCustomerEmailLang } = require('./companyInvoiceEmailLocale');
 
 function escapeHtml(s) {
   if (s == null || s === '') return '';
@@ -173,6 +174,11 @@ function getUi(countryCode) {
   return UI[lang] || UI.en;
 }
 
+/** Invoice customer emails: Danish or English only (matches company country: DK → da). */
+function getInvoiceCustomerEmailUi(countryCode) {
+  return invoiceCustomerEmailLang(countryCode) === 'da' ? UI.da : UI.en;
+}
+
 function formatMoneyAmount(amount, currency) {
   const n = Number(amount);
   if (!Number.isFinite(n)) return '—';
@@ -248,10 +254,14 @@ function buildInvoiceEmailInnerHtml({
     ? `${escapeHtml(ui.greetingWord)} <strong>${first}</strong>,`
     : `${escapeHtml(ui.greetingWord)},`;
 
-  const leadBlock =
-    customMessagePlain && String(customMessagePlain).trim()
-      ? plainBodyToEmailHtml(String(customMessagePlain).trim())
-      : `<p style="margin:0 0 20px;font-size:14px;line-height:1.55;color:#4b5563;">${escapeHtml(ui.defaultLead)}</p>`;
+  const hasCustomMessage = Boolean(customMessagePlain && String(customMessagePlain).trim());
+  const leadBlock = hasCustomMessage
+    ? plainBodyToEmailHtml(String(customMessagePlain).trim())
+    : `<p style="margin:0 0 20px;font-size:14px;line-height:1.55;color:#4b5563;">${escapeHtml(ui.defaultLead)}</p>`;
+  const greetingHtml = hasCustomMessage
+    ? ''
+    : `<p style="margin:0 0 10px;font-size:16px;line-height:1.45;color:#111827;">${greetingLine}</p>
+`;
 
   const invNo = escapeHtml(invoiceNumberDisplay);
   const issue = escapeHtml(issueDateDisplay);
@@ -332,9 +342,7 @@ function buildInvoiceEmailInnerHtml({
     </td>
   </tr>`;
 
-  return `
-<p style="margin:0 0 10px;font-size:16px;line-height:1.45;color:#111827;">${greetingLine}</p>
-${leadBlock}
+  return `${greetingHtml}${leadBlock}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px;border-collapse:separate;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 10px 15px -3px rgba(15,23,42,0.08),0 4px 6px -2px rgba(15,23,42,0.04);">
   <tr>
     <td style="background:#193434;padding:20px 22px;">
@@ -450,11 +458,13 @@ function buildPlainText({
 }) {
   const rawFirst = clientFirstName && String(clientFirstName).trim();
   const nameStr = rawFirst || ui.fallbackName || '';
-  const greeting = nameStr ? `${ui.greetingWord} ${nameStr},` : `${ui.greetingWord},`;
-  const lead =
-    customMessagePlain && String(customMessagePlain).trim()
-      ? String(customMessagePlain).trim()
-      : ui.defaultLead;
+  const hasCustomMessage = Boolean(customMessagePlain && String(customMessagePlain).trim());
+  const greeting = hasCustomMessage
+    ? null
+    : nameStr
+      ? `${ui.greetingWord} ${nameStr},`
+      : `${ui.greetingWord},`;
+  const lead = hasCustomMessage ? String(customMessagePlain).trim() : ui.defaultLead;
   const taxR = Number(taxRate);
   const showVat = Number.isFinite(taxR) && taxR > 0;
   const list = Array.isArray(items) ? items : [];
@@ -471,8 +481,7 @@ function buildPlainText({
   }
 
   const lines = [
-    greeting,
-    lead,
+    ...(greeting ? [greeting, lead] : [lead]),
     '',
     `${ui.invoiceDocTitle} #${invoiceNumberDisplay}`,
     `${ui.amountDueLabel}: ${totalFormatted}`,
@@ -512,15 +521,16 @@ function buildPlainText({
  * @returns {{ html: string, text: string }}
  */
 function buildInvoiceCustomerEmailPayload({ invoice, companyName, countryCode, eInvoiceUrl, messagePlain }) {
-  const ui = getUi(countryCode);
+  const ui = getInvoiceCustomerEmailUi(countryCode);
+  const dateCc = invoiceCustomerEmailLang(countryCode) === 'da' ? 'DK' : 'US';
   const clientFirstName = invoice.name && String(invoice.name).trim();
   const clientDisplayName =
     (invoice.client_name && String(invoice.client_name).trim()) ||
     [invoice.name, invoice.last_name].filter(Boolean).join(' ').trim() ||
     '';
   const invoiceNumberDisplay = String(invoice.invoice_number != null ? invoice.invoice_number : invoice.id);
-  const issueDateDisplay = formatDisplayDate(invoice.issue_date || invoice.created_at, countryCode);
-  const dueDateDisplay = formatDisplayDate(invoice.due_date, countryCode);
+  const issueDateDisplay = formatDisplayDate(invoice.issue_date || invoice.created_at, dateCc);
+  const dueDateDisplay = formatDisplayDate(invoice.due_date, dateCc);
   const cur = invoice.currency;
   const totalFormatted = formatMoneyAmount(invoice.total, cur);
   const subtotalFormatted = formatMoneyAmount(invoice.subtotal, cur);

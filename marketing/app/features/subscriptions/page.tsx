@@ -7,7 +7,7 @@ import Header from '../../components/Header'
 import Footer from '../../components/Footer'
 import CTASection from '../../components/CTASection'
 import { marketingImages } from '../../config/marketingImages'
-import { getLocaleFromPathname, withAppLanguageParam } from '../../lib/i18n'
+import { resolveMarketingLocale, withAppLanguageParam } from '../../lib/i18n'
 import {
   ArrowPathIcon,
   BanknotesIcon,
@@ -23,7 +23,7 @@ import {
 
 export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: { locale?: string }) {
   const pathname = usePathname()
-  const locale = pathname ? getLocaleFromPathname(pathname) : localeProp
+  const locale = resolveMarketingLocale(pathname, localeProp)
   const da = locale === 'da'
   const registerHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
 

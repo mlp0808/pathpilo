@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { pool } = require('../utils/database');
 const { buildPublicInvoicePayload } = require('../utils/eInvoicePayload');
+const { computeNextSequenceNumber, resolveInvoiceNumberDisplay } = require('../utils/invoiceNumberAllocation');
 
 const router = express.Router();
 
@@ -129,12 +130,16 @@ async function loadInvoiceForPublic(invoiceId) {
     // invoice_transactions may not exist
   }
 
+  const nextPreview = await computeNextSequenceNumber(pool, row.company_id);
+  const invoice_number_display = resolveInvoiceNumberDisplay(row, nextPreview);
+
   return {
     ...row,
     client_name,
     items: itemsResult.rows,
     transactions,
     balance,
+    invoice_number_display,
   };
 }
 

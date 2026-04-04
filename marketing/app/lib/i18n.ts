@@ -10,6 +10,16 @@ export function getLocaleFromPathname(pathname: string): MarketingLocale {
   return seg && isMarketingLocale(seg) ? seg : 'en'
 }
 
+/** Prefer locale from URL prefix; otherwise `localeProp` if valid; else `en`. */
+export function resolveMarketingLocale(
+  pathname: string | null | undefined,
+  localeProp?: string
+): MarketingLocale {
+  if (pathname) return getLocaleFromPathname(pathname)
+  if (localeProp && isMarketingLocale(localeProp)) return localeProp
+  return 'en'
+}
+
 export function stripLocalePrefix(pathname: string): string {
   const parts = pathname.split('/').filter(Boolean)
   if (parts[0] && isMarketingLocale(parts[0])) {

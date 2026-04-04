@@ -1,5 +1,11 @@
 const express = require('express');
 const { pool } = require('../utils/database');
+const {
+  ensureInvoiceNumberNullable,
+  clearInvoiceNumbersOnDrafts,
+  computeNextSequenceNumber,
+  resolveInvoiceNumberDisplay,
+} = require('../utils/invoiceNumberAllocation');
 
 const router = express.Router();
 const COUNTRY_TAX_DEFAULTS = {
@@ -432,13 +438,15 @@ router.get('/:clientId/invoices', authenticateToken, async (req, res) => {
       ORDER BY i.created_at DESC
     `, [companyId, clientId]);
 
+    const nextPreview = await computeNextSequenceNumber(pool, companyId);
     res.json({
       invoices: result.rows.map(invoice => ({
         ...invoice,
         client_name: `${invoice.name || ''} ${invoice.last_name || ''}`.trim(),
         created_by_name: invoice.created_by_first_name && invoice.created_by_last_name
           ? `${invoice.created_by_first_name} ${invoice.created_by_last_name}`
-          : null
+          : null,
+        invoice_number_display: resolveInvoiceNumberDisplay(invoice, nextPreview),
       }))
     });
   } catch (error) {
@@ -543,30 +551,8 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
         `ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1`
       )
       .catch(() => {});
-
-    const lock = await dbClient.query(
-      `SELECT invoice_next_number FROM companies WHERE id = $1 FOR UPDATE`,
-      [companyId]
-    );
-    let nextNum = Number(lock.rows[0]?.invoice_next_number);
-    if (!Number.isFinite(nextNum) || nextNum < 1) nextNum = 1;
-
-    const maxR = await dbClient.query(
-      `SELECT COALESCE(MAX(CAST(invoice_number AS BIGINT)), 0) AS m
-       FROM invoices WHERE company_id = $1 AND invoice_number ~ '^[0-9]+$' AND LENGTH(invoice_number) <= 18`,
-      [companyId]
-    );
-    const maxN = Number(maxR.rows[0].m) || 0;
-    if (nextNum <= maxN) {
-      nextNum = maxN + 1;
-    }
-
-    const invoiceNumber = String(nextNum);
-
-    await dbClient.query(`UPDATE companies SET invoice_next_number = $1 WHERE id = $2`, [
-      nextNum + 1,
-      companyId,
-    ]);
+    await ensureInvoiceNumberNullable(dbClient);
+    await clearInvoiceNumbersOnDrafts(dbClient);
 
     let subtotal = 0;
     const invoiceItems = [];
@@ -635,7 +621,7 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft')
       RETURNING *
     `, [
-      companyId, clientId, invoiceNumber, invoiceTitle || '', issue_date, due_date,
+      companyId, clientId, null, invoiceTitle || '', issue_date, due_date,
       subtotal, tax_rate, taxAmount, total, currency, notes, payment_terms, userId,
       (descriptionInput && String(descriptionInput).trim()) || '', !!showCompletedDate
     ]);

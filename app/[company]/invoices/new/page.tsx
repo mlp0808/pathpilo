@@ -63,7 +63,6 @@ function NewInvoicePageContent() {
     tax_rate: 25,
     currency: 'DKK',
     payment_terms: 'Payment terms: Net {overdue_days} days - Due date: {due_date}\n\nThe amount is to be paid to bank account:\nBank / Reg.nr. 5332 / Kontonr. 0254888\nInvoice no. {invoice_number} must be stated for bank transfer\n\nInterest of 0.81% per commenced month plus a fee of 100.00 DKK will be charged for payment after due date.',
-    notes: '',
     description: '',
     show_completed_date: false,
     discounts: {} as Record<string, number>,
@@ -185,7 +184,7 @@ function NewInvoicePageContent() {
           tax_rate: form.tax_rate,
           currency: form.currency,
           payment_terms: form.payment_terms,
-          notes: form.notes,
+          notes: '',
           description: form.description.trim() || '',
           show_completed_date: form.show_completed_date,
           discounts: form.discounts,
@@ -382,7 +381,7 @@ function NewInvoicePageContent() {
               </section>
 
               <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Payment & notes</h2>
+                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">Payment</h2>
                 <div className="space-y-4">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-700">Description (on invoice, above table)</label>
@@ -406,16 +405,6 @@ function NewInvoicePageContent() {
                     <p className="mt-1.5 text-xs text-gray-500">
                       Placeholders: {PAYMENT_TERMS_PLACEHOLDERS.join(', ')}
                     </p>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">Internal notes (not shown on invoice)</label>
-                    <textarea
-                      value={form.notes}
-                      onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
-                      rows={3}
-                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder="For your reference only..."
-                    />
                   </div>
                 </div>
               </section>
@@ -529,7 +518,6 @@ function NewInvoicePageContent() {
                         })}
                       </div>
                     )}
-                    {/* Internal notes are not shown on invoice */}
                   </div>
                 </div>
               </div>
