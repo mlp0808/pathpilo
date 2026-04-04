@@ -29,6 +29,10 @@ export const metadata: Metadata = {
     telephone: false,
   },
   metadataBase: new URL('https://pathpilo.com'),
+  icons: {
+    icon: '/pathpilo_favicon.png',
+    apple: '/pathpilo_favicon.png',
+  },
   alternates: {
     canonical: '/',
   },

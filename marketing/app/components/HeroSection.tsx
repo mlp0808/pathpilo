@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { marketingImages } from '../config/marketingImages'
 import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
+import { pushCtaClick } from '../lib/dataLayer'
 
 const COLLAGE = {
   main: marketingImages.hero.collageMain,
@@ -62,12 +63,28 @@ export default function HeroSection() {
               <Link
                 href={withAppLanguageParam(locale, 'https://app.pathpilo.com/register')}
                 className="btn-primary inline-flex justify-center text-center text-lg px-8 py-4"
+                onClick={() =>
+                  pushCtaClick({
+                    ctaType: 'register',
+                    ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
+                    linkUrl: withAppLanguageParam(locale, 'https://app.pathpilo.com/register'),
+                    location: 'hero',
+                  })
+                }
               >
                 {da ? 'Kom i gang gratis' : 'Get Started Free'}
               </Link>
               <Link
                 href={withLocalePath(locale, '/pricing')}
                 className="inline-flex justify-center rounded-xl border border-white/20 bg-white/5 px-8 py-4 text-lg font-semibold text-white backdrop-blur transition hover:border-white/30 hover:bg-white/10"
+                onClick={() =>
+                  pushCtaClick({
+                    ctaType: 'secondary',
+                    ctaLabel: da ? 'Se priser' : 'View pricing',
+                    linkUrl: withLocalePath(locale, '/pricing'),
+                    location: 'hero',
+                  })
+                }
               >
                 {da ? 'Se priser' : 'View pricing'}
               </Link>

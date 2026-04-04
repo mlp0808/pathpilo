@@ -6,6 +6,10 @@ import { ClientI18nProvider } from './components/I18nProvider'
 export const metadata: Metadata = {
   title: 'PathPilo - Client Management for Service Companies',
   description: 'Streamline your service business with PathPilo. Manage clients, jobs, and recurring tasks all in one place.',
+  icons: {
+    icon: '/pathpilo_favicon.png',
+    apple: '/pathpilo_favicon.png',
+  },
 }
 
 export default function RootLayout({

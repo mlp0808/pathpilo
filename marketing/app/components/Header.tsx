@@ -13,6 +13,7 @@ import {
   withLocalePath,
   type MarketingLocale,
 } from '../lib/i18n'
+import { pushCtaClick } from '../lib/dataLayer'
 
 export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -175,7 +176,18 @@ export default function Header() {
             >
               {locale === 'da' ? 'Log ind' : 'Sign In'}
             </Link>
-            <Link href={registerHref} className="btn-primary">
+            <Link
+              href={registerHref}
+              className="btn-primary"
+              onClick={() =>
+                pushCtaClick({
+                  ctaType: 'register',
+                  ctaLabel: locale === 'da' ? 'Kom i gang' : 'Get Started',
+                  linkUrl: registerHref,
+                  location: 'header',
+                })
+              }
+            >
               {locale === 'da' ? 'Kom i gang' : 'Get Started'}
             </Link>
           </div>
@@ -268,7 +280,18 @@ export default function Header() {
             >
               {locale === 'da' ? 'Log ind' : 'Sign In'}
             </Link>
-            <Link href={registerHref} className="block btn-primary text-center mt-4">
+            <Link
+              href={registerHref}
+              className="block btn-primary text-center mt-4"
+              onClick={() =>
+                pushCtaClick({
+                  ctaType: 'register',
+                  ctaLabel: locale === 'da' ? 'Kom i gang' : 'Get Started',
+                  linkUrl: registerHref,
+                  location: 'header_mobile',
+                })
+              }
+            >
               {locale === 'da' ? 'Kom i gang' : 'Get Started'}
             </Link>
           </div>

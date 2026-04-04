@@ -6,8 +6,10 @@ import { usePathname } from 'next/navigation'
 import Header from '../../components/Header'
 import Footer from '../../components/Footer'
 import CTASection from '../../components/CTASection'
+import FeaturePageAnalytics from '../../components/FeaturePageAnalytics'
 import { marketingImages } from '../../config/marketingImages'
 import { resolveMarketingLocale, withAppLanguageParam } from '../../lib/i18n'
+import { pushCtaClick } from '../../lib/dataLayer'
 import {
   ArrowsRightLeftIcon,
   BellAlertIcon,
@@ -37,6 +39,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
 
   return (
     <>
+      <FeaturePageAnalytics featureKey="team" />
       <Header />
 
       {/* ─── HERO (dark brand) ─── */}
@@ -477,6 +480,8 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
         primaryLink="https://app.pathpilo.com/register"
         secondaryCTA={da ? 'Kontakt os' : 'Contact Us'}
         secondaryLink="/contact"
+        analyticsLocation="cta_section_feature"
+        featureKey="team"
       />
 
       <Footer />

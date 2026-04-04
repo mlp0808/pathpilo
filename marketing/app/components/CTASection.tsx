@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
+import { pushCtaClick } from '../lib/dataLayer'
 
 interface CTASectionProps {
   title?: string
@@ -12,6 +13,9 @@ interface CTASectionProps {
   secondaryCTA?: string
   secondaryLink?: string
   variant?: 'default' | 'accent'
+  /** dataLayer location, e.g. cta_section (default) or feature page slug */
+  analyticsLocation?: string
+  featureKey?: string
 }
 
 export default function CTASection({
@@ -21,7 +25,9 @@ export default function CTASection({
   primaryLink = "https://app.pathpilo.com/register",
   secondaryCTA,
   secondaryLink,
-  variant = 'default'
+  variant = 'default',
+  analyticsLocation = 'cta_section',
+  featureKey,
 }: CTASectionProps) {
   const pathname = usePathname()
   const locale = getLocaleFromPathname(pathname || '/')
@@ -48,11 +54,37 @@ export default function CTASection({
           {subtitle}
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-          <Link href={localizeHref(primaryLink)} className="btn-primary text-lg px-8 py-4">
+          <Link
+            href={localizeHref(primaryLink)}
+            className="btn-primary text-lg px-8 py-4"
+            onClick={() => {
+              const href = localizeHref(primaryLink)
+              pushCtaClick({
+                ctaType: primaryLink.includes('register') ? 'register' : 'primary',
+                ctaLabel: primaryCTA,
+                linkUrl: href,
+                location: analyticsLocation,
+                featureKey,
+              })
+            }}
+          >
             {primaryCTA}
           </Link>
           {secondaryCTA && secondaryLink && (
-            <Link href={localizeHref(secondaryLink)} className={`${variant === 'accent' ? 'btn-outline border-white text-white hover:bg-white hover:text-accent-600' : 'btn-secondary'} text-lg px-8 py-4`}>
+            <Link
+              href={localizeHref(secondaryLink)}
+              className={`${variant === 'accent' ? 'btn-outline border-white text-white hover:bg-white hover:text-accent-600' : 'btn-secondary'} text-lg px-8 py-4`}
+              onClick={() => {
+                const href = localizeHref(secondaryLink)
+                pushCtaClick({
+                  ctaType: 'secondary',
+                  ctaLabel: secondaryCTA,
+                  linkUrl: href,
+                  location: analyticsLocation,
+                  featureKey,
+                })
+              }}
+            >
               {secondaryCTA}
             </Link>
           )}

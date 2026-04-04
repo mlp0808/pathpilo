@@ -6,8 +6,10 @@ import { usePathname } from 'next/navigation'
 import Header from '../../components/Header'
 import Footer from '../../components/Footer'
 import CTASection from '../../components/CTASection'
+import FeaturePageAnalytics from '../../components/FeaturePageAnalytics'
 import { marketingImages } from '../../config/marketingImages'
 import { resolveMarketingLocale, withAppLanguageParam } from '../../lib/i18n'
+import { pushCtaClick } from '../../lib/dataLayer'
 import {
   ArrowPathIcon,
   BanknotesIcon,
@@ -29,6 +31,7 @@ export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: 
 
   return (
     <>
+      <FeaturePageAnalytics featureKey="subscriptions" />
       <Header />
 
       <section className="relative overflow-hidden bg-[#0a1414]">
@@ -88,6 +91,15 @@ export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: 
                 <Link
                   href={registerHref}
                   className="btn-primary inline-flex justify-center !px-6 !py-3 !text-base hover:!scale-100"
+                  onClick={() =>
+                    pushCtaClick({
+                      ctaType: 'register',
+                      ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
+                      linkUrl: registerHref,
+                      location: 'feature_hero',
+                      featureKey: 'subscriptions',
+                    })
+                  }
                 >
                   {da ? 'Kom i gang gratis' : 'Get Started Free'}
                 </Link>
@@ -484,6 +496,8 @@ export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: 
         primaryLink="https://app.pathpilo.com/register"
         secondaryCTA={da ? 'Kontakt os' : 'Contact Us'}
         secondaryLink="/contact"
+        analyticsLocation="cta_section_feature"
+        featureKey="subscriptions"
       />
 
       <Footer />

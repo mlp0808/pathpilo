@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { marketingImages } from '../config/marketingImages'
 import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
+import { pushCtaClick } from '../lib/dataLayer'
 
 export default function Footer() {
   const pathname = usePathname()
@@ -96,7 +97,18 @@ export default function Footer() {
                 </a>
               </li>
               <li>
-                <a href={registerHref} className="text-gray-300 hover:text-white transition-colors">
+                <a
+                  href={registerHref}
+                  className="text-gray-300 hover:text-white transition-colors"
+                  onClick={() =>
+                    pushCtaClick({
+                      ctaType: 'register',
+                      ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
+                      linkUrl: registerHref,
+                      location: 'footer',
+                    })
+                  }
+                >
                   {da ? 'Kom i gang gratis' : 'Get Started Free'}
                 </a>
               </li>

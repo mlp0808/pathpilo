@@ -10,6 +10,7 @@ import {
   withAppLanguageParam,
 } from '../lib/i18n'
 import type { MarketingLocale } from '../lib/i18n'
+import { pushCtaClick } from '../lib/dataLayer'
 import {
   CheckCircleIcon,
   CurrencyDollarIcon,
@@ -25,6 +26,7 @@ export default function PricingPage({ locale: localeProp }: { locale?: string })
       ? localeProp
       : getLocaleFromPathname(pathname || '/')
   const da = locale === 'da'
+  const registerUrl = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -288,8 +290,16 @@ export default function PricingPage({ locale: localeProp }: { locale?: string })
               {da ? 'Ikke klar til at binde dig endnu? Kom i gang gratis - intet kreditkort påkrævet.' : 'Not ready to commit? Get started for free—no credit card required.'}
             </p>
             <a
-              href={withAppLanguageParam(locale, 'https://app.pathpilo.com/register')}
+              href={registerUrl}
               className="btn-outline text-lg px-8 py-4 inline-block"
+              onClick={() =>
+                pushCtaClick({
+                  ctaType: 'register',
+                  ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
+                  linkUrl: registerUrl,
+                  location: 'pricing_bottom',
+                })
+              }
             >
               {da ? 'Kom i gang gratis' : 'Get Started Free'}
             </a>
