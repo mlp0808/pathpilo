@@ -1,9 +1,7 @@
-require('dotenv').config();
 const path = require('path');
-// If no email config in api-server/.env, try parent .env (e.g. single .env at project root)
-if (!process.env.RESEND_API_KEY && !process.env.EMAIL_HOST) {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
-}
+// Root .env first (shared secrets like ADMIN_*), then api-server/.env overrides for local API
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '.env'), override: true });
 const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');

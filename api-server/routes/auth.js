@@ -433,11 +433,15 @@ router.post('/login', async (req, res) => {
     }
 
     // ── Super admin check (env-only, no DB entry) ──────────────────────────
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const adminPassword = process.env.ADMIN_PASSWORD;
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim();
+    const adminPassword =
+      process.env.ADMIN_PASSWORD !== undefined && process.env.ADMIN_PASSWORD !== null
+        ? String(process.env.ADMIN_PASSWORD).trim()
+        : '';
+    const inputEmail = String(email).trim();
 
-    if (adminEmail && email.toLowerCase() === adminEmail.toLowerCase()) {
-      if (!adminPassword || password !== adminPassword) {
+    if (adminEmail && inputEmail.toLowerCase() === adminEmail.toLowerCase()) {
+      if (!adminPassword || String(password).trim() !== adminPassword) {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
       const token = jwt.sign(
