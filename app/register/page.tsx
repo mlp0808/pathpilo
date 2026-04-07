@@ -120,6 +120,7 @@ function RegisterForm() {
         lastName: formData.lastName,
         email: formData.email,
         password: formData.password,
+        languageCode: requestedLang,
         verificationToken: token,
         ...(inviteToken && { invitationToken: inviteToken }),
         ...(trialToken && { trialToken }),

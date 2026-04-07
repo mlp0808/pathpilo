@@ -493,6 +493,7 @@ router.post('/login', async (req, res) => {
         uc.role as user_role,
         c.owner_id,
         c.country_code,
+        c.suspended_at,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
       FROM user_companies uc
       JOIN companies c ON uc.company_id = c.id
@@ -508,9 +509,8 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'User is not associated with any company' });
     }
 
-    // For admin users without companies, set activeCompany to null
-    // For regular users, use first company as active (prefer owned companies)
-    const activeCompany = companies.length > 0 ? companies[0] : null;
+    // Prefer a non-suspended company as active; otherwise fall back to first.
+    const activeCompany = companies.find(c => !c.suspended_at) || (companies.length > 0 ? companies[0] : null);
 
     // Generate JWT token
     // Admin users without companies won't have activeCompanyId
@@ -545,7 +545,8 @@ router.post('/login', async (req, res) => {
           slug: c.slug,
           countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
           role: c.user_role,
-          isOwner: c.is_owner
+          isOwner: c.is_owner,
+          suspendedAt: c.suspended_at || null
         }))
       }
     };
@@ -558,7 +559,8 @@ router.post('/login', async (req, res) => {
         slug: activeCompany.slug,
         countryCode: activeCompany.country_code || DEFAULT_COUNTRY_CODE,
         role: activeCompany.user_role,
-        isOwner: activeCompany.is_owner
+        isOwner: activeCompany.is_owner,
+        suspendedAt: activeCompany.suspended_at || null
       };
       responseData.user.companyId = activeCompany.id;
       responseData.user.companyName = activeCompany.name;

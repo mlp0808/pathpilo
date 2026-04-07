@@ -17,6 +17,7 @@ interface User {
     name: string
     slug?: string
     countryCode?: string
+    suspendedAt?: string | null
     role: string
     isOwner: boolean
   }>
@@ -25,6 +26,7 @@ interface User {
     name: string
     slug?: string
     countryCode?: string
+    suspendedAt?: string | null
     role: string
     isOwner: boolean
   } | null
@@ -57,6 +59,11 @@ export function useUser() {
       
       if (!hasCompanies && !hasActiveCompany && !hasCompanyId) {
         router.push('/setup/company')
+        return
+      }
+
+      if (user.activeCompany?.suspendedAt) {
+        router.push('/suspended')
         return
       }
     } catch (error) {

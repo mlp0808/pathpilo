@@ -180,6 +180,123 @@ router.get('/companies', async (req, res) => {
   }
 });
 
+// POST /api/admin/companies/:companyId/overwatch/start
+// Creates a temporary owner-level token for support access without creating membership.
+router.post('/companies/:companyId/overwatch/start', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { superPassword } = req.body || {};
+    const jwt = require('jsonwebtoken');
+    const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+    const configuredSuperPassword =
+      process.env.ADMIN_PASSWORD !== undefined && process.env.ADMIN_PASSWORD !== null
+        ? String(process.env.ADMIN_PASSWORD).trim()
+        : '';
+
+    if (!configuredSuperPassword) {
+      return res.status(500).json({ error: 'Super password is not configured on the server' });
+    }
+
+    if (String(superPassword || '').trim() !== configuredSuperPassword) {
+      return res.status(401).json({ error: 'Invalid super password' });
+    }
+
+    const companyResult = await pool.query(
+      `
+      SELECT c.id, c.name, c.slug, c.owner_id, c.country_code
+      FROM companies c
+      WHERE c.id = $1
+      `,
+      [companyId]
+    );
+
+    if (companyResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const company = companyResult.rows[0];
+    if (!company.owner_id) {
+      return res.status(400).json({ error: 'Company has no owner account to impersonate' });
+    }
+
+    const ownerResult = await pool.query(
+      `
+      SELECT id, first_name, last_name, email, language_code
+      FROM users
+      WHERE id = $1
+      `,
+      [company.owner_id]
+    );
+
+    if (ownerResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Company owner account not found' });
+    }
+
+    const owner = ownerResult.rows[0];
+    const adminEmail = String(req.user?.email || '').trim();
+    const adminUserId = Number(req.user?.userId || 0);
+
+    const token = jwt.sign(
+      {
+        userId: owner.id,
+        email: owner.email,
+        firstName: owner.first_name,
+        lastName: owner.last_name,
+        activeCompanyId: company.id,
+        role: 'owner',
+        overwatch: true,
+        overwatchAdminEmail: adminEmail || null,
+        overwatchAdminUserId: Number.isFinite(adminUserId) ? adminUserId : 0,
+        overwatchCompanyId: company.id,
+      },
+      JWT_SECRET,
+      { expiresIn: '30m' }
+    );
+
+    res.json({
+      message: 'Overwatch session started',
+      token,
+      user: {
+        id: owner.id,
+        firstName: owner.first_name,
+        lastName: owner.last_name,
+        email: owner.email,
+        languageCode: owner.language_code || 'en',
+        role: 'owner',
+        companyId: company.id,
+        companyName: company.name,
+        companies: [
+          {
+            id: company.id,
+            name: company.name,
+            slug: company.slug,
+            countryCode: company.country_code || 'DK',
+            role: 'owner',
+            isOwner: true,
+          },
+        ],
+        activeCompany: {
+          id: company.id,
+          name: company.name,
+          slug: company.slug,
+          countryCode: company.country_code || 'DK',
+          role: 'owner',
+          isOwner: true,
+        },
+        overwatch: {
+          active: true,
+          adminEmail: adminEmail || null,
+          companyId: company.id,
+          companyName: company.name,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Error starting overwatch session:', error);
+    res.status(500).json({ error: 'Failed to start overwatch session' });
+  }
+});
+
 // GET /api/admin/users - List all users
 router.get('/users', async (req, res) => {
   try {

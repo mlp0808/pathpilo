@@ -207,7 +207,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // GET /api/companies/slug/:slug - Resolve company by slug
-router.get('/slug/:slug', async (req, res) => {
+router.get('/slug/:slug', authenticateToken, async (req, res) => {
   try {
     const { slug } = req.params;
     const userId = req.user.userId;
@@ -402,7 +402,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
 
     // Get company details including slug
     const companyResult = await pool.query(
-      'SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, \'[^a-z0-9]+\', \'-\', \'g\'))) as slug, owner_id, country_code FROM companies WHERE id = $1',
+      'SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, \'[^a-z0-9]+\', \'-\', \'g\'))) as slug, owner_id, country_code, suspended_at FROM companies WHERE id = $1',
       [targetCompanyId]
     );
     const company = companyResult.rows[0];
@@ -410,6 +410,10 @@ router.post('/switch', authenticateToken, async (req, res) => {
     if (!company) {
       console.error('Company not found:', targetCompanyId);
       return res.status(404).json({ error: 'Company not found' });
+    }
+
+    if (company.suspended_at) {
+      return res.status(423).json({ error: 'Company is on hold and cannot be accessed' });
     }
     
     // Get user role in the company

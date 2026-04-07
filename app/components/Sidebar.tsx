@@ -21,6 +21,7 @@ import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
 import { useAppI18n } from './I18nProvider'
 import VideoGuideModal from './VideoGuideModal'
+import { isOverwatchActive, stopOverwatchSession } from '../utils/overwatch'
 
 interface Company {
   id: number
@@ -61,6 +62,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
   const [isVideoGuideOpen, setIsVideoGuideOpen] = useState(false)
+  const [overwatchActive, setOverwatchActive] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   // Auto-open Get Started modal on login; stays closed once dismissed until next logout
@@ -68,6 +70,10 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
     if (typeof window === 'undefined') return
     if (sessionStorage.getItem('pathpilo_video_guide_dismissed')) return
     setIsVideoGuideOpen(true)
+  }, [])
+
+  useEffect(() => {
+    setOverwatchActive(isOverwatchActive())
   }, [])
 
   const handleVideoGuideClose = () => {
@@ -101,6 +107,15 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
     localStorage.removeItem('user')
     sessionStorage.removeItem('pathpilo_video_guide_dismissed')
     window.location.href = '/'
+  }
+
+  const handleQuitOverwatch = () => {
+    const restored = stopOverwatchSession()
+    if (!restored) {
+      alert('No active overwatch session found.')
+      return
+    }
+    window.location.href = '/admin/companies'
   }
 
   const handleCompanySwitch = async (companyId: number) => {
@@ -201,11 +216,13 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
       {/* Top bar: Logout */}
       <div className="flex items-center px-4 py-2 border-b border-white/10">
         <button
-          onClick={handleLogout}
+          onClick={overwatchActive ? handleQuitOverwatch : handleLogout}
           className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
         >
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
-          <span className="text-xs font-medium">{t('app.sidebar.logout', 'Logout')}</span>
+          <span className="text-xs font-medium">
+            {overwatchActive ? 'Quit Overwatch' : t('app.sidebar.logout', 'Logout')}
+          </span>
         </button>
       </div>
 

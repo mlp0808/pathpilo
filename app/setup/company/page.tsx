@@ -7,13 +7,22 @@ import { useUser } from '../../hooks/useUser'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
 import { countryRules, getCountryRule } from '../../config/countryRules'
 import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
+import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../../i18n'
+
+const defaultCountryCodeFromLocale = (): string => {
+  if (typeof window === 'undefined') return 'DK'
+  const uiLocale = normalizeLocale(localStorage.getItem(UI_LOCALE_STORAGE_KEY))
+  return uiLocale === 'da' ? 'DK' : 'DK'
+}
 
 export default function CompanySetupPage() {
   const { user } = useUser()
+  const initialCountryCode = defaultCountryCodeFromLocale()
+  const initialCountryRule = countryRules[initialCountryCode] || countryRules.DK
   const [formData, setFormData] = useState({
-    country: countryRules.DK.countryName,
-    countryCode: 'DK',
-    timezone: getDefaultTimezoneForCountry('DK'),
+    country: initialCountryRule.countryName,
+    countryCode: initialCountryCode,
+    timezone: getDefaultTimezoneForCountry(initialCountryCode),
     name: '',
     cvrNumber: '',
     address: '',

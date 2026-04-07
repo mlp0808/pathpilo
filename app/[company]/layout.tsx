@@ -5,6 +5,7 @@ import { useParams, useRouter, usePathname } from 'next/navigation'
 import { useUser } from '@/app/hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 import { clearClientLocaleStorage } from '@/app/i18n'
+import { isOverwatchActive, stopOverwatchSession } from '@/app/utils/overwatch'
 
 function SuspendedWall({ companyName }: { companyName: string }) {
   const handleLogout = () => {
@@ -22,21 +23,29 @@ function SuspendedWall({ companyName }: { companyName: string }) {
           </svg>
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-primary-800 mb-2">Account on hold</h1>
+          <h1 className="text-2xl font-bold text-primary-800 mb-2">This company has expired</h1>
           <p className="text-gray-600">
-            <strong>{companyName}</strong> has been temporarily suspended.
-            Access to all company data, clients and jobs is currently unavailable.
+            <strong>{companyName}</strong> is currently on hold.
+            The software is unavailable for all users of this company.
           </p>
           <p className="text-sm text-gray-400 mt-3">
-            If you believe this is a mistake, please contact your account manager.
+            Contact the company owner, or go to our support page for more help.
           </p>
         </div>
-        <button
-          onClick={handleLogout}
-          className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center justify-center gap-3">
+          <a
+            href="https://pathpilo.com/contact"
+            className="btn-primary"
+          >
+            Go to support
+          </a>
+          <button
+            onClick={handleLogout}
+            className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -65,8 +74,26 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const [isResolving, setIsResolving] = useState(true)
   const [lastResolvedSlug, setLastResolvedSlug] = useState<string | null>(null)
   const [suspendedCompanyName, setSuspendedCompanyName] = useState<string | null>(null)
+  const [overwatchActive, setOverwatchActive] = useState(false)
+  const [overwatchAdminEmail, setOverwatchAdminEmail] = useState<string | null>(null)
 
   const companySlug = params?.company as string
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setOverwatchActive(isOverwatchActive())
+    try {
+      const rawUser = localStorage.getItem('user')
+      if (!rawUser) return
+      const parsed = JSON.parse(rawUser)
+      const adminEmail = parsed?.overwatch?.adminEmail
+      if (adminEmail && typeof adminEmail === 'string') {
+        setOverwatchAdminEmail(adminEmail)
+      }
+    } catch {
+      // ignore malformed local storage payload
+    }
+  }, [])
 
   useEffect(() => {
     if (userLoading || !companySlug) {
@@ -86,22 +113,6 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
       try {
         setIsResolving(true)
         const token = localStorage.getItem('token')
-        
-        // Check if user's active company already matches this slug
-        const userStr = localStorage.getItem('user')
-        if (userStr) {
-          try {
-            const userData = JSON.parse(userStr)
-            if (userData.activeCompany?.slug === companySlug) {
-              // Already on this company, just render
-              setLastResolvedSlug(companySlug)
-              setIsResolving(false)
-              return
-            }
-          } catch (e) {
-            console.error('Error parsing user data in layout:', e)
-          }
-        }
         
         // Resolve slug to company
         const resolveResponse = await fetch(apiUrl(`/companies/slug/${companySlug}`), {
@@ -243,7 +254,27 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     return <SuspendedWall companyName={suspendedCompanyName} />
   }
 
-  return <>{children}</>
+  return (
+    <>
+      {overwatchActive && (
+        <div className="sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          <span>
+            Overwatch mode active{overwatchAdminEmail ? ` (${overwatchAdminEmail})` : ''}. You are temporarily viewing this company as owner.
+          </span>
+          <button
+            onClick={() => {
+              stopOverwatchSession()
+              window.location.href = '/admin/companies'
+            }}
+            className="rounded border border-amber-400 bg-white px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+          >
+            Quit Overwatch
+          </button>
+        </div>
+      )}
+      {children}
+    </>
+  )
 }
 
 

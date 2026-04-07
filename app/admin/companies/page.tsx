@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
+import { startOverwatchSession } from '../../utils/overwatch'
+import { ArrowRightCircleIcon } from '@heroicons/react/24/outline'
 
 interface Company {
   id: number
@@ -78,6 +80,7 @@ export default function AdminCompaniesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [enteringCompanyId, setEnteringCompanyId] = useState<number | null>(null)
 
   useEffect(() => {
     // Check authentication first
@@ -151,6 +154,42 @@ export default function AdminCompaniesPage() {
       hour: '2-digit',
       minute: '2-digit'
     })
+  }
+
+  const handleEnterOverwatch = async (companyId: number) => {
+    if (enteringCompanyId) return
+    const superPassword = window.prompt('Enter super password to start Overwatch')
+    if (!superPassword) return
+    setEnteringCompanyId(companyId)
+    try {
+      const token = localStorage.getItem('token')
+      if (!token) {
+        setError('Not authenticated. Please log in again.')
+        return
+      }
+
+      const response = await fetch(apiUrl(`/admin/companies/${companyId}/overwatch/start`), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ superPassword }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setError(data.error || 'Failed to start overwatch')
+        return
+      }
+
+      startOverwatchSession(data.token, data.user)
+      const slug = data.user?.activeCompany?.slug
+      window.location.href = slug ? `/${slug}/dashboard` : '/select-company'
+    } catch (err) {
+      setError('Failed to start overwatch: ' + (err as Error).message)
+    } finally {
+      setEnteringCompanyId(null)
+    }
   }
 
   // Show loading while checking authentication
@@ -258,6 +297,7 @@ export default function AdminCompaniesPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Users</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access expires</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Overwatch</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -285,6 +325,16 @@ export default function AdminCompaniesPage() {
                         <ExpiryCell expiresAt={company.expiresAt} suspendedAt={company.suspendedAt} />
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{formatDate(company.createdAt)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <button
+                          onClick={() => handleEnterOverwatch(company.id)}
+                          disabled={enteringCompanyId === company.id}
+                          title="Enter company in overwatch mode"
+                          className="inline-flex items-center justify-center rounded-md border border-gray-200 p-2 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <ArrowRightCircleIcon className="h-5 w-5" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
