@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { marketingImages } from '../config/marketingImages'
 import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
-import { pushCtaClick } from '../lib/dataLayer'
+import { pushCtaClick, pushMetaCustomEvent } from '../lib/dataLayer'
 
 const COLLAGE = {
   main: marketingImages.hero.collageMain,
@@ -64,12 +64,20 @@ export default function HeroSection() {
                 href={withAppLanguageParam(locale, 'https://app.pathpilo.com/register')}
                 className="btn-primary inline-flex justify-center text-center text-lg px-8 py-4"
                 onClick={() =>
-                  pushCtaClick({
-                    ctaType: 'register',
-                    ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
-                    linkUrl: withAppLanguageParam(locale, 'https://app.pathpilo.com/register'),
-                    location: 'hero',
-                  })
+                  {
+                    const href = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
+                    pushCtaClick({
+                      ctaType: 'register',
+                      ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
+                      linkUrl: href,
+                      location: 'hero',
+                    })
+                    pushMetaCustomEvent('get_started', {
+                      cta_label: da ? 'Kom i gang gratis' : 'Get Started Free',
+                      link_url: href,
+                      location: 'hero',
+                    })
+                  }
                 }
               >
                 {da ? 'Kom i gang gratis' : 'Get Started Free'}

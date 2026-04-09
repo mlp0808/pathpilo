@@ -5,6 +5,7 @@
 declare global {
   interface Window {
     dataLayer?: Record<string, unknown>[]
+    fbq?: (...args: unknown[]) => void
   }
 }
 
@@ -40,4 +41,9 @@ export function pushFeaturePageView(featureKey: string, pagePath?: string) {
     feature_key: featureKey,
     ...(pagePath ? { page_path: pagePath } : {}),
   })
+}
+
+export function pushMetaCustomEvent(eventName: string, payload?: Record<string, unknown>) {
+  if (typeof window === 'undefined' || typeof window.fbq !== 'function') return
+  window.fbq('trackCustom', eventName, payload || {})
 }

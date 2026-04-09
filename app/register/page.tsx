@@ -14,6 +14,19 @@ import {
   isClientLoggedIn,
 } from '../utils/sessionClient'
 
+declare global {
+  interface Window {
+    fbq?: (...args: unknown[]) => void
+    dataLayer?: Record<string, unknown>[]
+  }
+}
+
+function pushRegistrationDataLayerEvent(payload: Record<string, unknown>) {
+  if (typeof window === 'undefined') return
+  window.dataLayer = window.dataLayer || []
+  window.dataLayer.push(payload)
+}
+
 function RegisterForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -189,6 +202,15 @@ function RegisterForm() {
           else setFormError(msg)
           return
         }
+        pushRegistrationDataLayerEvent({
+          event: 'registration_form_submitted',
+          step: 'details',
+          registration_type: inviteToken ? 'invite' : trialToken ? 'trial' : 'direct',
+        })
+        if (typeof window !== 'undefined' && typeof window.fbq === 'function') {
+          window.fbq('track', 'CompleteRegistration', { stage: 'details_submitted' })
+          window.fbq('trackCustom', 'sign_up', { stage: 'details_submitted' })
+        }
         setCodeSentMessage(`We sent a 6-digit code to ${data?.email || formData.email}.`)
         setRegistrationStep('verify')
         return
@@ -209,6 +231,11 @@ function RegisterForm() {
         setCodeError('Unable to verify code, please try again.')
         return
       }
+      pushRegistrationDataLayerEvent({
+        event: 'email_verification_completed',
+        step: 'verify',
+        registration_type: inviteToken ? 'invite' : trialToken ? 'trial' : 'direct',
+      })
       await completeRegistration(token)
     } catch (error) {
       console.error('Registration error:', error)
