@@ -43,7 +43,28 @@ export function pushFeaturePageView(featureKey: string, pagePath?: string) {
   })
 }
 
+const ENGAGED_MS = 30_000
+
 export function pushMetaCustomEvent(eventName: string, payload?: Record<string, unknown>) {
   if (typeof window === 'undefined' || typeof window.fbq !== 'function') return
   window.fbq('trackCustom', eventName, payload || {})
+}
+
+/**
+ * Fired once when the visitor has been on the page ≥30s and has scrolled or clicked at least once.
+ * GTM: Custom Event name `show_interest`. Meta: `trackCustom('show_interest', …)`.
+ */
+export function pushShowInterestEvent(payload?: { page_path?: string; interaction?: 'scroll' | 'click' }) {
+  if (typeof window === 'undefined') return
+  const pagePath = payload?.page_path ?? window.location.pathname
+  const metaPayload: Record<string, unknown> = {
+    engagement_seconds: ENGAGED_MS / 1000,
+    page_path: pagePath,
+    ...(payload?.interaction ? { first_interaction: payload.interaction } : {}),
+  }
+  pushToDataLayer({
+    event: 'show_interest',
+    ...metaPayload,
+  })
+  pushMetaCustomEvent('show_interest', metaPayload)
 }
