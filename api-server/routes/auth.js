@@ -35,6 +35,32 @@ pool.query(`
   ON registration_verification_codes (email)
 `).catch((err) => console.error('[auth] registration_verification_codes email index check failed:', err.message));
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS signup_progress_drafts (
+    id SERIAL PRIMARY KEY,
+    client_session_id VARCHAR(128) NOT NULL UNIQUE,
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    email VARCHAR(320),
+    step VARCHAR(32) NOT NULL DEFAULT 'name_entered',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).catch((err) => console.error('[auth] signup_progress_drafts table check failed:', err.message));
+
+pool.query(`
+  CREATE INDEX IF NOT EXISTS idx_signup_progress_drafts_updated
+  ON signup_progress_drafts (updated_at DESC)
+`).catch((err) => console.error('[auth] signup_progress_drafts index check failed:', err.message));
+
+const SIGNUP_PROGRESS_STEPS = new Set([
+  'name_entered',
+  'email_entered',
+  'details_ready',
+  'code_sent',
+  'code_verified',
+]);
+
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
@@ -50,6 +76,45 @@ function maskEmail(email) {
 function generateRegistrationCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
+
+// POST /api/auth/register/signup-progress — anonymous funnel (name before email)
+router.post('/register/signup-progress', async (req, res) => {
+  const { sessionId, firstName, lastName, email, step } = req.body || {};
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid.length > 128) {
+    return res.status(400).json({ error: 'Valid sessionId is required' });
+  }
+  const stepRaw = String(step || 'name_entered').trim();
+  if (!SIGNUP_PROGRESS_STEPS.has(stepRaw)) {
+    return res.status(400).json({ error: 'Invalid step' });
+  }
+  const fn = firstName != null ? String(firstName).trim().slice(0, 255) : '';
+  const ln = lastName != null ? String(lastName).trim().slice(0, 255) : '';
+  let em = email != null ? normalizeEmail(email) : '';
+  if (em && !em.includes('@')) {
+    return res.status(400).json({ error: 'Invalid email' });
+  }
+  if (!em) em = null;
+
+  try {
+    await pool.query(
+      `INSERT INTO signup_progress_drafts (client_session_id, first_name, last_name, email, step, updated_at)
+       VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5, NOW())
+       ON CONFLICT (client_session_id)
+       DO UPDATE SET
+         first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), signup_progress_drafts.first_name),
+         last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), signup_progress_drafts.last_name),
+         email = COALESCE(EXCLUDED.email, signup_progress_drafts.email),
+         step = EXCLUDED.step,
+         updated_at = NOW()`,
+      [sid, fn, ln, em, stepRaw]
+    );
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('[auth] register/signup-progress error:', error);
+    return res.status(500).json({ error: 'Failed to save progress' });
+  }
+});
 
 // POST /api/auth/register/send-code
 router.post('/register/send-code', async (req, res) => {
@@ -185,7 +250,7 @@ router.post('/register', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken } = req.body;
+    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken, signupSessionId } = req.body;
     const normalizedLanguageCode = String(languageCode || DEFAULT_LANGUAGE_CODE).trim().toLowerCase() || DEFAULT_LANGUAGE_CODE;
     const normalizedEmail = normalizeEmail(email);
 
@@ -364,6 +429,14 @@ router.post('/register', async (req, res) => {
        SET consumed_at = NOW()
        WHERE id = $1`,
       [verifyRes.rows[0].id]
+    );
+
+    const signupSid = String(signupSessionId || '').trim();
+    await client.query(
+      `DELETE FROM signup_progress_drafts
+       WHERE ($1 <> '' AND client_session_id = $1)
+          OR LOWER(TRIM(COALESCE(email, ''))) = $2`,
+      [signupSid, normalizedEmail]
     );
 
     await client.query('COMMIT');

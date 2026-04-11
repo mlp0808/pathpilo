@@ -21,10 +21,31 @@ interface User {
 }
 
 interface StartedSignup {
-  email: string
+  kind?: 'verification' | 'draft'
+  email: string | null
+  firstName?: string | null
+  lastName?: string | null
+  sessionId?: string | null
+  step?: string
+  codeVerified?: boolean
   startedAt: string
-  expiresAt: string
-  codeVerified: boolean
+  expiresAt?: string | null
+  updatedAt?: string
+}
+
+function startedSignupLabel(row: StartedSignup): string {
+  if (row.kind === 'verification' || !row.kind) {
+    if (row.codeVerified) return 'Email verified — account not created'
+    return 'Verification code sent'
+  }
+  const map: Record<string, string> = {
+    name_entered: 'Entered name',
+    email_entered: 'Entered email',
+    details_ready: 'Form complete (before code)',
+    code_sent: 'Verification code sent',
+    code_verified: 'Email verified — account not created',
+  }
+  return map[row.step || ''] || (row.step || 'In progress')
 }
 
 export default function AdminUsersPage() {
@@ -34,6 +55,8 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [deletingKey, setDeletingKey] = useState<string | null>(null)
+  const [pendingActionError, setPendingActionError] = useState<string | null>(null)
 
   useEffect(() => {
     // Check authentication first
@@ -110,6 +133,74 @@ export default function AdminUsersPage() {
     })
   }
 
+  const pendingRowKey = (signup: StartedSignup) =>
+    signup.kind === 'draft' && signup.sessionId
+      ? `draft-${signup.sessionId}`
+      : `v-${signup.email || 'unknown'}`
+
+  const deletePendingSignup = async (signup: StartedSignup) => {
+    const rowKey = pendingRowKey(signup)
+    if (signup.kind === 'draft') {
+      if (!signup.sessionId) {
+        setPendingActionError('Cannot remove this row: missing session id.')
+        return
+      }
+      if (
+        !window.confirm(
+          'Remove this early signup draft from the list? This does not delete any user account.'
+        )
+      ) {
+        return
+      }
+    } else {
+      if (!signup.email) {
+        setPendingActionError('Cannot remove this row: missing email.')
+        return
+      }
+      if (
+        !window.confirm(
+          `Remove pending verification for ${signup.email}? They can start signup again later.`
+        )
+      ) {
+        return
+      }
+    }
+
+    const token = localStorage.getItem('token')
+    if (!token) {
+      setPendingActionError('Not authenticated.')
+      return
+    }
+
+    const body =
+      signup.kind === 'draft'
+        ? { kind: 'draft' as const, sessionId: signup.sessionId }
+        : { kind: 'verification' as const, email: signup.email }
+
+    try {
+      setDeletingKey(rowKey)
+      setPendingActionError(null)
+      const response = await fetch(apiUrl('/admin/pending-signups'), {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setPendingActionError(data.error || 'Failed to remove pending signup')
+        return
+      }
+      await fetchUsers()
+    } catch (err) {
+      setPendingActionError('Network error: ' + (err as Error).message)
+    } finally {
+      setDeletingKey(null)
+    }
+  }
+
   // Show loading while checking authentication
   if (!isAuthenticated) {
     return (
@@ -175,9 +266,16 @@ export default function AdminUsersPage() {
         {/* Started signups */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
           <div className="px-6 py-4 border-b border-gray-200 bg-amber-50/60">
-            <h2 className="text-lg font-semibold text-amber-900">Started (not verified)</h2>
-            <p className="text-sm text-amber-700">Users who started signup but have not completed email verification/account creation.</p>
+            <h2 className="text-lg font-semibold text-amber-900">Started (incomplete)</h2>
+            <p className="text-sm text-amber-700">
+              Includes early progress (name/email before code) and rows waiting on verification or final account creation.
+            </p>
           </div>
+          {pendingActionError ? (
+            <div className="mx-6 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+              {pendingActionError}
+            </div>
+          ) : null}
           {loading ? (
             <div className="p-6 text-sm text-gray-500">Loading...</div>
           ) : startedSignups.length === 0 ? (
@@ -187,29 +285,48 @@ export default function AdminUsersPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Started</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code Expires</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stage</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last activity</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code expires</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {startedSignups.map((signup) => (
-                    <tr key={signup.email} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{signup.email}</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${
-                          signup.codeVerified
-                            ? 'bg-blue-100 text-blue-800 border-blue-200'
-                            : 'bg-amber-100 text-amber-800 border-amber-200'
-                        }`}>
-                          {signup.codeVerified ? 'Code verified, not completed' : 'Awaiting code verification'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatDate(signup.startedAt)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatDate(signup.expiresAt)}</td>
-                    </tr>
-                  ))}
+                  {startedSignups.map((signup) => {
+                    const rowKey = pendingRowKey(signup)
+                    const displayName =
+                      signup.firstName || signup.lastName
+                        ? [signup.firstName, signup.lastName].filter(Boolean).join(' ')
+                        : '—'
+                    const lastAt = signup.updatedAt || signup.startedAt
+                    return (
+                      <tr key={rowKey} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{displayName}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{signup.email || '—'}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border bg-amber-50 text-amber-900 border-amber-200">
+                            {startedSignupLabel(signup)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{formatDate(lastAt)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {signup.expiresAt ? formatDate(signup.expiresAt) : '—'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                          <button
+                            type="button"
+                            onClick={() => deletePendingSignup(signup)}
+                            disabled={deletingKey === rowKey}
+                            className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                          >
+                            {deletingKey === rowKey ? 'Removing…' : 'Remove'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

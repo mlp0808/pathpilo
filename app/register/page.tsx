@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon, CheckIcon } from '@heroicons/react/24/outline'
@@ -14,10 +14,27 @@ import {
   isClientLoggedIn,
 } from '../utils/sessionClient'
 
+const SIGNUP_SESSION_STORAGE_KEY = 'pathpilo_signup_session'
+
+function getSignupSessionId(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    let id = localStorage.getItem(SIGNUP_SESSION_STORAGE_KEY)
+    if (!id) {
+      id = crypto.randomUUID()
+      localStorage.setItem(SIGNUP_SESSION_STORAGE_KEY, id)
+    }
+    return id
+  } catch {
+    return ''
+  }
+}
+
 declare global {
   interface Window {
     fbq?: (...args: unknown[]) => void
     dataLayer?: Record<string, unknown>[]
+    hj?: (command: string, eventName?: string) => void
   }
 }
 
@@ -25,6 +42,29 @@ function pushRegistrationDataLayerEvent(payload: Record<string, unknown>) {
   if (typeof window === 'undefined') return
   window.dataLayer = window.dataLayer || []
   window.dataLayer.push(payload)
+}
+
+async function postSignupProgress(
+  apiUrlFn: (path: string) => string,
+  payload: { step: string; firstName?: string; lastName?: string; email?: string }
+) {
+  const sessionId = getSignupSessionId()
+  if (!sessionId) return
+  try {
+    await fetch(apiUrlFn('/auth/register/signup-progress'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        firstName: payload.firstName,
+        lastName: payload.lastName,
+        email: payload.email,
+        step: payload.step,
+      }),
+    })
+  } catch {
+    // ignore — funnel tracking only
+  }
 }
 
 function RegisterForm() {
@@ -71,6 +111,21 @@ function RegisterForm() {
   const [verificationCode, setVerificationCode] = useState('')
   const [codeSentMessage, setCodeSentMessage] = useState('')
   const [codeError, setCodeError] = useState('')
+  const detailsReadyPosted = useRef(false)
+
+  useEffect(() => {
+    if (sessionMode !== 'form') return
+    getSignupSessionId()
+    if (typeof window !== 'undefined' && window.hj) {
+      window.hj('event', 'signup_form_view')
+    }
+  }, [sessionMode])
+
+  useEffect(() => {
+    if (registrationStep === 'verify' && typeof window !== 'undefined' && window.hj) {
+      window.hj('event', 'signup_verify_view')
+    }
+  }, [registrationStep])
 
   // Load invitation details if token exists
   useEffect(() => {
@@ -120,8 +175,34 @@ function RegisterForm() {
       setVerificationCode('')
       setCodeSentMessage('')
       setCodeError('')
+      detailsReadyPosted.current = false
     }
     if (formError) setFormError('')
+  }
+
+  const handleNameFieldBlur = () => {
+    const fn = formData.firstName.trim()
+    const ln = formData.lastName.trim()
+    if (!fn || !ln) return
+    void postSignupProgress(apiUrl, {
+      step: 'name_entered',
+      firstName: fn,
+      lastName: ln,
+    })
+    if (typeof window !== 'undefined' && window.hj) {
+      window.hj('event', 'signup_name_entered')
+    }
+  }
+
+  const handleEmailBlur = () => {
+    const em = formData.email.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return
+    void postSignupProgress(apiUrl, {
+      step: 'email_entered',
+      firstName: formData.firstName.trim(),
+      lastName: formData.lastName.trim(),
+      email: em,
+    })
   }
 
   const completeRegistration = async (token: string) => {
@@ -135,6 +216,7 @@ function RegisterForm() {
         password: formData.password,
         languageCode: requestedLang,
         verificationToken: token,
+        signupSessionId: getSignupSessionId(),
         ...(inviteToken && { invitationToken: inviteToken }),
         ...(trialToken && { trialToken }),
       }),
@@ -211,6 +293,15 @@ function RegisterForm() {
           window.fbq('track', 'CompleteRegistration', { stage: 'details_submitted' })
           window.fbq('trackCustom', 'sign_up', { stage: 'details_submitted' })
         }
+        void postSignupProgress(apiUrl, {
+          step: 'code_sent',
+          firstName: formData.firstName.trim(),
+          lastName: formData.lastName.trim(),
+          email: formData.email.trim(),
+        })
+        if (typeof window !== 'undefined' && window.hj) {
+          window.hj('event', 'signup_code_sent')
+        }
         setCodeSentMessage(`We sent a 6-digit code to ${data?.email || formData.email}.`)
         setRegistrationStep('verify')
         return
@@ -236,6 +327,15 @@ function RegisterForm() {
         step: 'verify',
         registration_type: inviteToken ? 'invite' : trialToken ? 'trial' : 'direct',
       })
+      void postSignupProgress(apiUrl, {
+        step: 'code_verified',
+        firstName: formData.firstName.trim(),
+        lastName: formData.lastName.trim(),
+        email: formData.email.trim(),
+      })
+      if (typeof window !== 'undefined' && window.hj) {
+        window.hj('event', 'signup_code_verified')
+      }
       await completeRegistration(token)
     } catch (error) {
       console.error('Registration error:', error)
@@ -249,6 +349,26 @@ function RegisterForm() {
     formData.password && formData.confirmPassword &&
     formData.acceptTerms && formData.password === formData.confirmPassword
   const isVerificationValid = verificationCode.trim().length === 6
+
+  useEffect(() => {
+    if (registrationStep !== 'details' || !isDetailsValid || detailsReadyPosted.current) return
+    detailsReadyPosted.current = true
+    void postSignupProgress(apiUrl, {
+      step: 'details_ready',
+      firstName: formData.firstName.trim(),
+      lastName: formData.lastName.trim(),
+      email: formData.email.trim(),
+    })
+  }, [
+    registrationStep,
+    isDetailsValid,
+    formData.firstName,
+    formData.lastName,
+    formData.email,
+    formData.password,
+    formData.confirmPassword,
+    formData.acceptTerms,
+  ])
 
   if (sessionMode === 'checking') {
     return (
@@ -428,6 +548,7 @@ function RegisterForm() {
                       name="firstName"
                       value={formData.firstName}
                       onChange={handleInputChange}
+                      onBlur={handleNameFieldBlur}
                       className="input-field"
                       placeholder="John"
                       required
@@ -443,6 +564,7 @@ function RegisterForm() {
                       name="lastName"
                       value={formData.lastName}
                       onChange={handleInputChange}
+                      onBlur={handleNameFieldBlur}
                       className="input-field"
                       placeholder="Doe"
                       required
@@ -466,6 +588,7 @@ function RegisterForm() {
                     name="email"
                     value={formData.email}
                     onChange={handleInputChange}
+                    onBlur={handleEmailBlur}
                     readOnly={!!inviteToken || !!trialToken}
                     aria-invalid={!!emailError}
                     className={`input-field ${(inviteToken || trialToken) ? 'bg-gray-100 cursor-not-allowed' : ''} ${emailError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}

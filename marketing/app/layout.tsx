@@ -132,7 +132,7 @@ fbq('track', 'PageView');`,
         {shouldEnableHotjar && (
           <Script
             id="hotjar-init"
-            strategy="afterInteractive"
+            strategy="beforeInteractive"
             dangerouslySetInnerHTML={{
               __html: `
                 (function(h,o,t,j,a,r){

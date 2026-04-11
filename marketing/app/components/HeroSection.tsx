@@ -77,6 +77,10 @@ export default function HeroSection() {
                       link_url: href,
                       location: 'hero',
                     })
+                    const hj = typeof window !== 'undefined'
+                      ? (window as unknown as { hj?: (cmd: string, name?: string) => void }).hj
+                      : undefined
+                    hj?.('event', 'marketing_register_cta')
                   }
                 }
               >

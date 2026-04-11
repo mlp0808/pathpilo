@@ -97,6 +97,18 @@ async function initAdminSchema() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS signup_progress_drafts (
+        id SERIAL PRIMARY KEY,
+        client_session_id VARCHAR(128) NOT NULL UNIQUE,
+        first_name VARCHAR(255),
+        last_name VARCHAR(255),
+        email VARCHAR(320),
+        step VARCHAR(32) NOT NULL DEFAULT 'name_entered',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     // Run auto-suspend immediately after schema is ready, then every hour
     autoSuspendExpired();
     setInterval(autoSuspendExpired, 60 * 60 * 1000);
@@ -340,6 +352,61 @@ router.get('/users', async (req, res) => {
       ORDER BY MAX(r.created_at) DESC
     `);
 
+    const draftRes = await pool.query(`
+      SELECT
+        d.client_session_id,
+        d.first_name,
+        d.last_name,
+        d.email,
+        d.step,
+        d.created_at,
+        d.updated_at
+      FROM signup_progress_drafts d
+      LEFT JOIN users u ON d.email IS NOT NULL AND LOWER(TRIM(d.email)) = LOWER(u.email)
+      WHERE u.id IS NULL
+        AND (
+          d.email IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM registration_verification_codes r
+            WHERE LOWER(r.email) = LOWER(TRIM(d.email))
+              AND r.consumed_at IS NULL
+          )
+        )
+      ORDER BY d.updated_at DESC
+    `);
+
+    const verificationRows = startedRes.rows.map((s) => ({
+      kind: 'verification',
+      email: s.email,
+      firstName: null,
+      lastName: null,
+      sessionId: null,
+      step: s.code_verified ? 'code_verified' : 'code_sent',
+      codeVerified: !!s.code_verified,
+      startedAt: s.started_at,
+      updatedAt: s.started_at,
+      expiresAt: s.expires_at,
+    }));
+
+    const draftRows = draftRes.rows.map((d) => ({
+      kind: 'draft',
+      email: d.email,
+      firstName: d.first_name,
+      lastName: d.last_name,
+      sessionId: d.client_session_id,
+      step: d.step,
+      codeVerified: false,
+      startedAt: d.created_at,
+      expiresAt: null,
+      updatedAt: d.updated_at,
+    }));
+
+    const startedSignups = [...verificationRows, ...draftRows].sort((a, b) => {
+      const ta = new Date(b.updatedAt || b.startedAt).getTime();
+      const tb = new Date(a.updatedAt || a.startedAt).getTime();
+      return ta - tb;
+    });
+
     res.json({
       users: result.rows.map(u => ({
         id:        u.id,
@@ -350,16 +417,55 @@ router.get('/users', async (req, res) => {
         createdAt: u.created_at,
         companies: u.companies,
       })),
-      startedSignups: startedRes.rows.map((s) => ({
-        email: s.email,
-        startedAt: s.started_at,
-        expiresAt: s.expires_at,
-        codeVerified: !!s.code_verified,
-      })),
+      startedSignups,
     });
   } catch (error) {
     console.error('Error listing users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// DELETE /api/admin/pending-signups — drop test/noise rows from incomplete signup lists
+router.delete('/pending-signups', async (req, res) => {
+  try {
+    const { kind, email, sessionId } = req.body || {};
+
+    if (kind === 'verification') {
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized || !normalized.includes('@')) {
+        return res.status(400).json({ error: 'Valid email is required' });
+      }
+      const del = await pool.query(
+        `DELETE FROM registration_verification_codes
+         WHERE LOWER(TRIM(email)) = $1 AND consumed_at IS NULL
+         RETURNING id`,
+        [normalized]
+      );
+      return res.json({
+        deleted: del.rowCount,
+        message: del.rowCount > 0 ? 'Removed pending verification row(s)' : 'Nothing matched to delete',
+      });
+    }
+
+    if (kind === 'draft') {
+      const sid = String(sessionId || '').trim();
+      if (!sid || sid.length > 128) {
+        return res.status(400).json({ error: 'Valid sessionId is required' });
+      }
+      const del = await pool.query(
+        `DELETE FROM signup_progress_drafts WHERE client_session_id = $1 RETURNING id`,
+        [sid]
+      );
+      return res.json({
+        deleted: del.rowCount,
+        message: del.rowCount > 0 ? 'Removed signup draft' : 'Nothing matched to delete',
+      });
+    }
+
+    return res.status(400).json({ error: 'kind must be "verification" or "draft"' });
+  } catch (error) {
+    console.error('Error deleting pending signup:', error);
+    res.status(500).json({ error: 'Failed to delete pending signup' });
   }
 });
 
