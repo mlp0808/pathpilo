@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import './globals.css'
 import { ClientI18nProvider } from './components/I18nProvider'
+import { TawkIdentitySync } from './components/TawkIdentitySync'
 
 export const metadata: Metadata = {
   title: 'PathPilo - Client Management for Service Companies',
@@ -104,6 +105,7 @@ s0.parentNode.insertBefore(s1,s0);
 })();`,
           }}
         />
+        <TawkIdentitySync />
         <ClientI18nProvider>
           {children}
         </ClientI18nProvider>
