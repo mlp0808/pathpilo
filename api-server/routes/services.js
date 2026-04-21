@@ -79,7 +79,9 @@ router.post('/', authenticateToken, async (req, res) => {
       description,
       price,
       duration_minutes,
-      category
+      category,
+      // Optional chart-of-accounts code for bookkeeping integrations.
+      bookkeeping_account
     } = req.body;
     const userId = req.user?.userId || req.user?.id;
 
@@ -100,12 +102,17 @@ router.post('/', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    const bookkeepingAccountVal =
+      bookkeeping_account === undefined || bookkeeping_account === null || String(bookkeeping_account).trim() === ''
+        ? null
+        : String(bookkeeping_account).trim().slice(0, 32);
+
     const result = await pool.query(`
       INSERT INTO services
-      (company_id, title, price, duration_minutes)
-      VALUES ($1, $2, $3, $4)
+      (company_id, title, price, duration_minutes, bookkeeping_account)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [companyId, serviceName, priceVal, durationVal]);
+    `, [companyId, serviceName, priceVal, durationVal, bookkeepingAccountVal]);
 
     res.status(201).json({
       message: 'Service created successfully',

@@ -26,6 +26,13 @@ const nextConfig = {
         source: "/api/:path*",
         destination: `${apiBase.replace(/\/$/, "")}/api/:path*`,
       },
+      // Proxy company logos (and any other user-uploaded asset under /uploads/)
+      // through to the API server. Lets us reference them with a relative URL
+      // from anywhere in the frontend, including the public invoice page.
+      {
+        source: "/uploads/:path*",
+        destination: `${apiBase.replace(/\/$/, "")}/uploads/:path*`,
+      },
     ]
   },
 }

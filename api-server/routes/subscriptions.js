@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../utils/database');
 const { scheduleAutomationSendsForJob } = require('../utils/automatedEmails');
+const { setJobAutoTitleIfEmpty } = require('../utils/jobAutoTitle');
 
 const router = express.Router();
 
@@ -356,6 +357,10 @@ router.post('/', authenticateToken, async (req, res) => {
             }
           }
         }
+
+        // Persist a sensible default title for the first job when the
+        // subscription didn't supply one.
+        await setJobAutoTitleIfEmpty(dbClient, firstJob.id);
       }
 
       await dbClient.query('COMMIT');
@@ -794,6 +799,10 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
         [jobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null]
       );
     }
+
+    // If the parent subscription had no title, derive one for this
+    // materialized occurrence from the services that were just attached.
+    await setJobAutoTitleIfEmpty(dbClient, jobId);
 
     try {
       await dbClient.query(

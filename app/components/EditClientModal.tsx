@@ -25,6 +25,7 @@ interface Client {
   billing_city: string | null
   billing_email: string | null
   billing_phone: string | null
+  ean_number?: string | null
 }
 
 interface EditClientModalProps {
@@ -62,7 +63,8 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
     billing_zip_code: '',
     billing_city: '',
     billing_email: '',
-    billing_phone: ''
+    billing_phone: '',
+    ean_number: ''
   })
   const [separateBillingAddress, setSeparateBillingAddress] = useState(false)
   const [separateBillingContact, setSeparateBillingContact] = useState(false)
@@ -88,7 +90,8 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         billing_zip_code: client.billing_zip_code || '',
         billing_city: client.billing_city || '',
         billing_email: client.billing_email || '',
-        billing_phone: client.billing_phone || ''
+        billing_phone: client.billing_phone || '',
+        ean_number: client.ean_number || ''
       })
       
       // Set billing checkboxes based on existing data
@@ -131,7 +134,11 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
         billing_zip_code: separateBillingAddress ? currentClient.billing_zip_code : null,
         billing_city: separateBillingAddress ? currentClient.billing_city : null,
         billing_email: separateBillingContact ? currentClient.billing_email : null,
-        billing_phone: separateBillingContact ? currentClient.billing_phone : null
+        billing_phone: separateBillingContact ? currentClient.billing_phone : null,
+        // EAN/GLN only applies to companies (Danish public-sector e-invoicing).
+        ean_number: currentClient.client_type === 'company'
+          ? (currentClient.ean_number?.trim() || null)
+          : null
       }
       
       const response = await fetch(apiUrl(`/clients/${client.id}`), {
@@ -290,6 +297,28 @@ export default function EditClientModal({ isOpen, onClose, onClientUpdated, clie
                 placeholder={t('app.clients.edit.phonePlaceholder')}
               />
             </div>
+            {currentClient.client_type === 'company' && (
+              <div>
+                <label htmlFor="ean_number" className="block text-sm font-medium text-gray-900 mb-2">
+                  EAN / GLN <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  id="ean_number"
+                  name="ean_number"
+                  value={currentClient.ean_number}
+                  onChange={handleInputChange}
+                  inputMode="numeric"
+                  maxLength={20}
+                  className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
+                  placeholder="e.g. 5798000418806"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Required for sending invoices to Danish public-sector buyers (NemHandel/PEPPOL).
+                  Hidden on the invoice if left blank.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Billing Address Checkbox */}

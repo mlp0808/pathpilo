@@ -21,6 +21,8 @@ import {
   type AutomationSetting,
 } from '../../utils/emailTemplateDefaults'
 import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
+import { useAppI18n } from '../../components/I18nProvider'
+import type { MessageKey } from '../../i18n'
 
 interface MessagesDraft {
   templates: MessageTemplate[]
@@ -202,6 +204,15 @@ function mergeAutomationSettingsWithDefaults(incoming?: AutomationSetting[]): Au
 }
 
 export default function NotificationsPage() {
+  const { t } = useAppI18n()
+  const tr = (key: string, fallback: string) => t(key as MessageKey, fallback)
+
+  /** Translate a template's title/description by its id (emailTemplateDefaults stores English only). */
+  const getTemplateTitle = (tpl: { id: string; title: string }) =>
+    tr(`app.messages.tpl.${tpl.id}.title`, tpl.title)
+  const getTemplateDescription = (tpl: { id: string; description: string }) =>
+    tr(`app.messages.tpl.${tpl.id}.description`, tpl.description)
+
   // Resolve country code synchronously for useState initialiser, then refine via hook
   const initialCountryCode = getCompanyCountryCodeSync()
   const countryCode = useCompanyCountryCode()
@@ -435,9 +446,9 @@ export default function NotificationsPage() {
               : t
           ),
         }))
-        setSavedNotice('Messages saved.')
+        setSavedNotice(tr('app.messages.savedNotice', 'Messages saved.'))
       } catch {
-        setSavedNotice('Could not save messages right now.')
+        setSavedNotice(tr('app.messages.saveError', 'Could not save messages right now.'))
       } finally {
         setIsSaving(false)
         setTimeout(() => setSavedNotice(''), 2200)
@@ -464,7 +475,7 @@ export default function NotificationsPage() {
       automationSettings: mergeAutomationSettingsWithDefaults(),
       repliesToEmail: ownerFallbackEmail,
     })
-    setSavedNotice('Defaults restored.')
+    setSavedNotice(tr('app.messages.defaultsRestored', 'Defaults restored.'))
     setTimeout(() => setSavedNotice(''), 2200)
   }
 
@@ -472,7 +483,7 @@ export default function NotificationsPage() {
     <div key={template.id} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="mb-4">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="text-base font-semibold text-gray-900">{template.title}</h3>
+          <h3 className="text-base font-semibold text-gray-900">{getTemplateTitle(template)}</h3>
           <span
             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
               template.channel === 'email'
@@ -488,13 +499,13 @@ export default function NotificationsPage() {
             {template.channel.toUpperCase()}
           </span>
         </div>
-        <p className="text-sm text-gray-500 mt-1">{template.description}</p>
+        <p className="text-sm text-gray-500 mt-1">{getTemplateDescription(template)}</p>
       </div>
 
       <div className="space-y-2">
         {template.channel === 'email' && (
           <p className="text-xs text-gray-500 truncate">
-            <span className="font-semibold text-gray-600">Subject:</span> {template.subject}
+            <span className="font-semibold text-gray-600">{tr('app.messages.subjectLabel', 'Subject:')}</span> {template.subject}
           </p>
         )}
         <p className="text-xs text-gray-500 line-clamp-2">{template.message}</p>
@@ -503,7 +514,7 @@ export default function NotificationsPage() {
           onClick={() => setEditingTemplateId(template.id)}
           className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
-          Edit message
+          {tr('app.messages.editMessage', 'Edit message')}
         </button>
       </div>
     </div>
@@ -519,9 +530,14 @@ export default function NotificationsPage() {
                 <ChatBubbleLeftRightIcon className="w-6 h-6 text-accent-600" />
               </div>
               <div>
-                <h1 className="text-2xl md:text-3xl font-bold text-primary-800">Messages</h1>
+                <h1 className="text-2xl md:text-3xl font-bold text-primary-800">
+                  {tr('app.messages.pageTitle', 'Messages')}
+                </h1>
                 <p className="text-sm md:text-base text-gray-600 mt-1">
-                  Manage automated messages and manual send templates in one place.
+                  {tr(
+                    'app.messages.pageSubtitle',
+                    'Manage automated messages and manual send templates in one place.',
+                  )}
                 </p>
               </div>
             </div>
@@ -532,7 +548,7 @@ export default function NotificationsPage() {
                 className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 <ArrowPathIcon className="w-4 h-4" />
-                Reset all defaults
+                {tr('app.messages.resetAllDefaults', 'Reset all defaults')}
               </button>
               <button
                 onClick={handleSaveDraft}
@@ -540,7 +556,7 @@ export default function NotificationsPage() {
                 className="inline-flex items-center gap-1.5 rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <SparklesIcon className="w-4 h-4" />
-                {isSaving ? 'Saving...' : 'Save'}
+                {isSaving ? tr('app.messages.saving', 'Saving...') : tr('app.messages.save', 'Save')}
               </button>
             </div>
           </div>
@@ -552,7 +568,7 @@ export default function NotificationsPage() {
           )}
           {isLoadingRemote && (
             <div className="mt-3 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-700">
-              Loading saved templates...
+              {tr('app.messages.loadingRemote', 'Loading saved templates...')}
             </div>
           )}
         </div>
@@ -560,13 +576,18 @@ export default function NotificationsPage() {
         <div className="p-6 md:p-8 space-y-8">
           <section>
             <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold text-primary-800">Replies go to</h2>
+              <h2 className="text-lg font-semibold text-primary-800">
+                {tr('app.messages.repliesTo', 'Replies go to')}
+              </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Customer replies from email notifications will be routed to this address. Default is company owner email.
+                {tr(
+                  'app.messages.repliesToHelp',
+                  'Customer replies from email notifications will be routed to this address. Default is company owner email.',
+                )}
               </p>
               <div className="mt-4">
                 <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                  Reply-to email
+                  {tr('app.messages.replyToEmail', 'Reply-to email')}
                 </label>
                 <input
                   type="email"
@@ -582,19 +603,25 @@ export default function NotificationsPage() {
           <section>
             <div className="mb-4 flex items-center gap-2">
               <ClockIcon className="w-5 h-5 text-primary-700" />
-              <h2 className="text-lg font-semibold text-primary-800">Automated</h2>
+              <h2 className="text-lg font-semibold text-primary-800">
+                {tr('app.messages.sectionAutomated', 'Automated')}
+              </h2>
             </div>
             <div className="grid gap-4 lg:grid-cols-2 mb-4">
               {draft.automationSettings.map((setting) => {
                 const linkedTemplate = draft.templates.find((t) => t.id === setting.id)
+                const leadUnitLabel =
+                  setting.leadUnit === 'minutes'
+                    ? tr('app.messages.unitMinutes', 'minutes')
+                    : tr('app.messages.unitHours', 'hours')
                 const timingSummary =
                   setting.id === 'email_job_created'
-                    ? `${setting.leadValue} min after job is created`
+                    ? tr('app.messages.timing.jobCreated', '{n} min after job is created').replace('{n}', String(setting.leadValue))
                     : setting.id === 'email_job_reminder'
-                      ? `${setting.leadValue} h before midnight (job day)`
+                      ? tr('app.messages.timing.jobReminder', '{n} h before midnight (job day)').replace('{n}', String(setting.leadValue))
                       : setting.id === 'email_invoice_due_reminder'
-                        ? `${setting.leadValue} h before midnight (due date)`
-                        : `${setting.leadValue} ${setting.leadUnit}`
+                        ? tr('app.messages.timing.invoiceDue', '{n} h before midnight (due date)').replace('{n}', String(setting.leadValue))
+                        : `${setting.leadValue} ${leadUnitLabel}`
                 return (
                   <button
                     key={setting.id}
@@ -605,7 +632,9 @@ export default function NotificationsPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-base font-semibold text-gray-900">{setting.title}</h3>
+                          <h3 className="text-base font-semibold text-gray-900">
+                            {tr(`app.messages.auto.${setting.id}.title`, setting.title)}
+                          </h3>
                           <span
                             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                               setting.channel === 'email'
@@ -621,25 +650,32 @@ export default function NotificationsPage() {
                             {setting.channel.toUpperCase()}
                           </span>
                         </div>
-                        <p className="text-sm text-gray-500 mt-1">{setting.description}</p>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {tr(`app.messages.auto.${setting.id}.description`, setting.description)}
+                        </p>
                       </div>
                       <span
                         className={`shrink-0 inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                           setting.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'
                         }`}
                       >
-                        {setting.enabled ? 'On' : 'Off'}
+                        {setting.enabled ? tr('app.messages.statusOn', 'On') : tr('app.messages.statusOff', 'Off')}
                       </span>
                     </div>
                     <p className="mt-3 text-xs text-gray-500">
-                      {setting.enabled ? 'Active' : 'Inactive'} · {timingSummary}
+                      {setting.enabled
+                        ? tr('app.messages.statusActive', 'Active')
+                        : tr('app.messages.statusInactive', 'Inactive')}{' '}
+                      · {timingSummary}
                     </p>
                     {setting.channel === 'email' && linkedTemplate && (
                       <p className="mt-1 text-xs text-gray-400 line-clamp-1">
-                        Subject: {linkedTemplate.subject}
+                        {tr('app.messages.subjectLabel', 'Subject:')} {linkedTemplate.subject}
                       </p>
                     )}
-                    <p className="mt-2 text-xs font-medium text-accent-600">Open settings →</p>
+                    <p className="mt-2 text-xs font-medium text-accent-600">
+                      {tr('app.messages.openSettings', 'Open settings →')}
+                    </p>
                   </button>
                 )
               })}
@@ -649,7 +685,9 @@ export default function NotificationsPage() {
           <section>
             <div className="mb-4 flex items-center gap-2">
               <EnvelopeIcon className="w-5 h-5 text-primary-700" />
-              <h2 className="text-lg font-semibold text-primary-800">Templates</h2>
+              <h2 className="text-lg font-semibold text-primary-800">
+                {tr('app.messages.sectionTemplates', 'Templates')}
+              </h2>
             </div>
             <div className="grid gap-4 lg:grid-cols-2">
               {manualTemplates.map(renderTemplateCard)}
@@ -660,9 +698,14 @@ export default function NotificationsPage() {
             <div className="flex items-start gap-2 mb-3">
               <InformationCircleIcon className="w-5 h-5 text-blue-700 mt-0.5" />
               <div>
-                <h3 className="text-sm font-semibold text-blue-900">Personalization tags</h3>
+                <h3 className="text-sm font-semibold text-blue-900">
+                  {tr('app.messages.personalizationTags', 'Personalization tags')}
+                </h3>
                 <p className="text-xs text-blue-700 mt-0.5">
-                  Use these tags in subject lines and message bodies. They will be replaced with real values when sending.
+                  {tr(
+                    'app.messages.personalizationTagsHelp',
+                    'Use these tags in subject lines and message bodies. They will be replaced with real values when sending.',
+                  )}
                 </p>
               </div>
             </div>
@@ -702,8 +745,8 @@ export default function NotificationsPage() {
                   <>
                     <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 shrink-0">
                       <div>
-                        <h3 className="text-lg font-semibold text-gray-900">{template.title}</h3>
-                        <p className="text-sm text-gray-500 mt-1">{template.description}</p>
+                        <h3 className="text-lg font-semibold text-gray-900">{getTemplateTitle(template)}</h3>
+                        <p className="text-sm text-gray-500 mt-1">{getTemplateDescription(template)}</p>
                       </div>
                       <button
                         type="button"
@@ -717,9 +760,14 @@ export default function NotificationsPage() {
                     <div className="overflow-y-auto px-5 py-4 space-y-5">
                       <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50/80 px-4 py-3">
                         <div>
-                          <p className="text-sm font-medium text-gray-900">Automation</p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {tr('app.messages.modal.automation', 'Automation')}
+                          </p>
                           <p className="text-xs text-gray-500 mt-0.5">
-                            When off, nothing is sent for this automation.
+                            {tr(
+                              'app.messages.modal.automationHelp',
+                              'When off, nothing is sent for this automation.',
+                            )}
                           </p>
                         </div>
                         <AutomationSwitch
@@ -730,7 +778,7 @@ export default function NotificationsPage() {
 
                       <div>
                         <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                          Send timing
+                          {tr('app.messages.modal.sendTiming', 'Send timing')}
                         </label>
                         <div className="flex items-center gap-2">
                           <input
@@ -755,22 +803,36 @@ export default function NotificationsPage() {
                             className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
                           />
                           <span className="shrink-0 text-xs font-semibold text-gray-500">
-                            {automationSetting.leadUnit}
+                            {automationSetting.leadUnit === 'minutes'
+                              ? tr('app.messages.unitMinutes', 'minutes')
+                              : tr('app.messages.unitHours', 'hours')}
                           </span>
                         </div>
                         <p className="mt-1.5 text-xs text-gray-500">
                           {automationSetting.id === 'email_job_created'
-                            ? 'Sends after this many minutes. Uses the latest job data at send-time; skipped if the job is cancelled.'
+                            ? tr(
+                                'app.messages.modal.help.jobCreated',
+                                'Sends after this many minutes. Uses the latest job data at send-time; skipped if the job is cancelled.',
+                              )
                             : automationSetting.id === 'email_job_reminder'
-                              ? 'Hours before midnight (00:00) of the job day. Skipped if that time has already passed when the job is created. Decimals allowed (e.g. 2.5 → 21:30).'
+                              ? tr(
+                                  'app.messages.modal.help.jobReminder',
+                                  'Hours before midnight (00:00) of the job day. Skipped if that time has already passed when the job is created. Decimals allowed (e.g. 2.5 → 21:30).',
+                                )
                               : automationSetting.id === 'email_invoice_due_reminder'
-                                ? 'Hours before midnight (00:00) of the invoice due date. Only for sent invoices that are still unpaid. Decimals allowed.'
-                                : 'Delay before sending.'}
+                                ? tr(
+                                    'app.messages.modal.help.invoiceDue',
+                                    'Hours before midnight (00:00) of the invoice due date. Only for sent invoices that are still unpaid. Decimals allowed.',
+                                  )
+                                : tr('app.messages.modal.help.generic', 'Delay before sending.')}
                         </p>
                         {(automationSetting.id === 'email_job_reminder' ||
                           automationSetting.id === 'email_invoice_due_reminder') && (
                           <p className="mt-0.5 text-[11px] text-gray-400">
-                            ≈ {Math.round(automationSetting.leadValue * 60)} min before midnight
+                            {tr('app.messages.modal.approxMinutes', '≈ {n} min before midnight').replace(
+                              '{n}',
+                              String(Math.round(automationSetting.leadValue * 60)),
+                            )}
                           </p>
                         )}
                       </div>
@@ -779,7 +841,7 @@ export default function NotificationsPage() {
                         <>
                           <div>
                             <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                              Subject
+                              {tr('app.messages.modal.subject', 'Subject')}
                             </label>
                             <input
                               type="text"
@@ -791,12 +853,15 @@ export default function NotificationsPage() {
                           </div>
                           <div>
                             <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                              Opening message
+                              {tr('app.messages.modal.openingMessage', 'Opening message')}
                             </label>
                             <p className="text-xs text-gray-500 mb-2">
-                              Shown under the greeting, before date and location. Tags like{' '}
-                              <span className="font-mono text-gray-600">{'{Company name}'}</span> are replaced when
-                              sending.
+                              {tr(
+                                'app.messages.modal.openingMessageHelpA',
+                                'Shown under the greeting, before date and location. Tags like',
+                              )}{' '}
+                              <span className="font-mono text-gray-600">{'{Company name}'}</span>{' '}
+                              {tr('app.messages.modal.openingMessageHelpB', 'are replaced when sending.')}
                             </p>
                             <textarea
                               value={template.message}
@@ -810,7 +875,7 @@ export default function NotificationsPage() {
                       ) : (
                         <div>
                           <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                            SMS text
+                            {tr('app.messages.modal.smsText', 'SMS text')}
                           </label>
                           <textarea
                             value={template.message}
@@ -830,14 +895,14 @@ export default function NotificationsPage() {
                         className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                       >
                         <ArrowPathIcon className="h-4 w-4" />
-                        Reset to default
+                        {tr('app.messages.modal.resetToDefault', 'Reset to default')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setEditingTemplateId(null)}
                         className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600"
                       >
-                        Done
+                        {tr('app.messages.modal.done', 'Done')}
                       </button>
                     </div>
                   </>
@@ -849,8 +914,8 @@ export default function NotificationsPage() {
                 <>
                   <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 shrink-0">
                     <div>
-                      <h3 className="text-lg font-semibold text-gray-900">{template.title}</h3>
-                      <p className="text-sm text-gray-500 mt-1">{template.description}</p>
+                      <h3 className="text-lg font-semibold text-gray-900">{getTemplateTitle(template)}</h3>
+                      <p className="text-sm text-gray-500 mt-1">{getTemplateDescription(template)}</p>
                     </div>
                     <button
                       type="button"
@@ -865,7 +930,7 @@ export default function NotificationsPage() {
                     {template.channel === 'email' && (
                       <div>
                         <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                          Subject
+                          {tr('app.messages.modal.subject', 'Subject')}
                         </label>
                         <input
                           type="text"
@@ -878,7 +943,7 @@ export default function NotificationsPage() {
 
                     <div>
                       <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-                        Message body
+                        {tr('app.messages.modal.messageBody', 'Message body')}
                       </label>
                       <textarea
                         value={template.message}
@@ -896,14 +961,14 @@ export default function NotificationsPage() {
                       className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                     >
                       <ArrowPathIcon className="h-4 w-4" />
-                      Reset to default
+                      {tr('app.messages.modal.resetToDefault', 'Reset to default')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setEditingTemplateId(null)}
                       className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600"
                     >
-                      Done
+                      {tr('app.messages.modal.done', 'Done')}
                     </button>
                   </div>
                 </>

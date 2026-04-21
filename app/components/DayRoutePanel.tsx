@@ -265,7 +265,7 @@ function UserRoutePanel({
   onJobOpen: (id: number | string) => void
   onOptimize: (userId: number) => void
   optimizing: boolean
-  onBack: () => void
+  onBack?: () => void
   highlightedJobId?: number | string | null
   onJobCardHover?: (jobId: number | string | null) => void
   baselineMinutes?: number
@@ -303,16 +303,18 @@ function UserRoutePanel({
     <div className="flex flex-col gap-4">
       {/* User header */}
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
-          title={t('app.routePlanner.allEmployees', 'All employees')}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
+            title={t('app.routePlanner.allEmployees', 'All employees')}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        )}
         <div
           className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-bold"
           style={{ background: route.color, boxShadow: `0 4px 12px ${route.color}40` }}
@@ -656,7 +658,15 @@ export default function DayRoutePanel({
   baselineMinutesByUser,
 }: DayRoutePanelProps) {
   const { t, locale } = useAppI18n()
-  const focusedRoute = focusUserId != null ? routes.find(r => r.userId === focusUserId) : null
+  // Solo company: only one user has routes today → skip the "all employees" picker entirely
+  // and render that user's route panel directly. The user can't (and shouldn't) navigate
+  // back to a multi-employee overview.
+  const isSoloCompany = routes.length === 1
+  const focusedRoute = isSoloCompany
+    ? routes[0]
+    : focusUserId != null
+      ? routes.find(r => r.userId === focusUserId)
+      : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
@@ -714,7 +724,7 @@ export default function DayRoutePanel({
             onJobOpen={id => onJobOpen(id as number)}
             onOptimize={onOptimize}
             optimizing={optimizing}
-            onBack={onClearUser}
+            onBack={isSoloCompany ? undefined : onClearUser}
             highlightedJobId={highlightedJobId}
             onJobCardHover={onJobCardHover}
             baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}

@@ -5,8 +5,10 @@ import { useParams, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
 import Link from 'next/link'
-import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon, ClockIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon, ClockIcon, XMarkIcon, BellAlertIcon } from '@heroicons/react/24/outline'
 import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
+import { useAppI18n } from '@/app/components/I18nProvider'
+import type { MessageKey } from '@/app/i18n'
 
 function formatDate(value: string | undefined): string {
   if (!value) return '—'
@@ -23,19 +25,13 @@ function formatNumber(amount: number | string | undefined): string {
 }
 
 const INVOICE_STATUSES = [
-  { value: 'draft', label: 'Draft' },
-  { value: 'sent', label: 'Sent' },
-  { value: 'overdue', label: 'Overdue' },
-  { value: 'paid', label: 'Paid' },
+  { value: 'draft', labelKey: 'invoice.detail.statusDraft' as MessageKey, fallback: 'Draft' },
+  { value: 'sent', labelKey: 'invoice.detail.statusSent' as MessageKey, fallback: 'Sent' },
+  { value: 'overdue', labelKey: 'invoice.detail.statusOverdue' as MessageKey, fallback: 'Overdue' },
+  { value: 'paid', labelKey: 'invoice.detail.statusPaid' as MessageKey, fallback: 'Paid' },
 ] as const
 
 const TIMELINE_ORDER: readonly string[] = ['draft', 'sent', 'overdue', 'paid']
-
-function statusToLabel(status: string): string {
-  if (status === 'cancelled') return 'Credited'
-  if (status === 'credited') return 'Credited'
-  return INVOICE_STATUSES.find((s) => s.value === status)?.label ?? status
-}
 
 function timelineIndex(status: string | undefined): number {
   const s = status || 'draft'
@@ -56,6 +52,8 @@ function applySendInvoicePlaceholders(
 }
 
 export default function InvoicePage() {
+  const { t } = useAppI18n()
+  const tr = (key: MessageKey, fallback?: string) => t(key, fallback)
   const params = useParams()
   const searchParams = useSearchParams()
   const company = params?.company as string
@@ -74,8 +72,11 @@ export default function InvoicePage() {
 
   const backLabel =
     fromParam === 'client'
-      ? `Back to ${clientNameParam ? decodeURIComponent(clientNameParam) : 'client'}`
-      : 'Back to Completed'
+      ? tr('invoice.detail.backToClient', 'Back to {name}').replace(
+          '{name}',
+          clientNameParam ? decodeURIComponent(clientNameParam) : tr('invoice.detail.backToClientDefault', 'client'),
+        )
+      : tr('invoice.detail.backToCompleted', 'Back to Completed')
   const [invoice, setInvoice] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -92,7 +93,7 @@ export default function InvoicePage() {
   const [paymentReceivedModalOpen, setPaymentReceivedModalOpen] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
-  const [paymentSource, setPaymentSource] = useState('bank')
+  const [paymentSource, setPaymentSource] = useState('bank_transfer')
   const [paymentSubmitting, setPaymentSubmitting] = useState(false)
   const [paymentError, setPaymentError] = useState<string | null>(null)
   const [onlineInvoiceLoading, setOnlineInvoiceLoading] = useState(false)
@@ -100,12 +101,16 @@ export default function InvoicePage() {
   const [hasPaymentMethods, setHasPaymentMethods] = useState(true)
   const [pendingInvoiceReminder, setPendingInvoiceReminder] = useState<{ sendAt: string } | null>(null)
   const [cancelReminderLoading, setCancelReminderLoading] = useState(false)
+  const [manualReminderLoading, setManualReminderLoading] = useState(false)
+  const [manualReminderMessage, setManualReminderMessage] = useState<
+    { tone: 'success' | 'error'; text: string } | null
+  >(null)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
     if (!token || !id) {
       setLoading(false)
-      setError(!id ? 'Invalid invoice' : 'Not authenticated')
+      setError(!id ? tr('invoice.detail.invalidInvoice', 'Invalid invoice') : tr('invoice.detail.notAuthenticated', 'Not authenticated'))
       return
     }
     let cancelled = false
@@ -123,14 +128,14 @@ export default function InvoicePage() {
         if (invData.invoice) {
           setInvoice(invData.invoice)
           setPendingInvoiceReminder(invData.pendingInvoiceReminder ?? null)
-        } else setError(invData.error || 'Invoice not found')
+        } else setError(invData.error || tr('invoice.detail.notFound', 'Invoice not found'))
         if (eData.invoice) {
           setEInvoice(eData.invoice)
           setHasPaymentMethods(Boolean(eData.hasPaymentMethods))
         }
       })
       .catch(() => {
-        if (!cancelled) setError('Failed to load invoice')
+        if (!cancelled) setError(tr('invoice.detail.failedLoad', 'Failed to load invoice'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -196,10 +201,49 @@ export default function InvoicePage() {
     }
   }
 
+  const handleSendReminderNow = async () => {
+    const token = localStorage.getItem('token')
+    if (!token || !id) return
+    setManualReminderLoading(true)
+    setManualReminderMessage(null)
+    try {
+      const res = await fetch(apiUrl(`/invoices/${id}/send-reminder`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setManualReminderMessage({
+          tone: 'success',
+          text: data.sentTo
+            ? tr('invoice.detail.notificationSentTo', 'Notification sent to {email}.').replace('{email}', String(data.sentTo))
+            : tr('invoice.detail.notificationSent', 'Notification sent.'),
+        })
+        if (data.sentAt) {
+          setInvoice((prev: any) =>
+            prev ? { ...prev, last_manual_reminder_at: data.sentAt } : prev,
+          )
+        }
+      } else {
+        setManualReminderMessage({
+          tone: 'error',
+          text: data.error || tr('invoice.detail.notificationFailed', 'Failed to send notification.'),
+        })
+      }
+    } catch {
+      setManualReminderMessage({
+        tone: 'error',
+        text: tr('invoice.detail.networkError', 'Network error — please try again.'),
+      })
+    } finally {
+      setManualReminderLoading(false)
+    }
+  }
+
   const handleSendInvoice = async () => {
     const to = sendTo.trim()
     if (!to) {
-      setSendError('Please enter a recipient email.')
+      setSendError(tr('invoice.detail.enterEmail', 'Please enter a recipient email.'))
       return
     }
     const token = localStorage.getItem('token')
@@ -225,12 +269,9 @@ export default function InvoicePage() {
         data = text ? JSON.parse(text) : {}
       } catch {
         if (text.startsWith('<') || text.toLowerCase().includes('<!doctype')) {
-          setSendError(
-            'Server returned a web page instead of JSON. The API may be unreachable. ' +
-            'Ensure the api-server is running (e.g. port 8000) and, if needed, set NEXT_PUBLIC_API_URL=http://localhost:8000'
-          )
+          setSendError(tr('invoice.detail.serverHtmlError', 'Server returned a web page instead of JSON. The API may be unreachable. Ensure the api-server is running (e.g. port 8000) and, if needed, set NEXT_PUBLIC_API_URL=http://localhost:8000'))
         } else {
-          setSendError('Invalid response from server. Please try again.')
+          setSendError(tr('invoice.detail.invalidResponse', 'Invalid response from server. Please try again.'))
         }
         return
       }
@@ -240,11 +281,11 @@ export default function InvoicePage() {
         setSendConfirmStep('form')
         await refreshInvoiceReminderStatus()
       } else {
-        setSendError(data.error || 'Failed to send email')
+        setSendError(data.error || tr('invoice.detail.failedSendEmail', 'Failed to send email'))
       }
     } catch (e) {
       console.error(e)
-      setSendError('Failed to send email. Check the console and ensure the API server is running.')
+      setSendError(tr('invoice.detail.failedSendEmailConsole', 'Failed to send email. Check the console and ensure the API server is running.'))
     } finally {
       setSending(false)
     }
@@ -253,7 +294,7 @@ export default function InvoicePage() {
   const openPaymentReceivedModal = () => {
     setPaymentAmount(String(invoice?.total ?? ''))
     setPaymentDate(new Date().toISOString().slice(0, 10))
-    setPaymentSource('bank')
+    setPaymentSource('bank_transfer')
     setPaymentError(null)
     setPaymentReceivedModalOpen(true)
   }
@@ -261,17 +302,17 @@ export default function InvoicePage() {
   const handlePaymentReceived = async () => {
     const amount = paymentAmount.trim()
     if (!amount) {
-      setPaymentError('Please enter the amount paid.')
+      setPaymentError(tr('invoice.detail.enterAmount', 'Please enter the amount paid.'))
       return
     }
     const num = parseFloat(amount)
     if (isNaN(num) || num < 0) {
-      setPaymentError('Please enter a valid amount.')
+      setPaymentError(tr('invoice.detail.validAmount', 'Please enter a valid amount.'))
       return
     }
     const dateStr = paymentDate.trim()
     if (!dateStr) {
-      setPaymentError('Please select the payment date.')
+      setPaymentError(tr('invoice.detail.selectDate', 'Please select the payment date.'))
       return
     }
     const token = localStorage.getItem('token')
@@ -298,11 +339,9 @@ export default function InvoicePage() {
         data = text ? JSON.parse(text) : {}
       } catch {
         if (text.startsWith('<') || text.toLowerCase().includes('<!doctype')) {
-          setPaymentError(
-            'The server returned a web page instead of data. Make sure your API server is running and supports the payment endpoint (run "node setup-database.js" once to create the required table, then restart the server).'
-          )
+          setPaymentError(tr('invoice.detail.serverDatabaseError', 'The server returned a web page instead of data. Make sure your API server is running and supports the payment endpoint (run "node setup-database.js" once to create the required table, then restart the server).'))
         } else {
-          setPaymentError('Invalid response from server. Please try again.')
+          setPaymentError(tr('invoice.detail.invalidResponse', 'Invalid response from server. Please try again.'))
         }
         return
       }
@@ -316,11 +355,11 @@ export default function InvoicePage() {
         if (data.balance !== undefined && data.balance <= 0) setPendingInvoiceReminder(null)
         else await refreshInvoiceReminderStatus()
       } else {
-        setPaymentError(data.error || 'Failed to record payment')
+        setPaymentError(data.error || tr('invoice.detail.failedRecordPayment', 'Failed to record payment'))
       }
     } catch (e) {
       console.error(e)
-      setPaymentError('Failed to record payment. Check your connection and that the API server is running.')
+      setPaymentError(tr('invoice.detail.failedRecordPaymentNet', 'Failed to record payment. Check your connection and that the API server is running.'))
     } finally {
       setPaymentSubmitting(false)
     }
@@ -336,7 +375,7 @@ export default function InvoicePage() {
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        alert(data.error || 'Failed to download PDF')
+        alert(data.error || tr('invoice.detail.failedDownloadPdf', 'Failed to download PDF'))
         return
       }
       const blob = await res.blob()
@@ -348,7 +387,7 @@ export default function InvoicePage() {
       URL.revokeObjectURL(url)
     } catch (e) {
       console.error(e)
-      alert('Failed to download PDF')
+      alert(tr('invoice.detail.failedDownloadPdf', 'Failed to download PDF'))
     } finally {
       setPdfDownloading(false)
     }
@@ -360,7 +399,7 @@ export default function InvoicePage() {
         <div className="flex min-h-[60vh] items-center justify-center p-6">
           <div className="text-center">
             <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
-            <p className="mt-2 text-sm text-gray-500">Loading invoice...</p>
+            <p className="mt-2 text-sm text-gray-500">{tr('invoice.detail.loading', 'Loading invoice...')}</p>
           </div>
         </div>
       </AppLayout>
@@ -371,7 +410,7 @@ export default function InvoicePage() {
     return (
       <AppLayout>
         <div className="p-6">
-          <p className="text-red-600">{error || 'Invoice not found'}</p>
+          <p className="text-red-600">{error || tr('invoice.detail.notFound', 'Invoice not found')}</p>
           <Link
             href={backHref}
             className="mt-4 inline-flex items-center text-sm text-accent-600 hover:text-accent-700"
@@ -415,12 +454,12 @@ export default function InvoicePage() {
         headers: { Authorization: `Bearer ${token}` },
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Could not open online invoice')
+      if (!res.ok) throw new Error(data.error || tr('invoice.detail.couldNotOpenOnline', 'Could not open online invoice'))
       const path = typeof data.path === 'string' ? data.path : ''
-      if (!path.startsWith('/')) throw new Error('Invalid response')
+      if (!path.startsWith('/')) throw new Error(tr('invoice.detail.invalidResponse', 'Invalid response from server. Please try again.'))
       window.open(`${window.location.origin}${path}`, '_blank', 'noopener,noreferrer')
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Could not open online invoice')
+      alert(e instanceof Error ? e.message : tr('invoice.detail.couldNotOpenOnline', 'Could not open online invoice'))
     } finally {
       setOnlineInvoiceLoading(false)
     }
@@ -444,11 +483,11 @@ export default function InvoicePage() {
       if (res.ok && data.invoice) {
         setInvoice((prev: any) => (prev ? { ...prev, status: data.invoice.status } : prev))
       } else {
-        alert(data.error || 'Failed to update status')
+        alert(data.error || tr('invoice.detail.failedUpdateStatus', 'Failed to update status'))
       }
     } catch (e) {
       console.error(e)
-      alert('Failed to update status')
+      alert(tr('invoice.detail.failedUpdateStatus', 'Failed to update status'))
     } finally {
       setStatusUpdating(false)
     }
@@ -482,17 +521,26 @@ export default function InvoicePage() {
                 daysUntilOverdue === null
                   ? null
                   : daysUntilOverdue > 0
-                    ? `${daysUntilOverdue} day${daysUntilOverdue === 1 ? '' : 's'} until overdue`
+                    ? tr(
+                        daysUntilOverdue === 1 ? 'invoice.detail.daysUntilOverdueOne' : 'invoice.detail.daysUntilOverdueMany',
+                        daysUntilOverdue === 1 ? '{n} day until overdue' : '{n} days until overdue',
+                      ).replace('{n}', String(daysUntilOverdue))
                     : daysUntilOverdue === 0
-                      ? 'Due today'
-                      : `${Math.abs(daysUntilOverdue)} day${daysUntilOverdue === -1 ? '' : 's'} overdue`
+                      ? tr('invoice.detail.dueToday', 'Due today')
+                      : tr(
+                          daysUntilOverdue === -1 ? 'invoice.detail.daysOverdueOne' : 'invoice.detail.daysOverdueMany',
+                          daysUntilOverdue === -1 ? '{n} day overdue' : '{n} days overdue',
+                        ).replace('{n}', String(Math.abs(daysUntilOverdue)))
 
               return (
                 <div className="mb-8 w-full">
-                  <nav className="flex w-full items-start gap-0" aria-label="Invoice status">
+                  <nav className="flex w-full items-start gap-0" aria-label={tr('invoice.detail.ariaStatus', 'Invoice status')}>
                     {TIMELINE_ORDER.map((value, index) => {
                       const isOverpaid = currentStatus === 'overpaid'
-                      const displayLabel = value === 'paid' && isOverpaid ? 'Overpaid' : (INVOICE_STATUSES.find((s) => s.value === value)?.label ?? value)
+                      const statusRow = INVOICE_STATUSES.find((s) => s.value === value)
+                      const displayLabel = value === 'paid' && isOverpaid
+                        ? tr('invoice.detail.statusOverpaid', 'Overpaid')
+                        : (statusRow ? tr(statusRow.labelKey, statusRow.fallback) : value)
                       const isActive = currentIndex === index || (value === 'paid' && isOverpaid)
                       const isPast = currentIndex > index && !(value === 'paid' && isOverpaid)
                       const isFuture = currentIndex < index
@@ -588,7 +636,7 @@ export default function InvoicePage() {
               </div>
             ) : (
               <div className="rounded-xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500 shadow-sm">
-                Could not load the digital invoice preview. Try refreshing the page.
+                {tr('invoice.detail.previewUnavailable', 'Could not load the digital invoice preview. Try refreshing the page.')}
               </div>
             )}
           </div>
@@ -603,7 +651,7 @@ export default function InvoicePage() {
                 className="block rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden hover:border-gray-300 hover:shadow-md transition-all group"
               >
                 <div className="border-b border-gray-100 bg-gray-50 px-4 py-2.5 flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Client</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{tr('invoice.detail.client', 'Client')}</p>
                   <svg className="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
@@ -644,28 +692,42 @@ export default function InvoicePage() {
             {/* Balance timeline – what they owed, payments/charges, current balance */}
             <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
               <div className="border-b border-gray-100 bg-gray-50 px-4 py-2.5">
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Balance overview</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{tr('invoice.detail.balanceOverview', 'Balance overview')}</p>
               </div>
               <div className="p-4 space-y-0">
                 {/* Opening: invoice total */}
                 <div className="flex items-center justify-between gap-2 py-2 border-b border-gray-100">
-                  <span className="text-sm text-gray-600">Invoice total</span>
+                  <span className="text-sm text-gray-600">{tr('invoice.detail.invoiceTotal', 'Invoice total')}</span>
                   <span className="text-sm font-semibold text-gray-900 tabular-nums">+ {formatNumber(total)} {currency}</span>
                 </div>
                 {/* Running balance after each transaction */}
                 {transactions.length === 0 ? (
-                  <div className="py-2 text-sm text-gray-400">No payments or extra charges yet.</div>
+                  <div className="py-2 text-sm text-gray-400">{tr('invoice.detail.noTransactions', 'No payments or extra charges yet.')}</div>
                 ) : (
                   <ul className="divide-y divide-gray-50">
-                    {transactions.map((t: any) => {
-                      const amt = Number(t.amount) || 0
-                      const isPayment = t.type === 'payment'
+                    {transactions.map((tx: any) => {
+                      const amt = Number(tx.amount) || 0
+                      const isPayment = tx.type === 'payment'
+                      const sourceLabel = (() => {
+                        const map: Record<string, string> = {
+                          bank_transfer: tr('invoice.detail.paymentSource.bankTransfer', 'Bank transfer'),
+                          mobilepay: tr('invoice.detail.paymentSource.mobilepay', 'MobilePay'),
+                          card: tr('invoice.detail.paymentSource.card', 'Card'),
+                          cash: tr('invoice.detail.paymentSource.cash', 'Cash'),
+                          check: tr('invoice.detail.paymentSource.check', 'Check'),
+                          other: tr('invoice.detail.paymentSource.other', 'Other'),
+                          // Legacy values from before the structured enum.
+                          bank: tr('invoice.detail.paymentSource.bankTransfer', 'Bank transfer'),
+                        }
+                        const key = String(tx.payment_source || '').toLowerCase()
+                        return map[key] || tx.payment_source || ''
+                      })()
                       const label = isPayment
-                        ? (t.description || 'Payment') + (t.payment_source ? ` (${t.payment_source})` : '')
-                        : (t.description || 'Charge')
-                      const dateStr = t.transaction_date ? formatDate(t.transaction_date) : ''
+                        ? (tx.description || tr('invoice.detail.transaction.payment', 'Payment')) + (sourceLabel ? ` (${sourceLabel})` : '')
+                        : (tx.description || tr('invoice.detail.transaction.charge', 'Charge'))
+                      const dateStr = tx.transaction_date ? formatDate(tx.transaction_date) : ''
                       return (
-                        <li key={t.id} className="flex flex-col gap-0.5 py-2.5">
+                        <li key={tx.id} className="flex flex-col gap-0.5 py-2.5">
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm text-gray-700 truncate" title={label}>{label}</span>
                             <span className={`text-sm font-medium tabular-nums shrink-0 ${isPayment ? 'text-green-600' : 'text-amber-600'}`}>
@@ -682,13 +744,13 @@ export default function InvoicePage() {
                 <div className={`mt-4 pt-4 border-t-2 rounded-lg px-3 py-3 ${
                   balance > 0 ? 'border-gray-200 bg-gray-50' : balance < 0 ? 'border-blue-200 bg-blue-50' : 'border-green-200 bg-green-50'
                 }`}>
-                  <p className="text-xs font-medium uppercase tracking-wider text-gray-500 mb-0.5">Current balance</p>
+                  <p className="text-xs font-medium uppercase tracking-wider text-gray-500 mb-0.5">{tr('invoice.detail.currentBalance', 'Current balance')}</p>
                   {balance > 0 ? (
-                    <p className="text-lg font-bold text-gray-900 tabular-nums">{formatNumber(balance)} {currency} <span className="text-sm font-normal text-gray-600">owed</span></p>
+                    <p className="text-lg font-bold text-gray-900 tabular-nums">{formatNumber(balance)} {currency} <span className="text-sm font-normal text-gray-600">{tr('invoice.detail.balanceOwed', 'owed')}</span></p>
                   ) : balance < 0 ? (
-                    <p className="text-lg font-bold text-blue-700 tabular-nums">{formatNumber(Math.abs(balance))} {currency} <span className="text-sm font-normal text-blue-600">we owe you</span></p>
+                    <p className="text-lg font-bold text-blue-700 tabular-nums">{formatNumber(Math.abs(balance))} {currency} <span className="text-sm font-normal text-blue-600">{tr('invoice.detail.balanceWeOwe', 'we owe you')}</span></p>
                   ) : (
-                    <p className="text-lg font-bold text-green-700 tabular-nums">Paid off</p>
+                    <p className="text-lg font-bold text-green-700 tabular-nums">{tr('invoice.detail.paidOff', 'Paid off')}</p>
                   )}
                 </div>
                 <div className="mt-4 pt-2">
@@ -700,15 +762,15 @@ export default function InvoicePage() {
                   >
                     <GlobeAltIcon className="h-5 w-5" aria-hidden />
                     {onlineInvoiceLoading
-                      ? 'Opening…'
+                      ? tr('invoice.detail.opening', 'Opening…')
                       : isDraft
-                        ? 'Preview e-invoice'
-                        : 'Online invoice'}
+                        ? tr('invoice.detail.previewInvoice', 'Preview e-invoice')
+                        : tr('invoice.detail.onlineInvoice', 'Online invoice')}
                   </button>
                   <p className="mt-2 text-center text-[11px] text-gray-500 leading-snug">
                     {isDraft
-                      ? 'Staff-only preview (same as the client view). No public link until the invoice is sent.'
-                      : 'Opens the secure page your client can use to view this invoice and pay with your enabled methods.'}
+                      ? tr('invoice.detail.previewHint', 'Staff-only preview (same as the client view). No public link until the invoice is sent.')
+                      : tr('invoice.detail.onlineHint', 'Opens the secure page your client can use to view this invoice and pay with your enabled methods.')}
                   </p>
                 </div>
               </div>
@@ -721,7 +783,7 @@ export default function InvoicePage() {
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent-500 bg-accent-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
               >
                 <BanknotesIcon className="h-5 w-5" />
-                Payment received
+                {tr('invoice.detail.paymentReceived', 'Payment received')}
               </button>
             )}
             {(invoice.status === 'draft' || !invoice.status) && (
@@ -730,7 +792,7 @@ export default function InvoicePage() {
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
               >
                 <PencilSquareIcon className="h-5 w-5" />
-                Edit
+                {tr('invoice.detail.edit', 'Edit')}
               </Link>
             )}
             {isDraft && (
@@ -740,14 +802,56 @@ export default function InvoicePage() {
                 disabled={cannotLeaveDraftWithoutPayments}
                 title={
                   cannotLeaveDraftWithoutPayments
-                    ? 'Enable at least one payment method in Extensions before sending.'
+                    ? tr('invoice.detail.enablePaymentMethodWarn', 'Enable at least one payment method in Extensions before sending.')
                     : undefined
                 }
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-600 bg-accent-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <PaperAirplaneIcon className="h-5 w-5" aria-hidden />
-                Complete and send
+                {tr('invoice.detail.completeAndSend', 'Complete and send')}
               </button>
+            )}
+            {!isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue') && (
+              <div className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3">
+                <div className="flex items-start gap-2">
+                  <BellAlertIcon className="h-5 w-5 shrink-0 text-gray-700 mt-0.5" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900">{tr('invoice.detail.sendNotification', 'Send notification')}</p>
+                    <p className="text-xs text-gray-600 mt-0.5 leading-snug">
+                      {tr('invoice.detail.sendNotificationDesc', 'Email the client a reminder right now. The scheduled automatic reminder still runs as planned.')}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSendReminderNow}
+                  disabled={manualReminderLoading}
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <PaperAirplaneIcon className="h-4 w-4" aria-hidden />
+                  {manualReminderLoading ? tr('invoice.detail.sending', 'Sending…') : tr('invoice.detail.sendNotification', 'Send notification')}
+                </button>
+                {manualReminderMessage && (
+                  <p
+                    className={`mt-2 text-xs leading-snug ${
+                      manualReminderMessage.tone === 'success' ? 'text-emerald-700' : 'text-red-600'
+                    }`}
+                  >
+                    {manualReminderMessage.text}
+                  </p>
+                )}
+                {!manualReminderMessage && invoice.last_manual_reminder_at && (
+                  <p className="mt-2 text-[11px] text-gray-500">
+                    {tr('invoice.detail.lastSent', 'Last sent {time}').replace(
+                      '{time}',
+                      new Date(invoice.last_manual_reminder_at).toLocaleString(undefined, {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      }),
+                    )}
+                  </p>
+                )}
+              </div>
             )}
             {!isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue') && (
               <div className="w-full rounded-xl border border-gray-200 bg-gray-50/90 px-3 py-3">
@@ -755,12 +859,15 @@ export default function InvoicePage() {
                   <div className="flex items-start gap-2">
                     <ClockIcon className="h-5 w-5 shrink-0 text-accent-600 mt-0.5" aria-hidden />
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-gray-900">Due reminder scheduled</p>
+                      <p className="text-sm font-semibold text-gray-900">{tr('invoice.detail.dueReminderScheduled', 'Due reminder scheduled')}</p>
                       <p className="text-xs text-gray-600 mt-0.5">
-                        Sends {new Date(pendingInvoiceReminder.sendAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                        {tr('invoice.detail.sendsAt', 'Sends {time}').replace(
+                          '{time}',
+                          new Date(pendingInvoiceReminder.sendAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+                        )}
                       </p>
                       <p className="text-[11px] text-gray-500 mt-1">
-                        Manage wording and timing in Settings → Messages. Cancel here if you do not want this email.
+                        {tr('invoice.detail.manageReminder', 'Manage wording and timing in Settings → Messages. Cancel here if you do not want this email.')}
                       </p>
                     </div>
                     <button
@@ -768,18 +875,18 @@ export default function InvoicePage() {
                       onClick={handleCancelDueReminder}
                       disabled={cancelReminderLoading}
                       className="shrink-0 rounded-lg border border-gray-300 bg-white p-1.5 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                      title="Cancel scheduled reminder"
+                      title={tr('invoice.detail.cancelScheduledReminder', 'Cancel scheduled reminder')}
                     >
                       <XMarkIcon className="h-4 w-4" aria-hidden />
                     </button>
                   </div>
                 ) : (
                   <p className="text-xs text-gray-600 leading-snug">
-                    Due-date reminders run automatically when enabled under{' '}
+                    {tr('invoice.detail.autoReminderInfo', 'Due-date reminders run automatically when enabled under ')}
                     <Link href={company ? `/${company}/settings/notifications` : '/settings/notifications'} className="font-medium text-accent-700 underline">
-                      Settings → Messages
+                      {tr('invoice.detail.settingsMessages', 'Settings → Messages')}
                     </Link>
-                    . Nothing is scheduled for this invoice (already paid, past due time, or automation off).
+                    {tr('invoice.detail.noReminderScheduled', '. Nothing is scheduled for this invoice (already paid, past due time, or automation off).')}
                   </p>
                 )}
               </div>
@@ -791,7 +898,7 @@ export default function InvoicePage() {
               className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50"
             >
               <ArrowDownTrayIcon className="h-5 w-5" aria-hidden />
-              {pdfDownloading ? 'Downloading…' : 'Download as PDF'}
+              {pdfDownloading ? tr('invoice.detail.downloading', 'Downloading…') : tr('invoice.detail.downloadPdf', 'Download as PDF')}
             </button>
           </div>
         </div>
@@ -802,9 +909,9 @@ export default function InvoicePage() {
             <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
               {sendConfirmStep === 'confirm' ? (
                 <>
-                  <h2 className="text-lg font-semibold text-gray-900">Are you sure?</h2>
+                  <h2 className="text-lg font-semibold text-gray-900">{tr('invoice.detail.areYouSure', 'Are you sure?')}</h2>
                   <p className="mt-2 text-sm text-gray-600">
-                    Once you send this invoice, there is no going back. The invoice will be marked as sent and cannot be edited. The invoice is final as is.
+                    {tr('invoice.detail.sendConfirm', 'Once you send this invoice, there is no going back. The invoice will be marked as sent and cannot be edited. The invoice is final as is.')}
                   </p>
                   <div className="mt-6 flex justify-end gap-2">
                     <button
@@ -813,7 +920,7 @@ export default function InvoicePage() {
                       disabled={sending}
                       className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                     >
-                      Go back
+                      {tr('invoice.detail.goBack', 'Go back')}
                     </button>
                     <button
                       type="button"
@@ -824,12 +931,12 @@ export default function InvoicePage() {
                       {sending ? (
                         <>
                           <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                          Sending…
+                          {tr('invoice.detail.sending', 'Sending…')}
                         </>
                       ) : (
                         <>
                           <PaperAirplaneIcon className="h-4 w-4" />
-                          Yes, send
+                          {tr('invoice.detail.yesSend', 'Yes, send')}
                         </>
                       )}
                     </button>
@@ -837,50 +944,48 @@ export default function InvoicePage() {
                 </>
               ) : (
                 <>
-              <h2 className="text-lg font-semibold text-gray-900">Send invoice to client</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{tr('invoice.detail.sendTitle', 'Send invoice to client')}</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Sends an email with a button to open the e-invoice (no PDF). Subject and message come from your First invoice
-                email template in Settings → Messages (placeholders filled for this client). After sending, you can schedule an
-                automatic due reminder there too.
+                {tr('invoice.detail.sendDescription', 'Sends an email with a button to open the e-invoice (no PDF). Subject and message come from your First invoice email template in Settings → Messages (placeholders filled for this client). After sending, you can schedule an automatic due reminder there too.')}
               </p>
               <div className="mt-4 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">To (email)</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.sendToLabel', 'To (email)')}</label>
                   <input
                     type="email"
                     value={sendTo}
                     onChange={(e) => setSendTo(e.target.value)}
-                    placeholder="client@example.com"
+                    placeholder={tr('invoice.detail.sendToPlaceholder', 'client@example.com')}
                     className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Subject (preview)</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.sendSubjectLabel', 'Subject (preview)')}</label>
                   <input
                     type="text"
                     readOnly
                     value={sendSubject}
-                    placeholder="Loading from template…"
+                    placeholder={tr('invoice.detail.sendLoadingTemplate', 'Loading from template…')}
                     className="mt-1 w-full cursor-default rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Message (preview)</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.sendBodyLabel', 'Message (preview)')}</label>
                   <textarea
                     readOnly
                     value={sendBody}
-                    placeholder="Loading from template…"
+                    placeholder={tr('invoice.detail.sendLoadingTemplate', 'Loading from template…')}
                     rows={4}
                     className="mt-1 w-full cursor-default resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">CC (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.sendCcLabel', 'CC (optional)')}</label>
                   <input
                     type="email"
                     value={sendCc}
                     onChange={(e) => setSendCc(e.target.value)}
-                    placeholder="another@example.com"
+                    placeholder={tr('invoice.detail.sendCcPlaceholder', 'another@example.com')}
                     className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
                   />
                 </div>
@@ -895,14 +1000,14 @@ export default function InvoicePage() {
                   disabled={sending}
                   className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  Cancel
+                  {tr('invoice.detail.cancel', 'Cancel')}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     const to = sendTo.trim()
                     if (!to) {
-                      setSendError('Please enter a recipient email.')
+                      setSendError(tr('invoice.detail.enterEmail', 'Please enter a recipient email.'))
                       return
                     }
                     setSendError(null)
@@ -912,7 +1017,7 @@ export default function InvoicePage() {
                   className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
                 >
                   <PaperAirplaneIcon className="h-4 w-4" />
-                  Send
+                  {tr('invoice.detail.sendBtn', 'Send')}
                 </button>
               </div>
                 </>
@@ -925,13 +1030,13 @@ export default function InvoicePage() {
         {paymentReceivedModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
-              <h2 className="text-lg font-semibold text-gray-900">Payment received</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{tr('invoice.detail.paymentTitle', 'Payment received')}</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Record how much was paid and when. The invoice will be marked as paid.
+                {tr('invoice.detail.paymentDesc', 'Record how much was paid and when. The invoice will be marked as paid.')}
               </p>
               <div className="mt-4 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Amount paid</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.amountPaid', 'Amount paid')}</label>
                   <input
                     type="number"
                     step="0.01"
@@ -946,7 +1051,7 @@ export default function InvoicePage() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Payment date</label>
+                  <label className="block text-sm font-medium text-gray-700">{tr('invoice.detail.paymentDate', 'Payment date')}</label>
                   <input
                     type="date"
                     value={paymentDate}
@@ -955,14 +1060,24 @@ export default function InvoicePage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Where did this money come to?</label>
+                  <label className="block text-sm font-medium text-gray-700">
+                    {tr('invoice.detail.paymentSourceLabel', 'How was it paid?')} <span className="text-red-500">*</span>
+                  </label>
                   <select
                     value={paymentSource}
                     onChange={(e) => setPaymentSource(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
                   >
-                    <option value="bank">Bank</option>
+                    <option value="bank_transfer">{tr('invoice.detail.paymentSource.bankTransfer', 'Bank transfer')}</option>
+                    <option value="mobilepay">{tr('invoice.detail.paymentSource.mobilepay', 'MobilePay')}</option>
+                    <option value="card">{tr('invoice.detail.paymentSource.card', 'Card')}</option>
+                    <option value="cash">{tr('invoice.detail.paymentSource.cash', 'Cash')}</option>
+                    <option value="check">{tr('invoice.detail.paymentSource.check', 'Check')}</option>
+                    <option value="other">{tr('invoice.detail.paymentSource.other', 'Other')}</option>
                   </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {tr('invoice.detail.paymentSourceHint', 'Used by your bookkeeping export to map this payment to the right account.')}
+                  </p>
                 </div>
               </div>
               {paymentError && (
@@ -975,7 +1090,7 @@ export default function InvoicePage() {
                   disabled={paymentSubmitting}
                   className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  Cancel
+                  {tr('invoice.detail.cancel', 'Cancel')}
                 </button>
                 <button
                   type="button"
@@ -986,12 +1101,12 @@ export default function InvoicePage() {
                   {paymentSubmitting ? (
                     <>
                       <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      Recording…
+                      {tr('invoice.detail.recording', 'Recording…')}
                     </>
                   ) : (
                     <>
                       <BanknotesIcon className="h-4 w-4" />
-                      Mark as paid
+                      {tr('invoice.detail.markAsPaid', 'Mark as paid')}
                     </>
                   )}
                 </button>

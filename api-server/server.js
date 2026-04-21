@@ -38,6 +38,19 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Static serving for user-uploaded company assets (logos). Stored on local
+// disk under api-server/uploads/ — easy to migrate to S3 later by swapping
+// this and the multer storage in routes/companies.js.
+const uploadsDir = path.resolve(__dirname, 'uploads');
+const fs = require('fs');
+try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (_) { /* exists */ }
+app.use('/uploads', express.static(uploadsDir, {
+  maxAge: '7d',
+  setHeaders: (res) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  },
+}));
+
 // Email configuration (copied from main server)
 const emailTransporter = (() => {
   const resendApiKey = process.env.RESEND_API_KEY;
@@ -157,10 +170,15 @@ const emailTemplateRoutes = require('./routes/email-templates');
 const videoGuideRoutes = require('./routes/video-guides');
 const dailyRoutesRoutes = require('./routes/daily-routes');
 const employeeLeaveRoutes = require('./routes/employee-leave');
+const appointmentRoutes = require('./routes/appointments');
+const companyDefaultsRoutes = require('./routes/company-defaults');
 const invitationRoutes = require('./routes/invitations');
 const trialRoutes = require('./routes/trial');
 const publicInvoiceRoutes = require('./routes/public-invoices');
 const { runAutomatedEmailTick } = require('./utils/automatedEmails');
+const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
+const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
+const { ensureWorkHoursSchema } = require('./utils/workHoursSchema');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -185,6 +203,8 @@ app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/video-guides', videoGuideRoutes);
 app.use('/api/daily-routes', dailyRoutesRoutes);
 app.use('/api/employee-leave', employeeLeaveRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/company-defaults', companyDefaultsRoutes);
 app.use('/api/invitations', invitationRoutes);
 app.use('/api/trial', trialRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
@@ -253,6 +273,30 @@ app.listen(port, () => {
   setInterval(() => {
     runAutomatedEmailTick(pool);
   }, 60 * 1000);
+
+  // One-shot backfill: rewrite any historical jobs whose title is empty so
+  // the UI no longer shows "Untitled job". Deferred a few seconds so it
+  // doesn't compete with startup traffic. Idempotent — safe to re-run on
+  // every boot.
+  setTimeout(() => {
+    backfillJobAutoTitles(pool).catch((err) =>
+      console.warn('[jobAutoTitle] backfill failed:', err.message || err)
+    );
+  }, 5000);
+
+  // Add invoice snapshot + company contact columns idempotently. Single call
+  // populates: companies.email/phone/website/logo_url, clients.ean_number,
+  // services.bookkeeping_account, invoices.from_*/bill_to_*/tax_label/etc.
+  ensureSnapshotColumns(pool).catch((err) =>
+    console.warn('[invoiceSnapshot] migration failed:', err.message || err)
+  );
+
+  // Work hours + appointments schema: mode-aware work hours, company default
+  // template, unified employee_appointments table (replacing employee_leave)
+  // + one-shot legacy data migration.
+  ensureWorkHoursSchema(pool).catch((err) =>
+    console.warn('[workHoursSchema] migration failed:', err.message || err)
+  );
 });
 
 // Export for testing

@@ -756,20 +756,33 @@ router.delete('/video-guides/:id', async (req, res) => {
 router.patch('/companies/:companyId/expiry', async (req, res) => {
   try {
     const { companyId } = req.params;
-    const { expiresAt } = req.body; // ISO date string or null to clear
+    const { expiresAt } = req.body; // ISO date string or null/empty to clear
+    const expiresValue = expiresAt == null || expiresAt === '' ? null : expiresAt;
 
     const check = await pool.query('SELECT id FROM companies WHERE id = $1', [companyId]);
     if (check.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
 
+    // When trial/access is extended to the future (or cleared), clear auto-expiry suspension.
+    // When set to a past time, ensure suspended_at reflects expired access.
     const result = await pool.query(
-      `UPDATE companies SET expires_at = $2, updated_at = NOW() WHERE id = $1
+      `UPDATE companies SET
+         expires_at = $2::timestamptz,
+         suspended_at = CASE
+           WHEN $2::timestamptz IS NULL THEN NULL
+           WHEN $2::timestamptz > NOW() THEN NULL
+           ELSE COALESCE(suspended_at, NOW())
+         END,
+         updated_at = NOW()
+       WHERE id = $1
        RETURNING id, name, expires_at, suspended_at`,
-      [companyId, expiresAt || null]
+      [companyId, expiresValue]
     );
 
     const company = result.rows[0];
     res.json({
-      message: expiresAt ? 'Expiry date updated' : 'Expiry date cleared (access is now permanent)',
+      message: expiresValue
+        ? 'Expiry date updated (suspension cleared if access is now valid)'
+        : 'Expiry date cleared (access is now permanent; suspension cleared)',
       company: {
         id: company.id,
         name: company.name,

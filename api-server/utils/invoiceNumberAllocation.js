@@ -1,7 +1,14 @@
 /**
  * Invoice numbers are allocated when an invoice is first sent (not when a draft is created).
  * companies.invoice_next_number is the next number to assign; drafts do not consume sequence slots.
+ *
+ * NOTE: Allocating a number is the single moment an invoice transitions from
+ * mutable (draft) → immutable (issued). We therefore also call
+ * `snapshotInvoiceOnIssue` here, which freezes the company / client / tax
+ * blocks onto the invoice row. After this point the customer-facing data
+ * never changes, even if the company profile or client record is edited.
  */
+const { snapshotInvoiceOnIssue } = require('./invoiceSnapshot');
 
 /** Allow NULL on draft rows; safe to run repeatedly. */
 async function ensureInvoiceNumberNullable(pool) {
@@ -69,11 +76,19 @@ async function allocateInvoiceNumberIfDraft(client, companyId, invoiceId) {
   }
   const row = invRes.rows[0];
   if ((row.status || 'draft') !== 'draft') {
+    // Already issued — snapshot would be a no-op (frozen_at gates it) but call
+    // anyway so legacy invoices that pre-date snapshots get back-filled the
+    // first time anyone touches them.
+    await snapshotInvoiceOnIssue(client, invoiceId).catch((e) =>
+      console.error('snapshotInvoiceOnIssue (already-issued):', e.message),
+    );
     return row.invoice_number != null && String(row.invoice_number).trim() !== ''
       ? String(row.invoice_number).trim()
       : String(invoiceId);
   }
   if (row.invoice_number != null && String(row.invoice_number).trim() !== '') {
+    // Has a number but still draft (rare). Don't freeze yet — snapshot only
+    // happens together with the actual draft → issued transition below.
     return String(row.invoice_number).trim();
   }
 
@@ -106,6 +121,13 @@ async function allocateInvoiceNumberIfDraft(client, companyId, invoiceId) {
     nextNum + 1,
     companyId,
   ]);
+
+  // The invoice is now numbered. The caller will set status away from 'draft'
+  // immediately after this returns (every call site does so atomically). We
+  // freeze the from / bill-to / tax block right now so the very first PDF or
+  // digital render sees the snapshot, not the live data. If anything fails the
+  // outer transaction rolls back, leaving the invoice as a pristine draft.
+  await snapshotInvoiceOnIssue(client, invoiceId);
   return numStr;
 }
 

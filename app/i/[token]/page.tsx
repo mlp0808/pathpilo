@@ -62,5 +62,10 @@ export default function PublicInvoicePage() {
     )
   }
 
-  return <DigitalInvoiceView data={data} variant="public" />
+  // Customer-facing PDF download. Same builder as the admin route so the PDF
+  // is byte-identical to what the company sees internally — required for
+  // accounting consistency between the digital and printed invoice.
+  const pdfHref = apiUrl(`/public/invoices/${encodeURIComponent(token)}/pdf`)
+
+  return <DigitalInvoiceView data={data} variant="public" pdfHref={pdfHref} />
 }

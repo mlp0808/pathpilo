@@ -1,8 +1,20 @@
 'use client'
 
 import Link from 'next/link'
+import { clearClientLocaleStorage } from '@/app/i18n'
 
 export default function SuspendedPage() {
+  const handleLogout = () => {
+    try {
+      clearClientLocaleStorage()
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+    } catch {
+      // ignore — still navigate to login
+    }
+    window.location.href = '/login'
+  }
+
   return (
     <div className="min-h-screen bg-page flex items-center justify-center px-4">
       <div className="max-w-lg w-full rounded-2xl border border-amber-200 bg-white p-8 shadow-sm text-center">
@@ -17,13 +29,17 @@ export default function SuspendedPage() {
           This workspace is currently on hold. Contact the company owner, or visit our support page for help.
         </p>
 
-        <div className="mt-6 flex items-center justify-center gap-3">
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <Link href="https://pathpilo.com/contact" className="btn-primary">
             Go to support
           </Link>
-          <Link href="/login" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-            Back to login
-          </Link>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </div>

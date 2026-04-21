@@ -947,9 +947,11 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 {users.find(u => u.id === selectedUserId)?.first_name} {users.find(u => u.id === selectedUserId)?.last_name}
                               </span>
                             </div>
-                            <button type="button" onClick={() => setSelectedUserId(null)} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
-                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
-                            </button>
+                            {users.length > 1 && (
+                              <button type="button" onClick={() => setSelectedUserId(null)} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
+                                <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <button

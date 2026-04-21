@@ -83,12 +83,20 @@ export default function ExtensionsSettingsPage() {
         }
 
         const loaded: Integration[] = Array.isArray(data.integrations) ? data.integrations : []
-        setIntegrations(loaded)
+        // Invoice-payment providers (bank transfer, future Stripe/MobilePay…)
+        // are configured under Settings → Invoice options now, not here.
+        // Keeping the filter capability-driven means new payment providers
+        // automatically end up in the right place without code changes here.
+        const visible = loaded.filter(
+          (integration) =>
+            !(Array.isArray(integration.capabilities) && integration.capabilities.includes('invoice_payment')),
+        )
+        setIntegrations(visible)
 
-        if (loaded.length > 0) {
-          const firstProvider = loaded[0].provider
+        if (visible.length > 0) {
+          const firstProvider = visible[0].provider
           setSelectedProvider(firstProvider)
-          const first = loaded[0]
+          const first = visible[0]
           setDraftEnabled(Boolean(first.enabled))
           setDraftConfig({ ...EMPTY_BANK_CONFIG, ...(first.config || {}) })
         }
@@ -163,6 +171,19 @@ export default function ExtensionsSettingsPage() {
       {loading ? (
         <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-500">
           Loading extensions...
+        </div>
+      ) : integrations.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
+          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-400">
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.7 6.3l-1.4-1.4a1 1 0 00-1.4 0l-7.6 7.6a1 1 0 000 1.4l1.4 1.4a1 1 0 001.4 0l7.6-7.6a1 1 0 000-1.4z" />
+            </svg>
+          </div>
+          <p className="text-base font-semibold text-gray-900">No extensions available yet</p>
+          <p className="mt-1 text-sm text-gray-500 max-w-sm mx-auto">
+            Optional integrations will appear here when they&apos;re ready. Payment options have moved
+            to <strong>Settings → Invoice options</strong>.
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">

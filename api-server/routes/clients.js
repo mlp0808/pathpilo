@@ -474,6 +474,15 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
     await dbClient.query(`
       ALTER TABLE invoices ADD COLUMN IF NOT EXISTS show_completed_date BOOLEAN DEFAULT false
     `).catch(() => {});
+    // Per-invoice snapshot of which payment providers should appear on the
+    // PDF / online invoice. NULL = legacy invoices created before this gate;
+    // the renderer falls back to "use whatever's enabled at company level".
+    await dbClient.query(`
+      ALTER TABLE invoices ADD COLUMN IF NOT EXISTS enabled_payment_methods JSONB
+    `).catch(() => {});
+    await dbClient.query(
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_numbering_configured BOOLEAN NOT NULL DEFAULT FALSE`
+    ).catch(() => {});
 
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
@@ -495,8 +504,91 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       payment_terms,
       discounts = {},
       description: descriptionInput = '',
-      show_completed_date: showCompletedDate = false
+      // Combined "Reference / PO" line for B2B invoices. Stored in a dedicated
+      // column so it can be used by future EHF/PEPPOL e-invoice exports.
+      reference_text: referenceTextInput = '',
+      show_completed_date: showCompletedDate = false,
+      enabled_payment_methods: enabledPaymentMethodsInput,
     } = req.body;
+
+    // ── Gate 1: company must have explicitly chosen its starting invoice
+    // number. We never want to silently start a customer at #1 when they
+    // came from a previous system that was already at #847.
+    //
+    // We accept three signals as "configured":
+    //   1. The boolean flag column is TRUE (modern saves write this).
+    //   2. invoice_next_number is anything other than the schema default of
+    //      1 — somebody explicitly set a starting number, even if a legacy
+    //      save never wrote the flag.
+    //   3. The company has already issued at least one invoice (legacy).
+    // If any of these are true, also self-heal the flag column so the UI
+    // and other gates stop nagging on subsequent requests.
+    const numberingRow = await dbClient.query(
+      `SELECT invoice_numbering_configured, COALESCE(invoice_next_number, 1) AS invoice_next_number FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    const numberingFlag = numberingRow.rows[0]?.invoice_numbering_configured === true;
+    const explicitStart = Number(numberingRow.rows[0]?.invoice_next_number) > 1;
+    let hasIssuedInvoice = false;
+    if (!numberingFlag && !explicitStart) {
+      const issuedRow = await dbClient.query(
+        `SELECT 1 FROM invoices WHERE company_id = $1 AND invoice_number IS NOT NULL LIMIT 1`,
+        [companyId]
+      );
+      hasIssuedInvoice = issuedRow.rows.length > 0;
+    }
+    const numberingConfigured = numberingFlag || explicitStart || hasIssuedInvoice;
+    if (!numberingConfigured) {
+      return res.status(400).json({
+        error: 'Set up your invoice number start in Settings → Invoice options before creating an invoice.',
+        code: 'numbering_not_configured',
+      });
+    }
+    if (!numberingFlag && (explicitStart || hasIssuedInvoice)) {
+      await dbClient.query(
+        `UPDATE companies SET invoice_numbering_configured = TRUE WHERE id = $1`,
+        [companyId]
+      ).catch(() => {});
+    }
+
+    // ── Gate 2: the per-invoice payment options snapshot. We need at least
+    // one method active. Two cases:
+    //  • client sent an explicit list → use it (after intersecting with the
+    //    company-level enabled providers, so the client can't sneak in a
+    //    method that isn't actually configured).
+    //  • client sent nothing → default to whatever's enabled at company
+    //    level (back-compat with older clients / API consumers).
+    const enabledProvidersRow = await dbClient.query(
+      `
+      SELECT ci.provider
+      FROM company_integrations ci
+      JOIN integration_registry r ON r.provider = ci.provider
+      WHERE ci.company_id = $1
+        AND ci.enabled = TRUE
+        AND r.capabilities ? 'invoice_payment'
+      `,
+      [companyId]
+    ).catch(() => ({ rows: [] }));
+    const companyEnabledProviders = new Set(enabledProvidersRow.rows.map((r) => r.provider));
+
+    let enabledPaymentMethods;
+    if (Array.isArray(enabledPaymentMethodsInput)) {
+      enabledPaymentMethods = enabledPaymentMethodsInput
+        .map((p) => String(p || '').trim())
+        .filter((p) => p && companyEnabledProviders.has(p));
+    } else {
+      enabledPaymentMethods = Array.from(companyEnabledProviders);
+    }
+
+    if (enabledPaymentMethods.length === 0) {
+      return res.status(400).json({
+        error:
+          companyEnabledProviders.size === 0
+            ? 'Activate at least one payment option in Settings → Invoice options before creating an invoice.'
+            : 'Pick at least one payment option for this invoice.',
+        code: 'no_payment_methods',
+      });
+    }
 
     let due_date = dueDateBody;
     if (due_days != null && due_days !== '' && issue_date) {
@@ -617,13 +709,15 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       INSERT INTO invoices (
         company_id, client_id, invoice_number, title, issue_date, due_date,
         subtotal, tax_rate, tax_amount, total, currency, notes, payment_terms, created_by,
-        description, show_completed_date, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft')
+        description, show_completed_date, status, enabled_payment_methods, reference_text
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'draft', $17::jsonb, $18)
       RETURNING *
     `, [
       companyId, clientId, null, invoiceTitle || '', issue_date, due_date,
       subtotal, tax_rate, taxAmount, total, currency, notes, payment_terms, userId,
-      (descriptionInput && String(descriptionInput).trim()) || '', !!showCompletedDate
+      (descriptionInput && String(descriptionInput).trim()) || '', !!showCompletedDate,
+      JSON.stringify(enabledPaymentMethods),
+      (referenceTextInput && String(referenceTextInput).trim()) || null,
     ]);
 
     const invoice = invoiceResult.rows[0];

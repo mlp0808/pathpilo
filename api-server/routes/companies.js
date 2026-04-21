@@ -537,13 +537,17 @@ router.get('/profile', authenticateToken, async (req, res) => {
       }
     }
 
-    // Ensure route-location columns exist (run once per deployment)
+    // Ensure route-location + invoice-contact columns exist (idempotent).
     try {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_start_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_end_address TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS route_locations_enabled BOOLEAN DEFAULT TRUE');
       await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`);
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS email TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
     } catch (e) { /* ignore */ }
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
@@ -573,6 +577,12 @@ router.get('/profile', authenticateToken, async (req, res) => {
         address: company.address,
         city: company.city,
         zipCode: company.zip_code,
+        // Contact details rendered on every invoice. Hidden on the
+        // invoice when empty, per product spec.
+        email: company.email || '',
+        phone: company.phone || '',
+        website: company.website || '',
+        logoUrl: company.logo_url || '',
         defaultStartAddress: company.default_start_address ?? '',
         defaultEndAddress: company.default_end_address ?? '',
         routeLocationsEnabled: company.route_locations_enabled !== false,
@@ -622,6 +632,9 @@ router.put('/profile', authenticateToken, async (req, res) => {
       address,
       city,
       zipCode,
+      email,
+      phone,
+      website,
       defaultStartAddress,
       defaultEndAddress,
       routeLocationsEnabled,
@@ -636,6 +649,10 @@ router.put('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS route_locations_enabled BOOLEAN DEFAULT TRUE');
       await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`);
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS email TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
     } catch (e) { /* ignore */ }
 
     const hasTimezoneKey = Object.prototype.hasOwnProperty.call(req.body, 'timezone');
@@ -656,12 +673,26 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
     const locationsEnabled = routeLocationsEnabled === undefined ? undefined : Boolean(routeLocationsEnabled);
 
+    // COALESCE on every nullable field so a partial PATCH-like PUT (frontend
+    // only sends what changed) doesn't accidentally wipe the others.
     await pool.query(
-      `UPDATE companies SET name = $1, country = $2, country_code = COALESCE($3, country_code, '${DEFAULT_COUNTRY_CODE}'), cvr_number = $4, address = $5, city = $6, zip_code = $7,
-        default_start_address = $8, default_end_address = $9,
+      `UPDATE companies SET
+        name           = COALESCE($1, name),
+        country        = COALESCE($2, country),
+        country_code   = COALESCE($3, country_code, '${DEFAULT_COUNTRY_CODE}'),
+        cvr_number     = COALESCE($4, cvr_number),
+        address        = COALESCE($5, address),
+        city           = COALESCE($6, city),
+        zip_code       = COALESCE($7, zip_code),
+        default_start_address = COALESCE($8, default_start_address),
+        default_end_address   = COALESCE($9, default_end_address),
         route_locations_enabled = COALESCE($10, route_locations_enabled, TRUE),
-        timezone = CASE WHEN $12::boolean THEN $11 ELSE timezone END,
-        updated_at = CURRENT_TIMESTAMP WHERE id = $13`,
+        timezone       = CASE WHEN $12::boolean THEN $11 ELSE timezone END,
+        email          = COALESCE($14, email),
+        phone          = COALESCE($15, phone),
+        website        = COALESCE($16, website),
+        updated_at     = CURRENT_TIMESTAMP
+      WHERE id = $13`,
       [
         name != null ? String(name).trim() : null,
         country != null ? String(country).trim() : null,
@@ -676,6 +707,9 @@ router.put('/profile', authenticateToken, async (req, res) => {
         timezoneParam,
         hasTimezoneKey,
         companyId,
+        email != null ? String(email).trim() : null,
+        phone != null ? String(phone).trim() : null,
+        website != null ? String(website).trim() : null,
       ]
     );
 
@@ -699,6 +733,27 @@ async function ensureCompanyInvoiceSettingsColumns() {
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_subject TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_body TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1');
+  await pool.query(
+    'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_numbering_configured BOOLEAN NOT NULL DEFAULT FALSE'
+  );
+  // One-time, idempotent backfill. Flip the flag to TRUE for any company
+  // that has clearly already configured numbering, so we don't lock them out
+  // of creating new invoices when the "must explicitly choose a starting
+  // number" gate ships. Two signals count as "configured":
+  //   1. They have at least one issued invoice (legacy users).
+  //   2. They have a non-default invoice_next_number (>1) saved — somebody
+  //      actively typed a number into the settings page, even if no invoice
+  //      has been issued yet. This catches users who set, e.g., 1500 before
+  //      the flag column existed.
+  await pool.query(`
+    UPDATE companies
+    SET invoice_numbering_configured = TRUE
+    WHERE invoice_numbering_configured = FALSE
+      AND (
+        id IN (SELECT DISTINCT company_id FROM invoices WHERE invoice_number IS NOT NULL)
+        OR COALESCE(invoice_next_number, 1) > 1
+      )
+  `).catch(() => {});
 }
 
 async function resolveProfileCompanyId(req) {
@@ -745,7 +800,8 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_email_default_body,
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
-        invoice_next_number
+        invoice_next_number,
+        invoice_numbering_configured
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -772,6 +828,7 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
       invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
       invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
       invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
+      invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
       maxNumericInvoice,
     };
 
@@ -850,6 +907,10 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       }
       updates.push(`invoice_next_number = $${p++}`);
       values.push(n);
+      // The user has now explicitly chosen their starting number, so unlock
+      // invoice creation. We never flip this flag back to FALSE — once
+      // configured, always configured.
+      updates.push(`invoice_numbering_configured = TRUE`);
     }
 
     if (updates.length === 0) {
@@ -872,7 +933,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_email_default_body,
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
-        invoice_next_number
+        invoice_next_number,
+        invoice_numbering_configured
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -900,6 +962,7 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
         invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
         invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
+        invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
         maxNumericInvoice,
       },
     });
@@ -1329,6 +1392,122 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error creating company:', error);
     res.status(500).json({ error: 'Failed to create company' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Company logo upload (rendered on every invoice). Stored on local disk under
+// api-server/uploads/company-logos/. The DB only stores the public URL path.
+// ─────────────────────────────────────────────────────────────────────────────
+const multer = require('multer');
+const fsNode = require('fs');
+const pathNode = require('path');
+const cryptoNode = require('crypto');
+
+const LOGO_DIR = pathNode.resolve(__dirname, '..', 'uploads', 'company-logos');
+try { fsNode.mkdirSync(LOGO_DIR, { recursive: true }); } catch (_) { /* exists */ }
+
+const logoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, LOGO_DIR),
+    // Random filename so two companies can't ever collide and a deleted file
+    // can't be recovered via URL guessing.
+    filename: (_req, file, cb) => {
+      const ext = (pathNode.extname(file.originalname || '') || '.png').toLowerCase().slice(0, 8);
+      const random = cryptoNode.randomBytes(16).toString('hex');
+      cb(null, `${Date.now()}-${random}${ext}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB hard cap — logos are tiny
+  fileFilter: (_req, file, cb) => {
+    const ok = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+    if (!ok.includes(file.mimetype)) {
+      return cb(new Error('Only PNG, JPG, WEBP or SVG logos are accepted'));
+    }
+    cb(null, true);
+  },
+});
+
+router.post('/profile/logo', authenticateToken, (req, res) => {
+  logoUpload.single('logo')(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || 'Upload failed' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file received' });
+    }
+    try {
+      const userId = req.user.userId;
+      const activeCompanyId = req.user.activeCompanyId;
+      let companyId = activeCompanyId;
+      if (!companyId) {
+        const r = await pool.query(
+          `SELECT uc.company_id FROM user_companies uc WHERE uc.user_id = $1 LIMIT 1`,
+          [userId],
+        );
+        if (r.rows.length === 0) {
+          return res.status(400).json({ error: 'No active company found' });
+        }
+        companyId = r.rows[0].company_id;
+      } else {
+        const m = await pool.query(
+          'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+          [userId, companyId],
+        );
+        if (m.rows.length === 0) {
+          return res.status(403).json({ error: 'Not a member of the active company' });
+        }
+      }
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT').catch(() => {});
+
+      // Best-effort: delete the previous logo file to avoid orphans.
+      const previous = await pool.query('SELECT logo_url FROM companies WHERE id = $1', [companyId]);
+      const prevUrl = previous.rows[0]?.logo_url;
+      if (prevUrl && prevUrl.startsWith('/uploads/company-logos/')) {
+        const prevPath = pathNode.resolve(__dirname, '..', prevUrl.replace(/^\//, ''));
+        fsNode.promises.unlink(prevPath).catch(() => {});
+      }
+
+      const publicUrl = `/uploads/company-logos/${req.file.filename}`;
+      await pool.query(
+        `UPDATE companies SET logo_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [publicUrl, companyId],
+      );
+      return res.json({ logoUrl: publicUrl });
+    } catch (e) {
+      console.error('logo upload:', e);
+      return res.status(500).json({ error: 'Failed to save logo' });
+    }
+  });
+});
+
+router.delete('/profile/logo', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const activeCompanyId = req.user.activeCompanyId;
+    let companyId = activeCompanyId;
+    if (!companyId) {
+      const r = await pool.query(
+        `SELECT uc.company_id FROM user_companies uc WHERE uc.user_id = $1 LIMIT 1`,
+        [userId],
+      );
+      if (r.rows.length === 0) return res.status(400).json({ error: 'No active company found' });
+      companyId = r.rows[0].company_id;
+    }
+    const previous = await pool.query('SELECT logo_url FROM companies WHERE id = $1', [companyId]);
+    const prevUrl = previous.rows[0]?.logo_url;
+    if (prevUrl && prevUrl.startsWith('/uploads/company-logos/')) {
+      const prevPath = pathNode.resolve(__dirname, '..', prevUrl.replace(/^\//, ''));
+      fsNode.promises.unlink(prevPath).catch(() => {});
+    }
+    await pool.query(
+      `UPDATE companies SET logo_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [companyId],
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('logo delete:', e);
+    res.status(500).json({ error: 'Failed to delete logo' });
   }
 });
 

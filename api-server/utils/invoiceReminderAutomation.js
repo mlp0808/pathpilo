@@ -68,6 +68,12 @@ async function ensureInvoiceReminderSchema(pool) {
       UNIQUE(company_id, invoice_id, automation_key)
     )
   `);
+  // Tracks the timestamp of the most recent *manual* reminder nudge for the invoice.
+  // Kept separate from automation tracking so sending a manual notification never
+  // consumes or cancels the one scheduled automated reminder.
+  await pool.query(`
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS last_manual_reminder_at TIMESTAMPTZ
+  `);
   schemaEnsured = true;
 }
 
@@ -316,6 +322,128 @@ async function sendInvoiceReminderForRow(pool, row) {
   await pool.query(`DELETE FROM scheduled_invoice_reminder_sends WHERE id = $1`, [schedId]);
 }
 
+function manualReminderError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+/**
+ * Manually send a due-date reminder email right now.
+ *
+ * This is the "Send notification" action on an invoice. It reuses the same
+ * template / email builder as the automated reminder so the customer sees a
+ * consistent message, but it deliberately does NOT touch
+ * `scheduled_invoice_reminder_sends` or `automated_invoice_email_sends`.
+ * That means the scheduled automatic reminder (if any) will still fire at
+ * its planned time — this is a nudge *in addition to* automation.
+ *
+ * Throws errors with a `.code` string so the caller can map them to HTTP
+ * statuses: NO_INVOICE, INVALID_STATUS, NO_CLIENT_EMAIL, ALREADY_PAID,
+ * RATE_LIMITED.
+ */
+async function sendInvoiceReminderManually(pool, companyId, invoiceId) {
+  await ensureInvoiceReminderSchema(pool);
+
+  const invRes = await pool.query(
+    `SELECT i.*, c.name, c.last_name,
+            COALESCE(NULLIF(TRIM(c.billing_email), ''), NULLIF(TRIM(c.email), ''), '') AS client_email,
+            co.name AS company_name, co.country_code, co.timezone
+     FROM invoices i
+     JOIN clients c ON c.id = i.client_id
+     JOIN companies co ON co.id = i.company_id
+     WHERE i.id = $1 AND i.company_id = $2`,
+    [invoiceId, companyId]
+  );
+  if (invRes.rows.length === 0) {
+    throw manualReminderError('Invoice not found', 'NO_INVOICE');
+  }
+  const inv = invRes.rows[0];
+  const st = inv.status || 'draft';
+  if (st !== 'sent' && st !== 'overdue') {
+    throw manualReminderError(
+      'Only sent or overdue invoices can receive a reminder notification.',
+      'INVALID_STATUS'
+    );
+  }
+  if (!inv.client_email) {
+    throw manualReminderError(
+      'No email address on file for this client — add a billing email before sending a notification.',
+      'NO_CLIENT_EMAIL'
+    );
+  }
+  const balance = await computeInvoiceBalance(pool, invoiceId, inv.total);
+  if (balance <= 0) {
+    throw manualReminderError(
+      'This invoice is already fully paid, so no reminder was sent.',
+      'ALREADY_PAID'
+    );
+  }
+
+  // Light throttle to protect against rapid double-clicks / accidental spamming.
+  if (inv.last_manual_reminder_at) {
+    const last = new Date(inv.last_manual_reminder_at).getTime();
+    if (!Number.isNaN(last) && Date.now() - last < 30 * 1000) {
+      throw manualReminderError(
+        'A notification was just sent — please wait a moment before sending another.',
+        'RATE_LIMITED'
+      );
+    }
+  }
+
+  const itemsRes = await pool.query(
+    `SELECT ii.*, COALESCE(s.title, ii.description) AS service_title
+     FROM invoice_items ii
+     LEFT JOIN services s ON s.id = ii.service_id
+     WHERE ii.invoice_id = $1 ORDER BY ii.id`,
+    [invoiceId]
+  );
+  const client_name = [inv.name, inv.last_name].filter(Boolean).join(' ').trim() || '—';
+  const invoice = { ...inv, client_name, items: itemsRes.rows };
+
+  const invNo = String(invoice.invoice_number != null ? invoice.invoice_number : invoice.id);
+  const { subject: subjTpl, body: bodyTpl } = await loadReminderSubjectBody(
+    pool,
+    companyId,
+    inv.country_code || 'DK'
+  );
+  const subject = applyInvoiceNumberTokens(subjTpl, invNo);
+  const messagePlain = applyInvoiceNumberTokens(bodyTpl, invNo);
+
+  const token = await getOrCreateInvoicePublicToken(pool, invoiceId);
+  const eInvoiceUrl = `${getWebAppBaseUrl()}/i/${token}`;
+  const { html, text } = buildInvoiceCustomerEmailPayload({
+    invoice,
+    companyName: invoice.company_name || '',
+    countryCode: inv.country_code || 'DK',
+    eInvoiceUrl,
+    messagePlain,
+  });
+
+  const sentTo = inv.client_email.trim();
+  await sendEmail({
+    to: sentTo,
+    subject,
+    text,
+    html,
+    companyId,
+    fromName: invoice.company_name || undefined,
+  });
+
+  const upd = await pool.query(
+    `UPDATE invoices
+     SET last_manual_reminder_at = NOW()
+     WHERE id = $1 AND company_id = $2
+     RETURNING last_manual_reminder_at`,
+    [invoiceId, companyId]
+  );
+  const sentAt = upd.rows[0]?.last_manual_reminder_at
+    ? new Date(upd.rows[0].last_manual_reminder_at).toISOString()
+    : new Date().toISOString();
+
+  return { sentAt, sentTo };
+}
+
 /**
  * Process due invoice reminders (call from same tick as job automations).
  */
@@ -346,6 +474,7 @@ module.exports = {
   scheduleInvoiceDueReminder,
   cancelScheduledInvoiceReminder,
   getPendingInvoiceReminder,
+  sendInvoiceReminderManually,
   runInvoiceReminderTick,
   computeDueReminderSendAt,
   loadInvoiceReminderSettings,

@@ -10,13 +10,14 @@ import JobViewSlideout from '@/app/components/JobViewSlideout'
 import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
 import DayRoutePanel from '@/app/components/DayRoutePanel'
+import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoney } from '@/app/config/countryRules'
 import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppI18n } from '@/app/components/I18nProvider'
-import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline'
+import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon } from '@heroicons/react/24/outline'
 import type { UserRoute, RouteJob } from '@/app/components/RouteMap'
 
 // RouteMap uses mapbox-gl which cannot be server-rendered
@@ -77,20 +78,10 @@ function JobsPageContent() {
   }
   
   // Load saved state from localStorage
-  const getSavedWeek = () => {
-    try {
-      const saved = localStorage.getItem('vevago_jobs_week')
-      if (saved) {
-        const date = new Date(saved)
-        if (!isNaN(date.getTime())) {
-          return date
-        }
-      }
-    } catch (e) {}
-    return new Date()
-  }
-  
-  // Initialise currentWeek from URL ?date= param first, then localStorage
+  // Initialise currentWeek from URL ?date= param if present (used by day-view
+  // shareable links / refreshes), otherwise always start on today. We intentionally
+  // do NOT restore from localStorage — opening the jobs page should always land
+  // on the current week/month, regardless of where the user was last time.
   const [currentWeek, setCurrentWeek] = useState(() => {
     const dateStr = searchParams.get('date')
     if (dateStr) {
@@ -100,7 +91,7 @@ function JobsPageContent() {
         if (!isNaN(parsed.getTime())) return parsed
       }
     }
-    return getSavedWeek()
+    return new Date()
   })
   const [jobs, setJobs] = useState<any[]>([])
   // Full jobs dataset (unfiltered). Used by the route planner so "All employees" always works.
@@ -119,6 +110,11 @@ function JobsPageContent() {
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
   const [workHours, setWorkHours] = useState<WorkHours | null>(null)
   const [allUsersWorkHours, setAllUsersWorkHours] = useState<WorkHours | null>(null)
+  // Per-user schedule hours keyed by user id. Populated whenever we fetch the
+  // all-team aggregate so the all-team week view can show individual employees
+  // as "off" on days where *they* have zero scheduled hours (weekend, day off,
+  // part-time schedule) even when other team members are working.
+  const [workHoursByUser, setWorkHoursByUser] = useState<Record<number, WorkHours>>({})
   // Initialise viewMode from URL ?view= param
   const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() =>
     searchParams.get('view') === 'day' ? 'day' : 'week'
@@ -170,6 +166,41 @@ function JobsPageContent() {
   const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
   // Leave entries for the currently selected employee: date → { leave_type, hours_off }
   const [employeeLeaveByDate, setEmployeeLeaveByDate] = useState<Record<string, { leave_type: string; hours_off: number | null }>>({})
+
+  // Appointments (unified time off + blocks). Keyed by date for O(1) render
+  // and capacity lookup. Each entry carries every appointment for that day
+  // so the calendar cell can render pills and the capacity bar can sum up
+  // the approved hours.
+  type AppointmentItem = {
+    id: number
+    user_id: number
+    title: string
+    category: 'personal' | 'meeting' | 'sick' | 'vacation' | 'other'
+    notes: string | null
+    appointment_date: string
+    time_mode: 'span' | 'hours' | 'all_day'
+    start_time: string | null
+    end_time: string | null
+    hours_off: number | null
+    status: 'requested' | 'approved'
+    requested_by: number | null
+    approved_by: number | null
+  }
+  const [appointmentsByDate, setAppointmentsByDate] = useState<Record<string, AppointmentItem[]>>({})
+  const [isCreateAppointmentOpen, setIsCreateAppointmentOpen] = useState(false)
+  const [editingAppointment, setEditingAppointment] = useState<AppointmentPayload | null>(null)
+  const [appointmentPrefillDate, setAppointmentPrefillDate] = useState<string | null>(null)
+  const [appointmentPrefillUserId, setAppointmentPrefillUserId] = useState<number | null>(null)
+  // Per-cell "+ Add" popover — two choices (Job / Appointment).
+  const [cellAddMenu, setCellAddMenu] = useState<
+    | { date: string; x: number; y: number }
+    | null
+  >(null)
+  // 3-dot actions popover anchored to a specific appointment pill.
+  const [apptActionsMenu, setApptActionsMenu] = useState<
+    | { id: number; x: number; y: number }
+    | null
+  >(null)
 
 
   // Fetch saved travel times from daily_routes whenever the visible week changes
@@ -333,14 +364,13 @@ function JobsPageContent() {
     return days
   }
   
-  // Save week when it changes (e.g., from date picker or other interactions)
+  // (We intentionally don't persist currentWeek anywhere — see the initializer
+  //  comment above. The URL `?date=` is only set in day view by the effect below.)
+
+  // Clean up any legacy persisted week so old installs also reset to "today".
   useEffect(() => {
-    if (currentWeek) {
-      try {
-        localStorage.setItem('vevago_jobs_week', currentWeek.toISOString())
-      } catch (e) {}
-    }
-  }, [currentWeek])
+    try { localStorage.removeItem('vevago_jobs_week') } catch (e) {}
+  }, [])
 
   // Keep the browser URL in sync with the current view so that:
   //  • Refreshing the page returns you to the same day view
@@ -392,19 +422,22 @@ function JobsPageContent() {
         const token = localStorage.getItem('token')
         
         if (selectedUserId === 'all') {
-            // Fetch work hours for all users and sum them
+            // Fetch work hours for all users, sum them into the aggregate, AND
+            // keep a per-user map so per-employee day-off styling works in the
+            // all-team week view.
             try {
-                const workHoursPromises = users.map(user => 
+                const workHoursPromises = users.map(user =>
                     fetch(apiUrl(`/work-hours/${user.id}`), {
                         headers: {
                             'Authorization': `Bearer ${token}`
                         }
-                    }).then(res => res.json())
+                    })
+                        .then(res => res.json())
+                        .then(data => ({ userId: user.id, data }))
                 )
-                
+
                 const allWorkHoursData = await Promise.all(workHoursPromises)
-                
-                // Sum up all work hours
+
                 const aggregatedWorkHours: WorkHours = {
                     monday_hours: 0,
                     tuesday_hours: 0,
@@ -414,8 +447,10 @@ function JobsPageContent() {
                     saturday_hours: 0,
                     sunday_hours: 0
                 }
-                
-                allWorkHoursData.forEach(data => {
+
+                const perUser: Record<number, WorkHours> = {}
+
+                allWorkHoursData.forEach(({ userId, data }) => {
                     const rawWorkHours = data.workHours || {
                         monday_hours: 7.5,
                         tuesday_hours: 7.5,
@@ -425,17 +460,30 @@ function JobsPageContent() {
                         saturday_hours: 0,
                         sunday_hours: 0
                     }
-                    
-                    aggregatedWorkHours.monday_hours += parseFloat(rawWorkHours.monday_hours) || 0
-                    aggregatedWorkHours.tuesday_hours += parseFloat(rawWorkHours.tuesday_hours) || 0
-                    aggregatedWorkHours.wednesday_hours += parseFloat(rawWorkHours.wednesday_hours) || 0
-                    aggregatedWorkHours.thursday_hours += parseFloat(rawWorkHours.thursday_hours) || 0
-                    aggregatedWorkHours.friday_hours += parseFloat(rawWorkHours.friday_hours) || 0
-                    aggregatedWorkHours.saturday_hours += parseFloat(rawWorkHours.saturday_hours) || 0
-                    aggregatedWorkHours.sunday_hours += parseFloat(rawWorkHours.sunday_hours) || 0
+
+                    const parsed: WorkHours = {
+                        monday_hours: parseFloat(rawWorkHours.monday_hours) || 0,
+                        tuesday_hours: parseFloat(rawWorkHours.tuesday_hours) || 0,
+                        wednesday_hours: parseFloat(rawWorkHours.wednesday_hours) || 0,
+                        thursday_hours: parseFloat(rawWorkHours.thursday_hours) || 0,
+                        friday_hours: parseFloat(rawWorkHours.friday_hours) || 0,
+                        saturday_hours: parseFloat(rawWorkHours.saturday_hours) || 0,
+                        sunday_hours: parseFloat(rawWorkHours.sunday_hours) || 0,
+                    }
+
+                    perUser[userId] = parsed
+
+                    aggregatedWorkHours.monday_hours    += parsed.monday_hours
+                    aggregatedWorkHours.tuesday_hours   += parsed.tuesday_hours
+                    aggregatedWorkHours.wednesday_hours += parsed.wednesday_hours
+                    aggregatedWorkHours.thursday_hours  += parsed.thursday_hours
+                    aggregatedWorkHours.friday_hours    += parsed.friday_hours
+                    aggregatedWorkHours.saturday_hours  += parsed.saturday_hours
+                    aggregatedWorkHours.sunday_hours    += parsed.sunday_hours
                 })
-                
+
                 setAllUsersWorkHours(aggregatedWorkHours)
+                setWorkHoursByUser(perUser)
                 setWorkHours(null) // Clear individual work hours
             } catch (error) {
                 console.error('Error fetching work hours for all users:', error)
@@ -476,6 +524,9 @@ function JobsPageContent() {
 
                 setWorkHours(parsedWorkHours)
                 setAllUsersWorkHours(null) // Clear aggregated work hours
+                // Also remember this user's hours in the per-user map so any
+                // per-employee UI can read it even while in single-user view.
+                setWorkHoursByUser(prev => ({ ...prev, [Number(selectedUserId)]: parsedWorkHours }))
             }
         } catch (error) {
             console.error('Error fetching work hours:', error)
@@ -581,6 +632,42 @@ function JobsPageContent() {
         } finally {
             setLoading(false)
         }
+
+        // Fetch appointments for the same date range so the calendar can
+        // render them alongside jobs and deduct approved time from
+        // capacity. Failures here are logged but do not block the jobs
+        // fetch — they just leave the appointments map empty.
+        try {
+            const token = localStorage.getItem('token')
+            let startDate: string
+            let endDate: string
+            if (viewMode === 'month') {
+                const monthDays = getMonthDays()
+                startDate = toLocalDateString(monthDays[0])
+                endDate = toLocalDateString(monthDays[monthDays.length - 1])
+            } else {
+                startDate = toLocalDateString(weekDays[0])
+                endDate = toLocalDateString(weekDays[6])
+            }
+            const userParam = selectedUserId === 'all' ? 'all' : String(selectedUserId)
+            const apptRes = await fetch(
+                apiUrl(`/appointments?from=${startDate}&to=${endDate}&user_id=${userParam}&status=all`),
+                { headers: { Authorization: `Bearer ${token}` } }
+            )
+            if (apptRes.ok) {
+                const apptData = await apptRes.json()
+                const list: AppointmentItem[] = apptData.appointments || []
+                const byDate: Record<string, AppointmentItem[]> = {}
+                for (const a of list) {
+                    const key = a.appointment_date
+                    if (!byDate[key]) byDate[key] = []
+                    byDate[key].push(a)
+                }
+                setAppointmentsByDate(byDate)
+            }
+        } catch (err) {
+            console.warn('Failed to fetch appointments:', err)
+        }
     }
 
   // Track if we've initialized from URL to prevent loops
@@ -595,10 +682,20 @@ function JobsPageContent() {
     }
   }, [user, userLoading])
 
-  // Initialize selected user - priority: URL param > localStorage > first user
+  // Initialize selected user - priority: solo company > URL param > localStorage > first user
   useEffect(() => {
     if (!users || users.length === 0 || initializedFromUrl) return
-    
+
+    // Solo company: only one user → always pin to that user, ignore "all"/URL/localStorage.
+    if (users.length === 1) {
+      setSelectedUserId(users[0].id)
+      setInitializedFromUrl(true)
+      try {
+        localStorage.setItem('vevago_jobs_selected_user', String(users[0].id))
+      } catch (e) {}
+      return
+    }
+
     // First, try URL parameter
     const u = searchParams?.get('user')
     if (u) {
@@ -664,6 +761,23 @@ function JobsPageContent() {
     } catch (e) {}
   }, [users, searchParams, initializedFromUrl])
 
+  // Solo-company guard: if the company shrinks to a single user later, coerce
+  // any cached "all" / stale id back to the only user so the filter UI is consistent.
+  useEffect(() => {
+    if (!users || users.length !== 1) return
+    if (selectedUserId !== users[0].id) {
+      setSelectedUserId(users[0].id)
+      try {
+        localStorage.setItem('vevago_jobs_selected_user', String(users[0].id))
+      } catch (e) {}
+    }
+    // In day view there is no "all employees" picker for solo companies; pre-focus
+    // the map on the only user so it doesn't render in unfocused/overview mode.
+    if (dayFocusUserId !== users[0].id) {
+      setDayFocusUserId(users[0].id)
+    }
+  }, [users, selectedUserId, dayFocusUserId])
+
   // Persist selected user in URL and localStorage - only after initialization and only on manual changes
   useEffect(() => {
     // Don't run if not initialized yet, or if we don't have the required data
@@ -716,12 +830,98 @@ function JobsPageContent() {
         }
     }, [currentWeek, selectedUserId, user, userLoading, viewMode])
 
-    // Reset scroll position when week changes
+    // Reset scroll position when week changes.
+    // If today's date is inside the visible week and it falls on a weekend
+    // (Sat/Sun → indices 5/6 in our Monday-first layout), scroll the row all
+    // the way to the right so the weekend columns are actually visible.
+    // Otherwise scroll back to the start (Monday).
+    // Reset scroll position when week changes.
+    // If today's date is inside the visible week and it falls on a weekend
+    // (Sat/Sun → indices 5/6 in our Monday-first layout), scroll the row so
+    // those weekend columns are actually visible. Otherwise scroll back to
+    // the start (Monday).
+    //
+    // We have to fight two things:
+    //   1) The columns mount asynchronously, so scrollWidth is sometimes 0
+    //      on the first frame.
+    //   2) The container uses scroll-snap-type: x mandatory which can override
+    //      a raw `scrollLeft = max` assignment by snapping back to a snap
+    //      point. So instead of setting scrollLeft directly we look up the
+    //      today-column DOM node via a data attribute and use
+    //      `scrollIntoView({ inline: 'end' })`, then nudge scrollLeft to max
+    //      to make sure the very last column is flush with the right edge.
+    //
+    // We also retry across a few animation frames so we recover from the
+    // initial layout where the inner columns haven't been measured yet.
     useEffect(() => {
-        if (weekScrollContainerRef.current && viewMode === 'week') {
-            weekScrollContainerRef.current.scrollLeft = 0
-            setWeekScrollPosition(0)
+        if (viewMode !== 'week') return
+        const el = weekScrollContainerRef.current
+        if (!el) return
+
+        const todayIndex = weekDays.findIndex(d => isToday(d))
+        // Only adjust scroll when today is inside the currently visible week.
+        if (todayIndex === -1) return
+        const isWeekendToday = todayIndex === 5 || todayIndex === 6
+
+        let cancelled = false
+        let rafId = 0
+        let attempts = 0
+        const MAX_ATTEMPTS = 20
+
+        const apply = () => {
+            if (cancelled) return
+            const node = weekScrollContainerRef.current
+            if (!node) return
+
+            // Wait until the row actually has horizontal overflow, otherwise
+            // there's nothing to scroll yet and the columns probably haven't
+            // been laid out.
+            const overflow = node.scrollWidth - node.clientWidth
+            if (overflow <= 0 && attempts < MAX_ATTEMPTS) {
+                attempts++
+                rafId = requestAnimationFrame(apply)
+                return
+            }
+
+            if (isWeekendToday) {
+                // Find the actual today column and scroll it into view at the
+                // right edge. This sidesteps scroll-snap quirks because the
+                // browser will pick the nearest valid snap point that keeps
+                // the today column visible.
+                const todayEl = node.querySelector<HTMLElement>('[data-is-today="true"]')
+                if (todayEl) {
+                    try {
+                        todayEl.scrollIntoView({ inline: 'end', block: 'nearest' })
+                    } catch {
+                        node.scrollLeft = overflow
+                    }
+                    // Belt-and-suspenders: also push the scroller to its max
+                    // so the weekend columns are flush to the right edge.
+                    node.scrollLeft = overflow
+                    setWeekScrollPosition(overflow)
+                } else if (attempts < MAX_ATTEMPTS) {
+                    // Today column not in DOM yet — try again next frame.
+                    attempts++
+                    rafId = requestAnimationFrame(apply)
+                    return
+                } else {
+                    node.scrollLeft = overflow
+                    setWeekScrollPosition(overflow)
+                }
+            } else {
+                node.scrollLeft = 0
+                setWeekScrollPosition(0)
+            }
         }
+
+        rafId = requestAnimationFrame(apply)
+        return () => {
+            cancelled = true
+            if (rafId) cancelAnimationFrame(rafId)
+        }
+        // weekDays is derived from currentWeek; depending on currentWeek/viewMode
+        // is enough to re-run this when navigating between weeks.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentWeek, viewMode])
 
     // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch)
@@ -741,7 +941,29 @@ function JobsPageContent() {
             .catch(() => {})
     }, [selectedUserId, currentWeek, user])
 
-    // Filter jobs by day — localStorage route order (set by route planner) wins, then route_order from DB, then sort_order
+    // "HH:MM" (or "HH:MM:SS") → minutes since midnight. Missing/invalid → Infinity
+    // so time-less jobs fall to the bottom of the default sort.
+    const parseTimeToMinutes = (t?: string | null): number => {
+        if (!t) return Infinity
+        const s = String(t).trim()
+        if (!s) return Infinity
+        const parts = s.split(':')
+        const h = parseInt(parts[0] || '', 10)
+        const m = parseInt(parts[1] || '0', 10)
+        if (Number.isNaN(h)) return Infinity
+        return h * 60 + (Number.isNaN(m) ? 0 : m)
+    }
+
+    // Filter jobs by day. Sort priority:
+    //   1) localStorage route-order (route planner, most recent admin intent)
+    //   2) DB route_order (set only when an admin has arranged the day — route
+    //      planner run, or a drag-drop on the calendar)
+    //   3) Default: scheduled_time_from ascending (earliest first). Time-less
+    //      jobs sink to the bottom where creation order decides.
+    //
+    // Note: we intentionally do NOT use sort_order as a day-level order signal
+    // anymore — it's set at creation for every job, so it doesn't distinguish
+    // "admin arranged this day" from "nothing has been done here yet".
     const getJobsForDay = (date: Date) => {
         const dateString = toLocalDateString(date)
         const dayJobs = jobs.filter(job => toDateOnlyString(job.scheduled_date) === dateString)
@@ -764,7 +986,7 @@ function JobsPageContent() {
         } catch { /* ignore */ }
 
         return dayJobs.sort((a, b) => {
-            // Within the same user: prefer the route planner's explicit saved order
+            // 1) Within the same user: prefer the route planner's explicit saved order
             if (a.assigned_user_id === b.assigned_user_id) {
                 const userOrder = savedOrderMap[a.assigned_user_id]
                 if (userOrder) {
@@ -773,10 +995,24 @@ function JobsPageContent() {
                     if (ia !== Infinity || ib !== Infinity) return ia - ib
                 }
             }
-            // Fallback: route_order from DB, then sort_order, then created_at
-            const aOrder = a.route_order ?? a.sort_order ?? 999999
-            const bOrder = b.route_order ?? b.sort_order ?? 999999
-            if (aOrder !== bOrder) return aOrder - bOrder
+
+            // 2) DB route_order — only set after admin has arranged the day.
+            //    If either job has one, respect that explicit arrangement.
+            if (a.route_order != null || b.route_order != null) {
+                const aOrder = a.route_order ?? 999999
+                const bOrder = b.route_order ?? 999999
+                if (aOrder !== bOrder) return aOrder - bOrder
+            }
+
+            // 3) Default: earliest scheduled time first.
+            const aMin = parseTimeToMinutes(a.scheduled_time_from)
+            const bMin = parseTimeToMinutes(b.scheduled_time_from)
+            if (aMin !== bMin) return aMin - bMin
+
+            // Final tiebreakers for time-less jobs: creation order.
+            const aSort = a.sort_order ?? 999999
+            const bSort = b.sort_order ?? 999999
+            if (aSort !== bSort) return aSort - bSort
             return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         })
     }
@@ -786,6 +1022,26 @@ function JobsPageContent() {
         setCreateJobPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
         setShowCreateMenu(false)
         setIsCreateModalOpen(true)
+    }
+
+    // Get a specific user's scheduled work hours for a day-of-week.
+    // Returns 0 when the user has no schedule on file yet (safe default –
+    // callers treat 0 as "off").
+    const getWorkHoursForUserDay = (userId: number, dayIndex: number): number => {
+        const hours = workHoursByUser[userId]
+        if (!hours) return 0
+        const dayMap: (keyof WorkHours)[] = [
+            'monday_hours',
+            'tuesday_hours',
+            'wednesday_hours',
+            'thursday_hours',
+            'friday_hours',
+            'saturday_hours',
+            'sunday_hours',
+        ]
+        const raw = hours[dayMap[dayIndex]]
+        const n = typeof raw === 'string' ? parseFloat(raw) : (raw || 0)
+        return isNaN(n) ? 0 : n
     }
 
     // Get work hours for a specific day (dayIndex: 0=Monday, 1=Tuesday, etc.)
@@ -823,6 +1079,217 @@ function JobsPageContent() {
             case 'custom_hours':       return Math.min(baseHours, leave.hours_off ?? 0)
             default: return 0
         }
+    }
+
+    // Convert a single approved appointment into the hours it consumes.
+    // - all_day  → full base-hours for the day
+    // - hours    → the declared hours_off (capped to the day's capacity)
+    // - span     → end - start (in hours, capped to the day's capacity)
+    const hoursForAppointment = (a: AppointmentItem, baseHoursForDay: number): number => {
+        if (a.time_mode === 'all_day') return baseHoursForDay
+        if (a.time_mode === 'hours') return Math.min(baseHoursForDay, a.hours_off ?? 0)
+        if (a.time_mode === 'span' && a.start_time && a.end_time) {
+            const [sh, sm] = a.start_time.split(':').map((n) => parseInt(n, 10))
+            const [eh, em] = a.end_time.split(':').map((n) => parseInt(n, 10))
+            const minutes = eh * 60 + em - (sh * 60 + sm)
+            return Math.max(0, Math.min(baseHoursForDay, minutes / 60))
+        }
+        return 0
+    }
+
+    // Total approved-appointment hours to deduct from a day's capacity.
+    // In "all employees" view we sum approved appointments across users
+    // (since the capacity bar itself sums work hours across users).
+    const getApprovedAppointmentHoursForDate = (dateStr: string, baseHoursForDay: number): number => {
+        const list = appointmentsByDate[dateStr]
+        if (!list || list.length === 0) return 0
+        const approved = list.filter((a) => a.status === 'approved')
+        if (approved.length === 0) return 0
+        return approved.reduce((sum, a) => sum + hoursForAppointment(a, baseHoursForDay), 0)
+    }
+
+    // Pending request count, used in the page-level heads-up pill.
+    const pendingRequestCount = (() => {
+        let n = 0
+        for (const list of Object.values(appointmentsByDate)) {
+            for (const a of list) if (a.status === 'requested') n += 1
+        }
+        return n
+    })()
+
+    // Role check — admins can approve/decline requests and edit anyone's
+    // appointments. Company-scoped role is preferred (it's what the JWT
+    // already carries); we fall back to the platform role for safety.
+    const isAdmin = (() => {
+        const r = (user?.activeCompany?.role || user?.role || '').toString().toLowerCase()
+        return r === 'owner' || r === 'admin'
+    })()
+
+    // --- Appointment actions ------------------------------------------------
+
+    const refreshAppointments = async () => {
+        // Cheap: the main fetcher already loads appointments for the visible
+        // date range, so we just replay it.
+        await fetchJobsForWeek()
+    }
+
+    const handleApproveAppointment = async (id: number) => {
+        try {
+            const token = localStorage.getItem('token')
+            const res = await fetch(apiUrl(`/appointments/${id}/approve`), {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+            })
+            if (res.ok) {
+                setApptActionsMenu(null)
+                await refreshAppointments()
+            }
+        } catch (err) {
+            console.error('approve appointment', err)
+        }
+    }
+
+    const handleDeclineAppointment = async (id: number) => {
+        try {
+            const token = localStorage.getItem('token')
+            const res = await fetch(apiUrl(`/appointments/${id}/decline`), {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+            })
+            if (res.ok) {
+                setApptActionsMenu(null)
+                await refreshAppointments()
+            }
+        } catch (err) {
+            console.error('decline appointment', err)
+        }
+    }
+
+    const handleDeleteAppointment = async (id: number) => {
+        if (!window.confirm(t('app.appointments.confirmDelete', 'Delete this appointment?'))) return
+        try {
+            const token = localStorage.getItem('token')
+            const res = await fetch(apiUrl(`/appointments/${id}`), {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+            })
+            if (res.ok) {
+                setApptActionsMenu(null)
+                await refreshAppointments()
+            }
+        } catch (err) {
+            console.error('delete appointment', err)
+        }
+    }
+
+    const openCreateAppointmentForDate = (dateString: string | null = null) => {
+        setEditingAppointment(null)
+        setAppointmentPrefillDate(dateString)
+        setAppointmentPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
+        setShowCreateMenu(false)
+        setCellAddMenu(null)
+        setIsCreateAppointmentOpen(true)
+    }
+
+    const openEditAppointment = (a: AppointmentItem) => {
+        setEditingAppointment({
+            id: a.id,
+            user_id: a.user_id,
+            title: a.title,
+            category: a.category,
+            notes: a.notes,
+            appointment_date: a.appointment_date,
+            time_mode: a.time_mode,
+            start_time: a.start_time,
+            end_time: a.end_time,
+            hours_off: a.hours_off,
+            status: a.status,
+        })
+        setAppointmentPrefillDate(a.appointment_date)
+        setAppointmentPrefillUserId(a.user_id)
+        setApptActionsMenu(null)
+        setIsCreateAppointmentOpen(true)
+    }
+
+    // Render a compact appointment pill used inside week/month day cells.
+    // - Approved appointments: solid color-tinted background keyed by category.
+    // - Requested appointments: dashed border + "Request" badge so it's clear
+    //   they don't yet consume capacity.
+    const renderAppointmentPill = (appt: AppointmentItem, compact = false) => {
+        const cat = APPT_CATEGORY_OPTIONS.find((c) => c.value === appt.category) || APPT_CATEGORY_OPTIONS[APPT_CATEGORY_OPTIONS.length - 1]
+        const isPending = appt.status === 'requested'
+        // Resolve an "assigned to" name so admins can see whose appointment it is in the all-team view.
+        const assignedUser = users.find((u) => Number(u.id) === Number(appt.user_id))
+        const assignedName = assignedUser ? `${assignedUser.first_name} ${assignedUser.last_name}`.trim() : ''
+
+        let timeLabel = ''
+        if (appt.time_mode === 'span' && appt.start_time && appt.end_time) {
+            timeLabel = `${(appt.start_time + '').slice(0, 5)} - ${(appt.end_time + '').slice(0, 5)}`
+        } else if (appt.time_mode === 'hours' && appt.hours_off) {
+            timeLabel = `${Number(appt.hours_off).toFixed(1)} h`
+        } else if (appt.time_mode === 'all_day') {
+            timeLabel = t('app.appointments.allDay', 'All day')
+        }
+
+        return (
+            <div
+                key={`appt-${appt.id}`}
+                onClick={(e) => {
+                    e.stopPropagation()
+                    openEditAppointment(appt)
+                }}
+                className={`group relative rounded-lg ${compact ? 'p-1.5' : 'p-2'} text-xs transition-all cursor-pointer border ${
+                    isPending ? 'bg-white border-dashed' : 'bg-white'
+                }`}
+                style={{
+                    borderColor: cat.border,
+                    backgroundColor: isPending ? '#ffffff' : cat.bg,
+                }}
+                title={appt.title}
+            >
+                <div className="flex items-start justify-between gap-1">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <CalendarDaysIcon className="w-3 h-3 flex-shrink-0" style={{ color: cat.text }} />
+                        <span className="font-semibold truncate" style={{ color: cat.text }}>
+                            {appt.title}
+                        </span>
+                    </div>
+                    {/* Requested appointments get a pill so admins can triage at a glance. */}
+                    {isPending && (
+                        <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700 flex-shrink-0">
+                            {t('app.appointments.requestBadge', 'Request')}
+                        </span>
+                    )}
+                    {/* 3-dot actions menu — only meaningful when the user has some action
+                        available (admin on any, or owner on their own request/draft). */}
+                    {(isAdmin || appt.user_id === (user?.id || -1)) && (
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                setApptActionsMenu({
+                                    id: appt.id,
+                                    x: Math.min(rect.right - 180, window.innerWidth - 200),
+                                    y: rect.bottom + 4,
+                                })
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-black/5 flex-shrink-0"
+                            title={t('app.appointments.moreActions', 'More')}
+                        >
+                            <EllipsisHorizontalIcon className="w-3.5 h-3.5" style={{ color: cat.text }} />
+                        </button>
+                    )}
+                </div>
+                {!compact && (timeLabel || (selectedUserId === 'all' && assignedName)) && (
+                    <div className="flex items-center gap-1 mt-0.5 text-[10px] opacity-80" style={{ color: cat.text }}>
+                        {timeLabel && <span>{timeLabel}</span>}
+                        {timeLabel && selectedUserId === 'all' && assignedName && <span>·</span>}
+                        {selectedUserId === 'all' && assignedName && <span className="truncate">{assignedName}</span>}
+                    </div>
+                )}
+            </div>
+        )
     }
 
     // Calculate occupied time for a day (in hours) — use estimated_duration (all services)
@@ -1153,9 +1620,14 @@ function JobsPageContent() {
     return Object.entries(byUser).map(([uid, userJobs], idx) => {
       const user = users.find(u => u.id === Number(uid))
       const sorted = [...userJobs].sort((a, b) => {
+        // Explicit route_order (admin arranged) always wins.
         if (a.route_order != null && b.route_order != null) return a.route_order - b.route_order
         if (a.route_order != null) return -1
         if (b.route_order != null) return 1
+        // Default: earliest scheduled time first, time-less jobs at the bottom.
+        const aMin = parseTimeToMinutes(a.scheduled_time_from)
+        const bMin = parseTimeToMinutes(b.scheduled_time_from)
+        if (aMin !== bMin) return aMin - bMin
         return (a.sort_order ?? 0) - (b.sort_order ?? 0)
       })
       return {
@@ -1704,23 +2176,31 @@ function JobsPageContent() {
                         <div className="flex items-center gap-2 min-w-0 max-w-[200px] border border-accent-500/70 rounded-full px-3 py-1.5 bg-white">
                             <UserCircleIcon className="w-5 h-5 text-accent-500 flex-shrink-0" />
                             <div className="relative flex-1 min-w-0">
-                                <select
-                                    value={selectedUserId === 'all' ? 'all' : String(selectedUserId || '')}
-                                    onChange={(e) => {
-                                        isUserActionRef.current = true
-                                        const raw = e.target.value
-                                        if (raw === 'all') { setSelectedUserId('all'); return }
-                                        const id = parseInt(raw)
-                                        if (!isNaN(id)) setSelectedUserId(id)
-                                    }}
-                                    className="w-full bg-transparent border-none text-sm font-medium text-accent-500 focus:ring-0 focus:outline-none cursor-pointer appearance-none pr-6 py-1"
-                                >
-                                    <option value="all">{t('app.jobsPage.allTeam')}</option>
-                                    {users.map((u) => (
-                                        <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>
-                                    ))}
-                                </select>
-                                <ChevronDownIcon className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                                {users.length === 1 ? (
+                                    <span className="block truncate text-sm font-medium text-accent-500 py-1 pr-1">
+                                        {users[0].first_name} {users[0].last_name}
+                                    </span>
+                                ) : (
+                                    <>
+                                        <select
+                                            value={selectedUserId === 'all' ? 'all' : String(selectedUserId || '')}
+                                            onChange={(e) => {
+                                                isUserActionRef.current = true
+                                                const raw = e.target.value
+                                                if (raw === 'all') { setSelectedUserId('all'); return }
+                                                const id = parseInt(raw)
+                                                if (!isNaN(id)) setSelectedUserId(id)
+                                            }}
+                                            className="w-full bg-transparent border-none text-sm font-medium text-accent-500 focus:ring-0 focus:outline-none cursor-pointer appearance-none pr-6 py-1"
+                                        >
+                                            <option value="all">{t('app.jobsPage.allTeam')}</option>
+                                            {users.map((u) => (
+                                                <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>
+                                            ))}
+                                        </select>
+                                        <ChevronDownIcon className="absolute right-0 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                                    </>
+                                )}
                             </div>
                         </div>
                         <div className="flex rounded-lg bg-gray-100 p-0.5">
@@ -1883,8 +2363,14 @@ function JobsPageContent() {
                                 const occupiedHours = getOccupiedTime(day)
                                 const baseHoursM = typeof workHoursForDay === 'number' ? workHoursForDay : parseFloat(workHoursForDay) || 0
                                 const leaveHoursOffM = getLeaveHoursOff(dateString, baseHoursM)
-                                const workHoursNum = Math.max(0, baseHoursM - leaveHoursOffM)
-                                
+                                const apptHoursOffM = getApprovedAppointmentHoursForDate(dateString, baseHoursM)
+                                const workHoursNum = Math.max(0, baseHoursM - leaveHoursOffM - apptHoursOffM)
+
+                                // "Blocked day" = 0 hours available (weekend, full-day leave,
+                                // all-day appointment, etc.). Drives the diagonal-stripe overlay
+                                // and the muted styling on any jobs still scheduled here.
+                                const isDayBlocked = workHoursNum === 0
+
                                 // If there are jobs but 0 available hours (day off or no hours set), show red
                                 const hasJobsButNoHours = dayJobs.length > 0 && workHoursNum === 0
                                 
@@ -1893,13 +2379,26 @@ function JobsPageContent() {
                                     ? 100 
                                     : (workHoursNum > 0 ? (occupiedHours / workHoursNum) * 100 : 0)
                                 
-                                // Cap at 100% - if over 100%, show all red (don't extend beyond container)
+                                // Cap at 100% - if over 100%, show all red (don't extend beyond container).
+                                // Color tiers: green ≤80%, amber 80-100%, red >100% or jobs with 0 hours.
                                 const barPercent = Math.min(100, utilizationPercent)
-                                const barColor = hasJobsButNoHours || utilizationPercent > 100 
-                                    ? '#EF4444' // Red if jobs with 0 hours or over capacity
-                                    : utilizationPercent > 0 
-                                        ? '#3DD57A' // Green if within capacity
-                                        : 'transparent' // Transparent if no utilization
+                                const barColor = hasJobsButNoHours || utilizationPercent > 100
+                                    ? '#EF4444'
+                                    : utilizationPercent >= 80
+                                        ? '#F59E0B'
+                                        : utilizationPercent > 0
+                                            ? '#3DD57A'
+                                            : 'transparent'
+                                // Build a compact breakdown tooltip: jobs · appointments · capacity · over.
+                                const apptCountToday = (appointmentsByDate[dateString] || [])
+                                    .filter((a) => a.status === 'approved' && (selectedUserId === 'all' || Number(a.user_id) === Number(selectedUserId)))
+                                    .length
+                                const overHours = Math.max(0, occupiedHours - workHoursNum)
+                                const barTooltip =
+                                    `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} · ` +
+                                    `${apptCountToday} ${t('app.appointments.label', 'appointments')} · ` +
+                                    `${workHoursNum.toFixed(1)}h ${t('app.jobsPage.capacity', 'capacity')}` +
+                                    (overHours > 0 ? ` · ${overHours.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
                                 
                                 return (
                                     <div
@@ -1913,6 +2412,26 @@ function JobsPageContent() {
                                         onDragLeave={handleDragLeave}
                                         onDrop={(e) => handleDrop(e, dateString)}
                                     >
+                                        {/* Blocked-day stripes sit at z-0; content wrapper is z-[1] so the
+                                            pattern is NOT hidden behind bg-[#FCFCFC] (negative z-index was
+                                            painting under the column background in browsers). */}
+                                        {isCurrentMonth && isDayBlocked && (
+                                            <div
+                                                aria-hidden
+                                                className="pointer-events-none absolute inset-x-0 z-0"
+                                                style={{
+                                                    top: 44,
+                                                    bottom: 0,
+                                                    backgroundImage:
+                                                        'repeating-linear-gradient(135deg, rgba(71,85,105,0.13) 0, rgba(71,85,105,0.13) 4px, transparent 4px, transparent 11px)',
+                                                    WebkitMaskImage:
+                                                        'linear-gradient(to bottom, transparent 0, rgba(0,0,0,1) 28px, rgba(0,0,0,1) 100%)',
+                                                    maskImage:
+                                                        'linear-gradient(to bottom, transparent 0, rgba(0,0,0,1) 28px, rgba(0,0,0,1) 100%)',
+                                                }}
+                                            />
+                                        )}
+                                        <div className="relative z-[1] flex flex-col flex-1 min-h-0">
                                         {/* Date header */}
                                         <div className={`text-xs font-medium mb-2 ${isTodayBanner ? 'text-accent-600 font-bold' : 'text-gray-700'}`}>
                                             {day.getDate()}
@@ -1920,7 +2439,7 @@ function JobsPageContent() {
                                         
                                         {/* Capacity bar - always show if current month */}
                                         {isCurrentMonth && (
-                                            <div className="mb-2">
+                                            <div className="mb-2" title={barTooltip}>
                                                 <div className="w-full h-1 bg-primary-500/30 rounded-full overflow-hidden relative">
                                                     {/* Bar - capped at 100% width, color depends on utilization */}
                                                     {barPercent > 0 && (
@@ -1936,8 +2455,27 @@ function JobsPageContent() {
                                             </div>
                                         )}
                                         
-                                        {/* Job cards */}
+                                        {/* Appointments + Job cards. Appointments render first so they
+                                            remain visible when there are many jobs on the day. */}
                                         <div className="flex-1 overflow-y-auto space-y-1.5" style={{ maxHeight: '200px' }}>
+                                            {(() => {
+                                                const dayAppts = appointmentsByDate[dateString] || []
+                                                // In single-user view, scope to just that user. In all-team view, show everyone's.
+                                                const visible = selectedUserId === 'all'
+                                                    ? dayAppts
+                                                    : dayAppts.filter((a) => Number(a.user_id) === Number(selectedUserId))
+                                                if (!visible.length) return null
+                                                return (
+                                                    <div className="space-y-1">
+                                                        {visible.slice(0, 2).map((a) => renderAppointmentPill(a, true))}
+                                                        {visible.length > 2 && (
+                                                            <div className="text-[10px] text-gray-500 text-center">
+                                                                {t('app.appointments.moreN', '+{{n}} more').replace('{{n}}', String(visible.length - 2))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })()}
                                             {loading ? (
                                                 <div className="flex items-center justify-center h-16">
                                                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-500 border-t-transparent" />
@@ -1955,7 +2493,11 @@ function JobsPageContent() {
                                                             onDragEnd={handleDragEnd}
                                                             onClick={() => handleJobClick(job)}
                                                             className={`rounded-lg p-2 text-xs transition-all border ${
-                                                                isJobCancelled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
+                                                                isJobCancelled
+                                                                    ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
+                                                                    : isDayBlocked
+                                                                        ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
+                                                                        : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
                                                             } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
                                                         >
                                                             <div className="font-semibold text-gray-800 truncate flex items-center gap-1">
@@ -1979,12 +2521,24 @@ function JobsPageContent() {
                                                 </div>
                                             )}
                                         </div>
+                                        </div>
                                         
-                                        {/* Add job button */}
+                                        {/* Add job / appointment button: opens a small popover that lets
+                                            the user pick between creating a job and an appointment. We
+                                            position the popover at the click coordinates so it works
+                                            without per-cell refs. */}
                                         <button
                                             type="button"
-                                            onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
-                                            className="absolute bottom-1 right-1 inline-flex items-center justify-center w-5 h-5 text-accent-600 hover:text-accent-700 hover:bg-accent-50 rounded"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                                setCellAddMenu({
+                                                    date: dateString,
+                                                    x: Math.min(rect.right - 180, window.innerWidth - 200),
+                                                    y: rect.bottom + 4,
+                                                })
+                                            }}
+                                            className="absolute bottom-1 right-1 z-[2] inline-flex items-center justify-center w-5 h-5 text-accent-600 hover:text-accent-700 hover:bg-accent-50 rounded"
                                             title={t('app.jobsPage.addJob')}
                                         >
                                             <PlusIcon className="w-3 h-3" />
@@ -2028,7 +2582,13 @@ function JobsPageContent() {
                                     // Leave deduction — only applies when a single employee is selected
                                     const dayLeaveEntry = selectedUserId !== 'all' ? employeeLeaveByDate[dateString] ?? null : null
                                     const leaveHoursOff = getLeaveHoursOff(dateString, baseHours)
-                                    const workHoursNum = Math.max(0, baseHours - leaveHoursOff)
+                                    const apptHoursOff = getApprovedAppointmentHoursForDate(dateString, baseHours)
+                                    const workHoursNum = Math.max(0, baseHours - leaveHoursOff - apptHoursOff)
+
+                                    // "Blocked day" = 0 hours available (weekend, full-day leave,
+                                    // all-day appointment, etc.). Drives the diagonal-stripe overlay
+                                    // on the column and the muted styling on any jobs still here.
+                                    const isDayBlocked = workHoursNum === 0
 
                                     // Parse saved route for this day once — drives both the button colour
                                     // and the planned/unplanned divider in the job list.
@@ -2074,17 +2634,38 @@ function JobsPageContent() {
                                     return (
                                         <div
                                             key={originalIndex}
+                                            data-day-index={originalIndex}
+                                            data-is-today={isTodayBanner ? 'true' : undefined}
                                             className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative flex-shrink-0 h-full ${isDragOver ? 'ring-2 ring-accent-500/50' : ''}`}
-                                            style={{ 
+                                            style={{
                                                 width: 'calc((100% - 32px) / 5)', // 5 columns visible, accounting for gap (8px * 4 gaps = 32px)
                                                 minWidth: '200px',
                                                 scrollSnapAlign: 'start',
-                                                scrollSnapStop: 'always'
+                                                scrollSnapStop: 'always',
                                             }}
                                             onDragOver={(e) => handleDragOver(e, dateString)}
                                             onDragLeave={handleDragLeave}
                                             onDrop={(e) => handleDrop(e, dateString)}
                                         >
+                                            {/* Stripes at z-0; content at z-[1] — negative z-index was painting
+                                                the pattern UNDER the column bg-[#FCFCFC], so it never showed. */}
+                                            {isDayBlocked && (
+                                                <div
+                                                    aria-hidden
+                                                    className="pointer-events-none absolute inset-x-0 z-0"
+                                                    style={{
+                                                        top: 152,
+                                                        bottom: 0,
+                                                        backgroundImage:
+                                                            'repeating-linear-gradient(135deg, rgba(71,85,105,0.13) 0, rgba(71,85,105,0.13) 4px, transparent 4px, transparent 11px)',
+                                                        WebkitMaskImage:
+                                                            'linear-gradient(to bottom, transparent 0, rgba(0,0,0,1) 40px, rgba(0,0,0,1) 100%)',
+                                                        maskImage:
+                                                            'linear-gradient(to bottom, transparent 0, rgba(0,0,0,1) 40px, rgba(0,0,0,1) 100%)',
+                                                    }}
+                                                />
+                                            )}
+                                            <div className="relative z-[1] flex flex-col flex-1 min-h-0 min-w-0">
                                             {/* BANNER: month image from app + overlay. Today=#3DD57A, others=#193434. Date top-left, day name large bold white. */}
                                             {(() => {
                                                 const MONTH_IMGS = ['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov','dec'] as const
@@ -2153,7 +2734,18 @@ function JobsPageContent() {
                                                         {totalHoursWithTravel.toFixed(1)} / {workHoursNum.toFixed(1)}
                                                     </span>
                                                 </div>
-                                                <div className="w-full h-2 bg-primary-500/30 rounded-full relative" style={{ overflow: 'visible' }}>
+                                                {(() => {
+                                                    const apptCountToday = (appointmentsByDate[dateString] || [])
+                                                        .filter((a) => a.status === 'approved' && (selectedUserId === 'all' || Number(a.user_id) === Number(selectedUserId)))
+                                                        .length
+                                                    const overHoursW = Math.max(0, totalHoursWithTravel - workHoursNum)
+                                                    const weekBarTooltip =
+                                                        `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} · ` +
+                                                        `${apptCountToday} ${t('app.appointments.label', 'appointments')} · ` +
+                                                        `${workHoursNum.toFixed(1)}h ${t('app.jobsPage.capacity', 'capacity')}` +
+                                                        (overHoursW > 0 ? ` · ${overHoursW.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
+                                                    return (
+                                                        <div className="w-full h-2 bg-primary-500/30 rounded-full relative" title={weekBarTooltip} style={{ overflow: 'visible' }}>
                                                     {/* Green bar - shows capacity up to 100% */}
                                                     {greenWithTravel > 0 && (
                                                         <div
@@ -2171,12 +2763,22 @@ function JobsPageContent() {
                                                             }}
                                                         />
                                                     )}
-                                                </div>
+                                                        </div>
+                                                    )
+                                                })()}
                                                 {/* Action buttons: Add job (left) + Plan route (right) */}
                                                 <div className="flex items-center justify-between mt-2 gap-1">
                                                     <button
                                                         type="button"
-                                                        onClick={(e) => { e.stopPropagation(); openCreateJobForDate(dateString) }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                                            setCellAddMenu({
+                                                                date: dateString,
+                                                                x: rect.left,
+                                                                y: rect.bottom + 4,
+                                                            })
+                                                        }}
                                                         className="flex items-center gap-1 text-[11px] font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-1.5 py-0.5 rounded-md transition-colors"
                                                         title={t('app.jobsPage.addJob')}
                                                     >
@@ -2223,6 +2825,21 @@ function JobsPageContent() {
                                                     </div>
                                                 ) : (
                                                     <div className="space-y-2">
+                                                        {/* Appointments for this day. Rendered above jobs so they're
+                                                            always visible, and scoped to the selected user when a
+                                                            specific user is active. */}
+                                                        {(() => {
+                                                            const dayAppts = appointmentsByDate[dateString] || []
+                                                            const visible = selectedUserId === 'all'
+                                                                ? dayAppts
+                                                                : dayAppts.filter((a) => Number(a.user_id) === Number(selectedUserId))
+                                                            if (!visible.length) return null
+                                                            return (
+                                                                <div className="space-y-1.5">
+                                                                    {visible.map((a) => renderAppointmentPill(a, false))}
+                                                                </div>
+                                                            )
+                                                        })()}
                                                         <div className="min-h-[4px]" />
                                                         {dayJobs.length > 0 ? (
                                                         <>
@@ -2242,6 +2859,12 @@ function JobsPageContent() {
                                                                   const totalHours = totalMinutes / 60
                                                                   const maxHours = 8 // simple reference for bar
                                                                   const percent = Math.min(100, maxHours > 0 ? (totalHours / maxHours) * 100 : 0)
+                                                                  // Per-employee "off" check: this user's scheduled hours
+                                                                  // for this weekday are 0 (weekend, day off, part-time).
+                                                                  // Independent of the column-level `isDayBlocked`, which
+                                                                  // only fires when the whole team is off.
+                                                                  const userScheduledHours = getWorkHoursForUserDay(Number(u.id), dayOfWeekIndex)
+                                                                  const isUserDayBlocked = isDayBlocked || userScheduledHours === 0
                                                                   return (
                                                                     <button
                                                                       key={u.id}
@@ -2250,7 +2873,11 @@ function JobsPageContent() {
                                                                         isUserActionRef.current = true
                                                                         setSelectedUserId(u.id)
                                                                       }}
-                                                                      className="w-full text-left rounded-xl p-3 transition-all border bg-white border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer"
+                                                                      className={`w-full text-left rounded-xl p-3 transition-all border cursor-pointer ${
+                                                                        isUserDayBlocked
+                                                                            ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400'
+                                                                            : 'bg-white border-[#F1F8F4] hover:border-[#E0EDE4]'
+                                                                      }`}
                                                                     >
                                                                       <div className="flex items-center justify-between mb-1.5">
                                                                         <span className="font-semibold text-sm text-gray-800 truncate">
@@ -2297,7 +2924,11 @@ function JobsPageContent() {
                                                                         onDragEnd={handleDragEnd}
                                                                         onClick={() => handleJobClick(job)}
                                                                         className={`rounded-xl p-3 transition-all border ${
-                                                                            isJobCancelled ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed' : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
+                                                                            isJobCancelled
+                                                                                ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
+                                                                                : isDayBlocked
+                                                                                    ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
+                                                                                    : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
                                                                         } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
                                                                     >
                                                                     {/* Row 1: Client (left) + notes badge (right) */}
@@ -2378,6 +3009,7 @@ function JobsPageContent() {
                                                 )}
                                             </div>
 
+                                            </div>
                                         </div>
                                     )
                                 })}
@@ -2393,15 +3025,20 @@ function JobsPageContent() {
             <div className="fixed bottom-6 right-6 z-40" data-create-menu>
                 {/* Dropdown Menu */}
                 {showCreateMenu && (
-                    <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[180px]">
+                    <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[200px]">
                         <button onClick={() => { setShowCreateMenu(false); setIsCreateModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            Create Job
+                            {t('app.jobsPage.createJob', 'Create job')}
+                        </button>
+                        <button onClick={() => { setShowCreateMenu(false); openCreateAppointmentForDate(null) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
+                            {isAdmin
+                                ? t('app.appointments.createMenuItem', 'Create appointment')
+                                : t('app.appointments.requestMenuItem', 'Request appointment')}
                         </button>
                         <button onClick={() => { setShowCreateMenu(false); setIsSubscriptionModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            Create Subscription
+                            {t('app.jobsPage.createSubscription', 'Create subscription')}
                         </button>
                         <button onClick={() => { setShowCreateMenu(false); setIsCreateClientModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            Create Client
+                            {t('app.jobsPage.createClient', 'Create client')}
                         </button>
                     </div>
                 )}
@@ -2466,6 +3103,123 @@ function JobsPageContent() {
                     // Optionally refresh any client-related data
                 }}
             />
+
+            {/* Create / Edit Appointment Modal */}
+            <CreateAppointment
+                isOpen={isCreateAppointmentOpen}
+                onClose={() => {
+                    setIsCreateAppointmentOpen(false)
+                    setEditingAppointment(null)
+                    setAppointmentPrefillDate(null)
+                    setAppointmentPrefillUserId(null)
+                }}
+                onCreated={() => {
+                    setIsCreateAppointmentOpen(false)
+                    setEditingAppointment(null)
+                    setAppointmentPrefillDate(null)
+                    setAppointmentPrefillUserId(null)
+                    fetchJobsForWeek()
+                }}
+                users={users}
+                currentUserId={user?.id || 0}
+                isAdmin={isAdmin}
+                defaultDate={appointmentPrefillDate}
+                defaultUserId={appointmentPrefillUserId === 'all' ? null : (appointmentPrefillUserId as number | null)}
+                existing={editingAppointment}
+                t={t}
+            />
+
+            {/* Per-cell + popover: pick between Job and Appointment. Positioned
+                absolutely at the click point so it works for both week/month
+                views and doesn't need per-cell refs. */}
+            {cellAddMenu && (
+                <>
+                    <div
+                        className="fixed inset-0 z-[90]"
+                        onClick={() => setCellAddMenu(null)}
+                    />
+                    <div
+                        className="fixed z-[95] bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[180px]"
+                        style={{ top: cellAddMenu.y, left: cellAddMenu.x }}
+                    >
+                        <button
+                            onClick={() => {
+                                const d = cellAddMenu.date
+                                setCellAddMenu(null)
+                                openCreateJobForDate(d)
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        >
+                            <DocumentTextIcon className="w-4 h-4 text-gray-400" />
+                            {t('app.jobsPage.createJob', 'Create job')}
+                        </button>
+                        <button
+                            onClick={() => {
+                                const d = cellAddMenu.date
+                                setCellAddMenu(null)
+                                openCreateAppointmentForDate(d)
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                        >
+                            <CalendarDaysIcon className="w-4 h-4 text-gray-400" />
+                            {isAdmin
+                                ? t('app.appointments.createMenuItem', 'Create appointment')
+                                : t('app.appointments.requestMenuItem', 'Request appointment')}
+                        </button>
+                    </div>
+                </>
+            )}
+
+            {/* 3-dot actions menu anchored to an appointment pill. Closes on
+                outside click via the transparent overlay. */}
+            {apptActionsMenu && (() => {
+                const appt = Object.values(appointmentsByDate)
+                    .flat()
+                    .find((a) => a.id === apptActionsMenu.id)
+                if (!appt) return null
+                return (
+                    <>
+                        <div
+                            className="fixed inset-0 z-[90]"
+                            onClick={() => setApptActionsMenu(null)}
+                        />
+                        <div
+                            className="fixed z-[95] bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[180px]"
+                            style={{ top: apptActionsMenu.y, left: apptActionsMenu.x }}
+                        >
+                            {appt.status === 'requested' && isAdmin && (
+                                <>
+                                    <button
+                                        onClick={() => handleApproveAppointment(appt.id)}
+                                        className="w-full text-left px-4 py-2 text-sm text-green-700 hover:bg-green-50"
+                                    >
+                                        {t('app.appointments.approve', 'Approve')}
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeclineAppointment(appt.id)}
+                                        className="w-full text-left px-4 py-2 text-sm text-red-700 hover:bg-red-50"
+                                    >
+                                        {t('app.appointments.decline', 'Decline')}
+                                    </button>
+                                    <div className="h-px bg-gray-100 my-1 mx-2" />
+                                </>
+                            )}
+                            <button
+                                onClick={() => openEditAppointment(appt)}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                            >
+                                {t('app.appointments.edit', 'Edit')}
+                            </button>
+                            <button
+                                onClick={() => handleDeleteAppointment(appt.id)}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                            >
+                                {t('app.appointments.delete', 'Delete')}
+                            </button>
+                        </div>
+                    </>
+                )
+            })()}
 
             {/* View Job Slideout */}
             <JobViewSlideout

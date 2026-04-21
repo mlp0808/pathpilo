@@ -12,6 +12,7 @@ interface Service {
   title: string
   price: number | string
   duration_minutes: number
+  bookkeeping_account?: string | null
 }
 
 interface EditServiceModalProps {
@@ -27,7 +28,8 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
     title: '',
     price: '',
     duration_hours: '',
-    duration_minutes: ''
+    duration_minutes: '',
+    bookkeeping_account: ''
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -47,7 +49,8 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
         title: service.title,
         price: service.price.toString(),
         duration_hours: hours.toString(),
-        duration_minutes: minutes.toString()
+        duration_minutes: minutes.toString(),
+        bookkeeping_account: service.bookkeeping_account || ''
       })
     }
   }, [service])
@@ -76,7 +79,8 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
       const serviceData = {
         title: currentService.title,
         price: parseFloat(currentService.price),
-        duration_minutes: totalMinutes
+        duration_minutes: totalMinutes,
+        bookkeeping_account: currentService.bookkeeping_account.trim() || null
       }
       
       console.log('Updating service:', { serviceId: service.id, serviceData })
@@ -209,6 +213,26 @@ export default function EditServiceModal({ isOpen, onClose, onServiceUpdated, se
                 placeholder={t('app.services.placeholderMinutes', 'e.g. 30')}
               />
             </div>
+          </div>
+
+          {/* Bookkeeping account (optional) */}
+          <div>
+            <label htmlFor="bookkeeping_account" className="block text-sm font-medium text-gray-900 mb-2">
+              Bookkeeping account <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              id="bookkeeping_account"
+              name="bookkeeping_account"
+              value={currentService.bookkeeping_account}
+              onChange={handleInputChange}
+              maxLength={32}
+              className="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
+              placeholder="e.g. 1010"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Account code from your chart of accounts (e-conomic, Dinero, Billy…). Only used when exporting to bookkeeping.
+            </p>
           </div>
 
           {/* Note about customization */}

@@ -3,7 +3,7 @@
 import { useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 
-/** @deprecated Use /settings/clients — invoice defaults live under Clients. */
+/** @deprecated Use /settings/invoice-terms — invoice defaults live under Invoice terms. */
 export default function InvoicesSettingsRedirectPage() {
   const router = useRouter()
   const pathname = usePathname()
@@ -11,7 +11,7 @@ export default function InvoicesSettingsRedirectPage() {
   useEffect(() => {
     const parts = pathname.split('/').filter(Boolean)
     const slug = parts[0] !== 'settings' ? parts[0] : ''
-    const target = slug ? `/${slug}/settings/clients` : '/settings/clients'
+    const target = slug ? `/${slug}/settings/invoice-options` : '/settings/invoice-options'
     router.replace(target)
   }, [router, pathname])
 

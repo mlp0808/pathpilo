@@ -339,6 +339,28 @@ export default function CompanyDetailPage() {
                 )}
               </div>
 
+              {/* Mismatch banner: company is suspended but expiry is in the future (or cleared) */}
+              {isSuspended && (!company?.expiresAt || new Date(company.expiresAt) > new Date()) && (
+                <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                  <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-amber-900">This company is still on hold</p>
+                    <p className="text-xs text-amber-800 mt-0.5">
+                      Access is valid {company?.expiresAt ? `until ${new Date(company.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'permanently'}, but the company is suspended (likely auto-suspended when the previous trial expired). Click <strong>Reactivate now</strong> to lift the hold so the owner can log in.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleToggleHold}
+                    disabled={holdLoading}
+                    className="px-3 py-1.5 rounded-md text-xs font-semibold border border-green-400 bg-green-100 text-green-800 hover:bg-green-200 disabled:opacity-50 flex-shrink-0"
+                  >
+                    {holdLoading ? 'Reactivating…' : 'Reactivate now'}
+                  </button>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-end gap-3">
                 {/* Date input */}
                 <div className="flex-1 min-w-[180px]">

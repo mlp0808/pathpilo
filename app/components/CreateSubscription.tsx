@@ -276,7 +276,14 @@ export default function CreateSubscription({
     const token = localStorage.getItem('token')
     const res = await fetch(apiUrl('/users'), { headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json()
-    if (res.ok) setUsers(data.users || [])
+    if (res.ok) {
+      const fetched = data.users || []
+      setUsers(fetched)
+      // Solo company: auto-assign the only employee so the form is pre-filled.
+      if (fetched.length === 1) {
+        setSelectedUserId(prev => (prev ? prev : fetched[0].id))
+      }
+    }
   }
 
   // ── service helpers ───────────────────────────────────────────
@@ -605,7 +612,9 @@ export default function CreateSubscription({
                                   {(selectedUser.first_name[0] || '') + (selectedUser.last_name[0] || '')}
                                 </span>
                                 <span>{selectedUser.first_name} {selectedUser.last_name}</span>
-                                <XMarkIcon className="w-3 h-3 text-gray-400" onClick={e => { e.stopPropagation(); setSelectedUserId(null) }} />
+                                {users.length > 1 && (
+                                  <XMarkIcon className="w-3 h-3 text-gray-400" onClick={e => { e.stopPropagation(); setSelectedUserId(null) }} />
+                                )}
                               </>
                             ) : (
                               <>

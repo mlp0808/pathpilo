@@ -8,6 +8,7 @@ const {
   cancelPendingForJob,
 } = require('../utils/automatedEmails');
 const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
+const { setJobAutoTitleIfEmpty } = require('../utils/jobAutoTitle');
 
 const router = express.Router();
 
@@ -990,6 +991,11 @@ router.post('/', async (req, res) => {
         }
       }
 
+      // Persist a sensible default title built from the job's services when
+      // the caller didn't supply one. Done inside the transaction so the
+      // read-back below sees the final value.
+      await setJobAutoTitleIfEmpty(dbClient, job.id);
+
       await dbClient.query('COMMIT');
 
       // Schedule automation sends before responding so the badge is immediately visible.
@@ -1227,6 +1233,21 @@ router.put('/:jobId', async (req, res) => {
     `;
 
     const result = await pool.query(updateQuery, values);
+
+    // If the caller cleared the title (sent "" or whitespace), fall back to
+    // a derived title from the job's services so the row never ends up
+    // showing as "Untitled job" in the UI.
+    if (updates.title !== undefined && (updates.title == null || String(updates.title).trim() === '')) {
+      try {
+        await setJobAutoTitleIfEmpty(pool, jobId);
+        const refreshed = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+        if (refreshed.rows[0]) {
+          result.rows[0] = refreshed.rows[0];
+        }
+      } catch (autoErr) {
+        console.warn('setJobAutoTitleIfEmpty after PUT /jobs failed:', autoErr.message || autoErr);
+      }
+    }
 
     // If date changed, recalculate reminder send time
     if (updates.scheduled_date !== undefined) {

@@ -1,10 +1,19 @@
 const { resolveClientInvoiceContact } = require('./invoiceClientDisplay');
+const { t: tI18n, tInterp: tInterpI18n } = require('./invoiceI18n');
 
-function formatPdfDate(value) {
+// Locale-aware short-date formatter. Falls back to English month names when
+// the invoice has no locale (legacy rows). Adding a locale is a matter of
+// adding an array below.
+const PUBLIC_MONTHS = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  da: ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'],
+};
+function formatPdfDate(value, locale) {
   if (!value) return '—';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '—';
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const loc = locale && PUBLIC_MONTHS[locale] ? locale : 'en';
+  const months = PUBLIC_MONTHS[loc];
   const day = String(d.getDate()).padStart(2, '0');
   const month = months[d.getMonth()];
   const year = d.getFullYear();
@@ -32,9 +41,10 @@ function effectiveInvoiceNumber(invoice) {
 function replacePaymentTermsPlaceholders(template, invoice) {
   if (template == null || typeof template !== 'string') return '';
   const out = template.replace(/\uFF5B/g, '{').replace(/\uFF5D/g, '}');
+  const locale = invoice.invoice_locale || 'en';
   const issueDate = invoice.issue_date || invoice.created_at;
-  const due_date = formatPdfDate(invoice.due_date);
-  const invoice_date = formatPdfDate(issueDate);
+  const due_date = formatPdfDate(invoice.due_date, locale);
+  const invoice_date = formatPdfDate(issueDate, locale);
   const overdue_days = daysBetweenCalendar(issueDate, invoice.due_date);
   const invoice_number = effectiveInvoiceNumber(invoice);
   return out
@@ -54,16 +64,49 @@ function calendarDaysUntilDue(dueDateStr) {
   return Math.round((dueDay.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+// Pull the per-invoice snapshot of which providers should appear, when one
+// exists. Legacy invoices (created before this gate shipped) have NULL and
+// fall back to "use everything that is currently enabled at company level".
+function resolveAllowedProviders(invoice) {
+  const raw = invoice && invoice.enabled_payment_methods;
+  if (raw == null) return null;
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) return null;
+  return new Set(parsed.map((p) => String(p)));
+}
+
 function buildPaymentOptions(companyId, invoice, bankRow) {
+  const allowed = resolveAllowedProviders(invoice);
+  const isAllowed = (provider) => (allowed ? allowed.has(provider) : true);
+  const locale = invoice.invoice_locale || 'en';
+
   const methods = [];
-  if (bankRow && bankRow.enabled) {
+  if (bankRow && bankRow.enabled && isAllowed('bank_transfer')) {
     const cfg = bankRow.config || {};
     const invNo = effectiveInvoiceNumber(invoice);
-    const reference = `Invoice number: ${invNo}`;
+    // Same translation key used on the digital view so the label on the
+    // "Payment reference" line matches what customers see elsewhere.
+    const reference = tInterpI18n(
+      locale,
+      'invoice.paymentReferenceValue',
+      { n: invNo },
+      `Invoice number: ${invNo}`,
+    );
     methods.push({
       id: 'bank_transfer',
-      title: 'Bank transfer',
-      description: 'Pay directly from your bank using the details below.',
+      title: tI18n(locale, 'invoice.bankTransfer', 'Bank transfer'),
+      description: tI18n(
+        locale,
+        'invoice.bankTransferDesc',
+        'Pay directly from your bank using the details below.',
+      ),
       type: 'bank_transfer',
       bank: {
         accountHolder: cfg.accountHolder || '',
@@ -84,6 +127,15 @@ function buildPaymentOptions(companyId, invoice, bankRow) {
  */
 function buildPublicInvoicePayload(invoice, bankRow) {
   const companyId = invoice.company_id;
+  // The invoice locale comes from the snapshot on issued invoices and from
+  // the live company country on drafts. All user-facing strings on this
+  // payload (status badges, payment-method titles, payment reference,
+  // formatted dates) go through it so the customer sees one consistent
+  // language regardless of the admin's UI locale.
+  const locale = invoice.invoice_locale || 'en';
+  const tr = (key, fallback) => tI18n(locale, key, fallback);
+  const trI = (key, values, fallback) => tInterpI18n(locale, key, values, fallback);
+
   const paymentTermsResolved = invoice.payment_terms
     ? replacePaymentTermsPlaceholders(invoice.payment_terms, invoice)
     : '';
@@ -93,32 +145,50 @@ function buildPublicInvoicePayload(invoice, bankRow) {
   const status = invoice.status || 'draft';
   const balance = Number(invoice.balance) || 0;
 
-  let badge = { kind: 'open', label: 'Outstanding', sublabel: null };
+  let badge = {
+    kind: 'open',
+    label: tr('invoice.statusOutstanding', 'Outstanding'),
+    sublabel: null,
+  };
   if (status === 'cancelled') {
-    badge = { kind: 'cancelled', label: 'Cancelled', sublabel: null };
+    badge = { kind: 'cancelled', label: tr('invoice.statusCancelled', 'Cancelled'), sublabel: null };
   } else if (status === 'credited') {
-    badge = { kind: 'credited', label: 'Credited', sublabel: null };
+    badge = { kind: 'credited', label: tr('invoice.statusCredited', 'Credited'), sublabel: null };
   } else if (balance < 0 || status === 'overpaid') {
-    badge = { kind: 'overpaid', label: 'Overpaid', sublabel: null };
+    badge = { kind: 'overpaid', label: tr('invoice.statusOverpaid', 'Overpaid'), sublabel: null };
   } else if (balance <= 0 && status !== 'draft') {
-    badge = { kind: 'paid', label: 'Paid', sublabel: null };
+    badge = { kind: 'paid', label: tr('invoice.statusPaid', 'Paid'), sublabel: null };
   } else if (status === 'draft') {
-    badge = { kind: 'draft', label: 'Draft', sublabel: null };
+    badge = { kind: 'draft', label: tr('invoice.statusDraft', 'Draft'), sublabel: null };
   } else if (balance > 0 && daysUntilDue !== null && daysUntilDue < 0) {
     const daysOver = Math.abs(daysUntilDue);
+    const key = daysOver === 1 ? 'invoice.daysPastDue' : 'invoice.daysPastDuePlural';
     badge = {
       kind: 'overdue',
-      label: 'Overdue',
-      sublabel: `${daysOver} day${daysOver === 1 ? '' : 's'} past due date`,
+      label: tr('invoice.statusOverdue', 'Overdue'),
+      sublabel: trI(
+        key,
+        { n: daysOver },
+        `${daysOver} day${daysOver === 1 ? '' : 's'} past due date`,
+      ),
       daysOverdue: daysOver,
     };
   } else if (balance > 0 && daysUntilDue !== null && daysUntilDue === 0) {
-    badge = { kind: 'due_today', label: 'Due today', sublabel: 'Due date is today' };
+    badge = {
+      kind: 'due_today',
+      label: tr('invoice.statusDueToday', 'Due today'),
+      sublabel: tr('invoice.statusDueTodayLong', 'Due date is today'),
+    };
   } else if (balance > 0 && daysUntilDue !== null && daysUntilDue > 0) {
+    const key = daysUntilDue === 1 ? 'invoice.dueInDay' : 'invoice.dueInDays';
     badge = {
       kind: 'due_soon',
-      label: 'Outstanding',
-      sublabel: `Due in ${daysUntilDue} day${daysUntilDue === 1 ? '' : 's'}`,
+      label: tr('invoice.statusOutstanding', 'Outstanding'),
+      sublabel: trI(
+        key,
+        { n: daysUntilDue },
+        `Due in ${daysUntilDue} day${daysUntilDue === 1 ? '' : 's'}`,
+      ),
       daysUntilDue,
     };
   }
@@ -139,6 +209,9 @@ function buildPublicInvoicePayload(invoice, bankRow) {
     total: Number(invoice.total) || 0,
     balance,
     status,
+    // Language of this invoice. Consumed by DigitalInvoiceView to pick the
+    // right translations regardless of the admin's UI language.
+    locale,
     showCompletedDate: Boolean(invoice.show_completed_date),
     paymentTermsResolved,
     client: {
@@ -147,17 +220,35 @@ function buildPublicInvoicePayload(invoice, bankRow) {
       email: billTo.email || null,
       phone: billTo.phone || null,
     },
+    // Sender block. Each field is null when empty so the digital invoice can
+    // hide it cleanly — per product spec ("information that is not filled out
+    // is just not shown on the invoice"). The country-aware label is included
+    // so DK invoices say "CVR no.", DE invoices say "USt-IdNr.", etc.
     company: {
-      name: invoice.company_name,
+      name: invoice.company_name || null,
       addressLine: [invoice.company_address, invoice.company_zip_code, invoice.company_city]
         .filter(Boolean)
-        .join(' · '),
+        .join(' \u00b7 ') || null,
+      country: invoice.company_country || null,
+      countryCode: invoice.company_country_code || null,
       cvr: invoice.company_cvr_number || null,
+      cvrLabel: invoice.company_number_label || tr('invoice.companyNoFallback', 'Company no.'),
+      email: invoice.company_email || null,
+      phone: invoice.company_phone || null,
+      website: invoice.company_website || null,
+      logoUrl: invoice.company_logo_url || null,
     },
+    taxLabel: invoice.tax_label || tr('invoice.vatFallback', 'VAT'),
+    referenceText:
+      invoice.reference_text != null && String(invoice.reference_text).trim() !== ''
+        ? String(invoice.reference_text).trim()
+        : null,
     lineItems: (invoice.items || []).map((it) => {
       const desc = it.description || it.service_title || '—';
       const completedDate =
-        invoice.show_completed_date && it.job_completed_date ? formatPdfDate(it.job_completed_date) : null;
+        invoice.show_completed_date && it.job_completed_date
+          ? formatPdfDate(it.job_completed_date, locale)
+          : null;
       return {
         id: it.id,
         description: completedDate ? `${desc} · ${completedDate}` : desc,
@@ -176,7 +267,7 @@ function buildPublicInvoicePayload(invoice, bankRow) {
     due: {
       date: dueDateStr,
       daysUntilDue,
-      formatted: dueDateStr ? formatPdfDate(dueDateStr) : null,
+      formatted: dueDateStr ? formatPdfDate(dueDateStr, locale) : null,
     },
     badge,
     paymentMethods,

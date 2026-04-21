@@ -8,6 +8,11 @@ import {
   LinkIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
+  EnvelopeIcon,
+  PhoneIcon,
+  GlobeAltIcon,
+  PhotoIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import AddressSearchInput from '../../components/AddressSearchInput'
@@ -27,6 +32,12 @@ interface CompanyProfile {
   address: string
   city: string
   zipCode: string
+  /** Contact details rendered on every invoice. Hidden if empty. */
+  email: string
+  phone: string
+  website: string
+  /** Public URL path to the company logo (set via the upload endpoint). */
+  logoUrl: string
   defaultStartAddress: string
   defaultEndAddress: string
   routeLocationsEnabled: boolean
@@ -64,6 +75,10 @@ export default function BusinessSettingsPage() {
     address: '',
     city: '',
     zipCode: '',
+    email: '',
+    phone: '',
+    website: '',
+    logoUrl: '',
     defaultStartAddress: '',
     defaultEndAddress: '',
     routeLocationsEnabled: true,
@@ -102,6 +117,10 @@ export default function BusinessSettingsPage() {
           address: c.address || '',
           city: c.city || '',
           zipCode: c.zipCode || '',
+          email: c.email || '',
+          phone: c.phone || '',
+          website: c.website || '',
+          logoUrl: c.logoUrl || '',
           defaultStartAddress: c.defaultStartAddress || '',
           defaultEndAddress: c.defaultEndAddress || '',
           routeLocationsEnabled: c.routeLocationsEnabled !== false,
@@ -232,6 +251,65 @@ export default function BusinessSettingsPage() {
       country: COUNTRY_NAME_BY_CODE[nextCode] || prev.country || '',
       timezone: getDefaultTimezoneForCountry(nextCode),
     }))
+  }
+
+  // Logo upload state. The upload endpoint persists immediately, independent
+  // of the main "Save" flow, because it's a multipart upload with its own
+  // server-side validation.
+  const logoInputRef = useRef<HTMLInputElement | null>(null)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [logoError, setLogoError] = useState('')
+
+  const handleLogoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLogoError('')
+    if (file.size > 4 * 1024 * 1024) {
+      setLogoError(t('settings.business.logo.tooLarge', 'Logo must be 4 MB or smaller.'))
+      e.target.value = ''
+      return
+    }
+    setLogoUploading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const fd = new FormData()
+      fd.append('logo', file)
+      const res = await fetch(apiUrl('/companies/profile/logo'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      setFormData((prev) => ({ ...prev, logoUrl: data.logoUrl || '' }))
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : 'Failed to upload logo')
+    } finally {
+      setLogoUploading(false)
+      if (e.target) e.target.value = ''
+    }
+  }
+
+  const handleLogoDelete = async () => {
+    if (!formData.logoUrl) return
+    setLogoError('')
+    setLogoUploading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl('/companies/profile/logo'), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Delete failed')
+      }
+      setFormData((prev) => ({ ...prev, logoUrl: '' }))
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : 'Failed to delete logo')
+    } finally {
+      setLogoUploading(false)
+    }
   }
 
   const handleSave = async () => {
@@ -396,6 +474,69 @@ export default function BusinessSettingsPage() {
               ))}
             </div>
 
+            {/* Invoice contact details — rendered on every invoice (digital + PDF). Hidden if empty. */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center gap-2 mb-1">
+                <EnvelopeIcon className="w-4 h-4 text-primary-600" />
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {t('settings.business.invoiceContact.title', 'Contact details on invoices')}
+                </h3>
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                {t(
+                  'settings.business.invoiceContact.help',
+                  'Shown on every invoice you send. Empty fields are hidden \u2014 only fill in what you want clients to see.',
+                )}
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
+                    <EnvelopeIcon className="w-3.5 h-3.5 text-gray-400" />
+                    {t('settings.business.invoiceContact.email', 'Contact email')}
+                  </label>
+                  <input
+                    type="email"
+                    name="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
+                    disabled={!isEditing}
+                    placeholder={isEditing ? 'hello@yourcompany.com' : ''}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 disabled:bg-gray-100 disabled:text-gray-500 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
+                    <PhoneIcon className="w-3.5 h-3.5 text-gray-400" />
+                    {t('settings.business.invoiceContact.phone', 'Contact phone')}
+                  </label>
+                  <input
+                    type="tel"
+                    name="phone"
+                    value={formData.phone}
+                    onChange={handleInputChange}
+                    disabled={!isEditing}
+                    placeholder={isEditing ? '+45 12 34 56 78' : ''}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 disabled:bg-gray-100 disabled:text-gray-500 transition-colors"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-2">
+                    <GlobeAltIcon className="w-3.5 h-3.5 text-gray-400" />
+                    {t('settings.business.invoiceContact.website', 'Website')}
+                  </label>
+                  <input
+                    type="url"
+                    name="website"
+                    value={formData.website}
+                    onChange={handleInputChange}
+                    disabled={!isEditing}
+                    placeholder={isEditing ? 'https://yourcompany.com' : ''}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500 disabled:bg-gray-100 disabled:text-gray-500 transition-colors"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Route locations */}
             <div className="mt-6 pt-6 border-t border-gray-200">
               <div className="flex items-start gap-4">
@@ -480,6 +621,98 @@ export default function BusinessSettingsPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Company Logo ── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center space-x-3">
+            <PhotoIcon className="w-5 h-5 text-primary-600" />
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {t('settings.business.logo.title', 'Company logo')}
+              </h2>
+              <p className="text-gray-500 text-sm mt-0.5">
+                {t(
+                  'settings.business.logo.help',
+                  'Shown at the top of every invoice. PNG, JPG, WEBP or SVG \u2014 max 4 MB. Transparent backgrounds look best.',
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6">
+          <div className="flex flex-col sm:flex-row items-start gap-6">
+            <div className="flex-shrink-0">
+              <div className="w-40 h-40 rounded-xl border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center overflow-hidden">
+                {formData.logoUrl ? (
+                  // The src is the public URL returned by the API. /uploads/* is
+                  // proxied through Next.js to the API server.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={formData.logoUrl}
+                    alt={t('settings.business.logo.preview', 'Company logo preview')}
+                    className="max-w-full max-h-full object-contain"
+                  />
+                ) : (
+                  <div className="text-center px-3">
+                    <PhotoIcon className="w-10 h-10 text-gray-300 mx-auto" />
+                    <p className="mt-1 text-xs text-gray-400">
+                      {t('settings.business.logo.empty', 'No logo yet')}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex-1 space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => logoInputRef.current?.click()}
+                  disabled={logoUploading}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-accent-500 text-white rounded-lg text-sm font-medium hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <PhotoIcon className="w-4 h-4" />
+                  {logoUploading
+                    ? t('settings.business.logo.uploading', 'Uploading...')
+                    : formData.logoUrl
+                      ? t('settings.business.logo.replace', 'Replace logo')
+                      : t('settings.business.logo.upload', 'Upload logo')}
+                </button>
+                {formData.logoUrl && (
+                  <button
+                    type="button"
+                    onClick={handleLogoDelete}
+                    disabled={logoUploading}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-white text-red-600 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                    {t('settings.business.logo.delete', 'Remove')}
+                  </button>
+                )}
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  onChange={handleLogoSelect}
+                  className="hidden"
+                />
+              </div>
+              {logoError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                  {logoError}
+                </div>
+              )}
+              <p className="text-xs text-gray-500">
+                {t(
+                  'settings.business.logo.tip',
+                  'Tip: a wide rectangular logo (around 400 \u00d7 100 px) works best on invoices. Tall square logos still work but appear smaller.',
+                )}
+              </p>
+            </div>
           </div>
         </div>
       </div>

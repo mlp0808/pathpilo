@@ -30,6 +30,7 @@ interface Client {
   billing_city: string | null
   billing_email: string | null
   billing_phone: string | null
+  ean_number: string | null
   created_at: string
   updated_at: string
 }
@@ -1067,11 +1068,12 @@ export default function ClientDetailPage() {
                 <h3 className="text-sm font-semibold text-primary-500">Billing information</h3>
                 <button onClick={() => setIsEditClientOpen(true)} className="text-xs font-medium text-accent-600 hover:underline">Edit</button>
               </div>
-              {client.billing_address || client.billing_email || client.billing_phone ? (
+              {client.billing_address || client.billing_email || client.billing_phone || client.ean_number ? (
                 <dl className="space-y-3">
                   {client.billing_address && <InfoRow label="Billing address" value={billingLocation} />}
                   {client.billing_email && <InfoRow label="Billing email" value={client.billing_email} />}
                   {client.billing_phone && <InfoRow label="Billing phone" value={client.billing_phone} />}
+                  {client.ean_number && <InfoRow label="EAN / GLN" value={client.ean_number} />}
                 </dl>
               ) : (
                 <p className="text-xs text-gray-400">No separate billing information — using contact details.</p>
