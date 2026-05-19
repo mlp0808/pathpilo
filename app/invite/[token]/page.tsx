@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiUrl } from '../../utils/api'
 import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../../i18n'
+import { applySingleCompanyAutoSelect, getDashboardHref } from '../../utils/sessionClient'
 
 interface Invitation {
   id: number
@@ -82,22 +83,25 @@ export default function InvitePage() {
         if (data.user) {
           const lang = normalizeLocale(data.user.languageCode)
           localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
-          const userData = {
+          let userData: Record<string, unknown> = {
             id: data.user.id,
             firstName: data.user.firstName,
             lastName: data.user.lastName,
             email: data.user.email,
             languageCode: lang,
             role: data.user.activeCompany?.role || data.user.role || 'employee',
-            companyId: data.user.activeCompany?.id || null,
-            companyName: data.user.activeCompany?.name || null,
+            companyId: data.user.activeCompany?.id || data.user.companyId || null,
+            companyName: data.user.activeCompany?.name || data.user.companyName || null,
             companies: data.user.companies || [],
             activeCompany: data.user.activeCompany || null,
+            pendingInvites: data.user.pendingInvites || [],
           }
+          userData = applySingleCompanyAutoSelect(userData)
           localStorage.setItem('user', JSON.stringify(userData))
+          router.push(getDashboardHref(userData))
+        } else {
+          router.push('/select-company')
         }
-        const companySlug = data.user?.activeCompany?.slug || data.user?.companies?.[0]?.slug
-        router.push(companySlug ? `/${companySlug}/dashboard` : '/select-company')
       } else {
         setError(data.error || 'Failed to accept invitation')
       }
@@ -246,7 +250,7 @@ export default function InvitePage() {
                 {invitation.userExists ? (
                   <>
                     <Link
-                      href={`/login?invite=${token}`}
+                      href={`/login?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(invitation.email)}`}
                       className="block w-full py-3 text-center bg-accent-500 text-primary-500 rounded-xl font-bold hover:bg-accent-600 transition-colors text-sm"
                     >
                       Log in to accept

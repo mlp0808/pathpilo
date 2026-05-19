@@ -1,0 +1,110 @@
+﻿                <div className="border-t border-gray-200 mt-4" />
+              </div>
+
+              {/* Tasks ÔÇö compact rows: [check] title + duration | price | Cancel. Check = complete; Cancel = cancel row (red + cross). */}
+              <div>
+                {(() => {
+                  const svcs = (jobDetails || job)?.services || (jobDetails || job)?.job_services || []
+                  const totalTasks = svcs.length
+                  const completedCount = svcs.filter((s: any) => s.status === 'completed').length
+                  const totalDuration =
+                    (jobDetails || job)?.total_duration ??
+                    svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_duration_minutes ?? s.duration_minutes) || 0), 0)
+                  const totalPrice =
+                    (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
+                  const canEditServices = parseJobId(currentJob?.id) != null && !isProjectedJob && !isLocked
+                  const handleCheckClick = async (s: any) => {
+                    if (!canEditServices || !s.id) return
+                    const jobId = await ensureRealJobId()
+                    if (!jobId) return
+                    const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
+                    updateServiceStatus(jobId, s.id, next)
+                  }
+                  const handleCancelClick = async (s: any) => {
+                    if (!canEditServices || !s.id) return
+                    const jobId = await ensureRealJobId()
+                    if (!jobId) return
+                    const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
+                    updateServiceStatus(jobId, s.id, next)
+                  }
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-base font-semibold text-primary-500 flex items-center gap-2">
+                          <DocumentTextIcon className="w-5 h-5 text-accent-500" />
+                          {t('app.jobView.tasks')}
+                        </h3>
+                        <span className="text-sm text-gray-500">{t('app.jobView.tasksProgress').replace('{{done}}', String(completedCount)).replace('{{total}}', String(totalTasks || 0))}</span>
+                      </div>
+                      {svcs.length > 0 ? (
+                        <div className="space-y-1">
+                          {svcs.map((s: any, i: number) => {
+                            const serviceStatus = (s.status || (s.is_completed ? 'completed' : 'scheduled')) as string
+                            const isServiceCompleted = serviceStatus === 'completed'
+                            const isServiceCancelled = serviceStatus === 'cancelled'
+                            const isUpdating = updatingServiceId === s.id
+                            return (
+                              <div
+                                key={s.service_id || s.id || i}
+                                className={`flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors ${isServiceCancelled ? 'bg-red-50' : 'bg-white'}`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleCheckClick(s)}
+                                  disabled={!canEditServices || isUpdating}
+                                  className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-colors disabled:opacity-50 ${isServiceCancelled ? 'border-red-300 bg-red-100 text-red-500' : isServiceCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white hover:border-accent-400'}`}
+                                  title={isServiceCancelled ? t('app.jobView.undoCancel') : isServiceCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
+                                >
+                                  {isServiceCancelled ? (
+                                    <XMarkIcon className="w-3 h-3" strokeWidth={2.5} />
+                                  ) : (
+                                    <CheckIcon className={`w-3 h-3 ${isServiceCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
+                                  )}
+                                </button>
+                                <div className="flex-1 min-w-0 flex items-center gap-2">
+                                  <span className={`text-sm font-medium truncate ${isServiceCancelled ? 'text-red-700 line-through' : 'text-primary-500'}`}>
+                                    {s.title || s.service_title || s.service_name || t('app.jobView.task')}
+                                  </span>
+                                  <span className="text-xs text-gray-500 flex-shrink-0">
+                                    {formatDuration(s.custom_duration_minutes ?? s.duration_minutes ?? 0)}
+                                  </span>
+                                </div>
+                                <div className={`text-sm font-medium flex-shrink-0 ${isServiceCancelled ? 'text-red-600' : 'text-primary-500'}`}>
+                                  {formatPrice(s.custom_price ?? s.price ?? 0)}
+                                </div>
+                                {canEditServices && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCancelClick(s)}
+                                    disabled={isUpdating}
+                                    className="flex-shrink-0 text-xs font-medium px-2 py-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
+                                  >
+                                    {isServiceCancelled ? t('app.jobView.undo') : t('app.common.cancel')}
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 py-4 text-center">{t('app.jobView.noTasks')}</p>
+                      )}
+                      {svcs.length > 0 && (
+                        <div className="flex flex-col items-end gap-0.5 mt-2">
+                          <div className="text-sm text-gray-500">{t('app.jobView.timeLabel')} {formatDuration(totalDuration)}</div>
+                          <div className="text-sm text-gray-500">{t('app.jobView.valueLabel')} {formatPrice(totalPrice)}</div>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* Activity Log ÔÇö mobile-style: continuous line through bullets, white box per update, "add note +" button */}
+              <div className="pt-4 border-t border-gray-200">
+                <h3 className="text-base font-semibold text-primary-500 mb-4">{t('app.jobView.activityLog')}</h3>
+                {logsLoading ? (
+                  <div className="flex items-center justify-center py-4">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-500 border-t-transparent"></div>
+                  </div>
+                ) : jobLogs.length > 0 ? (

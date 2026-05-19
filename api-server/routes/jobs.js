@@ -9,6 +9,12 @@ const {
 } = require('../utils/automatedEmails');
 const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
 const { setJobAutoTitleIfEmpty } = require('../utils/jobAutoTitle');
+const {
+  parseSubscriptionVirtualJobId,
+  computeSubscriptionOccurrenceDate,
+  subscriptionDateIsOnOrAfterPause,
+} = require('../utils/subscriptionVirtualJob');
+const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
 
 const router = express.Router();
 
@@ -225,6 +231,157 @@ router.get('/:jobId', async (req, res) => {
 
     console.log('🏢 Company ID:', companyId);
 
+    const virtualParts = parseSubscriptionVirtualJobId(jobId);
+    let queryJobId = parseInt(jobId, 10);
+
+    if (virtualParts) {
+      let subRow;
+      try {
+        const subRes = await pool.query(
+          `SELECT
+            rj.*,
+            c.name,
+            c.last_name,
+            c.email as client_email,
+            c.phone as client_phone,
+            c.address,
+            c.zip_code,
+            c.city,
+            c.lat as client_lat,
+            c.lng as client_lng,
+            c.client_type,
+            CASE WHEN c.client_type = 'company' THEN true ELSE false END as is_company
+          FROM recurring_jobs rj
+          LEFT JOIN clients c ON rj.client_id = c.id
+          WHERE rj.id = $1 AND rj.company_id = $2 AND rj.is_active = true`,
+          [virtualParts.recurringJobId, companyId]
+        );
+        subRow = subRes.rows[0] || null;
+      } catch (subErr) {
+        if (subErr && (subErr.code === '42P01' || String(subErr.message || '').includes('recurring_jobs'))) {
+          subRow = null;
+        } else {
+          throw subErr;
+        }
+      }
+
+      if (!subRow) {
+        return res.status(404).json({ error: 'Job not found or access denied' });
+      }
+
+      const jobDate = computeSubscriptionOccurrenceDate(subRow, virtualParts.occurrence);
+      if (!jobDate) {
+        return res.status(404).json({ error: 'Job not found or access denied' });
+      }
+      if (subscriptionDateIsOnOrAfterPause(subRow, jobDate)) {
+        return res.status(404).json({ error: 'Job not found or access denied' });
+      }
+
+      const existingMat = await pool.query(
+        `SELECT id FROM jobs
+         WHERE company_id = $1 AND recurring_job_id = $2 AND recurring_occurrence = $3
+         LIMIT 1`,
+        [companyId, virtualParts.recurringJobId, virtualParts.occurrence]
+      );
+
+      if (existingMat.rows.length > 0) {
+        queryJobId = existingMat.rows[0].id;
+      } else {
+        const servicesResult = await pool.query(
+          `SELECT
+            rjs.id,
+            rjs.service_id,
+            rjs.custom_price,
+            rjs.custom_duration_minutes,
+            COALESCE(rjs.custom_price, s.price) as price,
+            COALESCE(rjs.custom_duration_minutes, s.duration_minutes) as duration_minutes,
+            s.title as service_name,
+            NULL::text as service_description,
+            'scheduled' as status,
+            NULL::timestamptz as completed_at,
+            false as is_completed
+          FROM recurring_job_services rjs
+          LEFT JOIN services s ON rjs.service_id = s.id
+          WHERE rjs.recurring_job_id = $1
+          ORDER BY rjs.id ASC`,
+          [virtualParts.recurringJobId]
+        );
+        let services = servicesResult.rows.map((row) => ({
+          id: row.id,
+          job_id: null,
+          service_id: row.service_id,
+          custom_title: null,
+          custom_price: row.custom_price,
+          custom_duration_minutes: row.custom_duration_minutes,
+          status: row.status,
+          completed_at: row.completed_at,
+          service_name: row.service_name || (row.service_id ? `Service #${row.service_id}` : 'Service'),
+          service_description: row.service_description,
+          price: row.price,
+          duration_minutes: row.duration_minutes,
+          is_completed: row.is_completed,
+        }));
+
+        for (let service of services) {
+          if (service.service_id && !service.service_name) {
+            try {
+              const serviceResult = await pool.query('SELECT * FROM services WHERE id = $1', [service.service_id]);
+              if (serviceResult.rows.length > 0) {
+                const svc = serviceResult.rows[0];
+                service.service_name = svc.title || svc.name || svc.service_name || `Service #${service.service_id}`;
+                service.service_description = svc.description || null;
+              }
+            } catch (err) {
+              service.service_name = service.service_name || `Service #${service.service_id}`;
+            }
+          }
+        }
+
+        const totalPrice = services.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
+        const totalDuration = services.reduce((sum, s) => sum + (parseInt(s.duration_minutes, 10) || 0), 0);
+        const completedCount = 0;
+
+        return res.json({
+          job: {
+            id: `subscription-${virtualParts.recurringJobId}-${virtualParts.occurrence}`,
+            company_id: companyId,
+            client_id: subRow.client_id,
+            assigned_user_id: subRow.assigned_user_id,
+            title: subRow.title,
+            note: subRow.note,
+            scheduled_date: jobDate,
+            scheduled_time_from: subRow.scheduled_time_from,
+            scheduled_time_to: subRow.scheduled_time_to,
+            status: 'scheduled',
+            recurring_job_id: virtualParts.recurringJobId,
+            recurring_occurrence: virtualParts.occurrence,
+            is_generated: true,
+            name: subRow.name,
+            last_name: subRow.last_name,
+            address: subRow.address,
+            zip_code: subRow.zip_code,
+            city: subRow.city,
+            client_email: subRow.client_email,
+            client_phone: subRow.client_phone,
+            client_lat: subRow.client_lat,
+            client_lng: subRow.client_lng,
+            client_type: subRow.client_type,
+            is_company: subRow.is_company,
+            invoice_id: null,
+            services,
+            timeline: [],
+            total_price: totalPrice,
+            total_duration: totalDuration,
+            completed_tasks: completedCount,
+            total_tasks: services.length,
+            is_projected: true,
+          },
+        });
+      }
+    } else if (Number.isNaN(queryJobId)) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
     // Get job with client details
     const jobQuery = `
       SELECT
@@ -245,19 +402,20 @@ router.get('/:jobId', async (req, res) => {
       WHERE j.id = $1 AND j.company_id = $2
     `;
 
-    console.log('📝 Query params:', [jobId, companyId]);
-    const jobResult = await pool.query(jobQuery, [parseInt(jobId), companyId]);
+    console.log('📝 Query params:', [queryJobId, companyId]);
+    const jobResult = await pool.query(jobQuery, [queryJobId, companyId]);
     console.log('📊 Job query result:', jobResult.rows.length, 'rows found');
 
     if (jobResult.rows.length === 0) {
       console.log('❌ Job not found - checking if job exists at all...');
       // Debug query to see if job exists
-      const debugResult = await pool.query('SELECT id, company_id FROM jobs WHERE id = $1', [parseInt(jobId)]);
+      const debugResult = await pool.query('SELECT id, company_id FROM jobs WHERE id = $1', [queryJobId]);
       console.log('🔍 Debug query result:', debugResult.rows);
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
     const job = jobResult.rows[0];
+    await jobEncryptedNotes.hydrateJobRecord(job, companyId);
 
     // Get all services for this job
     // Note: job_services can have either service_id (references services table) or custom_title (custom service)
@@ -284,7 +442,7 @@ router.get('/:jobId', async (req, res) => {
       ORDER BY js.id ASC
     `;
     
-    const servicesResult = await pool.query(servicesQuery, [jobId]);
+    const servicesResult = await pool.query(servicesQuery, [queryJobId]);
     let services = servicesResult.rows;
     
     // If service has service_id but no custom_title, fetch service name from services table
@@ -332,7 +490,7 @@ router.get('/:jobId', async (req, res) => {
         WHERE jl.job_id = $1
         ORDER BY jl.created_at ASC
       `;
-      const timelineResult = await pool.query(timelineQuery, [jobId]);
+      const timelineResult = await pool.query(timelineQuery, [queryJobId]);
       timeline = timelineResult.rows.map(log => ({
         id: log.id,
         description: log.description || log.note_content || '',
@@ -398,10 +556,12 @@ router.get('/', async (req, res) => {
         c.lat as client_lat,
         c.lng as client_lng,
         COALESCE(js_totals.service_count, 0) as service_count,
+        COALESCE(js_all.all_service_count, 0) as all_service_count,
         COALESCE(jn.note_count, 0) as note_count,
         COALESCE(js_totals.calculated_price, 0) as total_price,
         COALESCE(js_totals.calculated_duration, 0) as total_duration,
-        COALESCE(js_all.estimated_duration, 0) as estimated_duration
+        COALESCE(js_all.estimated_duration, 0) as estimated_duration,
+        COALESCE(js_all.estimated_price, 0) as estimated_price
       FROM jobs j
       LEFT JOIN clients c ON j.client_id = c.id
       LEFT JOIN (
@@ -418,7 +578,9 @@ router.get('/', async (req, res) => {
       LEFT JOIN (
         SELECT
           js.job_id,
-          SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as estimated_duration
+          COUNT(js.id) as all_service_count,
+          SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as estimated_duration,
+          SUM(COALESCE(js.custom_price, s.price, 0)) as estimated_price
         FROM job_services js
         LEFT JOIN services s ON js.service_id = s.id
         GROUP BY js.job_id
@@ -847,7 +1009,9 @@ router.get('/', async (req, res) => {
             zip_code: p.subscription.zip_code,
             city: p.subscription.city,
             service_count: p.subscriptionServices.length,
+            all_service_count: p.subscriptionServices.length,
             total_price: p.totalPrice,
+            estimated_price: p.totalPrice,
             total_duration: p.totalDuration,
             is_projected: true
           })
@@ -872,6 +1036,8 @@ router.get('/', async (req, res) => {
     }, {});
     console.log('📊 [api-server] Jobs returned by status:', statusCounts)
     console.log(`📊 [api-server] Total jobs: ${allJobs.length} (${realJobs.length} real, ${projectedJobs.length} projected) for company ${companyId}, date range: ${start_date} to ${end_date}`)
+
+    await jobEncryptedNotes.attachJobNotesToRows(realJobs, companyId);
 
     res.json({
       jobs: allJobs,
@@ -956,19 +1122,33 @@ router.post('/', async (req, res) => {
         [companyId, scheduled_date, assigned_user_id]
       );
       const nextSortOrder = (maxSortResult.rows[0]?.max_sort || 0) + 1;
+      const notePlain = note != null ? String(note).trim() : '';
 
-      // Create the job
+      // Create the job (note stored encrypted in secure_notes, not jobs.note)
       const jobResult = await dbClient.query(
         `INSERT INTO jobs
          (company_id, client_id, assigned_user_id, title, note, scheduled_date,
           scheduled_time_from, scheduled_time_to, recurring_job_id, is_generated, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, NULL, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
-        [companyId, client_id, assigned_user_id, title || '', note, scheduled_date,
+        [companyId, client_id, assigned_user_id, title || '', scheduled_date,
          scheduled_time_from, scheduled_time_to, null, false, nextSortOrder]
       );
 
       const job = jobResult.rows[0];
+
+      if (notePlain) {
+        await jobEncryptedNotes.setJobNoteText({
+          companyId,
+          jobId: job.id,
+          plainText: notePlain,
+          userId: jobEncryptedNotes.secureNoteUserId(req),
+          dbClient,
+        });
+        job.note = notePlain;
+      } else {
+        job.note = null;
+      }
 
       // Add services to job_services table
       if (services.length > 0) {
@@ -1017,9 +1197,14 @@ router.post('/', async (req, res) => {
         GROUP BY j.id, c.name, c.last_name, c.address, c.zip_code, c.city, c.lat, c.lng
       `, [job.id]);
 
+      const createdJob = jobWithDetails.rows[0];
+      if (createdJob) {
+        await jobEncryptedNotes.hydrateJobRecord(createdJob, companyId);
+      }
+
       res.status(201).json({
         message: 'Job created successfully',
-        job: jobWithDetails.rows[0]
+        job: createdJob
       });
 
     } catch (error) {
@@ -1206,33 +1391,50 @@ router.put('/:jobId', async (req, res) => {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
-    // Build update query dynamically
+    const noteUpdate = Object.prototype.hasOwnProperty.call(updates, 'note')
+      ? (updates.note == null ? '' : String(updates.note).trim())
+      : undefined;
+
+    // Build update query dynamically (note is stored via secure_notes, not jobs.note column)
     const fields = [];
     const values = [];
     let paramCount = 1;
 
     Object.keys(updates).forEach(key => {
-      if (updates[key] !== undefined && key !== 'id') {
+      if (updates[key] !== undefined && key !== 'id' && key !== 'note') {
         fields.push(`${key} = $${paramCount}`);
         values.push(updates[key]);
         paramCount++;
       }
     });
 
-    if (fields.length === 0) {
+    let result;
+    if (fields.length > 0) {
+      values.push(jobId);
+      const updateQuery = `
+        UPDATE jobs
+        SET ${fields.join(', ')}, updated_at = NOW()
+        WHERE id = $${paramCount}
+        RETURNING *
+      `;
+      result = await pool.query(updateQuery, values);
+    } else if (noteUpdate === undefined) {
       return res.status(400).json({ error: 'No valid fields to update' });
+    } else {
+      result = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
     }
 
-    values.push(jobId);
-
-    const updateQuery = `
-      UPDATE jobs
-      SET ${fields.join(', ')}, updated_at = NOW()
-      WHERE id = $${paramCount}
-      RETURNING *
-    `;
-
-    const result = await pool.query(updateQuery, values);
+    if (noteUpdate !== undefined) {
+      const saved = await jobEncryptedNotes.setJobNoteText({
+        companyId,
+        jobId,
+        plainText: noteUpdate,
+        userId: jobEncryptedNotes.secureNoteUserId(req),
+      });
+      if (result.rows[0]) {
+        result.rows[0].note = saved;
+      }
+    }
 
     // If the caller cleared the title (sent "" or whitespace), fall back to
     // a derived title from the job's services so the row never ends up
@@ -1258,9 +1460,14 @@ router.put('/:jobId', async (req, res) => {
       );
     }
 
+    const updatedJob = result.rows[0];
+    if (updatedJob && noteUpdate === undefined) {
+      await jobEncryptedNotes.hydrateJobRecord(updatedJob, companyId);
+    }
+
     res.json({
       message: 'Job updated successfully',
-      job: result.rows[0]
+      job: updatedJob
     });
 
   } catch (error) {
@@ -1469,6 +1676,356 @@ router.put('/:jobId/status', async (req, res) => {
   }
 });
 
+// POST /api/jobs/:jobId/complete-remaining
+//
+// Used by the mobile app's big "Complete" button: marks every task that
+// is still `scheduled` / NULL as completed, but leaves tasks that were
+// manually `cancelled` exactly as they are. The overall job status is
+// then recomputed from the tasks so it lands on either `completed` (no
+// cancellations) or `sub_completed` (some completed + some cancelled).
+router.post('/:jobId/complete-remaining', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const jobCheck = await pool.query(
+      'SELECT id FROM jobs WHERE id = $1 AND company_id = $2',
+      [jobId, companyId]
+    );
+    if (jobCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+
+    // Only flip the tasks that are still "pending" - do not touch the
+    // ones the user explicitly cancelled.
+    const updated = await pool.query(
+      `UPDATE job_services
+         SET status = 'completed',
+             completed_at = COALESCE(completed_at, NOW())
+       WHERE job_id = $1
+         AND (status IS NULL OR status = 'scheduled')
+       RETURNING id`,
+      [jobId]
+    );
+
+    await computeAndUpdateJobStatus(parseInt(jobId, 10));
+
+    // Single log line so the timeline stays readable.
+    try {
+      const userId = req.user?.userId || null;
+      const count = updated.rowCount || 0;
+      if (count > 0) {
+        await pool.query(
+          'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+          [
+            jobId,
+            userId,
+            'complete-remaining',
+            `Completed ${count} remaining task${count === 1 ? '' : 's'}`,
+          ]
+        );
+      }
+    } catch (logError) {
+      console.error('Failed to log complete-remaining', { jobId, error: logError.message });
+    }
+
+    const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+    res.json({
+      message: 'Remaining tasks completed',
+      updated_count: updated.rowCount || 0,
+      job: jobResult.rows[0] || null,
+    });
+  } catch (error) {
+    console.error('Error completing remaining tasks:', error);
+    res.status(500).json({ error: 'Failed to complete remaining tasks: ' + error.message });
+  }
+});
+
+// GET /api/jobs/:jobId/handoff
+//
+// Powers the "Next Job" handoff slide in the mobile app. Returns:
+//   - `current`: a slim version of the job the worker just finished
+//   - `next`:    the next job in the day for the same assigned user
+//                (sorted by manual route order, then created_at)
+//   - `drive`:   duration/distance between the two, computed via the
+//                Mapbox Directions API server-side when both ends have
+//                coordinates. May be null if we can't compute it.
+router.get('/:jobId/handoff', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const currentRes = await pool.query(
+      `SELECT j.*, c.name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email, c.phone AS client_phone,
+              c.address AS client_address, c.zip_code AS client_zip,
+              c.city AS client_city,
+              c.lat AS client_lat, c.lng AS client_lng,
+              c.client_type AS client_type
+         FROM jobs j
+         LEFT JOIN clients c ON j.client_id = c.id
+        WHERE j.id = $1 AND j.company_id = $2`,
+      [jobId, companyId]
+    );
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    const current = currentRes.rows[0];
+
+    // Find the next job in the same day for the same assignee. Ordering
+    // mirrors GET /jobs so the "next" is the next card the user sees
+    // in their list. We also include the current job's route_order so
+    // we can break ties consistently.
+    const nextRes = await pool.query(
+      `SELECT j.*, c.name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email, c.phone AS client_phone,
+              c.address AS client_address, c.zip_code AS client_zip,
+              c.city AS client_city,
+              c.lat AS client_lat, c.lng AS client_lng,
+              c.client_type AS client_type
+         FROM jobs j
+         LEFT JOIN clients c ON j.client_id = c.id
+        WHERE j.company_id = $1
+          AND j.scheduled_date = $2
+          AND j.assigned_user_id IS NOT DISTINCT FROM $3
+          AND j.id <> $4
+          AND j.status <> 'cancelled'
+          AND (
+            COALESCE(j.route_order, j.sort_order, 999999) > COALESCE($5::int, -1)
+            OR (
+              COALESCE(j.route_order, j.sort_order, 999999) = COALESCE($5::int, -1)
+              AND j.created_at > $6
+            )
+          )
+        ORDER BY COALESCE(j.route_order, j.sort_order, 999999) ASC,
+                 j.created_at ASC
+        LIMIT 1`,
+      [
+        companyId,
+        current.scheduled_date,
+        current.assigned_user_id,
+        current.id,
+        current.route_order ?? current.sort_order ?? null,
+        current.created_at,
+      ]
+    );
+
+    const next = nextRes.rows[0] || null;
+
+    // Either the job row or the client row may carry the coordinates
+    // (the route planner writes onto the job, but new jobs inherit
+    // from the client). Resolve both so the drive lookup works in
+    // either case.
+    const resolveLat = (row) =>
+      row?.lat != null ? row.lat : row?.client_lat ?? null;
+    const resolveLng = (row) =>
+      row?.lng != null ? row.lng : row?.client_lng ?? null;
+
+    // Build a single address string for geocoding fallback.
+    const rowAddress = (row) => {
+      const parts = [
+        row?.address || row?.client_address,
+        row?.zip_code || row?.client_zip,
+        row?.city   || row?.client_city,
+      ].filter(Boolean);
+      return parts.join(' ').trim() || null;
+    };
+
+    const mapboxToken =
+      process.env.MAPBOX_TOKEN ||
+      process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
+      '';
+
+    // Geocode an address string → [lng, lat] or null.
+    const geocode = async (address) => {
+      if (!address || !mapboxToken) return null;
+      try {
+        const encoded = encodeURIComponent(address);
+        const url =
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json` +
+          `?limit=1&access_token=${mapboxToken}`;
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        const body = await r.json();
+        const coords = body?.features?.[0]?.geometry?.coordinates;
+        if (coords && coords.length === 2) return { lng: coords[0], lat: coords[1] };
+      } catch (e) {
+        console.warn('Mapbox geocoding failed', e.message);
+      }
+      return null;
+    };
+
+    // Compute the driving duration between the two addresses. If the
+    // stored coordinates are missing (no route planned yet) we fall
+    // back to geocoding the text address on the fly.
+    let drive = null;
+    if (next && mapboxToken) {
+      let curLat = resolveLat(current);
+      let curLng = resolveLng(current);
+      let nxtLat = resolveLat(next);
+      let nxtLng = resolveLng(next);
+
+      // Geocode whichever address is missing coordinates.
+      if (curLat == null || curLng == null) {
+        const g = await geocode(rowAddress(current));
+        if (g) { curLat = g.lat; curLng = g.lng; }
+      }
+      if (nxtLat == null || nxtLng == null) {
+        const g = await geocode(rowAddress(next));
+        if (g) { nxtLat = g.lat; nxtLng = g.lng; }
+      }
+
+      if (curLat != null && curLng != null && nxtLat != null && nxtLng != null) {
+        try {
+          const coords = `${curLng},${curLat};${nxtLng},${nxtLat}`;
+          const url =
+            `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
+            `?geometries=geojson&overview=false&access_token=${mapboxToken}`;
+          const r = await fetch(url);
+          if (r.ok) {
+            const body = await r.json();
+            const route = body?.routes?.[0];
+            if (route) {
+              drive = {
+                duration_seconds: Math.round(route.duration || 0),
+                distance_meters: Math.round(route.distance || 0),
+              };
+            }
+          } else {
+            console.warn('Mapbox directions non-OK', r.status);
+          }
+        } catch (e) {
+          console.warn('Mapbox directions lookup failed', e.message);
+        }
+      }
+    }
+
+    const slim = (row) => row && {
+      id: row.id,
+      client_first_name: row.client_first_name,
+      client_last_name: row.client_last_name,
+      client_type: row.client_type,
+      address: row.address || row.client_address || null,
+      zip_code: row.zip_code || row.client_zip || null,
+      city: row.city || row.client_city || null,
+      client_email: row.client_email,
+      client_phone: row.client_phone,
+      scheduled_date: row.scheduled_date,
+      scheduled_time_from: row.scheduled_time_from,
+      scheduled_time_to: row.scheduled_time_to,
+      lat: resolveLat(row),
+      lng: resolveLng(row),
+    };
+
+    res.json({
+      current: slim(current),
+      next: slim(next),
+      drive,
+    });
+  } catch (error) {
+    console.error('Error building handoff data:', error);
+    res.status(500).json({ error: 'Failed to build handoff data: ' + error.message });
+  }
+});
+
+// POST /api/jobs/:jobId/start
+//
+// Called from the mobile app's "Start Job" button on the handoff
+// sheet. Optionally emails the client an "on the way" message and
+// always drops a log entry in the job timeline.
+router.post('/:jobId/start', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { notify_customer } = req.body || {};
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const jobRes = await pool.query(
+      `SELECT j.*, c.name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email
+         FROM jobs j
+         LEFT JOIN clients c ON j.client_id = c.id
+        WHERE j.id = $1 AND j.company_id = $2`,
+      [jobId, companyId]
+    );
+    if (jobRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    const job = jobRes.rows[0];
+    const userId = req.user?.userId || null;
+
+    // Always log "started".
+    try {
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [jobId, userId, 'job-started', 'Technician started the job']
+      );
+    } catch (logError) {
+      console.error('Failed to log job-started', logError.message);
+    }
+
+    let notified = false;
+    if (notify_customer && job.client_email) {
+      try {
+        // Minimal, language-agnostic "on the way" text. Clients who
+        // want a templated message will eventually be able to edit
+        // this from the settings area, but for now keep it simple.
+        const firstName = job.client_first_name || '';
+        const subject = `We're on our way`;
+        const eta = job.scheduled_time_from
+          ? ` around ${job.scheduled_time_from}`
+          : '';
+        const text =
+          `Hi ${firstName},\n\n` +
+          `Your technician is on the way and should be with you${eta}. ` +
+          `If anything comes up we'll let you know.\n\n` +
+          `Thank you!`;
+
+        await sendJobCustomerEmail(pool, companyId, {
+          to: job.client_email,
+          subject,
+          text,
+        });
+        notified = true;
+
+        try {
+          await pool.query(
+            'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+            [jobId, userId, 'notification-sent', `"On the way" notification sent to ${job.client_email}`]
+          );
+        } catch (logError) {
+          console.error('Failed to log on-the-way notification', logError.message);
+        }
+      } catch (mailError) {
+        console.error('Failed to send on-the-way email:', mailError.message);
+      }
+    }
+
+    res.json({
+      message: 'Job started',
+      job_id: parseInt(jobId, 10),
+      notified,
+    });
+  } catch (error) {
+    console.error('Error starting job:', error);
+    res.status(500).json({ error: 'Failed to start job: ' + error.message });
+  }
+});
+
 // POST /api/jobs/:jobId/notes - Add note to job timeline
 router.post('/:jobId/notes', async (req, res) => {
   try {
@@ -1497,17 +2054,16 @@ router.post('/:jobId/notes', async (req, res) => {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
-    // Insert note into job_logs table
-    const noteResult = await pool.query(
-      `INSERT INTO job_logs (job_id, user_id, action, description, note_content, created_at)
-       VALUES ($1, $2, 'note', $3, $3, NOW())
-       RETURNING *`,
-      [jobId, userId, content.trim()]
-    );
+    const noteRow = await jobEncryptedNotes.createEncryptedTimelineNote({
+      companyId,
+      jobId,
+      content: content.trim(),
+      userId,
+    });
 
     res.status(201).json({
       message: 'Note added successfully',
-      note: noteResult.rows[0]
+      note: noteRow
     });
 
   } catch (error) {
@@ -1533,18 +2089,151 @@ router.delete('/:jobId', async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    const virtualParts = parseSubscriptionVirtualJobId(jobId);
+    if (virtualParts) {
+      let subRow;
+      try {
+        const subRes = await pool.query(
+          `SELECT rj.* FROM recurring_jobs rj
+           WHERE rj.id = $1 AND rj.company_id = $2 AND rj.is_active = true`,
+          [virtualParts.recurringJobId, companyId]
+        );
+        subRow = subRes.rows[0] || null;
+      } catch (subErr) {
+        if (subErr && (subErr.code === '42P01' || String(subErr.message || '').includes('recurring_jobs'))) {
+          return res.status(404).json({ error: 'Job not found or access denied' });
+        }
+        throw subErr;
+      }
+      if (!subRow) {
+        return res.status(404).json({ error: 'Job not found or access denied' });
+      }
+
+      const jobDate = computeSubscriptionOccurrenceDate(subRow, virtualParts.occurrence);
+      if (!jobDate) {
+        return res.status(404).json({ error: 'Job not found or access denied' });
+      }
+      if (subscriptionDateIsOnOrAfterPause(subRow, jobDate)) {
+        return res.status(400).json({ error: 'This occurrence is not available (subscription paused).' });
+      }
+
+      const existingMat = await pool.query(
+        `SELECT id FROM jobs
+         WHERE company_id = $1 AND recurring_job_id = $2 AND recurring_occurrence = $3
+         LIMIT 1`,
+        [companyId, virtualParts.recurringJobId, virtualParts.occurrence]
+      );
+
+      if (existingMat.rows.length > 0) {
+        await pool.query('DELETE FROM jobs WHERE id = $1', [existingMat.rows[0].id]);
+        return res.json({ message: 'Job deleted successfully' });
+      }
+
+      const subServicesRes = await pool.query(
+        `SELECT rjs.service_id, rjs.custom_price, rjs.custom_duration_minutes
+         FROM recurring_job_services rjs
+         WHERE rjs.recurring_job_id = $1
+         ORDER BY rjs.id ASC`,
+        [virtualParts.recurringJobId]
+      );
+      const subServices = subServicesRes.rows;
+      if (!subServices || subServices.length === 0) {
+        return res.status(400).json({ error: 'Subscription has no services; cannot remove this occurrence.' });
+      }
+
+      const dbClient = await pool.connect();
+      try {
+        await dbClient.query('BEGIN');
+
+        const maxSortResult = await dbClient.query(
+          `SELECT COALESCE(MAX(sort_order), 0) as max_sort FROM jobs
+           WHERE company_id = $1 AND scheduled_date = $2 AND assigned_user_id = $3`,
+          [companyId, jobDate, subRow.assigned_user_id || userId]
+        );
+        const nextSortOrder = (maxSortResult.rows[0]?.max_sort || 0) + 1;
+
+        const subNotePlain =
+          subRow.note != null ? String(subRow.note).trim() : '';
+
+        const jobRes = await dbClient.query(
+          `INSERT INTO jobs (
+            company_id, client_id, assigned_user_id, title, note,
+            scheduled_date, scheduled_time_from, scheduled_time_to,
+            status, recurring_job_id, recurring_occurrence, is_generated, sort_order
+          ) VALUES ($1,$2,$3,$4,NULL,$6,$7,$8,$9,$10,$11,$12,$13)
+          RETURNING id`,
+          [
+            companyId,
+            subRow.client_id,
+            subRow.assigned_user_id || userId,
+            subRow.title,
+            jobDate,
+            subRow.scheduled_time_from || null,
+            subRow.scheduled_time_to || null,
+            'cancelled',
+            virtualParts.recurringJobId,
+            virtualParts.occurrence,
+            true,
+            nextSortOrder,
+          ]
+        );
+        const newJobId = jobRes.rows[0].id;
+
+        if (subNotePlain) {
+          await jobEncryptedNotes.setJobNoteText({
+            companyId,
+            jobId: newJobId,
+            plainText: subNotePlain,
+            userId: jobEncryptedNotes.secureNoteUserId(req),
+            dbClient,
+          });
+        }
+
+        for (const s of subServices) {
+          await dbClient.query(
+            `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
+             VALUES ($1,$2,$3,$4,'cancelled')`,
+            [newJobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null]
+          );
+        }
+
+        await setJobAutoTitleIfEmpty(dbClient, newJobId);
+        await dbClient.query('COMMIT');
+      } catch (txErr) {
+        try {
+          await dbClient.query('ROLLBACK');
+        } catch {}
+        throw txErr;
+      } finally {
+        dbClient.release();
+      }
+
+      return res.json({ message: 'Job deleted successfully' });
+    }
+
+    const numericId = parseInt(jobId, 10);
+    if (Number.isNaN(numericId)) {
+      return res.status(400).json({ error: 'Invalid job id' });
+    }
+
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
       'SELECT id FROM jobs WHERE id = $1 AND company_id = $2',
-      [jobId, companyId]
+      [numericId, companyId]
     );
 
     if (jobCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
+    await jobEncryptedNotes.deleteJobEncryptedNotes(
+      companyId,
+      numericId,
+      jobEncryptedNotes.secureNoteUserId(req),
+    );
+
     // Delete job (cascade will handle related records)
-    await pool.query('DELETE FROM jobs WHERE id = $1', [jobId]);
+    await pool.query('DELETE FROM jobs WHERE id = $1', [numericId]);
 
     res.json({
       message: 'Job deleted successfully'
@@ -1989,8 +2678,13 @@ router.get('/:jobId/logs', async (req, res) => {
       }
     }
 
+    const logs = await jobEncryptedNotes.hydrateJobLogRows(
+      logsResult.rows,
+      companyId,
+    );
+
     res.json({
-      logs: logsResult.rows
+      logs
     });
   } catch (error) {
     console.error('Error fetching job logs:', error);
@@ -2019,13 +2713,14 @@ router.delete('/:jobId/notes/:noteId', async (req, res) => {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
-    // Delete note from job_logs (where note_content exists)
-    const deleteResult = await pool.query(
-      'DELETE FROM job_logs WHERE id = $1 AND job_id = $2 AND user_id = $3 AND note_content IS NOT NULL RETURNING *',
-      [noteId, jobId, userId]
-    );
+    const deleted = await jobEncryptedNotes.deleteEncryptedTimelineNote({
+      companyId,
+      jobId,
+      noteId,
+      userId,
+    });
 
-    if (deleteResult.rows.length === 0) {
+    if (!deleted) {
       return res.status(404).json({ error: 'Note not found or access denied' });
     }
 

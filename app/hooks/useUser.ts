@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { apiUrl } from '@/app/utils/api'
+import { hasAppWorkspace } from '@/app/utils/sessionClient'
 
 interface User {
   id: number
@@ -20,6 +22,14 @@ interface User {
     suspendedAt?: string | null
     role: string
     isOwner: boolean
+  }>
+  pendingInvites?: Array<{
+    token: string
+    role: string
+    companyName: string
+    companySlug?: string
+    expiresAt: string
+    invitedByName?: string
   }>
   activeCompany?: {
     id: number
@@ -50,14 +60,41 @@ export function useUser() {
     try {
       const user = JSON.parse(userData)
       setUser(user)
+
+      // Keep desktop session user in sync with backend profile so edits made
+      // from mobile are reflected after a web refresh.
+      fetch(apiUrl('/user/profile'), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(async (res) => {
+          if (!res.ok) return null
+          return res.json()
+        })
+        .then((data) => {
+          const p = data?.user
+          if (!p) return
+          const merged = {
+            ...user,
+            firstName: p.firstName ?? user.firstName,
+            lastName: p.lastName ?? user.lastName,
+            email: p.email ?? user.email,
+            languageCode: p.languageCode ?? user.languageCode,
+            role: p.role ?? user.role,
+            ...(Array.isArray(p.companies) ? { companies: p.companies } : {}),
+            ...(p.pendingInvites !== undefined ? { pendingInvites: p.pendingInvites } : {}),
+            ...(p.activeCompany !== undefined ? { activeCompany: p.activeCompany } : {}),
+            ...(p.companyId !== undefined ? { companyId: p.companyId } : {}),
+            ...(p.companyName !== undefined ? { companyName: p.companyName } : {}),
+          }
+          localStorage.setItem('user', JSON.stringify(merged))
+          setUser(merged)
+        })
+        .catch(() => {
+          // Keep existing local session payload if sync fails.
+        })
       
-      // Check if user has companies or active company
-      // If user has no companies and no activeCompany, redirect to company setup
-      const hasCompanies = user.companies && user.companies.length > 0
-      const hasActiveCompany = user.activeCompany !== null && user.activeCompany !== undefined
-      const hasCompanyId = user.companyId !== null && user.companyId !== undefined
-      
-      if (!hasCompanies && !hasActiveCompany && !hasCompanyId) {
+      // Check if user has workspace (membership and/or pending invitations)
+      if (!hasAppWorkspace(user as Record<string, unknown>)) {
         router.push('/setup/company')
         return
       }

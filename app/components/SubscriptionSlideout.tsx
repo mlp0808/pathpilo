@@ -292,10 +292,13 @@ export default function SubscriptionSlideout({
 
   // ── render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-backdrop-in" onClick={onClose} />
 
-      <div className="relative bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200 animate-slideDown transform transition-all duration-300 ease-out">
+      {/* Bottom sheet on mobile, centered card on tablet/desktop. Animations
+          differ per breakpoint so the surface always slides from the side that
+          makes sense for the form factor. */}
+      <div className="relative bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[98vh] sm:min-h-[660px] flex flex-col overflow-hidden border border-gray-200 transform transition-all duration-300 ease-out animate-sheet-in-bottom sm:animate-slideDown pb-safe">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">

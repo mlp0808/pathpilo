@@ -354,7 +354,18 @@ router.post('/switch', authenticateToken, async (req, res) => {
       return res.status(401).json({ error: 'Invalid token: missing user ID' });
     }
 
-    console.log('Company switch request:', { company_id, company_slug, userId, tokenUser: req.user });
+    const logSwitch = (msg, extra) => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[companies/switch] ${msg}`, extra ?? '')
+      }
+    }
+
+    logSwitch('request', {
+      company_id,
+      company_slug,
+      userId,
+      activeCompanyId: req.user?.activeCompanyId,
+    })
 
     let targetCompanyId = company_id;
 
@@ -398,7 +409,7 @@ router.post('/switch', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Not a member of this company' });
     }
     
-    console.log('Membership verified for company:', targetCompanyId);
+    logSwitch('membership ok', { targetCompanyId })
 
     // Get company details including slug
     const companyResult = await pool.query(

@@ -32,6 +32,84 @@ const USER_COLORS = [
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
+/** Task count for job cards — list API exposes all_service_count, not job_services[]. */
+function getJobTaskCount(job: any): number {
+  const fromApi = Number(job.all_service_count ?? job.service_count ?? 0)
+  if (fromApi > 0) return fromApi
+  const fromArrays = (job.job_services || job.services || []).length
+  return fromArrays > 0 ? fromArrays : 1
+}
+
+/** Planned job value (all tasks); total_price on list API is completed tasks only. */
+function getJobDisplayPrice(job: any): number {
+  const estimated = parseFloat(String(job.estimated_price ?? ''))
+  if (!Number.isNaN(estimated) && estimated > 0) return estimated
+  const total = parseFloat(String(job.total_price ?? ''))
+  if (!Number.isNaN(total) && total > 0) return total
+  return 0
+}
+
+function parseNumericJobId(id: unknown): number | null {
+  if (typeof id === 'number' && Number.isFinite(id)) return id
+  if (typeof id === 'string' && /^\d+$/.test(id.trim())) return parseInt(id.trim(), 10)
+  return null
+}
+
+function getProjectedJobMeta(job: any): { subscriptionId: number; occurrence: number } | null {
+  const subId = typeof job?.recurring_job_id === 'number' ? job.recurring_job_id : null
+  const occ = typeof job?.recurring_occurrence === 'number' ? job.recurring_occurrence : null
+  if (subId && occ) return { subscriptionId: subId, occurrence: occ }
+
+  if (typeof job?.id === 'string' && String(job.id).startsWith('subscription-')) {
+    const parts = String(job.id).split('-')
+    if (parts.length >= 3) {
+      const ps = parseInt(parts[1], 10)
+      const po = parseInt(parts[2], 10)
+      if (Number.isFinite(ps) && Number.isFinite(po)) return { subscriptionId: ps, occurrence: po }
+    }
+  }
+  return null
+}
+
+function isProjectedJobRow(job: any): boolean {
+  return !!(job?.is_projected || (typeof job?.id === 'string' && String(job.id).startsWith('subscription-')))
+}
+
+async function ensureRealJobIdForAction(job: any, token: string): Promise<number> {
+  const parsed = parseNumericJobId(job?.id)
+  if (parsed != null) return parsed
+
+  if (!isProjectedJobRow(job)) {
+    throw new Error('Invalid job id')
+  }
+
+  const meta = getProjectedJobMeta(job)
+  if (!meta) {
+    throw new Error('Could not resolve subscription occurrence to materialize')
+  }
+
+  const mat = await fetch(
+    apiUrl(`/subscriptions/${meta.subscriptionId}/occurrences/${meta.occurrence}/materialize`),
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ scheduled_date: job.scheduled_date }),
+    },
+  )
+  const matData = await mat.json().catch(() => ({}))
+  if (!mat.ok) {
+    throw new Error(matData.error || matData.details || 'Failed to create real job from subscription')
+  }
+  const jobId = matData.jobId
+  if (typeof jobId !== 'number') {
+    throw new Error('Invalid jobId returned from materialize endpoint')
+  }
+  return jobId
+}
+
 interface User {
     id: number
     first_name: string
@@ -139,6 +217,9 @@ function JobsPageContent() {
   const [dayOptimizing, setDayOptimizing] = useState(false)
   const [dayGeocodingCount, setDayGeocodingCount] = useState(0)
   const [hoveredJobId, setHoveredJobId] = useState<number | string | null>(null)
+  // Manual draw-route mode (per focused user — only one drawable at a time)
+  const [drawMode, setDrawMode] = useState(false)
+  const [drawOrder, setDrawOrder] = useState<(number | string)[]>([])
   // Bumped every time routes are rebuilt so the directions effect always re-fires
   const [dayRoutesVersion, setDayRoutesVersion] = useState(0)
   const directionsFetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -178,11 +259,12 @@ function JobsPageContent() {
     category: 'personal' | 'meeting' | 'sick' | 'vacation' | 'other'
     notes: string | null
     appointment_date: string
+    end_date?: string | null
     time_mode: 'span' | 'hours' | 'all_day'
     start_time: string | null
     end_time: string | null
     hours_off: number | null
-    status: 'requested' | 'approved'
+    status: 'requested' | 'approved' | 'declined'
     requested_by: number | null
     approved_by: number | null
   }
@@ -657,11 +739,24 @@ function JobsPageContent() {
             if (apptRes.ok) {
                 const apptData = await apptRes.json()
                 const list: AppointmentItem[] = apptData.appointments || []
+                // Declined appointments are kept on the server so the employee's
+                // mobile status page can show the outcome, but they're irrelevant
+                // to the admin calendar (they don't consume capacity and aren't
+                // scheduled). Filter them out here so nothing downstream has to
+                // worry about them.
+                const visible = list.filter((a) => a.status !== 'declined')
                 const byDate: Record<string, AppointmentItem[]> = {}
-                for (const a of list) {
-                    const key = a.appointment_date
-                    if (!byDate[key]) byDate[key] = []
-                    byDate[key].push(a)
+                for (const a of visible) {
+                    const start = String(a.appointment_date).split('T')[0]
+                    const endPart = a.end_date ? String(a.end_date).split('T')[0] : start
+                    const cursor = new Date(`${start}T12:00:00`)
+                    const endD = new Date(`${endPart}T12:00:00`)
+                    while (cursor <= endD) {
+                        const key = toLocalDateString(cursor)
+                        if (!byDate[key]) byDate[key] = []
+                        byDate[key].push(a)
+                        cursor.setDate(cursor.getDate() + 1)
+                    }
                 }
                 setAppointmentsByDate(byDate)
             }
@@ -1110,11 +1205,13 @@ function JobsPageContent() {
 
     // Pending request count, used in the page-level heads-up pill.
     const pendingRequestCount = (() => {
-        let n = 0
+        const seen = new Set<number>()
         for (const list of Object.values(appointmentsByDate)) {
-            for (const a of list) if (a.status === 'requested') n += 1
+            for (const a of list) {
+                if (a.status === 'requested') seen.add(a.id)
+            }
         }
-        return n
+        return seen.size
     })()
 
     // Role check — admins can approve/decline requests and edit anyone's
@@ -1150,11 +1247,25 @@ function JobsPageContent() {
     }
 
     const handleDeclineAppointment = async (id: number) => {
+        // Optional reason — shown verbatim on the employee's mobile status
+        // page. Empty / cancelled prompt still declines (API allows null).
+        const reason = window.prompt(
+            t(
+                'app.appointments.declineReasonPrompt',
+                'Optional: tell the employee why (leave empty to just decline).'
+            ),
+            ''
+        )
+        if (reason === null) return // user hit Cancel
         try {
             const token = localStorage.getItem('token')
             const res = await fetch(apiUrl(`/appointments/${id}/decline`), {
                 method: 'POST',
-                headers: { Authorization: `Bearer ${token}` },
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ reason: reason.trim() || null }),
             })
             if (res.ok) {
                 setApptActionsMenu(null)
@@ -1199,6 +1310,7 @@ function JobsPageContent() {
             category: a.category,
             notes: a.notes,
             appointment_date: a.appointment_date,
+            end_date: a.end_date ?? null,
             time_mode: a.time_mode,
             start_time: a.start_time,
             end_time: a.end_time,
@@ -1215,7 +1327,7 @@ function JobsPageContent() {
     // - Approved appointments: solid color-tinted background keyed by category.
     // - Requested appointments: dashed border + "Request" badge so it's clear
     //   they don't yet consume capacity.
-    const renderAppointmentPill = (appt: AppointmentItem, compact = false) => {
+    const renderAppointmentPill = (appt: AppointmentItem, compact = false, cellDate?: string) => {
         const cat = APPT_CATEGORY_OPTIONS.find((c) => c.value === appt.category) || APPT_CATEGORY_OPTIONS[APPT_CATEGORY_OPTIONS.length - 1]
         const isPending = appt.status === 'requested'
         // Resolve an "assigned to" name so admins can see whose appointment it is in the all-team view.
@@ -1228,12 +1340,21 @@ function JobsPageContent() {
         } else if (appt.time_mode === 'hours' && appt.hours_off) {
             timeLabel = `${Number(appt.hours_off).toFixed(1)} h`
         } else if (appt.time_mode === 'all_day') {
-            timeLabel = t('app.appointments.allDay', 'All day')
+            const s = String(appt.appointment_date).split('T')[0]
+            const e = appt.end_date ? String(appt.end_date).split('T')[0] : ''
+            if (e && e > s) {
+                const d0 = new Date(`${s}T12:00:00`)
+                const d1 = new Date(`${e}T12:00:00`)
+                const nd = Math.round((d1.getTime() - d0.getTime()) / 86400000) + 1
+                timeLabel = `${nd}d`
+            } else {
+                timeLabel = t('app.appointments.allDay', 'All day')
+            }
         }
 
         return (
             <div
-                key={`appt-${appt.id}`}
+                key={`appt-${appt.id}-${cellDate ?? appt.appointment_date}`}
                 onClick={(e) => {
                     e.stopPropagation()
                     openEditAppointment(appt)
@@ -1274,7 +1395,14 @@ function JobsPageContent() {
                                     y: rect.bottom + 4,
                                 })
                             }}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-black/5 flex-shrink-0"
+                            className={`transition-opacity p-0.5 rounded hover:bg-black/5 flex-shrink-0 ${
+                                // Hover-only controls are hard to discover and don't work
+                                // well on touch devices; keep the menu trigger visible when
+                                // an admin is looking at a pending request.
+                                isAdmin && isPending
+                                    ? 'opacity-100'
+                                    : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
+                            }`}
                             title={t('app.appointments.moreActions', 'More')}
                         >
                             <EllipsisHorizontalIcon className="w-3.5 h-3.5" style={{ color: cat.text }} />
@@ -1562,16 +1690,19 @@ function JobsPageContent() {
     try {
       const token = localStorage.getItem('token')
       if (!token) return
-      const jobId = job.id
-      const newStatus = (job.status === 'completed' || job.status === 'sub_completed') ? 'scheduled' : 'completed'
 
-      const response = await fetch(apiUrl(`/jobs/${jobId}/status`), {
+      const originalId = job.id
+      const realJobId = await ensureRealJobIdForAction(job, token)
+      const newStatus =
+        job.status === 'completed' || job.status === 'sub_completed' ? 'scheduled' : 'completed'
+
+      const response = await fetch(apiUrl(`/jobs/${realJobId}/status`), {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: newStatus }),
       })
 
       const data = await response.json().catch(() => ({}))
@@ -1579,10 +1710,12 @@ function JobsPageContent() {
         throw new Error(data.error || 'Failed to update job status')
       }
 
-      // Update local jobs state so the card reflects the new status
-      setJobs(prev =>
-        prev.map((j: any) => (j.id === jobId ? { ...j, status: newStatus } : j))
-      )
+      const patch = { id: realJobId, status: newStatus, is_projected: false }
+      const applyPatch = (prev: any[]) =>
+        prev.map((j: any) => (j.id === originalId ? { ...j, ...patch } : j))
+
+      setJobs(applyPatch)
+      setAllJobs(applyPatch)
     } catch (error) {
       console.error('Failed to update job status from calendar:', error)
     }
@@ -1922,6 +2055,79 @@ function JobsPageContent() {
     setDayRoutes(prev => prev.map(r => r.userId === userId ? { ...r, jobs: newJobs } : r))
   }, [])
 
+  // ── Manual "Draw route" mode ─────────────────────────────────────────────────
+  //   The user clicks middle stops (in the focused user's route) one by one to
+  //   assign them order numbers. When every middle stop has a number we apply
+  //   the order via handleDayReorder and exit draw mode.
+  const handleDrawStart = useCallback(() => {
+    setDrawMode(true)
+    setDrawOrder([])
+    setHoveredJobId(null)
+  }, [])
+
+  const handleDrawExit = useCallback(() => {
+    setDrawMode(false)
+    setDrawOrder([])
+    setHoveredJobId(null)
+  }, [])
+
+  const handleDrawReset = useCallback(() => {
+    setDrawOrder([])
+  }, [])
+
+  const dayDrawUserId =
+    dayFocusUserId ?? (dayRoutes.length === 1 ? dayRoutes[0]?.userId ?? null : null)
+
+  const handleDrawAssign = useCallback((jobId: number | string) => {
+    const userId = dayDrawUserId
+    if (userId == null) return
+    const route = dayRoutes.find(r => r.userId === userId)
+    if (!route) return
+    const middleJobs = route.jobs.filter(j => !j.is_cancelled && !j.is_home)
+    const middleIds = new Set(middleJobs.map(j => String(j.id)))
+    if (!middleIds.has(String(jobId))) return
+
+    setDrawOrder(prev => {
+      const idx = prev.findIndex(id => String(id) === String(jobId))
+      // Toggle: clicking an already-numbered stop removes it (and shifts the rest).
+      if (idx !== -1) return prev.filter(id => String(id) !== String(jobId))
+      const next = [...prev, jobId]
+      // If that completes the order, apply it on the next tick.
+      if (next.length === middleJobs.length) {
+        const orderedMiddle = next
+          .map(id => middleJobs.find(j => String(j.id) === String(id)))
+          .filter((j): j is RouteJob => !!j)
+        const startJob = route.jobs.length > 0 && route.jobs[0].is_home ? route.jobs[0] : null
+        const endJob = route.jobs.length > 1 && route.jobs[route.jobs.length - 1].is_home
+          ? route.jobs[route.jobs.length - 1]
+          : null
+        const cancelled = route.jobs.filter(j => j.is_cancelled)
+        const fullOrder = [
+          ...(startJob ? [startJob] : []),
+          ...orderedMiddle,
+          ...(endJob ? [endJob] : []),
+          ...cancelled,
+        ]
+        setTimeout(() => {
+          handleDayReorder(userId, fullOrder)
+          setDrawMode(false)
+          setDrawOrder([])
+          setHoveredJobId(null)
+        }, 280)
+      }
+      return next
+    })
+  }, [dayDrawUserId, dayRoutes, handleDayReorder])
+
+  // Auto-exit draw mode if the focused user changes or there's no focus anymore
+  useEffect(() => {
+    if (!drawMode) return
+    if (dayDrawUserId == null) {
+      setDrawMode(false)
+      setDrawOrder([])
+    }
+  }, [dayDrawUserId, drawMode])
+
   // When user changes assignee from the route planner slideout, store pending change and update viewing job (no API until Save & apply)
   const handlePlannerAssigneeChange = useCallback((jobId: number, newUserId: number) => {
     setPendingAssigneeChanges(prev => ({ ...prev, [jobId]: newUserId }))
@@ -2062,6 +2268,11 @@ function JobsPageContent() {
             total_minutes: totalDriveMins,
             total_job_minutes: Math.round(totalJobMins),
             total_km: totalKm,
+            // Road-following GeoJSON coordinates from Directions API — used by the
+            // mobile app to draw the actual route on the overview map image.
+            route_geometry: route.routeGeometry?.coordinates
+              ? JSON.stringify(route.routeGeometry.coordinates)
+              : null,
           }),
         })
         if (!saveRes.ok) {
@@ -2139,41 +2350,60 @@ function JobsPageContent() {
                     <div className="text-xs text-red-700 mt-2">{t('app.jobsPage.errorHint')}</div>
                   </div>
                 )}
-                {/* Top Bar — hidden in day view (calendar nav lives on the map overlay) */}
-                {viewMode !== 'day' && <div className="flex items-center justify-between gap-4">
-                    {/* Left: square softly-rounded arrows, Today (underlined), month year */}
-                    <div className="flex items-center gap-3">
-                        <button 
-                            onClick={viewMode === 'month' ? goToPreviousMonth : goToPreviousWeek} 
-                            className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
+                {/* Top Bar — hidden in day view (calendar nav lives on the map overlay).
+                    Mobile-first: arrows + label form the first row; the user pill and
+                    view switcher are full-width on a second row so they breathe. */}
+                {viewMode !== 'day' && <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-4">
+                    {/* Row 1: nav arrows + Today + month/year + pending pill */}
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                        <button
+                            onClick={viewMode === 'month' ? goToPreviousMonth : goToPreviousWeek}
+                            className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:bg-gray-200 transition-colors flex-shrink-0"
                             aria-label={viewMode === 'month' ? t('app.jobsPage.prevMonth') : t('app.jobsPage.prevWeek')}
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                         </button>
-                        <button 
-                            onClick={viewMode === 'month' ? goToNextMonth : goToNextWeek} 
-                            className="w-8 h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors" 
+                        <button
+                            onClick={viewMode === 'month' ? goToNextMonth : goToNextWeek}
+                            className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:bg-gray-200 transition-colors flex-shrink-0"
                             aria-label={viewMode === 'month' ? t('app.jobsPage.nextMonth') : t('app.jobsPage.nextWeek')}
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                         </button>
-                        <button 
-                            onClick={viewMode === 'month' ? goToCurrentMonth : goToCurrentWeek} 
-                            className="text-sm font-medium text-gray-700 hover:text-primary-600 underline"
+                        <button
+                            onClick={viewMode === 'month' ? goToCurrentMonth : goToCurrentWeek}
+                            className="text-sm font-medium text-gray-700 hover:text-primary-600 underline flex-shrink-0"
                         >
                             {t('app.jobsPage.today')}
                         </button>
-                        <span className="text-sm font-medium text-primary-500">
-                            {viewMode === 'month' 
+                        <span className="text-sm font-medium text-primary-500 truncate">
+                            {viewMode === 'month'
                                 ? currentWeek.toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })
                                 : weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })
                             }
                         </span>
+                        {isAdmin && pendingRequestCount > 0 && (
+                            <span
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 flex-shrink-0"
+                                title={t(
+                                    'app.appointments.pendingRequestsHint',
+                                    'Employee requests waiting for your review'
+                                )}
+                            >
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                {t(
+                                    'app.appointments.pendingRequestsPill',
+                                    '{{count}} pending'
+                                ).replace('{{count}}', String(pendingRequestCount))}
+                            </span>
+                        )}
                     </div>
 
-                    {/* Right: user pill (thin light green border, green icon+name), then Day|Week|Month|Year */}
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2 min-w-0 max-w-[200px] border border-accent-500/70 rounded-full px-3 py-1.5 bg-white">
+                    {/* Row 2: user pill + view switcher. Stacks below the nav on
+                        mobile and shrinks the segmented control so all 4 modes fit
+                        on a 360px viewport. */}
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1 md:flex-initial md:max-w-[200px] border border-accent-500/70 rounded-full px-3 py-1.5 bg-white">
                             <UserCircleIcon className="w-5 h-5 text-accent-500 flex-shrink-0" />
                             <div className="relative flex-1 min-w-0">
                                 {users.length === 1 ? (
@@ -2203,12 +2433,12 @@ function JobsPageContent() {
                                 )}
                             </div>
                         </div>
-                        <div className="flex rounded-lg bg-gray-100 p-0.5">
+                        <div className="flex rounded-lg bg-gray-100 p-0.5 flex-shrink-0">
                             {(['day','week','month','year'] as const).map((m) => (
                                 <button
                                     key={m}
                                     onClick={() => setViewMode(m)}
-                                    className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                    className={`px-2.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium rounded-md transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
                                 >
                                     {m === 'day' ? t('app.jobsPage.viewDay') : m === 'week' ? t('app.jobsPage.viewWeek') : m === 'month' ? t('app.jobsPage.viewMonth') : t('app.jobsPage.viewYear')}
                                 </button>
@@ -2217,17 +2447,28 @@ function JobsPageContent() {
                     </div>
                 </div>}
 
-                {/* ── Day view: full-screen overlay (fixed, right of sidebar) ────── */}
+                {/* ── Day view: full-screen overlay.
+                    Desktop (lg+):  fixed, offset by the 200px sidebar, side-by-side.
+                    Mobile/tablet:  takes over below the sticky top bar; we stack
+                    the route panel on top of the map so both are reachable.
+                    The hardcoded `left: 200` is gone — we use Tailwind so it can
+                    flex with the new responsive shell. */}
                 {viewMode === 'day' && (
-                  <div className="fixed inset-0 flex z-10" style={{ left: 200 }}>
-                    {/* Left: job list panel — flush to sidebar, full height */}
-                    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden">
+                  <div className="fixed inset-0 z-10 flex flex-col lg:flex-row top-[var(--app-mobile-topbar-h)] lg:top-0 left-0 lg:left-[200px]">
+                    {/* Left/top: job list panel. Full width on mobile,
+                        fixed 380 column on desktop. */}
+                    <div className="w-full lg:w-[380px] lg:flex-shrink-0 flex flex-col overflow-hidden h-1/2 lg:h-full border-b lg:border-b-0 border-gray-200">
                       <DayRoutePanel
                         companySlug={companySlug}
                         routes={dayRoutes}
                         focusUserId={dayFocusUserId}
                         onSelectUser={setDayFocusUserId}
-                        onClearUser={() => setDayFocusUserId(null)}
+                        onClearUser={() => {
+                          setDayFocusUserId(null)
+                          setDrawMode(false)
+                          setDrawOrder([])
+                          setHoveredJobId(null)
+                        }}
                         onReorder={handleDayReorder}
                         onJobOpen={id => {
                           // Look up from the full dataset so we always have assigned_user_id, even when
@@ -2239,11 +2480,23 @@ function JobsPageContent() {
                         optimizing={dayOptimizing}
                         geocodingCount={dayGeocodingCount}
                         onSave={handleSaveAndApply}
-                        onBackToWeek={() => { setViewMode('week'); setDayFocusUserId(null); setHoveredJobId(null) }}
+                        onBackToWeek={() => { setViewMode('week'); setDayFocusUserId(null); setHoveredJobId(null); setDrawMode(false); setDrawOrder([]) }}
                         dateLabel={currentWeek.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'short' })}
                         highlightedJobId={hoveredJobId}
                         onJobCardHover={setHoveredJobId}
                         baselineMinutesByUser={dayBaselineMinutes}
+                        availableMinutesByUser={Object.fromEntries(
+                          dayRoutes.map(r => [
+                            r.userId,
+                            Math.round(getWorkHoursForUserDay(r.userId, (currentWeek.getDay() + 6) % 7) * 60),
+                          ])
+                        )}
+                        drawMode={drawMode}
+                        drawOrder={drawOrder}
+                        onDrawStart={handleDrawStart}
+                        onDrawAssign={handleDrawAssign}
+                        onDrawReset={handleDrawReset}
+                        onDrawExit={handleDrawExit}
                       />
                     </div>
 
@@ -2251,7 +2504,13 @@ function JobsPageContent() {
                     <div className="flex-1 relative overflow-hidden">
                       <RouteMap
                         routes={dayRoutes}
-                        focusUserId={dayFocusUserId}
+                        focusUserId={
+                          dayFocusUserId != null
+                            ? dayFocusUserId
+                            : dayRoutes.length === 1
+                              ? dayRoutes[0]?.userId ?? null
+                              : null
+                        }
                         onJobClick={id => {
                           const job = allJobs.find(j => j.id === id)
                           if (job) { setViewingJob(job); setIsViewModalOpen(true) }
@@ -2259,11 +2518,18 @@ function JobsPageContent() {
                         className="w-full h-full"
                         highlightedJobId={hoveredJobId}
                         onPinHover={setHoveredJobId}
+                        drawMode={drawMode}
+                        drawOrder={drawOrder}
+                        onDrawAssign={handleDrawAssign}
                       />
 
-                      {/* ── Calendar nav overlay — top-left of map ─────────────── */}
-                      <div className="absolute top-4 left-4 z-20 pointer-events-auto select-none">
-                        <div className="bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-3.5 py-3 flex items-center gap-2">
+                      {/* ── Calendar nav overlay.
+                          Desktop: floats top-left of the map.
+                          Mobile: spans the top of the map full-width so the 7
+                          day buttons remain easy to tap. Day circles shrink and
+                          gap tightens on small screens. */}
+                      <div className="absolute top-3 left-3 right-3 sm:right-auto z-20 pointer-events-auto select-none">
+                        <div className="bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-2 sm:px-3.5 py-2 sm:py-3 flex items-center gap-1 sm:gap-2 justify-between sm:justify-start">
                           {/* Prev week */}
                           <button
                             type="button"
@@ -2276,8 +2542,9 @@ function JobsPageContent() {
                             </svg>
                           </button>
 
-                          {/* Day circles M T W T F S S */}
-                          <div className="flex items-center gap-1">
+                          {/* Day circles M T W T F S S — share width on mobile so
+                              all 7 always fit; nominal size on desktop. */}
+                          <div className="flex items-center gap-0.5 sm:gap-1 flex-1 sm:flex-initial justify-between">
                             {weekDays.map((day, i) => {
                               const letters = ['M','T','W','T','F','S','S']
                               const isSelected = toLocalDateString(day) === toLocalDateString(currentWeek)
@@ -2288,7 +2555,7 @@ function JobsPageContent() {
                                   key={i}
                                   type="button"
                                   onClick={() => setCurrentWeek(new Date(day))}
-                                  className={`flex flex-col items-center justify-center w-10 h-10 rounded-full transition-all duration-150 ${
+                                  className={`flex flex-col items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full transition-all duration-150 ${
                                     isSelected
                                       ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 scale-105'
                                       : isTodayDay
@@ -2331,24 +2598,28 @@ function JobsPageContent() {
 
                 {/* ── Month / Week views ────────────────────────────────── */}
                 {viewMode !== 'day' && (
-                <div className="bg-[#fff] rounded-xl p-[10px] flex flex-col overflow-hidden max-w-full flex-1 min-h-0">
+                <div className="bg-[#fff] rounded-xl p-2 sm:p-[10px] flex flex-col overflow-hidden max-w-full flex-1 min-h-0">
                 {viewMode === 'month' ? (
-                    /* Month Calendar View */
-                    <div className="space-y-2">
+                    /* Month Calendar View. Header row shows only the first
+                       letter of each weekday on mobile so the columns don't
+                       force a horizontal overflow on narrow phones. */
+                    <div className="space-y-1.5 sm:space-y-2">
                         {/* Weekday headers */}
-                        <div className="grid grid-cols-7 gap-2 mb-2">
+                        <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1 sm:mb-2">
                             {[0, 1, 2, 3, 4, 5, 6].map((i) => {
                                 const d = new Date(2024, 0, 1 + i)
-                                const label = d.toLocaleDateString(dateLocale, { weekday: 'short' })
+                                const longLabel = d.toLocaleDateString(dateLocale, { weekday: 'short' })
+                                const shortLabel = d.toLocaleDateString(dateLocale, { weekday: 'narrow' })
                                 return (
-                                <div key={i} className="text-center text-xs font-semibold text-gray-600 py-2">
-                                    {label}
+                                <div key={i} className="text-center text-[10px] sm:text-xs font-semibold text-gray-600 py-1 sm:py-2">
+                                    <span className="sm:hidden">{shortLabel}</span>
+                                    <span className="hidden sm:inline">{longLabel}</span>
                                 </div>
                                 )
                             })}
                         </div>
                         {/* Calendar grid */}
-                        <div className="grid grid-cols-7 gap-2">
+                        <div className="grid grid-cols-7 gap-1 sm:gap-2">
                             {getMonthDays().map((day, index) => {
                                 const dayJobs = getJobsForDay(day)
                                 const dateString = toLocalDateString(day)
@@ -2403,7 +2674,7 @@ function JobsPageContent() {
                                 return (
                                     <div
                                         key={index}
-                                        className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative min-h-[120px] ${
+                                        className={`flex flex-col rounded-lg sm:rounded-xl overflow-hidden bg-[#FCFCFC] p-1.5 sm:p-[10px] relative min-h-[70px] sm:min-h-[120px] ${
                                             !isCurrentMonth ? 'opacity-50' : ''
                                         } ${isDragOver ? 'ring-2 ring-accent-500/50' : ''} ${
                                             isTodayBanner ? 'ring-2 ring-accent-500' : ''
@@ -2467,7 +2738,7 @@ function JobsPageContent() {
                                                 if (!visible.length) return null
                                                 return (
                                                     <div className="space-y-1">
-                                                        {visible.slice(0, 2).map((a) => renderAppointmentPill(a, true))}
+                                                        {visible.slice(0, 2).map((a) => renderAppointmentPill(a, true, dateString))}
                                                         {visible.length > 2 && (
                                                             <div className="text-[10px] text-gray-500 text-center">
                                                                 {t('app.appointments.moreN', '+{{n}} more').replace('{{n}}', String(visible.length - 2))}
@@ -2836,7 +3107,7 @@ function JobsPageContent() {
                                                             if (!visible.length) return null
                                                             return (
                                                                 <div className="space-y-1.5">
-                                                                    {visible.map((a) => renderAppointmentPill(a, false))}
+                                                                    {visible.map((a) => renderAppointmentPill(a, false, dateString))}
                                                                 </div>
                                                             )
                                                         })()}
@@ -2905,7 +3176,8 @@ function JobsPageContent() {
                                                             const addressDisplay = getAddressDisplay(job)
                                                             const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                             const isJobCancelled = job.status === 'cancelled'
-                                                            const taskCount = (job.job_services || job.services || []).length || 1
+                                                            const taskCount = getJobTaskCount(job)
+                                                            const jobDisplayPrice = getJobDisplayPrice(job)
                                                             const noteCount = (job as any).note_count ?? 0
 
                                                             return (
@@ -2978,8 +3250,8 @@ function JobsPageContent() {
                                                                                     </span>
                                                                                 ) : null
                                                                             })()}
-                                                                            {job.total_price != null && job.total_price > 0 && (
-                                                                                <span className="text-[11px] text-gray-500 flex-shrink-0">{formatPrice(job.total_price)}</span>
+                                                                            {jobDisplayPrice > 0 && (
+                                                                                <span className="text-[11px] text-gray-500 flex-shrink-0">{formatPrice(jobDisplayPrice)}</span>
                                                                             )}
                                                                         </div>
                                                                         {isJobCancelled ? (

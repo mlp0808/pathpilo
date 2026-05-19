@@ -39,6 +39,8 @@ export interface AppointmentPayload {
   category: Category
   notes: string | null
   appointment_date: string
+  /** Inclusive end date for multi-day all-day blocks; null = single day */
+  end_date?: string | null
   time_mode: TimeMode
   start_time: string | null
   end_time: string | null
@@ -107,6 +109,7 @@ export default function CreateAppointment({
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState<Category>('personal')
   const [date, setDate] = useState<string>(defaultDate || todayDateString())
+  const [endDate, setEndDate] = useState<string>('')
   const [timeMode, setTimeMode] = useState<TimeMode>('span')
   const [startTime, setStartTime] = useState<string>('09:00')
   const [endTime, setEndTime] = useState<string>('10:00')
@@ -134,6 +137,9 @@ export default function CreateAppointment({
       setTitle(existing.title || '')
       setCategory(existing.category)
       setDate(existing.appointment_date)
+      const s = existing.appointment_date
+      const e = existing.end_date && String(existing.end_date).slice(0, 10)
+      setEndDate(e && e > s ? e : '')
       setTimeMode(existing.time_mode)
       setStartTime(existing.start_time || '09:00')
       setEndTime(existing.end_time || '10:00')
@@ -145,6 +151,7 @@ export default function CreateAppointment({
       setTitle('')
       setCategory('personal')
       setDate(defaultDate || todayDateString())
+      setEndDate('')
       setTimeMode('span')
       setStartTime('09:00')
       setEndTime('10:00')
@@ -155,6 +162,10 @@ export default function CreateAppointment({
     setError(null)
     setSubmitting(false)
   }, [isOpen, existing, defaultDate, defaultUserId, currentUserId])
+
+  useEffect(() => {
+    if (timeMode !== 'all_day') setEndDate('')
+  }, [timeMode])
 
   const selectedUser = useMemo(
     () => users.find((u) => u.id === userId) || null,
@@ -209,6 +220,17 @@ export default function CreateAppointment({
         return
       }
     }
+    if (timeMode === 'all_day' && endDate) {
+      if (endDate < date) {
+        setError(
+          tr(
+            'app.appointments.errors.endDateBeforeStart',
+            'End date must be on or after the start date.',
+          ),
+        )
+        return
+      }
+    }
 
     setSubmitting(true)
     setError(null)
@@ -223,6 +245,11 @@ export default function CreateAppointment({
       start_time: timeMode === 'span' ? startTime : null,
       end_time: timeMode === 'span' ? endTime : null,
       hours_off: timeMode === 'hours' ? Number(hoursOff) : null,
+    }
+    if (timeMode === 'all_day' && endDate && endDate > date) {
+      payload.end_date = endDate
+    } else {
+      payload.end_date = null
     }
     // The backend ignores `kind` from non-admins (employees always persist as
     // 'work') but there's no harm in omitting it entirely on that path.
@@ -269,14 +296,14 @@ export default function CreateAppointment({
   const modal = (
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-[200] flex items-start justify-center bg-black/50 overflow-y-auto py-6 px-4"
+      className="fixed inset-0 z-[200] flex items-end sm:items-start justify-center bg-black/50 overflow-y-auto sm:py-6 sm:px-4 animate-backdrop-in"
       onMouseDown={(e) => {
         if (e.target === backdropRef.current) onClose()
       }}
     >
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-2xl bg-white rounded-2xl shadow-xl my-auto"
+        className="w-full max-w-2xl bg-white rounded-t-2xl sm:rounded-2xl shadow-xl my-auto pb-safe animate-sheet-in-bottom sm:animate-pop"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
@@ -438,6 +465,27 @@ export default function CreateAppointment({
                 )
               })}
             </div>
+
+            {timeMode === 'all_day' && (
+              <div className="mt-3 max-w-sm">
+                <label className="block text-xs text-gray-500 mb-1">
+                  {tr('app.appointments.throughDate', 'Through (inclusive, optional)')}
+                </label>
+                <input
+                  type="date"
+                  value={endDate}
+                  min={date}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500"
+                />
+                <p className="mt-1 text-xs text-gray-400">
+                  {tr(
+                    'app.appointments.throughDateHelp',
+                    'Leave empty for one day. Pick an end date for one booking across multiple days.',
+                  )}
+                </p>
+              </div>
+            )}
 
             <div className="mt-3">
               {timeMode === 'span' && (

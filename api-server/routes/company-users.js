@@ -1,5 +1,10 @@
 const express = require('express');
 const { pool } = require('../utils/database');
+const {
+  fetchUserCompanies,
+  fetchPendingInvitesForEmail,
+  DEFAULT_LANGUAGE_CODE,
+} = require('../utils/userLoginPayload');
 
 const router = express.Router();
 
@@ -39,16 +44,28 @@ router.get('/profile', async (req, res) => {
     }
 
     const user = result.rows[0];
-    res.json({
-      user: {
-        id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        role: user.role,
-        languageCode: user.language_code || 'en',
-      }
-    });
+    const companies = await fetchUserCompanies(userId);
+    const pendingInvites = await fetchPendingInvitesForEmail(user.email);
+    const activeCompany =
+      companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
+
+    const payload = {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      role: user.role,
+      languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
+      companies,
+      pendingInvites,
+      activeCompany: activeCompany || null,
+    };
+    if (activeCompany) {
+      payload.companyId = activeCompany.id;
+      payload.companyName = activeCompany.name;
+    }
+
+    res.json({ user: payload });
   } catch (error) {
     console.error('Error fetching profile:', error);
     res.status(500).json({ error: 'Failed to fetch profile' });

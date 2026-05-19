@@ -1309,11 +1309,11 @@ function NewInvoicePageContent() {
                         {tr('invoice.new.changeClient', 'Change client')}
                       </button>
                       <Link
-                        href={`/${company}/jobs/completed`}
+                        href={`/${company}/jobs`}
                         className="inline-flex items-center gap-1.5 rounded-xl bg-primary-500 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700"
                       >
                         <DocumentTextIcon className="h-4 w-4" />
-                        {tr('invoice.new.goToCompleted', 'Go to Completed')}
+                        {tr('invoice.new.goToJobs', 'Go to Jobs')}
                       </Link>
                     </div>
                   </div>

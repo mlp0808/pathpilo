@@ -7,10 +7,11 @@ import { EyeIcon, EyeSlashIcon, CheckIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage, normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../i18n'
 import {
+  applySingleCompanyAutoSelect,
   getDashboardHref,
   getStoredUser,
   getUserDisplayName,
-  hasCompanyContext,
+  hasAppWorkspace,
   isClientLoggedIn,
 } from '../utils/sessionClient'
 
@@ -129,18 +130,28 @@ function RegisterForm() {
 
   // Load invitation details if token exists
   useEffect(() => {
-    if (inviteToken) {
-      fetch(apiUrl(`/invitations/${inviteToken}`))
-        .then(res => res.json())
-        .then(data => {
-          if (data.invitation) {
-            setInvitationEmail(data.invitation.email)
-            setFormData(prev => ({ ...prev, email: data.invitation.email }))
-          }
-        })
-        .catch(err => console.error('Error loading invitation:', err))
+    if (!inviteToken) return
+    let cancelled = false
+    fetch(apiUrl(`/invitations/${inviteToken}`))
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        if (data.invitation?.userExists) {
+          router.replace(
+            `/login?invite=${encodeURIComponent(inviteToken)}&email=${encodeURIComponent(data.invitation.email || '')}`
+          )
+          return
+        }
+        if (data.invitation) {
+          setInvitationEmail(data.invitation.email)
+          setFormData((prev) => ({ ...prev, email: data.invitation.email }))
+        }
+      })
+      .catch((err) => console.error('Error loading invitation:', err))
+    return () => {
+      cancelled = true
     }
-  }, [inviteToken])
+  }, [inviteToken, router])
 
   // Load trial details if trial token exists
   useEffect(() => {
@@ -235,12 +246,12 @@ function RegisterForm() {
       return
     }
 
-    let userData = null
+    let sessionForRedirect: Record<string, unknown> | null = null
     if (data.token) {
       localStorage.setItem('token', data.token)
       const lang = normalizeLocale(data.user.languageCode)
       localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
-      userData = {
+      const userData = {
         id: data.user.id,
         firstName: data.user.firstName,
         lastName: data.user.lastName,
@@ -250,13 +261,14 @@ function RegisterForm() {
         companyId: data.user.companyId || data.user.activeCompany?.id || null,
         companyName: data.user.companyName || data.user.activeCompany?.name || null,
         companies: data.user.companies || [],
-        activeCompany: data.user.activeCompany || null
+        activeCompany: data.user.activeCompany || null,
+        pendingInvites: data.user.pendingInvites || [],
       }
-      localStorage.setItem('user', JSON.stringify(userData))
+      sessionForRedirect = applySingleCompanyAutoSelect(userData as Record<string, unknown>)
+      localStorage.setItem('user', JSON.stringify(sessionForRedirect))
     }
     if (inviteToken) {
-      const slug = userData?.activeCompany?.slug || userData?.companies?.[0]?.slug
-      router.push(slug ? `/${slug}/dashboard` : '/select-company')
+      router.push(sessionForRedirect ? getDashboardHref(sessionForRedirect) : '/select-company')
     } else {
       router.push('/setup/company')
     }
@@ -372,7 +384,7 @@ function RegisterForm() {
 
   if (sessionMode === 'checking') {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-12 px-6">
+      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
         <div className="max-w-md mx-auto w-full text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500" />
           <p className="mt-2 text-gray-600">Loading…</p>
@@ -385,7 +397,7 @@ function RegisterForm() {
     const user = getStoredUser()
     if (!user) {
       return (
-        <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-12 px-6">
+        <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
           <div className="max-w-md mx-auto w-full text-center text-sm text-gray-600">Session expired. Refresh the page.</div>
         </div>
       )
@@ -409,7 +421,7 @@ function RegisterForm() {
         seen.add(c.id)
       }
     }
-    const hasCo = hasCompanyContext(user)
+    const hasCo = hasAppWorkspace(user)
 
     const handleLogout = () => {
       clearClientLocaleStorage()
@@ -419,7 +431,7 @@ function RegisterForm() {
     }
 
     return (
-      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-12 px-6">
+      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
         <div className="max-w-md mx-auto w-full">
           <div className="text-center mb-8">
             <Link href="/" className="inline-flex items-center space-x-2 mb-6">
@@ -496,7 +508,7 @@ function RegisterForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-12 px-6">
+    <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
       <div className="max-w-md mx-auto w-full">
         {/* Header */}
         <div className="text-center mb-8">

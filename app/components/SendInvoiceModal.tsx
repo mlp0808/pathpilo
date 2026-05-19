@@ -34,9 +34,9 @@ export default function SendInvoiceModal({
 
   return (
     <div className="fixed inset-0 z-[70]">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-2xl bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden">
+      <div className="absolute inset-0 bg-black/50 animate-backdrop-in" onClick={onClose} />
+      <div className="absolute inset-0 flex items-end sm:items-center justify-center sm:p-4">
+        <div className="w-full max-w-2xl bg-white rounded-t-2xl sm:rounded-xl shadow-2xl border border-gray-200 overflow-hidden pb-safe animate-sheet-in-bottom sm:animate-pop">
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <div>
               <h3 className="text-base font-semibold text-gray-900">Send invoice</h3>

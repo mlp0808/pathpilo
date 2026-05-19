@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { 
-  HomeIcon, 
-  UserGroupIcon, 
-  UsersIcon, 
+import {
+  HomeIcon,
+  UserGroupIcon,
+  UsersIcon,
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
   ClipboardDocumentListIcon,
@@ -15,7 +15,8 @@ import {
   BuildingOfficeIcon,
   InboxIcon,
   RocketLaunchIcon,
-  DocumentTextIcon
+  DocumentTextIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
@@ -46,6 +47,13 @@ interface SidebarProps {
     } | null
   }
   onSettingsClick?: () => void
+  /**
+   * Mobile-drawer mode. When `isMobileOpen` is provided the sidebar renders
+   * inside an animated overlay + backdrop instead of being a fixed column.
+   * AppLayout still renders the desktop variant separately at `lg+`.
+   */
+  isMobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'app.role.admin' | 'app.role.employee' {
@@ -56,7 +64,12 @@ function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'ap
   return 'app.role.employee'
 }
 
-export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
+export default function Sidebar({
+  user,
+  onSettingsClick,
+  isMobileOpen,
+  onMobileClose,
+}: SidebarProps) {
   const { t } = useAppI18n()
   const pathname = usePathname()
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
@@ -65,12 +78,43 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const [overwatchActive, setOverwatchActive] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Auto-open Get Started modal on login; stays closed once dismissed until next logout
+  // Whether this instance is the drawer or the desktop column. The drawer
+  // is only rendered while it's open; the desktop column is always there.
+  const isDrawer = onMobileClose !== undefined
+
+  // Auto-open Get Started modal on login (desktop only — on mobile the
+  // drawer reuses this component and we don't want the guide to pop while
+  // the menu is sliding in).
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (isDrawer) return
     if (sessionStorage.getItem('pathpilo_video_guide_dismissed')) return
     setIsVideoGuideOpen(true)
-  }, [])
+  }, [isDrawer])
+
+  // Body scroll lock + ESC-to-close while the mobile drawer is up.
+  useEffect(() => {
+    if (!isDrawer) return
+    if (!isMobileOpen) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => {
+      document.body.style.overflow = prev
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [isDrawer, isMobileOpen, onMobileClose])
+
+  // Auto-close the drawer when the route changes (tap a nav item → drawer
+  // collapses cleanly without us having to wire onClick on every link).
+  useEffect(() => {
+    if (!isDrawer) return
+    onMobileClose?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname])
 
   useEffect(() => {
     setOverwatchActive(isOverwatchActive())
@@ -80,9 +124,6 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
     setIsVideoGuideOpen(false)
     sessionStorage.setItem('pathpilo_video_guide_dismissed', 'true')
   }
-
-  // Jobs sub-nav: show Overview + Completed when we're on any jobs route (not an accordion)
-  const isOnJobsSection = pathname.includes('/jobs')
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -183,19 +224,11 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
   const jobsBase = companySlug ? `/${companySlug}/jobs` : '/jobs'
   const navigation: Array<{
     name: string
-    href?: string
+    href: string
     icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
-    children?: Array<{ name: string; href: string }>
   }> = [
     { name: t('app.nav.dashboard', 'Dashboard'), href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
-    {
-      name: t('app.nav.jobs', 'Jobs'),
-      icon: ClipboardDocumentListIcon,
-      children: [
-        { name: t('app.nav.jobsOverview', 'Overview'), href: jobsBase },
-        { name: t('app.nav.jobsCompleted', 'Completed'), href: `${jobsBase}/completed` },
-      ],
-    },
+    { name: t('app.nav.jobs', 'Jobs'), href: jobsBase, icon: ClipboardDocumentListIcon },
     { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
     { name: t('app.nav.invoices', 'Invoices'), href: companySlug ? `/${companySlug}/invoices` : '/invoices', icon: DocumentTextIcon },
     { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
@@ -203,14 +236,26 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
     { name: t('app.nav.services', 'Services'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
 
-  return (
-    <div className="fixed inset-y-0 left-0 w-[200px] bg-[#1a2e2e] flex flex-col overflow-hidden">
-      {/* Header: PathPilo.app */}
-      <div className="px-4 pt-4 pb-2">
+  // Shared body — rendered identically in both desktop column + mobile
+  // drawer so any future nav change applies in both modes.
+  const body = (
+    <>
+      {/* Header: PathPilo.app — with a close button on mobile only. */}
+      <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <Link href={companySlug ? `/${companySlug}/dashboard` : '/dashboard'} className="block">
           <span className="text-white font-semibold text-base">PathPilo</span>
           <span className="text-white/70 font-normal text-sm">.app</span>
         </Link>
+        {isDrawer ? (
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={onMobileClose}
+            className="text-white/70 hover:text-white p-1 -mr-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        ) : null}
       </div>
 
       {/* Top bar: Logout */}
@@ -250,67 +295,11 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
       <nav className="flex-1 px-0 py-4 overflow-y-auto">
         {navigation.map((item) => {
           const Icon = item.icon
-          const hasChildren = item.children && item.children.length > 0
-
-          if (hasChildren) {
-            // Jobs: link to Overview (same as first child). Sub-items Overview + Completed show when we're in jobs section.
-            const overviewHref = item.children![0].href
-            const isJobsActive = pathname === overviewHref
-            return (
-              <div key={item.name} className="flex flex-col">
-                <Link
-                  href={overviewHref}
-                  className={`group flex items-stretch w-full text-sm font-medium transition-colors ${
-                    isJobsActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
-                  }`}
-                >
-                  <span
-                    className={`flex-shrink-0 w-1 min-h-[2.5rem] self-stretch ${
-                      isJobsActive ? 'bg-accent-500' : 'bg-transparent'
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="flex items-center flex-1 py-2.5 pl-3 pr-4">
-                    <Icon
-                      className={`mr-3 h-5 w-5 flex-shrink-0 ${
-                        isJobsActive ? 'text-white' : 'text-accent-500 group-hover:text-accent-400'
-                      }`}
-                      aria-hidden="true"
-                    />
-                    {item.name}
-                  </span>
-                </Link>
-                {isOnJobsSection && item.children!.map((sub) => {
-                  const isActive = pathname === sub.href
-                  return (
-                    <Link
-                      key={sub.name}
-                      href={sub.href}
-                      className={`group flex items-stretch w-full text-sm font-medium transition-colors pl-4 ${
-                        isActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
-                      }`}
-                    >
-                      <span
-                        className={`flex-shrink-0 w-1 min-h-[2.25rem] self-stretch ${
-                          isActive ? 'bg-accent-500' : 'bg-transparent'
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <span className="flex items-center flex-1 py-2 pl-3 pr-4 text-white/95">
-                        {sub.name}
-                      </span>
-                    </Link>
-                  )
-                })}
-              </div>
-            )
-          }
-
           const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
           return (
             <Link
               key={item.name}
-              href={item.href!}
+              href={item.href}
               className={`group flex items-stretch w-full text-sm font-medium transition-colors ${
                 isActive ? 'text-white bg-white/5' : 'text-white hover:bg-white/5'
               }`}
@@ -387,7 +376,7 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
       )}
 
       {/* Get Started - bottom left */}
-      <div className="px-4 py-3 border-t border-white/10">
+      <div className="px-4 py-3 border-t border-white/10 pb-safe-plus">
         <button
           onClick={() => setIsVideoGuideOpen(true)}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold text-sm rounded-xl shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 transition-all duration-200"
@@ -401,6 +390,33 @@ export default function Sidebar({ user, onSettingsClick }: SidebarProps) {
         isOpen={isVideoGuideOpen}
         onClose={handleVideoGuideClose}
       />
+    </>
+  )
+
+  // Mobile drawer: full-height slide-in panel with a tap-to-close backdrop.
+  // Rendered above everything via z-index; we deliberately keep the panel
+  // narrower than the screen so users can swipe past it onto the backdrop.
+  if (isDrawer) {
+    if (!isMobileOpen) return null
+    return (
+      <div className="lg:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={onMobileClose}
+          className="absolute inset-0 bg-black/50 backdrop-blur-[1px] animate-backdrop-in cursor-default"
+        />
+        <div className="relative h-full w-[82vw] max-w-[300px] bg-[#1a2e2e] flex flex-col overflow-hidden shadow-2xl animate-drawer-in-left">
+          {body}
+        </div>
+      </div>
+    )
+  }
+
+  // Desktop column. Hidden below `lg` — AppLayout shows the drawer there.
+  return (
+    <div className="hidden lg:flex fixed inset-y-0 left-0 w-[200px] bg-[#1a2e2e] flex-col overflow-hidden z-30">
+      {body}
     </div>
   )
 }

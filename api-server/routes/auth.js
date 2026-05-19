@@ -4,6 +4,10 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { pool } = require('../utils/database');
 const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
+const {
+  fetchUserCompanies,
+  fetchPendingInvitesForEmail,
+} = require('../utils/userLoginPayload');
 
 const router = express.Router();
 
@@ -291,7 +295,7 @@ router.post('/register', async (req, res) => {
         return res.status(409).json({
           error: 'account_exists',
           message: 'An account with this email already exists. Please log in to accept your invitation.',
-          loginUrl: `/login?invite=${invitationToken}`,
+          loginUrl: `/login?invite=${encodeURIComponent(invitationToken)}&email=${encodeURIComponent(normalizedEmail)}`,
         });
       }
       return res.status(400).json({ error: 'An account with this email already exists' });
@@ -484,6 +488,7 @@ router.post('/register', async (req, res) => {
         companyName: company.name,
         activeCompany,
         companies: [activeCompany],
+        pendingInvites: [],
       }
     });
 
@@ -538,12 +543,15 @@ router.post('/login', async (req, res) => {
     }
     // ──────────────────────────────────────────────────────────────────────
 
-    // Find user
-    const userResult = await pool.query(`
+    // Find user (case-insensitive email)
+    const userResult = await pool.query(
+      `
       SELECT id, first_name, last_name, email, password_hash, role, language_code
       FROM users
-      WHERE email = $1
-    `, [email]);
+      WHERE LOWER(TRIM(email)) = LOWER(TRIM($1))
+    `,
+      [email]
+    );
 
     if (userResult.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password' });
@@ -557,47 +565,29 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Get all companies user belongs to with their roles (including slug)
-    const companiesResult = await pool.query(`
-      SELECT 
-        c.id,
-        c.name,
-        COALESCE(c.slug, LOWER(REGEXP_REPLACE(c.name, '[^a-z0-9]+', '-', 'g'))) as slug,
-        uc.role as user_role,
-        c.owner_id,
-        c.country_code,
-        c.suspended_at,
-        CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
-      FROM user_companies uc
-      JOIN companies c ON uc.company_id = c.id
-      WHERE uc.user_id = $1
-      ORDER BY is_owner DESC, c.created_at ASC
-    `, [user.id]);
+    const companies = await fetchUserCompanies(user.id);
+    const pendingInvites = await fetchPendingInvitesForEmail(user.email);
 
-    const companies = companiesResult.rows;
-    
-    // Admin users don't need company association
-    // Regular users must have at least one company
-    if (companies.length === 0 && user.role !== 'admin') {
+    // Regular users need at least one company or a pending invitation they can accept after login.
+    if (companies.length === 0 && pendingInvites.length === 0 && user.role !== 'admin') {
       return res.status(403).json({ error: 'User is not associated with any company' });
     }
 
     // Prefer a non-suspended company as active; otherwise fall back to first.
-    const activeCompany = companies.find(c => !c.suspended_at) || (companies.length > 0 ? companies[0] : null);
+    const activeCompany =
+      companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
 
-    // Generate JWT token
-    // Admin users without companies won't have activeCompanyId
     const tokenPayload = {
-      userId: user.id, 
+      userId: user.id,
       email: user.email,
       firstName: user.first_name,
       lastName: user.last_name,
-      role: user.role
+      role: user.role,
     };
 
     if (activeCompany) {
       tokenPayload.activeCompanyId = activeCompany.id;
-      tokenPayload.role = activeCompany.user_role; // Use company role, not user role
+      tokenPayload.role = activeCompany.role;
     }
 
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
@@ -612,28 +602,20 @@ router.post('/login', async (req, res) => {
         email: user.email,
         languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
         role: user.role,
-        companies: companies.map(c => ({
-          id: c.id,
-          name: c.name,
-          slug: c.slug,
-          countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
-          role: c.user_role,
-          isOwner: c.is_owner,
-          suspendedAt: c.suspended_at || null
-        }))
-      }
+        companies,
+        pendingInvites,
+      },
     };
 
-    // Only include activeCompany if user has companies
     if (activeCompany) {
       responseData.user.activeCompany = {
         id: activeCompany.id,
         name: activeCompany.name,
         slug: activeCompany.slug,
-        countryCode: activeCompany.country_code || DEFAULT_COUNTRY_CODE,
-        role: activeCompany.user_role,
-        isOwner: activeCompany.is_owner,
-        suspendedAt: activeCompany.suspended_at || null
+        countryCode: activeCompany.countryCode || DEFAULT_COUNTRY_CODE,
+        role: activeCompany.role,
+        isOwner: activeCompany.isOwner,
+        suspendedAt: activeCompany.suspendedAt || null,
       };
       responseData.user.companyId = activeCompany.id;
       responseData.user.companyName = activeCompany.name;

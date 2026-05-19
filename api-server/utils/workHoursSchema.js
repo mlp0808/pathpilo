@@ -46,6 +46,19 @@ async function ensureWorkHoursSchema(pool) {
   const postCreateAlterStmts = [
     `ALTER TABLE employee_appointments
        ADD COLUMN IF NOT EXISTS kind VARCHAR(10) NOT NULL DEFAULT 'work'`,
+    // Decline audit trail. We no longer delete declined rows so the employee
+    // can see the outcome of their request on the mobile app. `decline_reason`
+    // is optional and shown as-is on the employee's request status screen.
+    `ALTER TABLE employee_appointments
+       ADD COLUMN IF NOT EXISTS decline_reason TEXT`,
+    `ALTER TABLE employee_appointments
+       ADD COLUMN IF NOT EXISTS declined_by INTEGER REFERENCES users(id)`,
+    `ALTER TABLE employee_appointments
+       ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ`,
+    // Inclusive end date for multi-day blocks (time off / all-day spans).
+    // NULL or equal to appointment_date means a single-day row.
+    `ALTER TABLE employee_appointments
+       ADD COLUMN IF NOT EXISTS end_date DATE`,
   ];
   for (const day of DAYS) {
     alterStmts.push(`ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS ${day}_start TIME`);

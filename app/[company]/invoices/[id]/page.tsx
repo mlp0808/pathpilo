@@ -67,8 +67,8 @@ export default function InvoicePage() {
     fromParam === 'client' && clientIdParam
       ? `/clients/${clientIdParam}`
       : company
-      ? `/${company}/jobs/completed`
-      : '/jobs/completed'
+      ? `/${company}/jobs`
+      : '/jobs'
 
   const backLabel =
     fromParam === 'client'
@@ -76,7 +76,7 @@ export default function InvoicePage() {
           '{name}',
           clientNameParam ? decodeURIComponent(clientNameParam) : tr('invoice.detail.backToClientDefault', 'client'),
         )
-      : tr('invoice.detail.backToCompleted', 'Back to Completed')
+      : tr('invoice.detail.backToJobs', 'Back to Jobs')
   const [invoice, setInvoice] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

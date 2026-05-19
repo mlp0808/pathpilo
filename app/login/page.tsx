@@ -6,9 +6,10 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import {
+  applySingleCompanyAutoSelect,
   getDashboardHref,
   getStoredUser,
-  hasCompanyContext,
+  hasAppWorkspace,
   isClientLoggedIn,
 } from '../utils/sessionClient'
 import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../i18n'
@@ -17,7 +18,10 @@ function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteToken = searchParams.get('invite')
+  const emailFromUrl = searchParams.get('email')
   const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
+
+  const [inviteForExistingAccount, setInviteForExistingAccount] = useState(false)
 
   const [authChecked, setAuthChecked] = useState(false)
 
@@ -35,11 +39,11 @@ function LoginForm() {
       return
     }
     const u = getStoredUser()
-    if (u && hasCompanyContext(u)) {
-      router.replace(getDashboardHref(u))
+    if (u && hasAppWorkspace(u)) {
+      router.replace(getDashboardHref(applySingleCompanyAutoSelect(u)))
       return
     }
-    if (u && !hasCompanyContext(u)) {
+    if (u && !hasAppWorkspace(u)) {
       router.replace('/setup/company')
       return
     }
@@ -58,6 +62,35 @@ function LoginForm() {
   const [forgotEmail, setForgotEmail] = useState('')
   const [forgotLoading, setForgotLoading] = useState(false)
   const [forgotError, setForgotError] = useState('')
+
+  useEffect(() => {
+    if (!inviteToken) return
+    let cancelled = false
+    fetch(apiUrl(`/invitations/${inviteToken}`))
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled || !d.invitation) return
+        setInviteForExistingAccount(!!d.invitation.userExists)
+        setFormData((prev) => ({
+          ...prev,
+          email: prev.email || d.invitation.email || '',
+        }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [inviteToken])
+
+  useEffect(() => {
+    if (!emailFromUrl) return
+    try {
+      const decoded = decodeURIComponent(emailFromUrl)
+      if (decoded) setFormData((prev) => ({ ...prev, email: decoded }))
+    } catch {
+      /* ignore */
+    }
+  }, [emailFromUrl])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -115,16 +148,24 @@ function LoginForm() {
               // Use the refreshed token that includes the new company
               localStorage.setItem('token', acceptData.token)
               const u = acceptData.user
-              localStorage.setItem('user', JSON.stringify({
-                id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
+              const lang = normalizeLocale(data.user.languageCode)
+              localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
+              let userData: Record<string, unknown> = {
+                id: u.id,
+                firstName: u.firstName,
+                lastName: u.lastName,
+                email: u.email,
+                languageCode: lang,
                 role: u.activeCompany?.role || u.role || 'employee',
-                companyId: u.activeCompany?.id || null,
-                companyName: u.activeCompany?.name || null,
+                companyId: u.activeCompany?.id || u.companyId || null,
+                companyName: u.activeCompany?.name || u.companyName || null,
                 companies: u.companies || [],
                 activeCompany: u.activeCompany || null,
-              }))
-              const slug = u.activeCompany?.slug || u.companies?.[0]?.slug
-              router.push(slug ? `/${slug}/dashboard` : '/select-company')
+                pendingInvites: u.pendingInvites || [],
+              }
+              userData = applySingleCompanyAutoSelect(userData)
+              localStorage.setItem('user', JSON.stringify(userData))
+              router.push(getDashboardHref(userData))
               return
             }
           } catch { /* fall through to normal redirect */ }
@@ -133,7 +174,7 @@ function LoginForm() {
         // Normal login redirect
         const lang = normalizeLocale(data.user.languageCode)
         localStorage.setItem(UI_LOCALE_STORAGE_KEY, lang)
-        const userData = {
+        let userData: Record<string, unknown> = {
           id: data.user.id,
           firstName: data.user.firstName,
           lastName: data.user.lastName,
@@ -144,11 +185,12 @@ function LoginForm() {
           companyName: data.user.activeCompany?.name || data.user.companyName || null,
           companies: data.user.companies || [],
           activeCompany: data.user.activeCompany || null,
+          pendingInvites: data.user.pendingInvites || [],
         }
+        userData = applySingleCompanyAutoSelect(userData)
         localStorage.setItem('user', JSON.stringify(userData))
 
-        const companySlug = data.user.activeCompany?.slug || data.user.companies?.[0]?.slug
-        router.push(companySlug ? `/${companySlug}/dashboard` : '/select-company')
+        router.push(getDashboardHref(userData))
       } else {
         setError(data.error || 'Login failed')
       }
@@ -164,7 +206,7 @@ function LoginForm() {
 
   if (!authChecked) {
     return (
-      <div className="min-h-screen bg-page flex flex-col justify-center py-12 px-6">
+      <div className="min-h-screen bg-page flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
         <div className="max-w-md mx-auto w-full text-center">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500" />
           <p className="mt-2 text-gray-600 text-sm">Loading…</p>
@@ -174,7 +216,7 @@ function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen bg-page flex flex-col justify-center py-12 px-6">
+    <div className="min-h-screen bg-page flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
       <div className="max-w-md mx-auto w-full">
 
         {/* ── FORGOT PASSWORD – success ──────────────────────────────────── */}
@@ -263,7 +305,11 @@ function LoginForm() {
                 {inviteToken ? 'Log in to accept your invite' : 'Welcome back'}
               </h1>
               <p className="text-gray-500 text-sm">
-                {inviteToken ? "Sign in and we'll add you to the company automatically" : 'Sign in to your account'}
+                {inviteToken
+                  ? inviteForExistingAccount
+                    ? 'This email already has an account. Enter your password below — after sign-in we connect you to the company from your invite.'
+                    : "Sign in with this email and password — we'll add you to the company from your invite."
+                  : 'Sign in to your account'}
               </p>
             </div>
 
@@ -288,7 +334,8 @@ function LoginForm() {
                     name="email"
                     value={formData.email}
                     onChange={handleInputChange}
-                    className="input-field"
+                    readOnly={!!inviteToken}
+                    className={`input-field${inviteToken ? ' bg-gray-50 text-gray-700 cursor-not-allowed' : ''}`}
                     placeholder="you@example.com"
                     required
                   />
@@ -340,6 +387,7 @@ function LoginForm() {
                 </button>
               </form>
 
+              {!inviteForExistingAccount && (
               <div className="mt-6 text-center">
                 <p className="text-sm text-gray-500">
                   Don't have an account?{' '}
@@ -355,6 +403,7 @@ function LoginForm() {
                   </Link>
                 </p>
               </div>
+              )}
             </div>
 
             {/* Demo credentials */}

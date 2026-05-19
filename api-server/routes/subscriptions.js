@@ -2,6 +2,8 @@ const express = require('express');
 const { pool } = require('../utils/database');
 const { scheduleAutomationSendsForJob } = require('../utils/automatedEmails');
 const { setJobAutoTitleIfEmpty } = require('../utils/jobAutoTitle');
+const { deleteFutureNonCompletedJobsForSubscription } = require('../utils/subscriptionStopCleanup');
+const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
 
 const router = express.Router();
 
@@ -331,17 +333,30 @@ router.post('/', authenticateToken, async (req, res) => {
       // Create the first job only if a user is assigned
       let firstJob = null;
       if (assigned_user_id) {
+        const firstNotePlain = note != null ? String(note).trim() : '';
         const firstJobResult = await dbClient.query(`
           INSERT INTO jobs
           (company_id, client_id, assigned_user_id, title, note, scheduled_date,
            scheduled_time_from, scheduled_time_to, recurring_job_id, recurring_occurrence, is_generated, status, sort_order)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $9), 0))
+          VALUES ($1, $2, $3, $4, NULL, $6, $7, $8, $9, $10, $11, $12, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $9), 0))
           RETURNING *
-        `, [companyId, clientIdNum, assigned_user_id, title, note, firstOccurrence,
+        `, [companyId, clientIdNum, assigned_user_id, title, firstOccurrence,
             scheduled_time_from, scheduled_time_to, subscription.id, 1, true, 'scheduled']);
 
         // Add services to the first job
         firstJob = firstJobResult.rows[0];
+        if (firstJob && firstNotePlain) {
+          await jobEncryptedNotes.setJobNoteText({
+            companyId,
+            jobId: firstJob.id,
+            plainText: firstNotePlain,
+            userId: jobEncryptedNotes.secureNoteUserId(req),
+            dbClient,
+          });
+          firstJob.note = firstNotePlain;
+        } else if (firstJob) {
+          firstJob.note = null;
+        }
         if (services.length > 0) {
           for (const service of services) {
             if (service.service_id) {
@@ -532,19 +547,20 @@ router.put('/:subscriptionId', authenticateToken, async (req, res) => {
 
 // DELETE /api/subscriptions/:subscriptionId - Delete subscription
 router.delete('/:subscriptionId', authenticateToken, async (req, res) => {
+  const dbClient = await pool.connect();
   try {
-    const { subscriptionId } = req.params;
-    const userId = req.user.userId;
+    const subscriptionId = parseInt(req.params.subscriptionId, 10);
+    if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) {
+      return res.status(400).json({ error: 'Invalid subscription id' });
+    }
 
-    // Get user's company
     const companyAccess = await getActiveCompanyId(req, res);
     if (companyAccess.error) {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
 
-    // Verify subscription belongs to user's company
-    const subscriptionCheck = await pool.query(
+    const subscriptionCheck = await dbClient.query(
       'SELECT id FROM recurring_jobs WHERE id = $1 AND company_id = $2',
       [subscriptionId, companyId]
     );
@@ -553,19 +569,26 @@ router.delete('/:subscriptionId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Subscription not found or access denied' });
     }
 
-    // Mark as inactive (don't delete to preserve job history)
-    await pool.query(
+    await dbClient.query('BEGIN');
+    // Remove planned materialized occurrences from today onward (keeps completed / invoiced jobs).
+    await deleteFutureNonCompletedJobsForSubscription(dbClient, companyId, subscriptionId);
+    await dbClient.query(
       'UPDATE recurring_jobs SET is_active = false, updated_at = NOW() WHERE id = $1',
       [subscriptionId]
     );
+    await dbClient.query('COMMIT');
 
-    res.json({
+    return res.json({
       message: 'Subscription deactivated successfully'
     });
-
   } catch (error) {
+    try {
+      await dbClient.query('ROLLBACK');
+    } catch (_) { /* ignore */ }
     console.error('Error deleting subscription:', error);
-    res.status(500).json({ error: 'Failed to delete subscription: ' + error.message });
+    return res.status(500).json({ error: 'Failed to delete subscription: ' + error.message });
+  } finally {
+    dbClient.release();
   }
 });
 
@@ -766,19 +789,21 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     await dbClient.query('BEGIN');
 
+    const matNotePlain =
+      sub.note != null ? String(sub.note).trim() : '';
+
     const jobRes = await dbClient.query(
       `INSERT INTO jobs (
         company_id, client_id, assigned_user_id, title, note,
         scheduled_date, scheduled_time_from, scheduled_time_to,
         status, recurring_job_id, recurring_occurrence, is_generated, sort_order
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,COALESCE($13, 0))
+      ) VALUES ($1,$2,$3,$4,NULL,$6,$7,$8,$9,$10,$11,$12,COALESCE($13, 0))
       RETURNING id`,
       [
         companyId,
         sub.client_id,
         sub.assigned_user_id || userId,
         sub.title,
-        sub.note || null,
         jobDate,
         sub.scheduled_time_from || null,
         sub.scheduled_time_to || null,
@@ -790,6 +815,16 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
       ]
     );
     const jobId = jobRes.rows[0].id;
+
+    if (matNotePlain) {
+      await jobEncryptedNotes.setJobNoteText({
+        companyId,
+        jobId,
+        plainText: matNotePlain,
+        userId: jobEncryptedNotes.secureNoteUserId(req),
+        dbClient,
+      });
+    }
 
     for (const s of subServices) {
       await dbClient.query(

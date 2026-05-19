@@ -327,21 +327,23 @@ export default function InvoicesListPage() {
   return (
     <AppLayout>
       <div>
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-primary-500">{t('app.invoicesList.title', 'Invoices')}</h1>
-            <p className="text-sm text-gray-500 mt-0.5">{t('app.invoicesList.subtitle', 'View and filter all invoices for your company.')}</p>
+        <div className="flex items-center justify-between gap-3 mb-5 sm:mb-6">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-primary-500 truncate">{t('app.invoicesList.title', 'Invoices')}</h1>
+            <p className="text-xs sm:text-sm text-gray-500 mt-0.5">{t('app.invoicesList.subtitle', 'View and filter all invoices for your company.')}</p>
           </div>
           <Link
             href={`${base}/new`}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+            className="inline-flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 active:bg-primary-700/90 transition-colors flex-shrink-0"
           >
             <PlusIcon className="w-4 h-4" />
-            {t('app.invoicesList.newInvoice', 'New invoice')}
+            <span className="hidden xs:inline">{t('app.invoicesList.newInvoice', 'New invoice')}</span>
           </Link>
         </div>
 
-        <div className="flex flex-col xl:flex-row flex-wrap gap-3 mb-6">
+        {/* Filters. On mobile each control becomes full-width; on tablet they
+            wrap and align by their labels; on desktop they fit on a row. */}
+        <div className="flex flex-col xl:flex-row flex-wrap gap-3 mb-5 sm:mb-6">
           <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">{t('app.invoicesList.period', 'Period')}</label>
@@ -381,7 +383,7 @@ export default function InvoicesListPage() {
             )}
           </div>
 
-          <div className="relative" ref={statusRef}>
+          <div className="relative w-full sm:w-auto" ref={statusRef}>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('app.invoicesList.status', 'Status')}</label>
             <button
               type="button"
@@ -411,7 +413,7 @@ export default function InvoicesListPage() {
             )}
           </div>
 
-          <div className="relative flex-1 min-w-[200px] max-w-md" ref={clientRef}>
+          <div className="relative w-full sm:flex-1 sm:min-w-[200px] sm:max-w-md" ref={clientRef}>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('app.invoicesList.client', 'Client')}</label>
             <button
               type="button"
@@ -487,53 +489,95 @@ export default function InvoicesListPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-400 border-t-transparent" />
           </div>
         ) : invoices.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center">
+          <div className="bg-white border border-gray-200 rounded-2xl p-8 sm:p-12 text-center">
             <p className="text-sm font-medium text-gray-900 mb-1">{t('app.invoicesList.empty', 'No invoices match your filters.')}</p>
             <p className="text-xs text-gray-500">{t('app.invoicesList.emptyHint', 'Try widening the date range or clearing filters.')}</p>
           </div>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/80 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    <th className="px-4 py-3">{t('app.invoicesList.col.number', 'Number')}</th>
-                    <th className="px-4 py-3">{t('app.invoicesList.col.title', 'Title')}</th>
-                    <th className="px-4 py-3">{t('app.invoicesList.col.client', 'Client')}</th>
-                    <th className="px-4 py-3">{t('app.invoicesList.col.issueDate', 'Issue date')}</th>
-                    <th className="px-4 py-3">{t('app.invoicesList.col.due', 'Due')}</th>
-                    <th className="px-4 py-3">{t('app.invoicesList.col.status', 'Status')}</th>
-                    <th className="px-4 py-3 text-right">{t('app.invoicesList.col.total', 'Total')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invoices.map((inv) => (
-                    <tr key={inv.id} className="border-b border-gray-100 hover:bg-gray-50/80">
-                      <td className="px-4 py-3">
-                        <Link href={`${base}/${inv.id}`} className="font-medium text-primary-600 hover:underline">
-                          {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-3 text-gray-800 max-w-[200px] truncate">{inv.title || '—'}</td>
-                      <td className="px-4 py-3 text-gray-700">{inv.client_name}</td>
-                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.issue_date)}</td>
-                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.due_date || undefined)}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
-                        >
-                          {statusLabel(t, inv.status || 'draft')}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
-                        {formatMoney(inv.total, inv.currency)}
-                      </td>
+          <>
+            {/* Desktop / wide tablet: full table. */}
+            <div className="hidden md:block bg-white border border-gray-200 rounded-2xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50/80 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      <th className="px-4 py-3">{t('app.invoicesList.col.number', 'Number')}</th>
+                      <th className="px-4 py-3">{t('app.invoicesList.col.title', 'Title')}</th>
+                      <th className="px-4 py-3">{t('app.invoicesList.col.client', 'Client')}</th>
+                      <th className="px-4 py-3">{t('app.invoicesList.col.issueDate', 'Issue date')}</th>
+                      <th className="px-4 py-3">{t('app.invoicesList.col.due', 'Due')}</th>
+                      <th className="px-4 py-3">{t('app.invoicesList.col.status', 'Status')}</th>
+                      <th className="px-4 py-3 text-right">{t('app.invoicesList.col.total', 'Total')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {invoices.map((inv) => (
+                      <tr key={inv.id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                        <td className="px-4 py-3">
+                          <Link href={`${base}/${inv.id}`} className="font-medium text-primary-600 hover:underline">
+                            {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3 text-gray-800 max-w-[200px] truncate">{inv.title || '—'}</td>
+                        <td className="px-4 py-3 text-gray-700">{inv.client_name}</td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.issue_date)}</td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.due_date || undefined)}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
+                          >
+                            {statusLabel(t, inv.status || 'draft')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
+                          {formatMoney(inv.total, inv.currency)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+
+            {/* Mobile / small tablet: card list. Same data, designed to be
+                fully tappable. Number + total form the header row, status
+                pill aligns right, secondary info wraps below. */}
+            <ul className="md:hidden bg-white border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100">
+              {invoices.map((inv) => (
+                <li key={inv.id} className="tap-press">
+                  <Link
+                    href={`${base}/${inv.id}`}
+                    className="block px-4 py-3 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm text-primary-600">
+                            {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
+                          </span>
+                          <span
+                            className={`inline-flex px-2 py-0.5 rounded-lg text-[10px] font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
+                          >
+                            {statusLabel(t, inv.status || 'draft')}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-700 mt-1 truncate">{inv.title || '—'}</p>
+                        <p className="text-xs text-gray-500 truncate">{inv.client_name}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-semibold text-sm text-gray-900 whitespace-nowrap">
+                          {formatMoney(inv.total, inv.currency)}
+                        </div>
+                        <div className="text-[11px] text-gray-500 mt-1 whitespace-nowrap">
+                          {formatDate(inv.due_date || undefined)}
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </AppLayout>

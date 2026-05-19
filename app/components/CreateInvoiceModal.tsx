@@ -226,8 +226,8 @@ export default function CreateInvoiceModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] min-h-[70vh] overflow-hidden flex">
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end sm:items-center justify-center sm:p-4 animate-backdrop-in">
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-2xl max-w-4xl w-full max-h-[92vh] sm:max-h-[90vh] sm:min-h-[70vh] overflow-hidden flex pb-safe animate-sheet-in-bottom sm:animate-pop">
         {/* Step Indicator */}
         <div className="w-16 bg-gray-50 border-r border-gray-200 flex flex-col items-center py-6">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium mb-2 ${

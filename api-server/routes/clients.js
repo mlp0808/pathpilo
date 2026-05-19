@@ -6,6 +6,34 @@ const {
   computeNextSequenceNumber,
   resolveInvoiceNumberDisplay,
 } = require('../utils/invoiceNumberAllocation');
+const secureNotes = require('../utils/secureNotes');
+const {
+  deactivateSubscriptionsForClient,
+  deleteFutureNonCompletedJobsForClient,
+} = require('../utils/subscriptionStopCleanup');
+
+const SECURE_NOTE_MAX_LENGTH = 10000;
+
+const DELETED_CLIENT_NAME = 'Deleted client';
+
+// Idempotently make sure the clients table has the columns we need for the
+// "anonymize on delete" flow (keep the row + the foreign keys; clear PII).
+// Runs once per process the first time the route fires.
+let clientPrivacyMigrationDone = false;
+async function ensureClientPrivacyColumns() {
+  if (clientPrivacyMigrationDone) return;
+  clientPrivacyMigrationDone = true;
+  try {
+    await pool.query(
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+    );
+  } catch (e) {
+    // Migration is opportunistic. If a permission error happens here we still
+    // want the rest of the app to keep working; the next call will retry.
+    clientPrivacyMigrationDone = false;
+    console.warn('ensureClientPrivacyColumns failed:', e?.message || e);
+  }
+}
 
 const router = express.Router();
 const COUNTRY_TAX_DEFAULTS = {
@@ -76,7 +104,66 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/clients/geocode/suggest?q=… — Mapbox forward geocode (token stays server-side)
+router.get('/geocode/suggest', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) {
+      return res.json({ features: [] });
+    }
+    const mapboxToken =
+      process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!mapboxToken) {
+      return res
+        .status(503)
+        .json({ error: 'Address search is not configured on the server' });
+    }
+    let countryParam = '';
+    try {
+      const cr = await pool.query(
+        'SELECT country_code FROM companies WHERE id = $1',
+        [companyId],
+      );
+      const cc = String(cr.rows[0]?.country_code || 'DK')
+        .trim()
+        .toLowerCase();
+      if (cc.length === 2) {
+        countryParam = `&country=${encodeURIComponent(cc)}`;
+      }
+    } catch (_) {
+      /* optional */
+    }
+    const encoded = encodeURIComponent(q);
+    const url =
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json` +
+      `?access_token=${mapboxToken}` +
+      '&types=address,place,locality,neighborhood,postcode' +
+      '&limit=8&autocomplete=true' +
+      countryParam;
+    const r = await fetch(url);
+    if (!r.ok) {
+      console.warn('Mapbox geocode suggest failed', r.status);
+      return res.json({ features: [] });
+    }
+    const data = await r.json();
+    return res.json({
+      features: Array.isArray(data.features) ? data.features : [],
+    });
+  } catch (e) {
+    console.error('geocode suggest error', e);
+    return res.status(500).json({ error: 'Address search failed' });
+  }
+});
+
 // GET /api/clients - Get all clients for company
+// Anonymized (deleted_at IS NOT NULL) clients are excluded by default. They
+// still exist in the database so older jobs and invoices keep working; pass
+// ?include_deleted=true if an admin tool needs to surface them.
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -87,6 +174,10 @@ router.get('/', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    await ensureClientPrivacyColumns();
+    const includeDeleted =
+      String(req.query.include_deleted || '').toLowerCase() === 'true';
+
     const result = await pool.query(`
       SELECT
         c.*,
@@ -95,6 +186,7 @@ router.get('/', authenticateToken, async (req, res) => {
       FROM clients c
       LEFT JOIN jobs j ON c.id = j.client_id AND j.status != 'cancelled'
       WHERE c.company_id = $1
+      ${includeDeleted ? '' : 'AND c.deleted_at IS NULL'}
       GROUP BY c.id
       ORDER BY c.name ASC, c.last_name ASC
     `, [companyId]);
@@ -173,7 +265,8 @@ router.post('/', authenticateToken, async (req, res) => {
       email,
       phone,
       lat,
-      lng
+      lng,
+      company_number,
     } = req.body;
     const userId = req.user.userId;
 
@@ -191,10 +284,23 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const result = await pool.query(`
       INSERT INTO clients
-      (company_id, name, last_name, client_type, address, zip_code, city, email, phone, lat, lng)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      (company_id, name, last_name, client_type, address, zip_code, city, email, phone, lat, lng, company_number)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [companyId, name, last_name, client_type, address, zip_code, city, email, phone, lat || null, lng || null]);
+    `, [
+      companyId,
+      name,
+      last_name,
+      client_type,
+      address,
+      zip_code,
+      city,
+      email,
+      phone,
+      lat || null,
+      lng || null,
+      company_number || null,
+    ]);
 
     res.status(201).json({
       message: 'Client created successfully',
@@ -270,50 +376,157 @@ router.put('/:clientId', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE /api/clients/:clientId - Delete client
+// DELETE /api/clients/:clientId - Anonymize client ("right to be forgotten").
+//
+// The row is intentionally KEPT, but personal data is stripped and
+// deleted_at is set. Why:
+//   • Jobs (and any future invoice references) still point at this client_id,
+//     so reports and history don't break.
+//   • Invoices that were issued have already snapshotted the client onto the
+//     invoice row (see utils/invoiceSnapshot.js), so the customer-facing
+//     document is unaffected.
+//   • Privacy-wise the personal data we hold for that client is removed.
+//
+// Active subscriptions for this client are deactivated, and materialized
+// jobs from today onward that are not completed and not on an invoice are
+// removed (same rules as stopping a subscription).
+//
+// If the caller wants a hard delete (only sensible when nothing references
+// the row), pass ?hard=true and we attempt a real DELETE; this still fails
+// if jobs exist.
 router.delete('/:clientId', authenticateToken, async (req, res) => {
+  const userId = req.user.userId || req.user?.id || null;
+
   try {
     const { clientId } = req.params;
-    const userId = req.user.userId;
+    const cid = parseInt(String(clientId), 10);
+    if (!Number.isFinite(cid)) {
+      return res.status(400).json({ error: 'Invalid client id' });
+    }
 
-    // Get user's active company from JWT token
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
 
-    // Verify client belongs to user's company
-    const clientCheck = await pool.query(
-      'SELECT id FROM clients WHERE id = $1 AND company_id = $2',
-      [clientId, companyId]
-    );
+    await ensureClientPrivacyColumns();
 
+    const clientCheck = await pool.query(
+      'SELECT id, deleted_at FROM clients WHERE id = $1 AND company_id = $2',
+      [cid, companyId]
+    );
     if (clientCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Client not found or access denied' });
     }
-
-    // Check if client has any jobs
-    const jobCheck = await pool.query(
-      'SELECT COUNT(*) as job_count FROM jobs WHERE client_id = $1',
-      [clientId]
-    );
-
-    if (jobCheck.rows[0].job_count > 0) {
-      return res.status(400).json({
-        error: 'Cannot delete client with existing jobs. Cancel all jobs first.'
+    if (clientCheck.rows[0].deleted_at) {
+      return res.json({
+        message: 'Client was already anonymized',
+        already_deleted: true,
       });
     }
 
-    await pool.query('DELETE FROM clients WHERE id = $1', [clientId]);
+    const wantsHardDelete = String(req.query.hard || '').toLowerCase() === 'true';
+
+    if (wantsHardDelete) {
+      const jobCheck = await pool.query(
+        'SELECT COUNT(*) as job_count FROM jobs WHERE client_id = $1',
+        [cid]
+      );
+      if (Number(jobCheck.rows[0].job_count) > 0) {
+        return res.status(400).json({
+          error:
+            'Cannot hard-delete a client with existing jobs. Anonymize instead, or remove the jobs first.',
+        });
+      }
+      const pg = await pool.connect();
+      try {
+        await pg.query('BEGIN');
+        await secureNotes.deleteAllNotesForEntity({
+          companyId,
+          entityType: 'client',
+          entityId: cid,
+          userId,
+          dbClient: pg,
+        });
+        await pg.query('DELETE FROM clients WHERE id = $1 AND company_id = $2', [cid, companyId]);
+        await pg.query('COMMIT');
+      } catch (e) {
+        try { await pg.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        throw e;
+      } finally {
+        pg.release();
+      }
+      return res.json({ message: 'Client deleted', hard: true });
+    }
+
+    // Anonymize. Keeps the row + foreign keys; wipes personal data and all
+    // encrypted client notes in the same transaction.
+    const pg = await pool.connect();
+    try {
+      await pg.query('BEGIN');
+      await secureNotes.deleteAllNotesForEntity({
+        companyId,
+        entityType: 'client',
+        entityId: cid,
+        userId,
+        dbClient: pg,
+      });
+      try {
+        await deactivateSubscriptionsForClient(pg, companyId, cid);
+      } catch (subErr) {
+        if (
+          subErr.code === '42P01' ||
+          String(subErr.message || '').includes('recurring_jobs') ||
+          String(subErr.message || '').includes('does not exist')
+        ) {
+          console.log('⚠️ [clients] Skipping subscription deactivation (recurring_jobs unavailable)');
+        } else {
+          throw subErr;
+        }
+      }
+      await deleteFutureNonCompletedJobsForClient(pg, companyId, cid);
+      await pg.query(
+        `UPDATE clients SET
+           name = $2,
+           last_name = NULL,
+           address = NULL,
+           zip_code = NULL,
+           city = NULL,
+           country = NULL,
+           email = NULL,
+           phone = NULL,
+           lat = NULL,
+           lng = NULL,
+           company_number = NULL,
+           billing_address = NULL,
+           billing_zip_code = NULL,
+           billing_city = NULL,
+           billing_email = NULL,
+           billing_phone = NULL,
+           ean_number = NULL,
+           deleted_at = NOW(),
+           updated_at = NOW()
+         WHERE id = $1 AND company_id = $3`,
+        [cid, DELETED_CLIENT_NAME, companyId],
+      );
+      await pg.query('COMMIT');
+    } catch (e) {
+      try { await pg.query('ROLLBACK'); } catch (_) { /* ignore */ }
+      throw e;
+    } finally {
+      pg.release();
+    }
 
     res.json({
-      message: 'Client deleted successfully'
+      message: 'Client personal data removed',
+      anonymized: true,
     });
-
   } catch (error) {
-    console.error('Error deleting client:', error);
-    res.status(500).json({ error: 'Failed to delete client: ' + error.message });
+    console.error('Error anonymizing client:', error);
+    res
+      .status(500)
+      .json({ error: 'Failed to remove client: ' + error.message });
   }
 });
 
@@ -826,5 +1039,227 @@ router.get('/:clientId/subscriptions', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch subscriptions: ' + error.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Encrypted "Standard notes" on a client (multiple notes per client).
+//
+// Storage: `secure_notes` rows with entity_type='client', entity_id=clientId.
+// ---------------------------------------------------------------------------
+
+async function loadClientForCompany(clientId, companyId) {
+  const res = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND company_id = $2',
+    [clientId, companyId],
+  );
+  return res.rows[0] || null;
+}
+
+function secureNoteUserId(req) {
+  return req.user?.id || req.user?.userId || null;
+}
+
+function validateSecureNoteBody(note) {
+  if (typeof note !== 'string') {
+    return { error: 'Note must be a string' };
+  }
+  if (note.length > SECURE_NOTE_MAX_LENGTH) {
+    return {
+      error: `Note exceeds maximum length of ${SECURE_NOTE_MAX_LENGTH} characters`,
+    };
+  }
+  return null;
+}
+
+router.get('/:clientId/secure-notes', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res
+        .status(companyAccess.status)
+        .json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const clientId = parseInt(req.params.clientId, 10);
+    if (!Number.isFinite(clientId)) {
+      return res.status(400).json({ error: 'Invalid client id' });
+    }
+
+    const client = await loadClientForCompany(clientId, companyId);
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const notes = await secureNotes.listNotesForEntity({
+      companyId,
+      entityType: 'client',
+      entityId: clientId,
+      userId: secureNoteUserId(req),
+    });
+    return res.json({ notes });
+  } catch (err) {
+    console.error('Error listing secure notes:', err);
+    return res.status(500).json({
+      error: 'Failed to load secure notes',
+      ...(process.env.NODE_ENV === 'development' && {
+        detail: err.message || String(err),
+      }),
+    });
+  }
+});
+
+router.post('/:clientId/secure-notes', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res
+        .status(companyAccess.status)
+        .json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const clientId = parseInt(req.params.clientId, 10);
+    if (!Number.isFinite(clientId)) {
+      return res.status(400).json({ error: 'Invalid client id' });
+    }
+
+    const bodyErr = validateSecureNoteBody(req.body?.note);
+    if (bodyErr) {
+      return res.status(400).json({ error: bodyErr.error });
+    }
+
+    const client = await loadClientForCompany(clientId, companyId);
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    try {
+      const created = await secureNotes.createNote({
+        companyId,
+        entityType: 'client',
+        entityId: clientId,
+        plainText: req.body.note,
+        userId: secureNoteUserId(req),
+      });
+      return res.status(201).json({ note: created });
+    } catch (e) {
+      if (e.code === 'EMPTY_NOTE') {
+        return res.status(400).json({ error: 'Note text is required' });
+      }
+      throw e;
+    }
+  } catch (err) {
+    console.error('Error creating secure note:', err);
+    return res.status(500).json({
+      error: 'Failed to save secure note',
+      ...(process.env.NODE_ENV === 'development' && {
+        detail: err.message || String(err),
+      }),
+    });
+  }
+});
+
+router.put(
+  '/:clientId/secure-notes/:noteId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const companyAccess = getActiveCompanyId(req);
+      if (companyAccess.error) {
+        return res
+          .status(companyAccess.status)
+          .json({ error: companyAccess.error });
+      }
+      const companyId = companyAccess.companyId;
+      const clientId = parseInt(req.params.clientId, 10);
+      const noteId = parseInt(req.params.noteId, 10);
+      if (!Number.isFinite(clientId) || !Number.isFinite(noteId)) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+
+      const bodyErr = validateSecureNoteBody(req.body?.note);
+      if (bodyErr) {
+        return res.status(400).json({ error: bodyErr.error });
+      }
+
+      const client = await loadClientForCompany(clientId, companyId);
+      if (!client) {
+        return res.status(404).json({ error: 'Client not found' });
+      }
+
+      try {
+        const updated = await secureNotes.updateNoteById({
+          companyId,
+          entityType: 'client',
+          entityId: clientId,
+          noteId,
+          plainText: req.body.note,
+          userId: secureNoteUserId(req),
+        });
+        if (!updated) {
+          return res.status(404).json({ error: 'Note not found' });
+        }
+        return res.json({ note: updated });
+      } catch (e) {
+        if (e.code === 'EMPTY_NOTE') {
+          return res.status(400).json({ error: 'Note text is required' });
+        }
+        throw e;
+      }
+    } catch (err) {
+      console.error('Error updating secure note:', err);
+      return res.status(500).json({
+        error: 'Failed to save secure note',
+        ...(process.env.NODE_ENV === 'development' && {
+          detail: err.message || String(err),
+        }),
+      });
+    }
+  },
+);
+
+router.delete(
+  '/:clientId/secure-notes/:noteId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const companyAccess = getActiveCompanyId(req);
+      if (companyAccess.error) {
+        return res
+          .status(companyAccess.status)
+          .json({ error: companyAccess.error });
+      }
+      const companyId = companyAccess.companyId;
+      const clientId = parseInt(req.params.clientId, 10);
+      const noteId = parseInt(req.params.noteId, 10);
+      if (!Number.isFinite(clientId) || !Number.isFinite(noteId)) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+
+      const client = await loadClientForCompany(clientId, companyId);
+      if (!client) {
+        return res.status(404).json({ error: 'Client not found' });
+      }
+
+      const ok = await secureNotes.deleteNoteById({
+        companyId,
+        entityType: 'client',
+        entityId: clientId,
+        noteId,
+        userId: secureNoteUserId(req),
+      });
+      if (!ok) {
+        return res.status(404).json({ error: 'Note not found' });
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('Error deleting secure note:', err);
+      return res.status(500).json({
+        error: 'Failed to delete secure note',
+        ...(process.env.NODE_ENV === 'development' && {
+          detail: err.message || String(err),
+        }),
+      });
+    }
+  },
+);
 
 module.exports = router;

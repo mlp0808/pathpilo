@@ -105,11 +105,12 @@ export default function ClientsPage() {
   return (
     <AppLayout>
       <div>
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-primary-500">{t('app.clientsList.title')}</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
+        {/* Header. On mobile the button collapses to a compact "+ Add" pill
+            so the title and total can use the full line width. */}
+        <div className="flex items-center justify-between mb-5 sm:mb-6 gap-3">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold text-primary-500 truncate">{t('app.clientsList.title')}</h1>
+            <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
               {clients.length === 1
                 ? t('app.clientsList.subtitle').replace('{{count}}', String(clients.length))
                 : t('app.clientsList.subtitlePlural').replace('{{count}}', String(clients.length))}
@@ -117,36 +118,38 @@ export default function ClientsPage() {
           </div>
           <button
             onClick={openAddClient}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+            className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 active:bg-primary-700/90 transition-colors flex-shrink-0"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            {t('app.clientsList.newClient')}
+            <span className="hidden xs:inline">{t('app.clientsList.newClient')}</span>
           </button>
         </div>
 
-        {/* Filters + Search */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-5">
-          {/* Type filters */}
-          <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
-            {(['all', 'person', 'company'] as const).map(type => (
-              <button
-                key={type}
-                onClick={() => setFilterType(type)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                  filterType === type
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
-                }`}
-              >
-                {type === 'all' ? t('app.clientsList.filterAll').replace('{{count}}', String(clients.length)) : type === 'person' ? t('app.clientsList.filterPeople').replace('{{count}}', String(personCount)) : t('app.clientsList.filterCompanies').replace('{{count}}', String(companyCount))}
-              </button>
-            ))}
+        {/* Filters + Search. On phones the filter chips become a horizontally
+            scrollable rail so longer translations (e.g. "Companies (8)") never
+            wrap or overflow. Search drops below and uses the full width. */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-4 sm:mb-5">
+          <div className="h-rail no-scrollbar -mx-4 sm:mx-0 px-4 sm:px-0 sm:flex-shrink-0">
+            <div className="inline-flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
+              {(['all', 'person', 'company'] as const).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setFilterType(type)}
+                  className={`whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                    filterType === type
+                      ? 'bg-primary-500 text-white'
+                      : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                  }`}
+                >
+                  {type === 'all' ? t('app.clientsList.filterAll').replace('{{count}}', String(clients.length)) : type === 'person' ? t('app.clientsList.filterPeople').replace('{{count}}', String(personCount)) : t('app.clientsList.filterCompanies').replace('{{count}}', String(companyCount))}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Search */}
-          <div className="relative flex-1 max-w-sm">
+          <div className="relative flex-1 sm:max-w-sm">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
@@ -184,7 +187,7 @@ export default function ClientsPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-400 border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-2xl p-12 text-center">
+          <div className="bg-white border border-gray-200 rounded-2xl p-8 sm:p-12 text-center">
             <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -215,7 +218,7 @@ export default function ClientsPage() {
                 <div
                   key={client.id}
                   onClick={() => goToClient(client.id)}
-                  className={`flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${
+                  className={`flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3 sm:py-4 cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition-colors ${
                     idx > 0 ? 'border-t border-gray-100' : ''
                   }`}
                 >

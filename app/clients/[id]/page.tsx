@@ -33,6 +33,18 @@ interface Client {
   ean_number: string | null
   created_at: string
   updated_at: string
+  // Set by the API when a client has been anonymized ("right to be
+  // forgotten"). The row is kept so jobs/invoices stay consistent; the UI
+  // just relabels the client as "Deleted client".
+  deleted_at?: string | null
+}
+
+interface ClientSecureNote {
+  id: number
+  note: string
+  updatedAt: string | null
+  updatedBy: number | null
+  createdAt?: string | null
 }
 
 type TabId = 'jobs' | 'subscriptions' | 'invoices' | 'settings'
@@ -164,9 +176,24 @@ export default function ClientDetailPage() {
   const [isDeletingClient, setIsDeletingClient] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const [showClientMenu, setShowClientMenu] = useState(false)
+  /** Failsafe confirmation before anonymizing client + wiping notes */
+  const [removeClientDataModalOpen, setRemoveClientDataModalOpen] = useState(false)
+
+  // Encrypted standard notes — multiple per client; loaded with the page.
+  const [secureNotes, setSecureNotes] = useState<ClientSecureNote[]>([])
+  const [secureNoteLoading, setSecureNoteLoading] = useState(true)
+  /** null = browsing list; 'new' = composing; number = editing that id */
+  const [secureNoteEditingId, setSecureNoteEditingId] = useState<number | 'new' | null>(null)
+  const [secureNoteDraft, setSecureNoteDraft] = useState('')
+  const [secureNoteSaving, setSecureNoteSaving] = useState(false)
+  const [secureNoteError, setSecureNoteError] = useState<string | null>(null)
 
   // ── fetch client ───────────────────────────────────────────────────────────
-  useEffect(() => { if (clientId) fetchClient() }, [clientId])
+  useEffect(() => {
+    if (!clientId) return
+    fetchClient()
+    fetchSecureNotes()
+  }, [clientId])
   useEffect(() => {
     const validTabs: TabId[] = ['jobs', 'subscriptions', 'invoices', 'settings']
     if (tabFromUrl && validTabs.includes(tabFromUrl)) setActiveTab(tabFromUrl)
@@ -182,6 +209,92 @@ export default function ClientDetailPage() {
       else setError(data.error || t('app.clientDetail.errLoad'))
     } catch { setError(t('app.clientDetail.networkError')) }
     finally { setLoading(false) }
+  }
+
+  const fetchSecureNotes = async () => {
+    if (!clientId) return
+    setSecureNoteLoading(true)
+    setSecureNoteError(null)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/clients/${clientId}/secure-notes`), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && Array.isArray(data.notes)) {
+        setSecureNotes(data.notes as ClientSecureNote[])
+      } else {
+        setSecureNotes([])
+        setSecureNoteError(data.error || 'Failed to load secure notes')
+      }
+    } catch {
+      setSecureNotes([])
+      setSecureNoteError('Network error while loading secure notes')
+    } finally {
+      setSecureNoteLoading(false)
+    }
+  }
+
+  const saveSecureNote = async () => {
+    if (!clientId || secureNoteSaving || secureNoteEditingId === null) return
+    const trimmed = secureNoteDraft.trim()
+    if (!trimmed) {
+      setSecureNoteError('Note cannot be empty')
+      return
+    }
+    setSecureNoteSaving(true)
+    setSecureNoteError(null)
+    try {
+      const token = localStorage.getItem('token')
+      const isNew = secureNoteEditingId === 'new'
+      const url = isNew
+        ? apiUrl(`/clients/${clientId}/secure-notes`)
+        : apiUrl(`/clients/${clientId}/secure-notes/${secureNoteEditingId}`)
+      const res = await fetch(url, {
+        method: isNew ? 'POST' : 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ note: secureNoteDraft }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setSecureNoteEditingId(null)
+        setSecureNoteDraft('')
+        await fetchSecureNotes()
+      } else {
+        setSecureNoteError(data.error || 'Failed to save secure note')
+      }
+    } catch {
+      setSecureNoteError('Network error while saving secure note')
+    } finally {
+      setSecureNoteSaving(false)
+    }
+  }
+
+  const deleteSecureNote = async (noteId: number) => {
+    if (!clientId || !window.confirm('Delete this note?')) return
+    setSecureNoteError(null)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/clients/${clientId}/secure-notes/${noteId}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        if (secureNoteEditingId === noteId) {
+          setSecureNoteEditingId(null)
+          setSecureNoteDraft('')
+        }
+        await fetchSecureNotes()
+      } else {
+        setSecureNoteError(data.error || 'Failed to delete note')
+      }
+    } catch {
+      setSecureNoteError('Network error while deleting note')
+    }
   }
 
   // ── fetch per-tab data ─────────────────────────────────────────────────────
@@ -253,17 +366,33 @@ export default function ClientDetailPage() {
   }
 
   // ── client actions ─────────────────────────────────────────────────────────
-  const handleDeleteClient = async () => {
-    if (!client) return
-    if (!confirm(t('app.clientDetail.confirmDelete').replace('{{name}}', `${client.name}${client.last_name ? ' ' + client.last_name : ''}`))) return
+  const clientDisplayName = client
+    ? `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
+    : ''
+
+  const openRemoveClientDataModal = () => {
+    setShowClientMenu(false)
+    setRemoveClientDataModalOpen(true)
+  }
+
+  const executeRemoveClientData = async () => {
+    if (!clientId) return
     try {
       setIsDeletingClient(true)
       const token = localStorage.getItem('token')
       const res = await fetch(apiUrl(`/clients/${clientId}`), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
-      if (res.ok) goBackToClients()
-      else { const d = await res.json(); alert(d.error || t('app.clientDetail.errDelete')) }
-    } catch { alert(t('app.clientDetail.errDelete')) }
-    finally { setIsDeletingClient(false) }
+      if (res.ok) {
+        setRemoveClientDataModalOpen(false)
+        goBackToClients()
+      } else {
+        const d = await res.json()
+        alert(d.error || t('app.clientDetail.errDelete'))
+      }
+    } catch {
+      alert(t('app.clientDetail.errDelete'))
+    } finally {
+      setIsDeletingClient(false)
+    }
   }
 
   const handlePauseSubscription = async (subscription: any, paused: boolean) => {
@@ -389,10 +518,20 @@ export default function ClientDetailPage() {
     )
   }
 
-  const fullName = `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
-  const initials = getInitials(client.name, client.last_name)
-  const location = [client.address, client.zip_code, client.city].filter(Boolean).join(', ')
-  const billingLocation = [client.billing_address, client.billing_zip_code, client.billing_city].filter(Boolean).join(', ')
+  // Anonymized ("Right to be forgotten") clients keep the row + jobs/invoices,
+  // but PII is wiped server-side and deleted_at is set. We just label the row
+  // so reports/history stay readable.
+  const isAnonymized = !!client.deleted_at
+  const fullName = isAnonymized
+    ? t('app.clientDetail.anonymizedLabel') || 'Deleted client'
+    : `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
+  const initials = isAnonymized ? '—' : getInitials(client.name, client.last_name)
+  const location = isAnonymized
+    ? ''
+    : [client.address, client.zip_code, client.city].filter(Boolean).join(', ')
+  const billingLocation = isAnonymized
+    ? ''
+    : [client.billing_address, client.billing_zip_code, client.billing_city].filter(Boolean).join(', ')
 
   const fmtDate = (d: string) => {
     if (!d) return '—'
@@ -506,39 +645,47 @@ export default function ClientDetailPage() {
 
             {/* Actions */}
             <div className="mt-4 flex flex-col gap-2">
-              <button
-                onClick={() => setIsEditClientOpen(true)}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium text-primary-500 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                {t('app.clientDetail.editClient')}
-              </button>
+              {isAnonymized ? (
+                <div className="w-full text-center px-3 py-2.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-xl">
+                  {t('app.clientDetail.anonymizedHint') || 'Personal data has been removed. History is preserved.'}
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setIsEditClientOpen(true)}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium text-primary-500 bg-gray-50 border border-gray-200 rounded-xl hover:bg-gray-100 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    {t('app.clientDetail.editClient')}
+                  </button>
 
-              {/* 3-dot / delete */}
-              <div className="relative" ref={menuRef}>
-                <button
-                  onClick={() => setShowClientMenu(v => !v)}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01" />
-                  </svg>
-                  {t('app.clientDetail.moreOptions')}
-                </button>
-                {showClientMenu && (
-                  <div className="absolute bottom-10 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+                  {/* 3-dot / remove personal data */}
+                  <div className="relative" ref={menuRef}>
                     <button
-                      onClick={() => { setShowClientMenu(false); handleDeleteClient() }}
-                      disabled={isDeletingClient}
-                      className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                      onClick={() => setShowClientMenu(v => !v)}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
                     >
-                      {isDeletingClient ? t('app.clientDetail.deleting') : t('app.clientDetail.deleteClient')}
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01" />
+                      </svg>
+                      {t('app.clientDetail.moreOptions')}
                     </button>
+                    {showClientMenu && (
+                      <div className="absolute bottom-10 left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+                        <button
+                          onClick={openRemoveClientDataModal}
+                          disabled={isDeletingClient}
+                          className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          {isDeletingClient ? t('app.clientDetail.deleting') : t('app.clientDetail.deleteClient')}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1044,7 +1191,7 @@ export default function ClientDetailPage() {
           )
         })()}
 
-        {/* ── SETTINGS TAB ─────────────────────────────────────────────────── */}
+        {/* ── PROFILE TAB (client settings) ────────────────────────────────── */}
         {activeTab === 'settings' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* Contact info */}
@@ -1080,6 +1227,122 @@ export default function ClientDetailPage() {
               )}
             </div>
 
+            {/* Standard notes (encrypted). Multiple notes per client; add / edit / delete. */}
+            <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl p-5">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-primary-50 text-primary-500 flex items-center justify-center">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 11c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm0 0v3m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zM8 11V7a4 4 0 118 0v4" />
+                    </svg>
+                  </div>
+                  <div className="leading-tight">
+                    <div className="text-sm font-semibold text-primary-500">Standard notes</div>
+                    <div className="text-[11px] text-gray-400">
+                      Encrypted. Only members of this company can read them.
+                    </div>
+                  </div>
+                </div>
+                {!secureNoteLoading && secureNoteEditingId === null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSecureNoteDraft('')
+                      setSecureNoteEditingId('new')
+                      setSecureNoteError(null)
+                    }}
+                    className="text-xs font-medium text-primary-500 px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    Add note
+                  </button>
+                )}
+              </div>
+
+              {secureNoteLoading ? (
+                <div className="text-xs text-gray-400 py-2">Loading…</div>
+              ) : secureNoteEditingId !== null ? (
+                <div className="mt-2">
+                  <textarea
+                    value={secureNoteDraft}
+                    onChange={(e) => setSecureNoteDraft(e.target.value)}
+                    rows={5}
+                    placeholder="E.g. door code, alarm instructions, windows not to clean, call before arriving..."
+                    className="w-full text-sm border border-gray-200 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    autoFocus
+                  />
+                  {secureNoteError && (
+                    <div className="text-[12px] text-red-600 mt-2">{secureNoteError}</div>
+                  )}
+                  <div className="flex items-center justify-end gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSecureNoteEditingId(null)
+                        setSecureNoteDraft('')
+                        setSecureNoteError(null)
+                      }}
+                      disabled={secureNoteSaving}
+                      className="text-xs font-medium text-gray-500 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveSecureNote}
+                      disabled={secureNoteSaving}
+                      className="text-xs font-semibold text-white bg-primary-500 px-3 py-1.5 rounded-lg hover:bg-primary-600 disabled:opacity-60"
+                    >
+                      {secureNoteSaving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              ) : secureNotes.length > 0 ? (
+                <ul className="mt-1 space-y-3">
+                  {secureNotes.map((n) => (
+                    <li
+                      key={n.id}
+                      className="border border-gray-100 rounded-lg p-3 bg-gray-50/50"
+                    >
+                      <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                        {n.note}
+                      </div>
+                      {n.updatedAt ? (
+                        <div className="text-[10px] text-gray-400 mt-2">
+                          Updated {new Date(n.updatedAt).toLocaleString()}
+                        </div>
+                      ) : null}
+                      <div className="flex justify-end gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSecureNoteDraft(n.note)
+                            setSecureNoteEditingId(n.id)
+                            setSecureNoteError(null)
+                          }}
+                          className="text-xs font-medium text-primary-500 px-2 py-1 rounded-md hover:bg-white border border-transparent hover:border-gray-200"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSecureNote(n.id)}
+                          className="text-xs font-medium text-red-600 px-2 py-1 rounded-md hover:bg-white border border-transparent hover:border-red-100"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-xs text-gray-400 mt-1">No standard notes yet.</div>
+              )}
+
+              {secureNoteEditingId === null && secureNoteError ? (
+                <div className="text-[12px] text-red-600 mt-2">{secureNoteError}</div>
+              ) : null}
+            </div>
+
             {/* Future: Automations */}
             <div className="bg-white border border-gray-200 rounded-2xl p-5 opacity-50 cursor-not-allowed select-none">
               <div className="flex items-center gap-2 mb-2">
@@ -1102,15 +1365,15 @@ export default function ClientDetailPage() {
             <div className="lg:col-span-2 bg-white border border-red-100 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-red-600 mb-1">Danger zone</h3>
               <p className="text-xs text-gray-400 mb-4">
-                Deleting a client will anonymize their personal data and remove all jobs and subscriptions.
-                Financial records (invoices) are preserved for legal compliance.
+                {t('app.clientDetail.dangerZoneBody')}
               </p>
               <button
-                onClick={handleDeleteClient}
+                type="button"
+                onClick={openRemoveClientDataModal}
                 disabled={isDeletingClient}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-xl hover:bg-red-50 transition-colors disabled:opacity-50"
               >
-                {isDeletingClient ? 'Deleting…' : 'Delete client'}
+                {isDeletingClient ? t('app.clientDetail.deleting') : t('app.clientDetail.deleteClient')}
               </button>
             </div>
           </div>
@@ -1165,6 +1428,54 @@ export default function ClientDetailPage() {
         />
       )}
 
+
+      {removeClientDataModalOpen && client && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => !isDeletingClient && setRemoveClientDataModalOpen(false)}
+            aria-hidden
+          />
+          <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden border border-red-100">
+            <div className="px-6 py-4 border-b border-red-50 bg-red-50/60">
+              <h3 className="text-base font-semibold text-red-700">
+                {t('app.clientDetail.removeDataModalTitle')}
+              </h3>
+              <p className="text-sm text-gray-700 mt-2 whitespace-pre-line">
+                {t('app.clientDetail.removeDataModalSubtitle').replace('{{name}}', clientDisplayName)}
+              </p>
+            </div>
+            <div className="px-6 py-4 space-y-3 text-sm text-gray-700">
+              <p className="font-medium text-gray-900">{t('app.clientDetail.removeDataModalWillRemove')}</p>
+              <ul className="list-disc pl-5 space-y-1.5 text-gray-700">
+                <li>{t('app.clientDetail.removeDataModalBulletPii')}</li>
+                <li>{t('app.clientDetail.removeDataModalBulletNotes')}</li>
+              </ul>
+              <p className="text-xs text-gray-500 border-t border-gray-100 pt-3 whitespace-pre-line">
+                {t('app.clientDetail.removeDataModalKept')}
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setRemoveClientDataModalOpen(false)}
+                disabled={isDeletingClient}
+                className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 disabled:opacity-50"
+              >
+                {t('app.clientDetail.removeDataModalCancelBtn')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void executeRemoveClientData()}
+                disabled={isDeletingClient}
+                className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-white bg-red-600 rounded-xl hover:bg-red-700 disabled:opacity-50"
+              >
+                {isDeletingClient ? t('app.clientDetail.deleting') : t('app.clientDetail.removeDataModalConfirmBtn')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {deleteInvoiceId && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">

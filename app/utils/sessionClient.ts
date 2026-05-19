@@ -31,6 +31,17 @@ export function hasCompanyContext(user: Record<string, unknown> | null): boolean
   return hasCompanies || hasActiveCompany || hasCompanyId
 }
 
+export function hasPendingInvites(user: Record<string, unknown> | null): boolean {
+  if (!user) return false
+  const pending = user.pendingInvites
+  return Array.isArray(pending) && pending.length > 0
+}
+
+/** Logged-in user has a company to work in and/or open invitations to respond to. */
+export function hasAppWorkspace(user: Record<string, unknown> | null): boolean {
+  return hasCompanyContext(user) || hasPendingInvites(user)
+}
+
 function activeCompanyRole(user: Record<string, unknown>): string | undefined {
   const ac = user.activeCompany as { role?: string } | undefined
   if (ac?.role) return String(ac.role)
@@ -61,23 +72,81 @@ export function isSetupWizardMarkedComplete(): boolean {
 export function shouldRedirectAwayFromSetupWizard(user: Record<string, unknown> | null): boolean {
   if (!user) return false
   if (isSetupWizardMarkedComplete()) return true
+  if (hasPendingInvites(user)) return true
   if (!hasCompanyContext(user)) return false
   const r = activeCompanyRole(user)
   if (r && r !== 'owner') return true
   return false
 }
 
+/**
+ * If the user belongs to exactly one company, ensure activeCompany and top-level
+ * company fields match it so routing and layouts never send them to the picker.
+ */
+export function applySingleCompanyAutoSelect<T extends Record<string, unknown>>(user: T): T {
+  const pending = user.pendingInvites as unknown[] | undefined
+  if (Array.isArray(pending) && pending.length > 0) return user
+
+  const list = user.companies as Array<{
+    id?: number
+    name?: string
+    slug?: string
+    role?: string
+    countryCode?: string
+    isOwner?: boolean
+    suspendedAt?: string | null
+  }> | undefined
+  if (!Array.isArray(list) || list.length !== 1) return user
+  const only = list[0]
+  if (!only?.slug) return user
+
+  const role =
+    typeof user.role === 'string' && user.role
+      ? user.role
+      : typeof only.role === 'string'
+        ? only.role
+        : 'employee'
+
+  return {
+    ...user,
+    activeCompany: only,
+    companyId: only.id ?? user.companyId,
+    companyName: only.name ?? user.companyName,
+    role,
+  } as T
+}
+
 /** Primary dashboard URL for the stored session (company slug in path). */
 export function getDashboardHref(user: Record<string, unknown>): string {
+  const pending = user.pendingInvites as unknown[] | undefined
+  if (Array.isArray(pending) && pending.length > 0) {
+    return '/select-company'
+  }
+
+  const list = user.companies as Array<{ slug?: string }> | undefined
+  if (Array.isArray(list) && list.length > 1) {
+    return '/select-company'
+  }
+  // Single-company accounts: never send them to the picker if we have a slug.
+  if (Array.isArray(list) && list.length === 1 && list[0]?.slug) {
+    return `/${list[0].slug}/dashboard`
+  }
   const active = user.activeCompany as { slug?: string } | undefined
   if (active?.slug) return `/${active.slug}/dashboard`
-  const list = user.companies as Array<{ slug?: string }> | undefined
   if (Array.isArray(list)) {
     for (const c of list) {
       if (c?.slug) return `/${c.slug}/dashboard`
     }
   }
   return '/select-company'
+}
+
+/** Company slug derived the same way as dashboard routing (single-company aware). */
+export function getActiveCompanySlugFromSession(user: Record<string, unknown>): string | null {
+  const href = getDashboardHref(user)
+  if (href === '/select-company') return null
+  const parts = href.split('/').filter(Boolean)
+  return parts[0] || null
 }
 
 export function getUserDisplayName(user: Record<string, unknown>): string {

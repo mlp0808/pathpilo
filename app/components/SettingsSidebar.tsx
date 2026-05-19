@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -13,6 +14,7 @@ import {
   PuzzlePieceIcon,
   DocumentTextIcon,
   ClockIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 import type { ComponentType, SVGProps } from 'react'
 import { useAppI18n } from './I18nProvider'
@@ -25,6 +27,9 @@ interface SettingsSidebarProps {
     email: string
   }
   onBack: () => void
+  /** Renders the sidebar as a mobile drawer when these props are passed. */
+  isMobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 type NavItem = {
@@ -41,9 +46,36 @@ type NavSection = {
   items: NavItem[]
 }
 
-export default function SettingsSidebar({ user: _user, onBack }: SettingsSidebarProps) {
+export default function SettingsSidebar({
+  user: _user,
+  onBack,
+  isMobileOpen,
+  onMobileClose,
+}: SettingsSidebarProps) {
   const pathname = usePathname()
   const { t } = useAppI18n()
+  const isDrawer = onMobileClose !== undefined
+
+  useEffect(() => {
+    if (!isDrawer || !isMobileOpen) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => {
+      document.body.style.overflow = prev
+      window.removeEventListener('keydown', handleKey)
+    }
+  }, [isDrawer, isMobileOpen, onMobileClose])
+
+  // Auto-close on route change so tapping a nav item in the drawer collapses
+  // it cleanly without us wiring onClick on every Link.
+  useEffect(() => {
+    if (isDrawer) onMobileClose?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname])
 
   // Extract company slug from URL: /{slug}/settings/... → slug
   // Falls back to empty string for legacy /settings/... routes
@@ -115,8 +147,8 @@ export default function SettingsSidebar({ user: _user, onBack }: SettingsSidebar
     return candidates.some((href) => pathname === href || pathname.startsWith(href + '/'))
   }
 
-  return (
-    <div className="fixed inset-y-0 left-0 w-[200px] bg-sidebar flex flex-col overflow-hidden">
+  const body = (
+    <>
       {/* Top Bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
         <button
@@ -126,9 +158,21 @@ export default function SettingsSidebar({ user: _user, onBack }: SettingsSidebar
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           <span className="text-xs font-medium">{t('settings.sidebar.logout', 'Logout')}</span>
         </button>
-        <span className="text-gray-400 text-xs font-medium">
-          {t('settings.sidebar.title', 'Settings')}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-400 text-xs font-medium">
+            {t('settings.sidebar.title', 'Settings')}
+          </span>
+          {isDrawer ? (
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={onMobileClose}
+              className="text-white/70 hover:text-white p-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+            >
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {/* Back */}
@@ -186,9 +230,32 @@ export default function SettingsSidebar({ user: _user, onBack }: SettingsSidebar
       </nav>
 
       {/* Bottom Spacing */}
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 pb-safe-plus">
         <div className="text-xs text-gray-500 text-center">Vevago v1.0</div>
       </div>
+    </>
+  )
+
+  if (isDrawer) {
+    if (!isMobileOpen) return null
+    return (
+      <div className="lg:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={onMobileClose}
+          className="absolute inset-0 bg-black/50 backdrop-blur-[1px] animate-backdrop-in cursor-default"
+        />
+        <div className="relative h-full w-[82vw] max-w-[300px] bg-sidebar flex flex-col overflow-hidden shadow-2xl animate-drawer-in-left">
+          {body}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="hidden lg:flex fixed inset-y-0 left-0 w-[200px] bg-sidebar flex-col overflow-hidden z-30">
+      {body}
     </div>
   )
 }

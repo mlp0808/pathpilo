@@ -1,6 +1,23 @@
 const express = require('express');
 const { pool } = require('../utils/database');
 
+// Idempotently make sure the services table has the columns we need for
+// the "archive on delete" flow (keep the row + the foreign keys; hide it
+// from pickers). Runs once per process the first time the route fires.
+let serviceLifecycleMigrationDone = false;
+async function ensureServiceLifecycleColumns() {
+  if (serviceLifecycleMigrationDone) return;
+  serviceLifecycleMigrationDone = true;
+  try {
+    await pool.query(
+      `ALTER TABLE services ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`,
+    );
+  } catch (e) {
+    serviceLifecycleMigrationDone = false;
+    console.warn('ensureServiceLifecycleColumns failed:', e?.message || e);
+  }
+}
+
 const router = express.Router();
 
 // Authentication middleware
@@ -35,17 +52,25 @@ const getActiveCompanyId = (req) => {
   return { companyId: activeCompanyId };
 };
 
-// GET /api/services - Get all services for company
+// GET /api/services - Get all services for the company.
+//
+// Archived services (archived_at IS NOT NULL) are excluded by default so
+// they disappear from job/subscription pickers but still resolve when an
+// older job_services row joins back. Pass ?include_archived=true to also
+// list archived ones (used by the admin "Archived services" view).
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.userId || req.user?.id;
 
-    // Get user's active company from JWT token
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
+
+    await ensureServiceLifecycleColumns();
+    const includeArchived =
+      String(req.query.include_archived || '').toLowerCase() === 'true';
 
     const result = await pool.query(`
       SELECT
@@ -55,6 +80,7 @@ router.get('/', authenticateToken, async (req, res) => {
       LEFT JOIN job_services js ON s.id = js.service_id
       LEFT JOIN jobs j ON js.job_id = j.id
       WHERE s.company_id = $1
+      ${includeArchived ? '' : 'AND s.archived_at IS NULL'}
       GROUP BY s.id
       ORDER BY s.title ASC
     `, [companyId]);
@@ -188,50 +214,111 @@ router.put('/:serviceId', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE /api/services/:serviceId - Delete service
+// DELETE /api/services/:serviceId - Archive a service.
+//
+// We KEEP the row so old job_services rows that reference this service still
+// resolve their title/price. The service just disappears from "active"
+// pickers because GET /services filters out archived_at IS NOT NULL. Pass
+// ?hard=true for a real DELETE; that still fails if anything references it.
 router.delete('/:serviceId', authenticateToken, async (req, res) => {
   try {
     const { serviceId } = req.params;
-    const userId = req.user?.userId || req.user?.id;
 
-    // Get user's active company from JWT token
     const companyAccess = getActiveCompanyId(req);
     if (companyAccess.error) {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
 
-    // Verify service belongs to user's company
+    await ensureServiceLifecycleColumns();
+
     const serviceCheck = await pool.query(
-      'SELECT id FROM services WHERE id = $1 AND company_id = $2',
-      [serviceId, companyId]
+      'SELECT id, archived_at FROM services WHERE id = $1 AND company_id = $2',
+      [serviceId, companyId],
+    );
+    if (serviceCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found or access denied' });
+    }
+    if (serviceCheck.rows[0].archived_at) {
+      return res.json({
+        message: 'Service is already archived',
+        already_archived: true,
+      });
+    }
+
+    const wantsHardDelete = String(req.query.hard || '').toLowerCase() === 'true';
+
+    if (wantsHardDelete) {
+      const usageCheck = await pool.query(
+        'SELECT COUNT(*) as usage_count FROM job_services WHERE service_id = $1',
+        [serviceId],
+      );
+      if (Number(usageCheck.rows[0].usage_count) > 0) {
+        return res.status(400).json({
+          error:
+            'Cannot hard-delete a service that is used in existing jobs. Archive it instead.',
+        });
+      }
+      await pool.query('DELETE FROM services WHERE id = $1', [serviceId]);
+      return res.json({ message: 'Service deleted', hard: true });
+    }
+
+    await pool.query(
+      `UPDATE services
+         SET archived_at = NOW(),
+             updated_at  = NOW()
+       WHERE id = $1`,
+      [serviceId],
     );
 
+    return res.json({
+      message: 'Service archived',
+      archived: true,
+    });
+
+  } catch (error) {
+    console.error('Error archiving service:', error);
+    res.status(500).json({ error: 'Failed to archive service: ' + error.message });
+  }
+});
+
+// POST /api/services/:serviceId/restore - Restore an archived service.
+router.post('/:serviceId/restore', authenticateToken, async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    await ensureServiceLifecycleColumns();
+
+    const serviceCheck = await pool.query(
+      'SELECT id FROM services WHERE id = $1 AND company_id = $2',
+      [serviceId, companyId],
+    );
     if (serviceCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Service not found or access denied' });
     }
 
-    // Check if service is used in any jobs
-    const usageCheck = await pool.query(
-      'SELECT COUNT(*) as usage_count FROM job_services WHERE service_id = $1',
-      [serviceId]
+    const result = await pool.query(
+      `UPDATE services
+         SET archived_at = NULL,
+             updated_at  = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [serviceId],
     );
 
-    if (usageCheck.rows[0].usage_count > 0) {
-      return res.status(400).json({
-        error: 'Cannot delete service that is used in existing jobs'
-      });
-    }
-
-    await pool.query('DELETE FROM services WHERE id = $1', [serviceId]);
-
     res.json({
-      message: 'Service deleted successfully'
+      message: 'Service restored',
+      service: result.rows[0],
     });
-
   } catch (error) {
-    console.error('Error deleting service:', error);
-    res.status(500).json({ error: 'Failed to delete service: ' + error.message });
+    console.error('Error restoring service:', error);
+    res.status(500).json({ error: 'Failed to restore service: ' + error.message });
   }
 });
 

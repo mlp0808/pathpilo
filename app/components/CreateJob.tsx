@@ -278,6 +278,64 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
   )
 }
 
+type ClientStandardNoteRow = { id: number; note: string }
+
+function ClientStandardNotesPicker({
+  clientId,
+  loading,
+  error,
+  notes,
+  onUse,
+  t,
+}: {
+  clientId: number | null | undefined
+  loading: boolean
+  error: string | null
+  notes: ClientStandardNoteRow[]
+  onUse: (text: string) => void
+  t: (key: string, fallback?: string) => string
+}) {
+  if (clientId == null || clientId < 1) return null
+  return (
+    <div className="pt-3 mt-3 border-t border-gray-100">
+      <div className="text-xs font-semibold text-primary-700 mb-2">
+        {t('app.createJob.clientStandardNotesHeading', 'From client standard notes')}
+      </div>
+      <p className="text-[11px] text-gray-500 mb-2">
+        {t(
+          'app.createJob.clientStandardNotesHint',
+          'Encrypted notes from the client profile. Tap one to add it to this job note.',
+        )}
+      </p>
+      {loading ? (
+        <div className="text-xs text-gray-400 py-2">{t('app.createJob.clientStandardNotesLoading', 'Loading…')}</div>
+      ) : error ? (
+        <div className="text-xs text-red-600 py-1">{error}</div>
+      ) : notes.length === 0 ? (
+        <div className="text-xs text-gray-400 py-1">
+          {t('app.createJob.noClientStandardNotes', 'No standard notes saved for this client yet.')}
+        </div>
+      ) : (
+        <div className="max-h-44 overflow-y-auto space-y-2 pr-0.5">
+          {notes.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => onUse(row.note)}
+              className="w-full text-left px-3 py-2.5 rounded-xl border border-gray-200 bg-white hover:border-accent-300 hover:bg-accent-50/40 text-sm text-gray-800 transition-colors shadow-sm"
+            >
+              <span className="line-clamp-3 whitespace-pre-wrap block">{row.note}</span>
+              <span className="mt-1.5 block text-xs font-semibold text-accent-600">
+                {t('app.createJob.useClientStandardNote', 'Add to job note')}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface Service {
   id: number
   title: string
@@ -384,6 +442,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [jobTimeTo, setJobTimeTo] = useState('')
   const [jobNote, setJobNote] = useState('')
   const [showNoteInput, setShowNoteInput] = useState(false)
+  const [clientStandardNotes, setClientStandardNotes] = useState<ClientStandardNoteRow[]>([])
+  const [clientStandardNotesLoading, setClientStandardNotesLoading] = useState(false)
+  const [clientStandardNotesError, setClientStandardNotesError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [createdJobId, setCreatedJobId] = useState<number | null>(null)
 
@@ -501,6 +562,51 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setSelectedPastJob(null)
     }
   }, [selectedClient, jobType])
+
+  useEffect(() => {
+    if (!showNoteInput || !selectedClient?.id || selectedClient.id < 1) {
+      setClientStandardNotes([])
+      setClientStandardNotesLoading(false)
+      setClientStandardNotesError(null)
+      return
+    }
+    let cancelled = false
+    setClientStandardNotesLoading(true)
+    setClientStandardNotesError(null)
+    const token = localStorage.getItem('token')
+    fetch(apiUrl(`/clients/${selectedClient.id}/secure-notes`), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (res.ok && Array.isArray(data.notes)) {
+          setClientStandardNotes(
+            data.notes.map((n: { id: number; note: string }) => ({
+              id: n.id,
+              note: typeof n.note === 'string' ? n.note : '',
+            })),
+          )
+        } else {
+          setClientStandardNotes([])
+          setClientStandardNotesError(
+            typeof data.error === 'string' ? data.error : 'Could not load client notes',
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClientStandardNotes([])
+          setClientStandardNotesError('Network error')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setClientStandardNotesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showNoteInput, selectedClient?.id])
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -639,6 +745,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     setSelectedServices(selectedServices.map(s => 
       s.id === serviceId ? { ...s, [field]: value } : s
     ))
+  }
+
+  const applyClientStandardNote = (text: string) => {
+    setJobNote((prev) => {
+      const p = prev.trim()
+      if (!p) return text
+      return `${p}\n\n${text}`
+    })
   }
   
   const handleSubmitJob = async () => {
@@ -822,8 +936,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   if (mode === 'job') {
     return (
       <>
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn" onClick={onClose}>
-          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden animate-slideDown" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 sm:p-4 animate-fadeIn" onClick={onClose}>
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[98vh] sm:min-h-[660px] flex flex-col overflow-hidden animate-sheet-in-bottom sm:animate-slideDown pb-safe" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
               <div className="space-y-0.5">
                 <h2 className="text-2xl font-bold text-primary-800 tracking-tight">{t('app.jobs.create.title')}</h2>
@@ -1071,7 +1185,20 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         {/* Note modal — also via portal for the same reason */}
         {typeof document !== 'undefined' && createPortal(
           <ConfirmModal isOpen={showNoteInput} onClose={() => setShowNoteInput(false)} onConfirm={() => setShowNoteInput(false)} title={t('app.createJob.addNote', 'Add Note')} description={t('app.createJob.addNoteDesc', 'Add a note to this job')} confirmLabel={t('app.createJob.saveNote', 'Save Note')} enableNotification={false}>
-            <div className="space-y-4"><div><label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.note', 'Note')}</label><textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder={t('app.createJob.notePlaceholder', 'Enter a note for this job...')} rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" /></div></div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.note', 'Note')}</label>
+                <textarea value={jobNote} onChange={e => setJobNote(e.target.value)} placeholder={t('app.createJob.notePlaceholder', 'Enter a note for this job...')} rows={5} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm resize-none bg-white shadow-sm" />
+              </div>
+              <ClientStandardNotesPicker
+                clientId={selectedClient?.id}
+                loading={clientStandardNotesLoading}
+                error={clientStandardNotesError}
+                notes={clientStandardNotes}
+                onUse={applyClientStandardNote}
+                t={t}
+              />
+            </div>
           </ConfirmModal>
         , document.body)}
       </>
@@ -1938,6 +2065,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           className="w-full px-3 py-2 border border-gray-200 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all duration-150 ease-out text-sm resize-none bg-white"
                       rows={3}
                           style={{ minHeight: '70px', maxHeight: '100px' }}
+                    />
+                    <ClientStandardNotesPicker
+                      clientId={selectedClient?.id}
+                      loading={clientStandardNotesLoading}
+                      error={clientStandardNotesError}
+                      notes={clientStandardNotes}
+                      onUse={applyClientStandardNote}
+                      t={t}
                     />
                     <div className="flex justify-end space-x-2">
                       <button

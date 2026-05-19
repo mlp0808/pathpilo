@@ -124,12 +124,12 @@ export default function AddLeaveModal({
 
   const modal = (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center sm:p-4 animate-backdrop-in"
       style={{ backgroundColor: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-slideDown"
+        className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full max-w-md max-h-[92vh] sm:max-h-[90vh] flex flex-col overflow-hidden pb-safe animate-sheet-in-bottom sm:animate-slideDown"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}

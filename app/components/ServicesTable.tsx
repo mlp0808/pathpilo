@@ -82,34 +82,42 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
     }
   }
 
-  const handleDeleteService = async (serviceId: number) => {
-    if (!confirm('Are you sure you want to delete this service? This action cannot be undone.')) {
+  // The API DELETE call archives the service (sets archived_at) rather than
+  // hard-deleting it, so jobs and invoices that still reference this row keep
+  // displaying the correct title and price. Archived services disappear from
+  // the catalog list returned by GET /services.
+  const handleArchiveService = async (serviceId: number) => {
+    if (
+      !confirm(
+        'Archive this service?\n\nIt will be removed from the active services list. Past jobs and invoices that use it will still display correctly.',
+      )
+    ) {
       return
     }
 
     setDeletingServiceId(serviceId)
-    
+
     try {
       const token = localStorage.getItem('token')
-      
+
       const response = await fetch(apiUrl(`/services/${serviceId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
         }
       })
-      
+
       if (response.ok) {
         if (onServiceUpdated) {
           onServiceUpdated()
         }
       } else {
         const data = await response.json()
-        alert(`Failed to delete service: ${data.error || 'Unknown error'}`)
+        alert(`Failed to archive service: ${data.error || 'Unknown error'}`)
       }
     } catch (error) {
-      console.error('Delete service error:', error)
-      alert('Network error: Failed to delete service')
+      console.error('Archive service error:', error)
+      alert('Network error: Failed to archive service')
     } finally {
       setDeletingServiceId(null)
     }
@@ -198,12 +206,13 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
                   >
                     Edit
                   </button>
-                  <button 
-                    onClick={() => handleDeleteService(service.id)}
+                  <button
+                    onClick={() => handleArchiveService(service.id)}
                     disabled={deletingServiceId === service.id}
+                    title="Hide from the active list. Past jobs and invoices keep working."
                     className="text-red-600 hover:text-red-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {deletingServiceId === service.id ? 'Deleting...' : 'Delete'}
+                    {deletingServiceId === service.id ? 'Archiving...' : 'Archive'}
                   </button>
                 </div>
               </td>

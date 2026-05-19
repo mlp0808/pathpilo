@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+/* --------------------------------------------------------------------------
+   Motion primitives.
+   Standardised easing curves so every animated surface (drawer, slideout,
+   bottom sheet, modal) feels like it came from the same product. We avoid
+   linear/ease-in on entries; everything decelerates into place.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Snappy spring-ish curve used for drawers, sheets, modals. */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Gentle exit curve. */
+  --ease-out-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Header / nav heights so child pages can offset themselves. */
+  --app-mobile-topbar-h: 56px;
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-safe-top: env(safe-area-inset-top, 0px);
+}
+
 @keyframes slideInFromBottom {
   from {
     opacity: 0;
@@ -33,6 +50,44 @@
   }
 }
 
+@keyframes drawerInLeft {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sheetInBottom {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes backdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 .animate-in {
   animation: slideInFromBottom 0.3s ease-out;
 }
@@ -47,6 +102,22 @@
 
 .slide-up {
   animation: slideUp 0.3s ease-out;
+}
+
+.animate-drawer-in-left {
+  animation: drawerInLeft 0.28s var(--ease-spring) both;
+}
+
+.animate-sheet-in-bottom {
+  animation: sheetInBottom 0.32s var(--ease-spring) both;
+}
+
+.animate-backdrop-in {
+  animation: backdropIn 0.22s var(--ease-out-soft) both;
+}
+
+.animate-pop {
+  animation: pop 0.22s var(--ease-spring) both;
 }
 
 /* Custom thin scrollbar for week view */
@@ -79,6 +150,46 @@
 @layer base {
   html {
     font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  /* iOS / Android home indicator + notch helpers so fixed bars never
+     collide with the system UI on real phones. */
+  .pt-safe {
+    padding-top: var(--app-safe-top);
+  }
+  .pb-safe {
+    padding-bottom: var(--app-safe-bottom);
+  }
+  .pb-safe-plus {
+    padding-bottom: calc(var(--app-safe-bottom) + 1rem);
+  }
+
+  /* Hide native scrollbars while keeping scrollability — used on
+     horizontally-scrolling rails (week strip, segmented controls). */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Generic horizontal pill rail with smooth scroll + touch momentum. */
+  .h-rail {
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  /* "Press" affordance for tappable cards on touch surfaces — replaces
+     the desktop hover state which doesn't apply. */
+  .tap-press {
+    transition: transform 0.12s var(--ease-spring), background-color 0.12s var(--ease-out-soft);
+  }
+  .tap-press:active {
+    transform: scale(0.98);
   }
 }
 

@@ -1,4 +1,10 @@
 import { registerRootComponent } from 'expo';
+import { probeText } from './src/debug/textPipelineProbe';
+
+if (typeof __DEV__ !== 'undefined' && __DEV__) {
+  // Metro / remote JS: probePathPiloText('label', someString)
+  global.probePathPiloText = probeText;
+}
 
 import App from './App';
 

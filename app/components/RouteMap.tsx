@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { buildSequentialPickMapFeatures } from '@/app/lib/sequentialPick/buildMapPinFeatures'
+import { SEQUENTIAL_PICK_THEME } from '@/app/lib/sequentialPick/theme'
+import type { SequentialPickId } from '@/app/lib/sequentialPick'
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
@@ -46,6 +49,12 @@ interface RouteMapProps {
   className?: string
   highlightedJobId?: number | string | null
   onPinHover?: (jobId: number | string | null) => void
+  /** When true, the map enters manual draw-route mode (white dots, click-to-assign). */
+  drawMode?: boolean
+  /** Job ids already assigned a number, in chosen order (only meaningful when drawMode). */
+  drawOrder?: (number | string)[]
+  /** Called when an un-numbered draw-mode pin is clicked. */
+  onDrawAssign?: (jobId: number | string) => void
 }
 
 function fmtMin(minutes: number) {
@@ -69,35 +78,46 @@ function safeRemoveSource(map: mapboxgl.Map, id: string) {
   try { if (map.getSource(id)) map.removeSource(id) } catch { /* ignore */ }
 }
 
-// Builds the GeoJSON FeatureCollection for a route's active pins (only jobs with coords).
-// Marks one job as highlighted; is_home jobs get a home icon in the layer.
-function buildPinFeatures(
-  jobs: RouteJob[],
-  highlightedJobId: number | string | null | undefined,
-) {
-  let clientIndex = 0
-  return jobs
-    .filter((j): j is RouteJob & { lat: number; lng: number } => j.lat != null && j.lng != null)
-    .map((job, idx) => {
-      const isHome = !!job.is_home
-      const seq = isHome ? '' : String(++clientIndex)
-      return {
-        type: 'Feature' as const,
-        properties: {
-          jobId: job.id,
-          seq,
-          label: job.label,
-          address: job.address || '',
-          time: job.time || '',
-          durationMinutes: job.estimated_duration_minutes ?? -1,
-          legMinutes: job.legMinutes ?? -1,
-          idx,
-          isHome,
-          highlight: highlightedJobId != null && String(job.id) === String(highlightedJobId),
-        },
-        geometry: { type: 'Point' as const, coordinates: [job.lng, job.lat] as [number, number] },
-      }
-    })
+type PinSourceMeta = {
+  pickActive: boolean
+  pickOrder: SequentialPickId[]
+  highlightedId: SequentialPickId | null | undefined
+}
+
+const PICK_PIN_ICON_ID = 'sequential-pick-pin'
+
+/** Load location-pin SVG into the map sprite (idle unpicked stops). */
+function ensureSequentialPickPinImage(map: mapboxgl.Map) {
+  if (map.hasImage(PICK_PIN_ICON_ID)) return
+  const fill = SEQUENTIAL_PICK_THEME.pinIdleIcon
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="${fill}" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z"/></svg>`
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  const img = new Image(24, 24)
+  img.onload = () => {
+    if (!map.hasImage(PICK_PIN_ICON_ID)) {
+      map.addImage(PICK_PIN_ICON_ID, img, { pixelRatio: 2 })
+      map.triggerRepaint()
+    }
+  }
+  img.src = url
+}
+
+function buildPinFeatures(jobs: RouteJob[], meta: PinSourceMeta) {
+  return buildSequentialPickMapFeatures(jobs, meta)
+}
+
+/** Mapbox stringifies GeoJSON properties on feature query — avoid `if (props.isHome)`. */
+function featIsHome(props: { isHome?: unknown }): boolean {
+  const v = props.isHome
+  return v === true || v === 1 || v === '1'
+}
+
+function featJobId(props: { jobId?: unknown }): number | string {
+  const id = props.jobId
+  if (typeof id === 'number' && !Number.isNaN(id)) return id
+  if (typeof id === 'string' && id !== '') return id
+  const n = Number(id)
+  return Number.isNaN(n) ? String(id) : n
 }
 
 export default function RouteMap({
@@ -107,6 +127,9 @@ export default function RouteMap({
   className,
   highlightedJobId,
   onPinHover,
+  drawMode,
+  drawOrder,
+  onDrawAssign,
 }: RouteMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
@@ -114,10 +137,17 @@ export default function RouteMap({
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null)  // shown on click (stays until next click)
   const addedSourcesRef = useRef<{ id: string; layers: string[] }[]>([])
 
-  // Maps active-pin sourceId → array of jobs, so we can re-call setData on hover
+  // Maps active-pin sourceId → jobs + pick meta for lightweight setData updates
   const pinSourceJobsRef = useRef<Record<string, RouteJob[]>>({})
+  const pinSourceMetaRef = useRef<Record<string, PinSourceMeta>>({})
   // Tracks mouseenter/leave handlers for cleanup on redraw
   const hoverHandlersRef = useRef<{ layer: string; type: string; fn: (e?: mapboxgl.MapLayerMouseEvent) => void }[]>([])
+  // Tracks click handlers for cleanup on redraw — Mapbox keeps them bound to the
+  // layer id even after the layer is removed, so they leak across draws otherwise.
+  const clickHandlersRef = useRef<{ layer: string; fn: (e: mapboxgl.MapLayerMouseEvent) => void }[]>([])
+  const mapClickHandlersRef = useRef<{ fn: (e: mapboxgl.MapMouseEvent) => void }[]>([])
+  const onDrawAssignRef = useRef(onDrawAssign)
+  onDrawAssignRef.current = onDrawAssign
 
   // ── Init map once ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -136,21 +166,30 @@ export default function RouteMap({
     return () => { map.remove(); mapRef.current = null }
   }, [])
 
-  // ── Update only the highlight property when hover changes ─────────────────
-  // Calls setData on each active-pin source — no full layer redraw needed.
+  // Pin data refresh on hover / pick order (layer swap handled in draw() + useLayoutEffect).
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
 
     Object.entries(pinSourceJobsRef.current).forEach(([sourceId, jobs]) => {
       const src = map.getSource(sourceId) as mapboxgl.GeoJSONSource | undefined
-      if (!src) return
+      const meta = pinSourceMetaRef.current[sourceId]
+      if (!src || !meta) return
+      const onPickLayers = !!map.getLayer(`${sourceId}-hit`)
+      if (onPickLayers !== meta.pickActive) return
+
+      const nextMeta: PinSourceMeta = {
+        pickActive: meta.pickActive,
+        pickOrder: drawOrder ?? [],
+        highlightedId: highlightedJobId,
+      }
+      pinSourceMetaRef.current[sourceId] = nextMeta
       src.setData({
         type: 'FeatureCollection',
-        features: buildPinFeatures(jobs, highlightedJobId),
+        features: buildPinFeatures(jobs, nextMeta),
       })
     })
-  }, [highlightedJobId])
+  }, [highlightedJobId, drawOrder])
 
   // ── Full redraw when routes / focus change ────────────────────────────────
   const draw = useCallback(() => {
@@ -164,6 +203,14 @@ export default function RouteMap({
       try { map.off(type as 'mouseenter' | 'mouseleave', layer, fn) } catch { /* ignore */ }
     })
     hoverHandlersRef.current = []
+    clickHandlersRef.current.forEach(({ layer, fn }) => {
+      try { map.off('click', layer, fn) } catch { /* ignore */ }
+    })
+    clickHandlersRef.current = []
+    mapClickHandlersRef.current.forEach(({ fn }) => {
+      try { map.off('click', fn) } catch { /* ignore */ }
+    })
+    mapClickHandlersRef.current = []
 
     addedSourcesRef.current.forEach(({ id, layers }) => {
       layers.forEach(lid => safeRemoveLayer(map, lid))
@@ -171,10 +218,16 @@ export default function RouteMap({
     })
     addedSourcesRef.current = []
     pinSourceJobsRef.current = {}
+    pinSourceMetaRef.current = {}
 
     const visibleRoutes = focusUserId != null
       ? routes.filter(r => r.userId === focusUserId)
       : routes
+
+    // Solo companies may show a route before dayFocusUserId is set — align draw mode
+    // with the single visible route in that case.
+    const drawTargetUserId =
+      focusUserId ?? (visibleRoutes.length === 1 ? visibleRoutes[0].userId : null)
 
     const allCoords: [number, number][] = []
 
@@ -187,11 +240,13 @@ export default function RouteMap({
 
       allCoords.push(...pts.map(j => [j.lng, j.lat] as [number, number]))
 
-      // ── Route line — 3-layer glow ────────────────────────────────────────
+      const isRouteInDrawMode = !!drawMode && drawTargetUserId === route.userId
+
+      // ── Route line — 3-layer glow (hidden during draw mode) ──────────────
       const rawCoords: [number, number][] = activeJobs.map(j => [j.lng, j.lat])
       const lineCoords = route.routeGeometry?.coordinates ?? rawCoords
 
-      if (activeJobs.length >= 2) {
+      if (!isRouteInDrawMode && activeJobs.length >= 2) {
         const lId = `line-${route.userId}`
         try {
           map.addSource(lId, {
@@ -205,65 +260,186 @@ export default function RouteMap({
         } catch (e) { console.warn('line add failed', e) }
       }
 
-      // ── Active numbered pins ─────────────────────────────────────────────
+      // ── Active pins ──────────────────────────────────────────────────────
       if (activeJobs.length > 0) {
         const pId = `pins-${route.userId}`
+        const pickMeta: PinSourceMeta = {
+          pickActive: isRouteInDrawMode,
+          pickOrder: drawOrder ?? [],
+          highlightedId: highlightedJobId,
+        }
         pinSourceJobsRef.current[pId] = activeJobs
+        pinSourceMetaRef.current[pId] = pickMeta
 
-        const features = buildPinFeatures(activeJobs, highlightedJobId)
+        const features = buildPinFeatures(activeJobs, pickMeta)
 
         try {
           map.addSource(pId, { type: 'geojson', data: { type: 'FeatureCollection', features } })
 
-          // Outer ring — visible only on hover (fixed size, no zoom nesting in case)
-          map.addLayer({
-            id: `${pId}-ring`,
-            type: 'circle', source: pId,
-            paint: {
-              'circle-radius': ['case', ['get', 'highlight'], 26, 0],
-              'circle-color': route.color,
-              'circle-opacity': ['case', ['get', 'highlight'], 0.15, 0],
-              'circle-stroke-width': ['case', ['get', 'highlight'], 2.5, 0],
-              'circle-stroke-color': route.color,
-              'circle-stroke-opacity': ['case', ['get', 'highlight'], 0.5, 0],
-            },
-          })
+          if (isRouteInDrawMode) {
+            ensureSequentialPickPinImage(map)
+            const idle = SEQUENTIAL_PICK_THEME.pinIdle
+            const accent = route.color
 
-          // Main circle — zoom at top level, case inside stop values
-          map.addLayer({
-            id: `${pId}-circle`,
-            type: 'circle', source: pId,
-            paint: {
-              'circle-radius': [
-                'interpolate', ['linear'], ['zoom'],
-                8,  ['case', ['get', 'highlight'], 17, 12],
-                14, ['case', ['get', 'highlight'], 22, 16],
-              ],
-              'circle-color': route.color,
-              'circle-stroke-width': ['case', ['get', 'highlight'], 4, 2.5],
-              'circle-stroke-color': '#ffffff',
-            },
-          })
+            // Sequential pick: hide route lines; dark idle pins → green when picked
+            map.addLayer({
+              id: `${pId}-shadow`,
+              type: 'circle',
+              source: pId,
+              paint: {
+                'circle-radius': [
+                  'interpolate', ['linear'], ['zoom'],
+                  8, ['case', ['any', ['==', ['get', 'pickAvailable'], 1], ['==', ['get', 'isPicked'], 1]], 14, 0],
+                  14, ['case', ['any', ['==', ['get', 'pickAvailable'], 1], ['==', ['get', 'isPicked'], 1]], 18, 0],
+                ],
+                'circle-color': '#000000',
+                'circle-opacity': ['case', ['any', ['==', ['get', 'pickAvailable'], 1], ['==', ['get', 'isPicked'], 1]], 0.22, 0],
+                'circle-blur': 0.55,
+                'circle-translate': [0, 2],
+              },
+            })
 
-          // Number or home icon label
-          map.addLayer({
-            id: `${pId}-label`,
-            type: 'symbol', source: pId,
-            layout: {
-              'text-field': ['case', ['get', 'isHome'], '⌂', ['get', 'seq']],
-              'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
-              'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 12, 13, 14, 15],
-              'text-allow-overlap': true,
-              'text-ignore-placement': true,
-            },
-            paint: {
-              'text-color': '#ffffff',
-              'text-halo-color': 'rgba(0,0,0,0.2)',
-              'text-halo-width': 0.5,
-            },
-          })
+            map.addLayer({
+              id: `${pId}-circle`,
+              type: 'circle',
+              source: pId,
+              paint: {
+                'circle-radius': [
+                  'interpolate', ['linear'], ['zoom'],
+                  8, ['case', ['==', ['get', 'isPicked'], 1], 14, ['case', ['==', ['get', 'pickAvailable'], 1], 12, ['case', ['==', ['get', 'isHome'], 1], 12, 0]]],
+                  14, ['case', ['==', ['get', 'isPicked'], 1], 18, ['case', ['==', ['get', 'pickAvailable'], 1], 16, ['case', ['==', ['get', 'isHome'], 1], 16, 0]]],
+                ],
+                'circle-color': [
+                  'case',
+                  ['==', ['get', 'isPicked'], 1], accent,
+                  ['==', ['get', 'pickAvailable'], 1], idle,
+                  ['==', ['get', 'isHome'], 1], accent,
+                  accent,
+                ],
+                'circle-stroke-width': ['case', ['==', ['get', 'isHome'], 1], 2.5, 0],
+                'circle-stroke-color': '#ffffff',
+              },
+            })
 
-          addedSourcesRef.current.push({ id: pId, layers: [`${pId}-ring`, `${pId}-circle`, `${pId}-label`] })
+            // Location pin icon on idle unpicked stops (matches sidebar badge)
+            map.addLayer({
+              id: `${pId}-pin-icon`,
+              type: 'symbol',
+              source: pId,
+              filter: ['==', ['get', 'showPinIcon'], 1],
+              layout: {
+                'icon-image': PICK_PIN_ICON_ID,
+                'icon-size': ['interpolate', ['linear'], ['zoom'], 8, 0.55, 14, 0.65],
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
+              },
+            })
+
+            // Picked number or hover preview in the centre
+            map.addLayer({
+              id: `${pId}-center`,
+              type: 'symbol',
+              source: pId,
+              layout: {
+                'text-field': ['get', 'centerLabel'],
+                'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 14],
+                'text-allow-overlap': true,
+                'text-ignore-placement': true,
+              },
+              paint: {
+                'text-color': [
+                  'case',
+                  ['==', ['get', 'isPicked'], 1], SEQUENTIAL_PICK_THEME.pinPickedText,
+                  SEQUENTIAL_PICK_THEME.previewTextOnIdle,
+                ],
+              },
+            })
+
+            map.addLayer({
+              id: `${pId}-label`,
+              type: 'symbol',
+              source: pId,
+              layout: {
+                'text-field': ['case', ['==', ['get', 'isHome'], 1], '⌂', ''],
+                'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 14],
+                'text-allow-overlap': true,
+                'text-ignore-placement': true,
+              },
+              paint: { 'text-color': '#ffffff' },
+            })
+
+            // Invisible hit target above icons/text so clicks are not blocked by symbols
+            map.addLayer({
+              id: `${pId}-hit`,
+              type: 'circle',
+              source: pId,
+              filter: ['any', ['==', ['get', 'pickAvailable'], 1], ['==', ['get', 'isPicked'], 1]],
+              paint: {
+                'circle-radius': [
+                  'interpolate', ['linear'], ['zoom'],
+                  8, 18,
+                  14, 22,
+                ],
+                'circle-color': '#000000',
+                'circle-opacity': 0.01,
+              },
+            })
+
+            addedSourcesRef.current.push({
+              id: pId,
+              layers: [`${pId}-shadow`, `${pId}-circle`, `${pId}-pin-icon`, `${pId}-center`, `${pId}-label`, `${pId}-hit`],
+            })
+          } else {
+            // Normal mode: numbered route pins
+            map.addLayer({
+              id: `${pId}-ring`,
+              type: 'circle', source: pId,
+              paint: {
+                'circle-radius': ['case', ['==', ['get', 'highlight'], 1], 26, 0],
+                'circle-color': route.color,
+                'circle-opacity': ['case', ['==', ['get', 'highlight'], 1], 0.15, 0],
+                'circle-stroke-width': ['case', ['==', ['get', 'highlight'], 1], 2.5, 0],
+                'circle-stroke-color': route.color,
+                'circle-stroke-opacity': ['case', ['==', ['get', 'highlight'], 1], 0.5, 0],
+              },
+            })
+
+            map.addLayer({
+              id: `${pId}-circle`,
+              type: 'circle', source: pId,
+              paint: {
+                'circle-radius': [
+                  'interpolate', ['linear'], ['zoom'],
+                  8,  ['case', ['==', ['get', 'highlight'], 1], 17, 12],
+                  14, ['case', ['==', ['get', 'highlight'], 1], 22, 16],
+                ],
+                'circle-color': route.color,
+                'circle-stroke-width': ['case', ['==', ['get', 'highlight'], 1], 4, 2.5],
+                'circle-stroke-color': '#ffffff',
+              },
+            })
+
+            map.addLayer({
+              id: `${pId}-label`,
+              type: 'symbol', source: pId,
+              layout: {
+                'text-field': ['case', ['==', ['get', 'isHome'], 1], '⌂', ['get', 'seq']],
+                'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
+                'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 12, 13, 14, 15],
+                'text-allow-overlap': true,
+                'text-ignore-placement': true,
+              },
+              paint: {
+                'text-color': '#ffffff',
+                'text-halo-color': 'rgba(0,0,0,0.2)',
+                'text-halo-width': 0.5,
+              },
+            })
+
+            addedSourcesRef.current.push({ id: pId, layers: [`${pId}-ring`, `${pId}-circle`, `${pId}-label`] })
+          }
 
           // ── Hover: show popup + highlight ──────────────────────────────────
           const onEnter = (e: mapboxgl.MapLayerMouseEvent) => {
@@ -274,10 +450,18 @@ export default function RouteMap({
               jobId: number | string
               seq: string; label: string; address: string
               time: string; durationMinutes: number; legMinutes: number; idx: number
+              isHome?: boolean
+              drawAvailable?: boolean
+              drawNumbered?: boolean
+              drawNextNumber?: number
             }
             const coords = (e.features[0].geometry as GeoJSON.Point).coordinates as [number, number]
 
             onPinHover?.(props.jobId)
+
+            // Draw mode: hover is purely visual (the pin itself shows the preview
+            // number via the label layer). No popup, no extra UI.
+            if (isRouteInDrawMode && !featIsHome(props)) return
 
             // Build info chips
             const timeChip = props.time
@@ -332,21 +516,49 @@ export default function RouteMap({
             onPinHover?.(null)
           }
 
-          map.on('mouseenter', `${pId}-circle`, onEnter)
-          map.on('mouseleave', `${pId}-circle`, onLeave)
-          hoverHandlersRef.current.push(
-            { layer: `${pId}-circle`, type: 'mouseenter', fn: onEnter },
-            { layer: `${pId}-circle`, type: 'mouseleave', fn: onLeave },
-          )
+          const pickHoverLayers = isRouteInDrawMode
+            ? [`${pId}-hit`]
+            : [`${pId}-circle`]
 
-          // ── Click: open job detail (skip home pins — they are not jobs)
-          map.on('click', `${pId}-circle`, (e) => {
-            if (!e.features?.[0]) return
-            const props = e.features[0].properties as { jobId: number | string; isHome?: boolean }
-            if (props.isHome) return
+          const handlePinPick = (props: { jobId?: unknown; isHome?: unknown }) => {
+            if (featIsHome(props)) return
+            const jobId = featJobId(props)
             if (clickPopupRef.current) { clickPopupRef.current.remove(); clickPopupRef.current = null }
-            onJobClick(Number(props.jobId))
+            if (isRouteInDrawMode && onDrawAssignRef.current) {
+              onDrawAssignRef.current(jobId)
+              return
+            }
+            onJobClick(Number(jobId))
+          }
+
+          pickHoverLayers.forEach(layer => {
+            map.on('mouseenter', layer, onEnter)
+            map.on('mouseleave', layer, onLeave)
+            hoverHandlersRef.current.push(
+              { layer, type: 'mouseenter', fn: onEnter },
+              { layer, type: 'mouseleave', fn: onLeave },
+            )
           })
+
+          if (isRouteInDrawMode) {
+            // Map-level query so symbol/icon layers never block picks
+            const onMapClick = (e: mapboxgl.MapMouseEvent) => {
+              const features = map.queryRenderedFeatures(e.point, { layers: [`${pId}-hit`] })
+              if (!features[0]) return
+              handlePinPick(features[0].properties as { jobId?: unknown; isHome?: unknown })
+            }
+            map.on('click', onMapClick)
+            mapClickHandlersRef.current.push({ fn: onMapClick })
+          } else {
+            const onPinClick = (e: mapboxgl.MapLayerMouseEvent) => {
+              if (!e.features?.[0]) return
+              handlePinPick(e.features[0].properties as { jobId?: unknown; isHome?: unknown })
+            }
+            pickHoverLayers.forEach(layer => {
+              map.on('click', layer, onPinClick)
+              clickHandlersRef.current.push({ layer, fn: onPinClick })
+            })
+          }
         } catch (e) { console.warn('active pins add failed', e) }
       }
 
@@ -364,9 +576,15 @@ export default function RouteMap({
           map.addLayer({ id: `${cId}-label`, type: 'symbol', source: cId, layout: { 'text-field': '✕', 'text-size': 9, 'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#94a3b8' } })
           addedSourcesRef.current.push({ id: cId, layers: [`${cId}-circle`, `${cId}-label`] })
 
-          map.on('mouseenter', `${cId}-circle`, () => { map.getCanvas().style.cursor = 'pointer' })
-          map.on('mouseleave', `${cId}-circle`, () => { map.getCanvas().style.cursor = '' })
-          map.on('click', `${cId}-circle`, (e) => {
+          const cEnter = () => { map.getCanvas().style.cursor = 'pointer' }
+          const cLeave = () => { map.getCanvas().style.cursor = '' }
+          map.on('mouseenter', `${cId}-circle`, cEnter)
+          map.on('mouseleave', `${cId}-circle`, cLeave)
+          hoverHandlersRef.current.push(
+            { layer: `${cId}-circle`, type: 'mouseenter', fn: cEnter },
+            { layer: `${cId}-circle`, type: 'mouseleave', fn: cLeave },
+          )
+          const onCancelledClick = (e: mapboxgl.MapLayerMouseEvent) => {
             if (!e.features?.[0]) return
             const props = e.features[0].properties as { label: string; address: string }
             const coords = (e.features[0].geometry as GeoJSON.Point).coordinates as [number, number]
@@ -381,7 +599,9 @@ export default function RouteMap({
                 </div>
               `)
               .addTo(map)
-          })
+          }
+          map.on('click', `${cId}-circle`, onCancelledClick)
+          clickHandlersRef.current.push({ layer: `${cId}-circle`, fn: onCancelledClick })
         } catch (e) { console.warn('cancelled pins add failed', e) }
       }
     })
@@ -396,18 +616,28 @@ export default function RouteMap({
       )
       map.fitBounds(bounds, { padding: 80, duration: 600, maxZoom: 14 })
     }
-  }, [routes, focusUserId, onJobClick, onPinHover, highlightedJobId])
+  }, [routes, focusUserId, onJobClick, onPinHover, highlightedJobId, drawMode, drawOrder, onDrawAssign])
+
+  const drawRef = useRef(draw)
+  drawRef.current = draw
 
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    if (map.isStyleLoaded()) {
-      draw()
-    } else {
-      map.once('load', draw)
-      return () => { map.off('load', draw) }
+    const run = () => { if (map.isStyleLoaded()) drawRef.current() }
+    if (map.isStyleLoaded()) run()
+    else {
+      map.once('load', run)
+      return () => { map.off('load', run) }
     }
   }, [draw])
+
+  // Swap layer stack before paint when toggling pick mode or employee focus.
+  useLayoutEffect(() => {
+    const map = mapRef.current
+    if (!map?.isStyleLoaded()) return
+    drawRef.current()
+  }, [drawMode, focusUserId])
 
   return (
     <>

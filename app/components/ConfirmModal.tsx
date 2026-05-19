@@ -81,9 +81,9 @@ export default function ConfirmModal({
 
   return (
     <div className="fixed inset-0 z-[60]">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-gray-200 animate-slideDown">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-backdrop-in" onClick={onClose} />
+      <div className="absolute inset-0 flex items-end sm:items-center justify-center sm:p-4">
+        <div className="w-full max-w-lg bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-gray-200 pb-safe animate-sheet-in-bottom sm:animate-slideDown">
           <div className="px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
             <h3 className="text-xl font-bold text-primary-800 tracking-tight">{title}</h3>
             {description && <p className="text-sm text-gray-500 mt-1.5 font-medium">{description}</p>}

@@ -45,9 +45,9 @@ function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+
     if (!noteContent.trim()) {
       setError(t('app.jobView.noteRequired'))
       return
@@ -87,31 +87,205 @@ function NoteInput({ jobId, onNoteAdded, onCancel }: NoteInputProps) {
         value={noteContent}
         onChange={(e) => setNoteContent(e.target.value)}
         placeholder={t('app.jobView.notePlaceholder')}
-        rows={4}
-        className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-white text-primary-500 placeholder-gray-400 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 resize-none"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            void handleSubmit()
+          }
+        }}
+        rows={3}
+        autoFocus
+        className="w-full px-3 py-2.5 text-sm rounded-lg border border-dashed border-slate-400 bg-[#E8EDEA] text-primary-600 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-400 resize-none"
       />
-      <div className="flex justify-end gap-3">
+      <div className="flex justify-end items-center gap-3">
         {onCancel && (
           <button
             type="button"
             onClick={onCancel}
-            className="w-11 h-11 rounded-full bg-gray-200 text-primary-500 flex items-center justify-center font-bold hover:bg-gray-300 transition-colors"
+            className="text-xs font-medium text-slate-600 hover:text-primary-600"
           >
-            ✕
+            {t('app.common.cancel')}
           </button>
         )}
         <button
           type="submit"
           disabled={isSubmitting || !noteContent.trim()}
-          className="w-11 h-11 rounded-full bg-accent-500 text-white flex items-center justify-center font-bold hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="text-xs font-semibold text-primary-700 hover:text-primary-900 disabled:opacity-40"
         >
-          ✓
+          {isSubmitting ? t('app.jobView.savingNote') : t('app.jobView.saveNote')}
         </button>
       </div>
-      {error && (
-        <div className="text-xs text-red-600">{error}</div>
-      )}
+      {error && <div className="text-xs text-red-600">{error}</div>}
     </form>
+  )
+}
+
+const jobNoteCardBase =
+  'rounded-lg border border-dashed text-sm text-primary-700 leading-relaxed'
+const jobNoteCardEmpty = 'border-slate-500/75 bg-[#E8EDEA]'
+const jobNoteCardFilled = 'border-slate-500/90 bg-white'
+
+function resizeJobNoteTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, 72), 200)}px`
+}
+
+function jobNoteCardClass(hasContent: boolean) {
+  return `${jobNoteCardBase} ${hasContent ? jobNoteCardFilled : jobNoteCardEmpty}`
+}
+
+interface JobNoteCardProps {
+  jobId: number | null
+  jobNoteText: string
+  canEdit: boolean
+  onSaveJobNote: (text: string, jobId: number) => Promise<void>
+}
+
+function JobNoteCard({ jobId, jobNoteText, canEdit, onSaveJobNote }: JobNoteCardProps) {
+  const { t } = useAppI18n()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(jobNoteText)
+  const [displayNote, setDisplayNote] = useState(jobNoteText)
+  const [saving, setSaving] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const savedText = displayNote.trim()
+  const hasSavedNote = savedText.length > 0
+  const showFilledStyle = hasSavedNote || draft.trim().length > 0
+
+  useEffect(() => {
+    setDisplayNote(jobNoteText)
+    setDraft(jobNoteText)
+    setEditing(false)
+  }, [jobId])
+
+  useEffect(() => {
+    if (!editing && jobNoteText.trim()) {
+      setDisplayNote(jobNoteText)
+    }
+  }, [jobNoteText, editing])
+
+  useEffect(() => {
+    if (editing) {
+      resizeJobNoteTextarea(textareaRef.current)
+      textareaRef.current?.focus()
+    }
+  }, [editing])
+
+  const startEditing = () => {
+    if (!canEdit || jobId == null) return
+    setDraft(displayNote)
+    setEditing(true)
+  }
+
+  const cancelEditing = () => {
+    setDraft(displayNote)
+    setEditing(false)
+  }
+
+  const saveDraft = async () => {
+    if (jobId == null) {
+      alert(t('app.jobView.noteErr', 'Could not save note'))
+      return
+    }
+    const trimmed = draft.trim()
+    if (trimmed === displayNote.trim()) {
+      setEditing(false)
+      return
+    }
+    const previousDisplay = displayNote
+    setDisplayNote(trimmed)
+    setDraft(trimmed)
+    setEditing(false)
+    setSaving(true)
+    try {
+      await onSaveJobNote(trimmed, jobId)
+    } catch (err) {
+      setDisplayNote(previousDisplay)
+      setDraft(trimmed)
+      setEditing(true)
+      alert(err instanceof Error ? err.message : t('app.jobView.noteErr', 'Could not save note'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!canEdit) {
+    if (!hasSavedNote) return null
+    return (
+      <div className={`${jobNoteCardClass(true)} px-3 py-2.5 whitespace-pre-wrap min-h-[3rem]`}>
+        {savedText}
+      </div>
+    )
+  }
+
+  if (!editing) {
+    if (!hasSavedNote) {
+      return (
+        <button
+          type="button"
+          onClick={startEditing}
+          className={`${jobNoteCardClass(false)} w-full text-left px-3 py-2.5 min-h-[3rem] cursor-text hover:bg-[#DFE6E2] transition-colors`}
+        >
+          <span className="text-slate-500">{t('app.jobView.jobDescriptionPlaceholder')}</span>
+        </button>
+      )
+    }
+    return (
+      <button
+        type="button"
+        onClick={startEditing}
+        className={`${jobNoteCardClass(true)} w-full text-left px-3 py-2.5 min-h-[3rem] cursor-text hover:bg-slate-50/80 transition-colors whitespace-pre-wrap`}
+      >
+        {savedText}
+      </button>
+    )
+  }
+
+  return (
+    <div className={`${jobNoteCardClass(showFilledStyle)} px-3 py-2`}>
+      <textarea
+        ref={textareaRef}
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          resizeJobNoteTextarea(e.target)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            void saveDraft()
+          }
+          if (e.key === 'Escape') {
+            cancelEditing()
+          }
+        }}
+        placeholder={t('app.jobView.jobDescriptionPlaceholder')}
+        rows={3}
+        className="w-full bg-transparent text-primary-700 placeholder:text-slate-500/90 focus:outline-none resize-none text-sm leading-relaxed min-h-[4.5rem] max-h-[12.5rem]"
+      />
+      <div className="flex justify-end items-center gap-3 mt-1.5">
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={cancelEditing}
+          disabled={saving}
+          className="text-xs font-medium text-slate-600 hover:text-primary-600 disabled:opacity-40"
+        >
+          {t('app.common.cancel')}
+        </button>
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void saveDraft()}
+          disabled={saving}
+          className="text-xs font-semibold text-primary-700 hover:text-primary-900 disabled:opacity-40"
+        >
+          {saving ? t('app.jobView.savingNote') : t('app.jobView.saveNote')}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -465,6 +639,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const [slideEntered, setSlideEntered] = useState(false)
   const [clientContact, setClientContact] = useState<{ email?: string; phone?: string } | null>(null)
   const [showNoteInput, setShowNoteInput] = useState(false)
+  const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'history'>('tasks')
   const [updatingServiceId, setUpdatingServiceId] = useState<number | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<{ id: number; status: string; invoice_number?: string | null } | null>(null)
   const [automationBadges, setAutomationBadges] = useState<{
@@ -537,6 +712,47 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       return () => cancelAnimationFrame(id)
     }
   }, [isOpen])
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveDetailTab('tasks')
+      setShowNoteInput(false)
+    }
+  }, [isOpen, job?.id])
+
+  const saveJobNote = useCallback(
+    async (text: string, explicitJobId: number) => {
+      const jobId = explicitJobId
+      const trimmed = text.trim()
+      setJobDetails((prev: any) => {
+        const base = prev || job
+        return base ? { ...base, note: trimmed } : prev
+      })
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/jobs/${jobId}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ note: trimmed }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(
+          typeof data.error === 'string' ? data.error : 'Failed to save note',
+        )
+      }
+      const savedNoteFromApi =
+        typeof data.job?.note === 'string' ? data.job.note : trimmed
+      setJobDetails((prev: any) => {
+        const base = prev || job
+        return base ? { ...base, note: savedNoteFromApi } : prev
+      })
+      onJobUpdated?.()
+    },
+    [jobDetails, job, onJobUpdated],
+  )
 
   // Load users when slideout opens with an assigned job so we can show assignee name (list/single-job APIs don't return first/last name)
   const assignedUserId = (jobDetails || job)?.assigned_user_id
@@ -1372,7 +1588,17 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       const data = await response.json()
 
       if (response.ok && data.job) {
-        setJobDetails(data.job)
+        setJobDetails((prev: any) => {
+          const next = data.job
+          const prevNote =
+            typeof prev?.note === 'string' ? prev.note.trim() : ''
+          const nextNote =
+            typeof next?.note === 'string' ? next.note.trim() : ''
+          if (prevNote && !nextNote) {
+            return { ...next, note: prev.note }
+          }
+          return next
+        })
         fetchAutomationBadges(nid)
         fetchJobLogs(data.job.id ?? nid)
       }
@@ -1661,8 +1887,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       <div className="fixed inset-0 bg-black bg-opacity-50 z-40" onClick={onClose} />
       
       {/* Slideout — slides in from right */}
-      <div className={`fixed right-0 top-0 h-full w-full max-w-[min(520px,65vw)] bg-page shadow-xl z-50 flex flex-col overflow-hidden transition-transform duration-300 ease-out ${slideEntered ? 'translate-x-0' : 'translate-x-full'}`}>
-        {/* Content — scrollable: Header, Schedule & Location, Tasks, Activity Log */}
+      <div className={`fixed right-0 top-0 h-full w-full max-w-full sm:max-w-[min(540px,80vw)] lg:max-w-[min(540px,65vw)] bg-page shadow-xl z-50 flex flex-col overflow-hidden transition-transform duration-300 ease-out ${slideEntered ? 'translate-x-0' : 'translate-x-full'}`}>
+        {/* Content — scrollable: Header, Schedule & Location, Tasks, Notes, Activity Log */}
         <div className="flex-1 overflow-y-auto">
           {/* Header — dark #193434: client name + Person, email, phone (now scrollable) */}
           <div className="bg-primary-500 px-5 pt-5 pb-3">
@@ -1803,8 +2029,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           </div>
           </div>
 
-          {/* Content sections — off-white #F6F9F7: Schedule & Location, Tasks, Activity Log */}
-          <div className="px-5 pt-3 pb-5 space-y-5">
+          {/* Content sections — off-white #F6F9F7: Schedule & Location, Tasks, Notes, Activity Log */}
+          <div className="px-5 pt-3 pb-5 space-y-3">
           {loading ? (
             <div className="flex items-center justify-center h-32">
               <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-500 border-t-transparent"></div>
@@ -1936,10 +2162,51 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     </button>
                   </div>
                 </div>
-                <div className="border-t border-gray-200 mt-4" />
               </div>
 
-              {/* Tasks — compact rows: [check] title + duration | price | Cancel. Check = complete; Cancel = cancel row (red + cross). */}
+              <div className="space-y-3">
+                {(() => {
+                  const jobNoteText = String((jobDetails || job)?.note ?? '').trim()
+                  const realJobId = parseJobId(currentJob?.id)
+                  const canEditJobNote =
+                    realJobId != null && !isProjectedJob && !isLocked
+                  return (
+                    <JobNoteCard
+                      key={realJobId ?? 'no-job'}
+                      jobId={realJobId}
+                      jobNoteText={jobNoteText}
+                      canEdit={canEditJobNote}
+                      onSaveJobNote={saveJobNote}
+                    />
+                  )
+                })()}
+
+                <div className="flex gap-1 p-1 rounded-xl bg-slate-200/80">
+                  <button
+                    type="button"
+                    onClick={() => setActiveDetailTab('tasks')}
+                    className={`flex-1 min-h-[40px] rounded-lg text-sm font-bold transition-colors ${
+                      activeDetailTab === 'tasks'
+                        ? 'bg-white text-primary-700 shadow-sm'
+                        : 'text-slate-600 hover:text-primary-700'
+                    }`}
+                  >
+                    {t('app.jobView.tasks')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDetailTab('history')}
+                    className={`flex-1 min-h-[40px] rounded-lg text-sm font-bold transition-colors ${
+                      activeDetailTab === 'history'
+                        ? 'bg-white text-primary-700 shadow-sm'
+                        : 'text-slate-600 hover:text-primary-700'
+                    }`}
+                  >
+                    {t('app.jobView.tabHistory')}
+                  </button>
+                </div>
+
+                {activeDetailTab === 'tasks' && (
               <div>
                 {(() => {
                   const svcs = (jobDetails || job)?.services || (jobDetails || job)?.job_services || []
@@ -1967,15 +2234,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                   }
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-base font-semibold text-primary-500 flex items-center gap-2">
-                          <DocumentTextIcon className="w-5 h-5 text-accent-500" />
-                          {t('app.jobView.tasks')}
-                        </h3>
-                        <span className="text-sm text-gray-500">{t('app.jobView.tasksProgress').replace('{{done}}', String(completedCount)).replace('{{total}}', String(totalTasks || 0))}</span>
-                      </div>
                       {svcs.length > 0 ? (
-                        <div className="space-y-1">
+                        <div className="space-y-1.5">
                           {svcs.map((s: any, i: number) => {
                             const serviceStatus = (s.status || (s.is_completed ? 'completed' : 'scheduled')) as string
                             const isServiceCompleted = serviceStatus === 'completed'
@@ -1984,7 +2244,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                             return (
                               <div
                                 key={s.service_id || s.id || i}
-                                className={`flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors ${isServiceCancelled ? 'bg-red-50' : 'bg-white'}`}
+                                className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 transition-colors shadow-sm ${isServiceCancelled ? 'bg-red-50 shadow-red-100/50' : 'bg-white'}`}
                               >
                                 <button
                                   type="button"
@@ -2028,19 +2288,34 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         <p className="text-sm text-gray-500 py-4 text-center">{t('app.jobView.noTasks')}</p>
                       )}
                       {svcs.length > 0 && (
-                        <div className="flex flex-col items-end gap-0.5 mt-2">
-                          <div className="text-sm text-gray-500">{t('app.jobView.timeLabel')} {formatDuration(totalDuration)}</div>
-                          <div className="text-sm text-gray-500">{t('app.jobView.valueLabel')} {formatPrice(totalPrice)}</div>
-                        </div>
+                        <p className="mt-2 text-right text-xs text-gray-500 tabular-nums leading-relaxed">
+                          <span>
+                            {t('app.jobView.tasksProgress')
+                              .replace('{{done}}', String(completedCount))
+                              .replace('{{total}}', String(totalTasks || 0))}
+                          </span>
+                          <span className="mx-2 text-gray-300" aria-hidden>
+                            ·
+                          </span>
+                          <span>
+                            {t('app.jobView.timeLabel')} {formatDuration(totalDuration)}
+                          </span>
+                          <span className="mx-2 text-gray-300" aria-hidden>
+                            ·
+                          </span>
+                          <span>
+                            {t('app.jobView.valueLabel')} {formatPrice(totalPrice)}
+                          </span>
+                        </p>
                       )}
                     </>
                   )
                 })()}
               </div>
+                )}
 
-              {/* Activity Log — mobile-style: continuous line through bullets, white box per update, "add note +" button */}
-              <div className="pt-4 border-t border-gray-200">
-                <h3 className="text-base font-semibold text-primary-500 mb-4">{t('app.jobView.activityLog')}</h3>
+                {activeDetailTab === 'history' && (
+              <div>
                 {logsLoading ? (
                   <div className="flex items-center justify-center py-4">
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-500 border-t-transparent"></div>
@@ -2160,63 +2435,37 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         </div>
                       )
                     })}
-                    {/* add note + button (like mobile) — aligns with white boxes, toggles text field */}
-                    {parseJobId(currentJob?.id) != null && !showNoteInput && (
-                      <button
-                        type="button"
-                        onClick={() => setShowNoteInput(true)}
-                        className="mt-4 ml-[36px] px-6 py-3 rounded-full text-sm font-semibold text-white transition-colors"
-                        style={{ backgroundColor: '#3DD57A' }}
-                      >
-                        add note +
-                      </button>
-                    )}
-                    {parseJobId(currentJob?.id) != null && showNoteInput && (
-                      <div className="mt-4 ml-[36px]">
-                        <NoteInput
-                          jobId={parseJobId(currentJob.id)!}
-                          onNoteAdded={() => {
-                            fetchJobLogs(parseJobId(currentJob.id)!)
-                            setShowNoteInput(false)
-                          }}
-                          onCancel={() => setShowNoteInput(false)}
-                        />
-                      </div>
-                    )}
-                    {parseJobId(currentJob?.id) == null && (
-                      <div className="text-xs text-gray-500 mt-4">Notes are only available for real jobs (not subscription previews).</div>
-                    )}
                   </div>
                 ) : (
                   <div>
-                    <div className="text-sm text-gray-500">No timeline entries yet</div>
-                    {parseJobId(currentJob?.id) != null && !showNoteInput && (
+                    <div className="text-sm text-gray-500">{t('app.jobView.noTimeline')}</div>
+                  </div>
+                )}
+                {parseJobId(currentJob?.id) != null && !isProjectedJob && !isLocked && (
+                  <div className="mt-4 pt-4 border-t border-dashed border-slate-300">
+                    {showNoteInput ? (
+                      <NoteInput
+                        jobId={parseJobId(currentJob.id)!}
+                        onNoteAdded={() => {
+                          fetchJobLogs(parseJobId(currentJob.id)!)
+                          setShowNoteInput(false)
+                        }}
+                        onCancel={() => setShowNoteInput(false)}
+                      />
+                    ) : (
                       <button
                         type="button"
                         onClick={() => setShowNoteInput(true)}
-                        className="mt-4 ml-[36px] px-6 py-3 rounded-full text-sm font-semibold text-white transition-colors"
-                        style={{ backgroundColor: '#3DD57A' }}
+                        className="text-xs font-medium text-primary-800/80 hover:text-primary-950"
                       >
-                        add note +
+                        {t('app.jobView.addLogNote')}
                       </button>
-                    )}
-                    {parseJobId(currentJob?.id) != null && showNoteInput && (
-                      <div className="mt-4 ml-[36px]">
-                        <NoteInput
-                          jobId={parseJobId(currentJob.id)!}
-                          onNoteAdded={() => {
-                            fetchJobLogs(parseJobId(currentJob.id)!)
-                            setShowNoteInput(false)
-                          }}
-                          onCancel={() => setShowNoteInput(false)}
-                        />
-                      </div>
-                    )}
-                    {parseJobId(currentJob?.id) == null && (
-                      <div className="text-xs text-gray-500 mt-4">Notes are only available for real jobs.</div>
                     )}
                   </div>
                 )}
+              </div>
+                )}
+
               </div>
 
             </>

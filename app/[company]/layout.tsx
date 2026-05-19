@@ -66,6 +66,18 @@ export default function CompanyLayout({ children }: { children: React.ReactNode 
   )
 }
 
+/** When the URL slug cannot be resolved, prefer another membership; if only one company exists, use it. */
+function pickFallbackCompany(
+  userData: { companies?: Array<{ slug?: string }> },
+  currentSlug: string
+): { slug: string } | undefined {
+  const list = userData.companies || []
+  const alt = list.find((c) => c?.slug && c.slug !== currentSlug)
+  if (alt?.slug) return { slug: alt.slug }
+  if (list.length === 1 && list[0]?.slug) return { slug: list[0].slug }
+  return undefined
+}
+
 function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const params = useParams()
   const router = useRouter()
@@ -128,7 +140,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
           if (userStr) {
             try {
               const userData = JSON.parse(userStr)
-              const validCompany = userData.companies?.find((c: any) => c.slug !== companySlug)
+              const validCompany = pickFallbackCompany(userData, companySlug)
               if (validCompany) {
                 console.log(`Redirecting to valid company: ${validCompany.slug}`)
                 router.replace(`/${validCompany.slug}/dashboard`)
@@ -197,7 +209,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
           if (userStr) {
             try {
               const userData = JSON.parse(userStr)
-              const validCompany = userData.companies?.find((c: any) => c.slug !== companySlug)
+              const validCompany = pickFallbackCompany(userData, companySlug)
               if (validCompany) {
                 console.log(`Redirecting to valid company: ${validCompany.slug}`)
                 router.replace(`/${validCompany.slug}/dashboard`)
@@ -219,7 +231,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         if (userStr) {
           try {
             const userData = JSON.parse(userStr)
-            const validCompany = userData.companies?.find((c: any) => c.slug !== companySlug)
+            const validCompany = pickFallbackCompany(userData, companySlug)
             if (validCompany) {
               console.log(`Redirecting to valid company: ${validCompany.slug}`)
               router.replace(`/${validCompany.slug}/dashboard`)

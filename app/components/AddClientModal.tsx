@@ -192,15 +192,16 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="flex min-h-screen items-end sm:items-center justify-center sm:p-4">
         {/* Backdrop */}
-        <div 
-          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
+        <div
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity animate-backdrop-in"
           onClick={handleClose}
         />
-        
-        {/* Modal */}
-        <div className="relative bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
+
+        {/* Modal — bottom sheet on mobile so the form is reachable from the
+            keyboard, popped card on tablet/desktop. */}
+        <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[90vh] overflow-y-auto border border-slate-200 pb-safe animate-sheet-in-bottom sm:animate-pop">
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-primary-500 to-accent-500 text-white">
             <div>

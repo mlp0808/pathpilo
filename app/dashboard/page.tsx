@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUser } from '../hooks/useUser'
+import { getDashboardHref } from '../utils/sessionClient'
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -10,14 +11,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      // Prefer redirecting to a company slug dashboard if we can.
-      // Otherwise, send the user to the company picker.
-      const companySlug = user.activeCompany?.slug || user.companies?.[0]?.slug
-      if (companySlug) {
-        router.replace(`/${companySlug}/dashboard`)
-      } else {
-        router.replace('/select-company')
-      }
+      router.replace(getDashboardHref(user as Record<string, unknown>))
     }
   }, [user, loading, router])
 

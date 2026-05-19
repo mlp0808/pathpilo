@@ -56,6 +56,12 @@ module.exports = {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
       },
+      screens: {
+        // Tailwind defaults: sm 640, md 768, lg 1024, xl 1280, 2xl 1536.
+        // We add an `xs` for the smallest phones so we can opt-in to even
+        // tighter spacing where it matters.
+        xs: '420px',
+      },
       keyframes: {
         fadeIn: {
           '0%': { opacity: '0' },
@@ -69,11 +75,21 @@ module.exports = {
           '0%': { opacity: '0', transform: 'translateX(100%)' },
           '100%': { opacity: '1', transform: 'translateX(0)' },
         },
+        slideInRightFull: {
+          '0%': { transform: 'translateX(100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
+        slideOutRightFull: {
+          '0%': { transform: 'translateX(0)' },
+          '100%': { transform: 'translateX(100%)' },
+        },
       },
       animation: {
         fadeIn: 'fadeIn 0.2s ease-out',
         slideDown: 'slideDown 0.3s ease-out',
         slideInRight: 'slideInRight 0.3s ease-out',
+        slideInRightFull: 'slideInRightFull 0.32s cubic-bezier(0.22, 1, 0.36, 1) both',
+        slideOutRightFull: 'slideOutRightFull 0.24s cubic-bezier(0.4, 0, 0.2, 1) both',
       },
     },
   },

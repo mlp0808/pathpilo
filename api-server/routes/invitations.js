@@ -1,6 +1,11 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
+const {
+  fetchUserCompanies,
+  fetchPendingInvitesForEmail,
+  DEFAULT_LANGUAGE_CODE,
+} = require('../utils/userLoginPayload');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -43,7 +48,10 @@ router.get('/:token', async (req, res) => {
     const inv = result.rows[0];
 
     // Check if a user account already exists for this email
-    const userCheck = await pool.query('SELECT id FROM users WHERE email = $1', [inv.email]);
+    const userCheck = await pool.query(
+      'SELECT id FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM($1))',
+      [inv.email]
+    );
     const userExists = userCheck.rows.length > 0;
 
     res.json({
@@ -89,7 +97,7 @@ router.post('/:token/accept', authenticateToken, async (req, res) => {
 
     // Verify the logged-in user's email matches the invitation
     const userResult = await pool.query(
-      'SELECT id, first_name, last_name, email, role FROM users WHERE id = $1',
+      'SELECT id, first_name, last_name, email, role, language_code FROM users WHERE id = $1',
       [userId]
     );
     if (userResult.rows.length === 0) {
@@ -114,22 +122,20 @@ router.post('/:token/accept', authenticateToken, async (req, res) => {
       [invitation.id]
     );
 
-    // Build a fresh JWT with the new company context
-    const companiesResult = await pool.query(`
-      SELECT uc.company_id AS id, uc.role, c.name, c.slug
-      FROM user_companies uc
-      JOIN companies c ON uc.company_id = c.id
-      WHERE uc.user_id = $1
-      ORDER BY uc.created_at ASC
-    `, [userId]);
-
-    const companies = companiesResult.rows;
-    const activeCompany = companies.find(c => c.id === invitation.company_id) || companies[0];
+    const companies = await fetchUserCompanies(userId);
+    const pendingInvites = await fetchPendingInvitesForEmail(user.email);
+    const activeCompany =
+      companies.find((c) => c.id === invitation.company_id) ||
+      companies.find((c) => !c.suspendedAt) ||
+      companies[0] ||
+      null;
 
     const newToken = jwt.sign(
       {
         userId,
         email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
         role: activeCompany?.role || 'employee',
         activeCompanyId: activeCompany?.id || null,
       },
@@ -137,22 +143,116 @@ router.post('/:token/accept', authenticateToken, async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    const userPayload = {
+      id: userId,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
+      role: activeCompany?.role || 'employee',
+      companies,
+      pendingInvites,
+      activeCompany,
+    };
+    if (activeCompany) {
+      userPayload.companyId = activeCompany.id;
+      userPayload.companyName = activeCompany.name;
+    }
+
     res.json({
       message: 'Invitation accepted successfully',
       token: newToken,
-      user: {
-        id: userId,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        role: activeCompany?.role || 'employee',
-        activeCompany: activeCompany || null,
-        companies,
-      },
+      user: userPayload,
     });
   } catch (error) {
     console.error('Error accepting invitation:', error);
     res.status(500).json({ error: 'Failed to accept invitation' });
+  }
+});
+
+// POST /api/invitations/:token/decline — requires auth; marks invite cancelled for this email
+router.post('/:token/decline', authenticateToken, async (req, res) => {
+  try {
+    const { token } = req.params;
+    const userId = req.user.userId;
+
+    const inviteResult = await pool.query(
+      `
+      SELECT ci.id, ci.email
+      FROM company_invitations ci
+      WHERE ci.token = $1
+        AND ci.status = 'pending'
+        AND ci.expires_at > NOW()
+    `,
+      [token]
+    );
+
+    if (inviteResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired invitation' });
+    }
+
+    const invitation = inviteResult.rows[0];
+
+    const userResult = await pool.query(
+      'SELECT id, first_name, last_name, email, role, language_code FROM users WHERE id = $1',
+      [userId]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const user = userResult.rows[0];
+
+    if (user.email.toLowerCase() !== invitation.email.toLowerCase()) {
+      return res.status(403).json({ error: 'This invitation is not for your email address' });
+    }
+
+    await pool.query(
+      `UPDATE company_invitations SET status = 'cancelled' WHERE id = $1 AND status = 'pending'`,
+      [invitation.id]
+    );
+
+    const companies = await fetchUserCompanies(userId);
+    const pendingInvites = await fetchPendingInvitesForEmail(user.email);
+    const activeCompany =
+      companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
+
+    const newToken = jwt.sign(
+      {
+        userId,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        role: activeCompany?.role || user.role || 'employee',
+        activeCompanyId: activeCompany?.id || null,
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    const userPayload = {
+      id: userId,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
+      role: activeCompany?.role || user.role || 'employee',
+      companies,
+      pendingInvites,
+      activeCompany: activeCompany || null,
+    };
+    if (activeCompany) {
+      userPayload.companyId = activeCompany.id;
+      userPayload.companyName = activeCompany.name;
+    }
+
+    res.json({
+      message: 'Invitation declined',
+      token: newToken,
+      user: userPayload,
+    });
+  } catch (error) {
+    console.error('Error declining invitation:', error);
+    res.status(500).json({ error: 'Failed to decline invitation' });
   }
 });
 

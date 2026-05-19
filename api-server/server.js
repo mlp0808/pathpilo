@@ -179,6 +179,12 @@ const { runAutomatedEmailTick } = require('./utils/automatedEmails');
 const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
 const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
 const { ensureWorkHoursSchema } = require('./utils/workHoursSchema');
+const {
+  ensureSecureNotesSchema,
+  ensureSecureNotesMultiNoteSupport,
+} = require('./utils/secureNotesSchema');
+const { assertMasterKeyConfigured } = require('./utils/secureNotes');
+const { migrateLegacyJobNotes } = require('./utils/jobEncryptedNotes');
 
 // Mount routes
 app.use('/api/auth', authRoutes);
@@ -264,40 +270,60 @@ process.on('SIGINT', () => {
   });
 });
 
-// Start server
-app.listen(port, () => {
-  console.log(`🚀 PathPilo API Server running on port ${port}`);
-  console.log(`📊 Health check: http://localhost:${port}/api/health`);
-  console.log(`📚 API documentation: http://localhost:${port}/`);
-  runAutomatedEmailTick(pool);
-  setInterval(() => {
+// Start server: create secure-notes tables before accepting traffic. Schema
+// does not need SECURE_NOTES_MASTER_KEY; validate the key after so a missing
+// key never skips migrations (otherwise reads hit "relation does not exist").
+(async () => {
+  try {
+    await ensureSecureNotesSchema(pool);
+    await ensureSecureNotesMultiNoteSupport(pool);
+    console.log('✅ Secure notes schema ready');
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.error('[secureNotesSchema] migration failed:', msg);
+  }
+
+  try {
+    assertMasterKeyConfigured();
+    await migrateLegacyJobNotes(pool);
+  } catch (err) {
+    console.error('[secureNotes] FATAL (encrypt/decrypt will fail):', err.message || err);
+  }
+
+  app.listen(port, () => {
+    console.log(`🚀 PathPilo API Server running on port ${port}`);
+    console.log(`📊 Health check: http://localhost:${port}/api/health`);
+    console.log(`📚 API documentation: http://localhost:${port}/`);
     runAutomatedEmailTick(pool);
-  }, 60 * 1000);
+    setInterval(() => {
+      runAutomatedEmailTick(pool);
+    }, 60 * 1000);
 
-  // One-shot backfill: rewrite any historical jobs whose title is empty so
-  // the UI no longer shows "Untitled job". Deferred a few seconds so it
-  // doesn't compete with startup traffic. Idempotent — safe to re-run on
-  // every boot.
-  setTimeout(() => {
-    backfillJobAutoTitles(pool).catch((err) =>
-      console.warn('[jobAutoTitle] backfill failed:', err.message || err)
+    // One-shot backfill: rewrite any historical jobs whose title is empty so
+    // the UI no longer shows "Untitled job". Deferred a few seconds so it
+    // doesn't compete with startup traffic. Idempotent — safe to re-run on
+    // every boot.
+    setTimeout(() => {
+      backfillJobAutoTitles(pool).catch((e) =>
+        console.warn('[jobAutoTitle] backfill failed:', e.message || e)
+      );
+    }, 5000);
+
+    // Add invoice snapshot + company contact columns idempotently. Single call
+    // populates: companies.email/phone/website/logo_url, clients.ean_number,
+    // services.bookkeeping_account, invoices.from_*/bill_to_*/tax_label/etc.
+    ensureSnapshotColumns(pool).catch((e) =>
+      console.warn('[invoiceSnapshot] migration failed:', e.message || e)
     );
-  }, 5000);
 
-  // Add invoice snapshot + company contact columns idempotently. Single call
-  // populates: companies.email/phone/website/logo_url, clients.ean_number,
-  // services.bookkeeping_account, invoices.from_*/bill_to_*/tax_label/etc.
-  ensureSnapshotColumns(pool).catch((err) =>
-    console.warn('[invoiceSnapshot] migration failed:', err.message || err)
-  );
-
-  // Work hours + appointments schema: mode-aware work hours, company default
-  // template, unified employee_appointments table (replacing employee_leave)
-  // + one-shot legacy data migration.
-  ensureWorkHoursSchema(pool).catch((err) =>
-    console.warn('[workHoursSchema] migration failed:', err.message || err)
-  );
-});
+    // Work hours + appointments schema: mode-aware work hours, company default
+    // template, unified employee_appointments table (replacing employee_leave)
+    // + one-shot legacy data migration.
+    ensureWorkHoursSchema(pool).catch((e) =>
+      console.warn('[workHoursSchema] migration failed:', e.message || e)
+    );
+  });
+})();
 
 // Export for testing
 module.exports = app;
