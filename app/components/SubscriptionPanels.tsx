@@ -18,8 +18,15 @@ import { useAppI18n } from './I18nProvider'
 //  SchedulePanel
 // ─────────────────────────────────────────────────────────────
 
-interface SchedulePanelProps extends ScheduleState {
-  onStartingDateChange: (v: string) => void
+interface SchedulePanelProps extends Omit<ScheduleState, 'startingDate'> {
+  /** Anchor for forecasts: today when ASAP, else custom picked date. */
+  effectiveStartingDate: string
+  /** First visit YYYY-MM-DD (shown in preview; sent to API when ASAP). */
+  firstVisitYmd: string
+  startAsap: boolean
+  onStartAsapChange: (v: boolean) => void
+  customStartingDate: string
+  onCustomStartingDateChange: (v: string) => void
   onRecurrenceTypeChange: (v: 'weekly' | 'monthly') => void
   onDayOfWeekChange: (v: number) => void
   onIntervalWeeksChange: (v: number) => void
@@ -34,7 +41,10 @@ interface SchedulePanelProps extends ScheduleState {
 }
 
 export function SchedulePanel({
-  startingDate, onStartingDateChange,
+  effectiveStartingDate,
+  firstVisitYmd,
+  startAsap, onStartAsapChange,
+  customStartingDate, onCustomStartingDateChange,
   recurrenceType, onRecurrenceTypeChange,
   dayOfWeek, onDayOfWeekChange,
   intervalWeeks, onIntervalWeeksChange,
@@ -68,34 +78,34 @@ export function SchedulePanel({
           .replace('{{n}}', String(intervalMonths))
           .replace('{{ordinal}}', ordinal(dayOfMonth))
 
-  return (
-    <div className="space-y-5">
-      <div>
-        <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.startingDate')}</label>
-        <input
-          type="date"
-          value={startingDate}
-          onChange={e => onStartingDateChange(e.target.value)}
-          className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
-        />
-        <p className="text-xs text-gray-400 mt-1.5">
-          {t('app.subscription.schedule.startingDateHelp')}
-        </p>
-      </div>
+  const btnSeg = (active: boolean) =>
+    `flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
+      active
+        ? 'bg-primary-800 text-white shadow-sm'
+        : 'text-gray-600 hover:bg-gray-100'
+    }`
 
+  const btnChoice = (active: boolean) =>
+    `min-h-[2.25rem] py-2 px-1 rounded-md text-xs font-medium transition-colors ${
+      active
+        ? 'bg-primary-800 text-white shadow-sm'
+        : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+    }`
+
+  return (
+    <div className="space-y-4">
       <div>
-        <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.recurrenceType')}</label>
-        <div className="flex gap-2">
+        <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.recurrenceType')}</label>
+        <div className="flex p-0.5 gap-0.5 rounded-lg border border-gray-200 bg-white">
           {(['weekly', 'monthly'] as const).map(type => (
             <button
               key={type}
               type="button"
-              onClick={() => onRecurrenceTypeChange(type)}
-              className={`flex-1 py-2.5 text-sm font-semibold rounded-xl border transition-all capitalize ${
-                recurrenceType === type
-                  ? 'bg-primary-500 text-white border-primary-500 shadow-md shadow-primary-500/20'
-                  : 'bg-white border-gray-200 text-gray-600 hover:border-primary-300 hover:text-primary-600'
-              }`}
+              onClick={() => {
+                onCustomIntervalChange('')
+                onRecurrenceTypeChange(type)
+              }}
+              className={btnSeg(recurrenceType === type)}
             >
               {type === 'weekly' ? t('app.subscription.schedule.weekly') : t('app.subscription.schedule.monthly')}
             </button>
@@ -106,18 +116,14 @@ export function SchedulePanel({
       {recurrenceType === 'weekly' && (
         <>
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.dayOfWeek')}</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.dayOfWeek')}</label>
             <div className="grid grid-cols-7 gap-1">
               {weekDayShort.map((name, idx) => (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => onDayOfWeekChange(idx)}
-                  className={`py-2 rounded-xl text-xs font-semibold transition-all ${
-                    dayOfWeek === idx
-                      ? 'bg-accent-500 text-white shadow-md shadow-accent-500/20'
-                      : 'bg-white border border-gray-200 text-gray-600 hover:border-accent-300 hover:text-accent-600'
-                  }`}
+                  className={btnChoice(dayOfWeek === idx)}
                 >
                   {name.slice(0, 2)}
                 </button>
@@ -126,27 +132,33 @@ export function SchedulePanel({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.repeatEvery')}</label>
-            <div className="grid grid-cols-3 gap-2">
-              {[1, 2, 3, 4, 6].map(n => (
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.repeatEvery')}</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[1, 2, 3].map(n => (
                 <button
                   key={n}
                   type="button"
                   onClick={() => { onIntervalWeeksChange(n); onCustomIntervalChange('') }}
-                  className={`py-2.5 text-sm font-semibold rounded-xl border transition-all ${
-                    intervalWeeks === n && !customInterval
-                      ? 'bg-accent-500 text-white border-accent-500 shadow-md shadow-accent-500/20'
-                      : 'bg-white border-gray-200 text-gray-700 hover:border-accent-300 hover:text-accent-600'
-                  }`}
+                  className={btnChoice(intervalWeeks === n && !customInterval)}
                 >
                   {n === 1 ? t('app.subscription.schedule.weeklyShort') : t('app.subscription.schedule.nWeeks').replace('{{n}}', String(n))}
                 </button>
               ))}
-              <div className={`flex items-center gap-1.5 rounded-xl border px-3 transition-all ${
-                customInterval
-                  ? 'border-accent-500 bg-accent-50 shadow-md shadow-accent-500/20'
-                  : 'border-gray-200 bg-white hover:border-accent-300'
-              }`}>
+              {[4, 6].map(n => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => { onIntervalWeeksChange(n); onCustomIntervalChange('') }}
+                  className={btnChoice(intervalWeeks === n && !customInterval)}
+                >
+                  {t('app.subscription.schedule.nWeeks').replace('{{n}}', String(n))}
+                </button>
+              ))}
+              <div
+                className={`min-w-0 flex items-center gap-1 rounded-md border px-1.5 py-0.5 transition-colors ${
+                  customInterval ? 'border-primary-800 bg-primary-800' : 'border-gray-200 bg-white'
+                }`}
+              >
                 <input
                   type="number"
                   min={1}
@@ -159,15 +171,15 @@ export function SchedulePanel({
                     if (!isNaN(num) && num > 0) onIntervalWeeksChange(num)
                   }}
                   placeholder={t('app.subscription.schedule.customPlaceholder')}
-                  className={`w-full py-2 text-sm font-semibold bg-transparent focus:outline-none text-center ${
-                    customInterval ? 'text-accent-600' : 'text-gray-500'
+                  className={`min-w-0 w-full py-1.5 text-xs font-medium bg-transparent focus:outline-none text-center ${
+                    customInterval ? 'text-white placeholder:text-white/60' : 'text-gray-500'
                   }`}
                 />
-                {customInterval && (
-                  <span className="text-xs text-accent-600 font-medium whitespace-nowrap">
-                    {parseInt(customInterval) > 1 ? t('app.subscription.schedule.wks') : t('app.subscription.schedule.wk')}
+                {customInterval ? (
+                  <span className="text-[10px] text-white/80 shrink-0 pr-0.5">
+                    {parseInt(customInterval, 10) > 1 ? t('app.subscription.schedule.wks') : t('app.subscription.schedule.wk')}
                   </span>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
@@ -177,100 +189,124 @@ export function SchedulePanel({
       {recurrenceType === 'monthly' && (
         <>
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.dayOfMonth')}</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.dayOfMonth')}</label>
             <div className="grid grid-cols-7 gap-1">
               {Array.from({ length: 28 }, (_, i) => i + 1).map(day => (
                 <button
                   key={day}
                   type="button"
                   onClick={() => onDayOfMonthChange(day)}
-                  className={`py-2 rounded-xl text-xs font-semibold transition-all ${
-                    dayOfMonth === day
-                      ? 'bg-accent-500 text-white shadow-md shadow-accent-500/20'
-                      : 'bg-white border border-gray-200 text-gray-600 hover:border-accent-300 hover:text-accent-600'
-                  }`}
+                  className={btnChoice(dayOfMonth === day)}
                 >
                   {day}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">
+            <p className="text-xs text-gray-400 mt-1">
               {t('app.subscription.schedule.dayOfMonthHelp')}
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.subscription.schedule.repeatEvery')}</label>
-            <div className="grid grid-cols-3 gap-2">
-              {[1, 2, 3].map(n => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => { onIntervalMonthsChange(n); onCustomIntervalChange('') }}
-                  className={`py-2.5 text-sm font-semibold rounded-xl border transition-all ${
-                    intervalMonths === n && !customInterval
-                      ? 'bg-accent-500 text-white border-accent-500 shadow-md shadow-accent-500/20'
-                      : 'bg-white border-gray-200 text-gray-700 hover:border-accent-300 hover:text-accent-600'
-                  }`}
-                >
-                  {n === 1 ? t('app.subscription.schedule.monthly') : n === 2 ? t('app.subscription.schedule.every2mo') : t('app.subscription.schedule.quarterly')}
-                </button>
-              ))}
-              <div className={`col-span-3 flex items-center gap-1 rounded-xl border px-3 transition-all ${
-                customInterval
-                  ? 'border-accent-500 bg-accent-50'
-                  : 'border-gray-200 bg-white hover:border-accent-300'
-              }`}>
-                <input
-                  type="number"
-                  min={1}
-                  max={24}
-                  value={customInterval}
-                  onChange={e => {
-                    const v = e.target.value
-                    onCustomIntervalChange(v)
-                    const num = parseInt(v)
-                    if (!isNaN(num) && num > 0) onIntervalMonthsChange(num)
-                  }}
-                  placeholder={t('app.subscription.schedule.customMonthsPlaceholder')}
-                  className={`w-full py-2.5 text-sm font-semibold bg-transparent focus:outline-none ${
-                    customInterval ? 'text-accent-600' : 'text-gray-400'
-                  }`}
-                />
-                {customInterval && (
-                  <span className="text-xs text-accent-600 font-medium whitespace-nowrap">
-                    {parseInt(customInterval) > 1 ? t('app.subscription.schedule.months') : t('app.subscription.schedule.month')}
-                  </span>
-                )}
-              </div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              {t('app.subscription.schedule.repeatEveryNMonthsLabel', 'Repeat every')}
+            </label>
+            <div className="flex items-center gap-2 max-w-[220px]">
+              <input
+                type="number"
+                min={1}
+                max={24}
+                value={intervalMonths}
+                onChange={e => {
+                  const raw = e.target.value
+                  if (raw === '') {
+                    onIntervalMonthsChange(1)
+                    return
+                  }
+                  const n = parseInt(raw, 10)
+                  if (!Number.isFinite(n)) return
+                  onIntervalMonthsChange(Math.min(24, Math.max(1, n)))
+                }}
+                className="w-20 px-3 py-2 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-800/25"
+              />
+              <span className="text-xs text-gray-500">
+                {intervalMonths === 1
+                  ? t('app.subscription.schedule.month', 'month')
+                  : t('app.subscription.schedule.months', 'months')}
+              </span>
             </div>
+            <p className="text-xs text-gray-400 mt-1.5">
+              {t(
+                'app.subscription.schedule.repeatEveryNMonthsHelp',
+                'Enter how many months between visits. 1 = every month, 2 = every other month, 3 = quarterly, etc.'
+              )}
+            </p>
           </div>
         </>
       )}
 
-      <div className="bg-gradient-to-br from-accent-50/60 to-white rounded-2xl p-5 border-2 border-accent-200/40 shadow-sm">
-        <div className="text-xs font-bold text-accent-600 uppercase tracking-wider mb-3">{t('app.subscription.schedule.schedulePreview')}</div>
-        <div className="space-y-2">
-          <div className="text-base font-bold text-primary-800">
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.startingDate')}</label>
+        <div className="flex p-0.5 gap-0.5 rounded-lg border border-gray-200 bg-white mb-2">
+          <button
+            type="button"
+            onClick={() => onStartAsapChange(true)}
+            className={btnSeg(startAsap)}
+          >
+            {t('app.subscription.schedule.startAsap', 'As soon as possible')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onStartAsapChange(false)}
+            className={btnSeg(!startAsap)}
+          >
+            {t('app.subscription.schedule.startPickDate', 'Pick a date')}
+          </button>
+        </div>
+        {!startAsap && (
+          <input
+            type="date"
+            value={customStartingDate}
+            onChange={e => onCustomStartingDateChange(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-1 focus:ring-primary-400/30 focus:border-primary-400"
+          />
+        )}
+        <p className="text-xs text-gray-400 mt-1.5">
+          {startAsap
+            ? t('app.subscription.schedule.startAsapHelp', 'The first visit is the next matching day on or after today.')
+            : t('app.subscription.schedule.startingDateHelp')}
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+        <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-2">{t('app.subscription.schedule.schedulePreview')}</div>
+        <div className="space-y-1.5">
+          <div className="text-sm font-semibold text-gray-900">
             {recurrenceType === 'weekly' ? weeklyPreview : monthlyPreview}
           </div>
-          {startingDate ? (
-            <div className="text-sm text-primary-600 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent-500 inline-block" />
-              {t('app.subscription.schedule.starting')}{' '}
-              {new Date(startingDate).toLocaleDateString(dateLocale, {
-                weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-              })}
+          {firstVisitYmd ? (
+            <div className="text-xs text-gray-600 space-y-0.5">
+              <div className="text-[11px] font-medium text-gray-700">
+                {t('app.subscription.schedule.firstVisitLabel', 'First visit')}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-1 h-1 rounded-full bg-primary-600 inline-block flex-shrink-0" />
+                <span>
+                  {new Date(firstVisitYmd + 'T12:00:00').toLocaleDateString(dateLocale, {
+                    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+                  })}
+                </span>
+              </div>
             </div>
           ) : (
-            <div className="text-sm text-gray-400 italic">{t('app.subscription.schedule.chooseStartingDate')}</div>
+            <div className="text-xs text-gray-400">{t('app.subscription.schedule.chooseStartingDate')}</div>
           )}
           {hasStats && (
-            <div className="mt-3 pt-3 border-t border-accent-200/40 flex flex-wrap gap-4 text-xs text-gray-500">
-              <span><span className="font-semibold text-primary-700">{fmtMoney(pricePerVisit, countryCode)}</span> {t('app.subscription.schedule.perVisitStat')}</span>
-              <span><span className="font-semibold text-primary-700">{durationPerVisit} {t('app.subscription.schedule.minPerVisit')}</span> {t('app.subscription.schedule.perVisitStat')}</span>
-              <span><span className="font-semibold text-primary-700">~{visitsPerYear}×</span> {t('app.subscription.schedule.perYearStat')}</span>
-              <span><span className="font-semibold text-primary-700">{fmtMoney(revenuePerYear, countryCode)}</span> {t('app.subscription.schedule.annualRevenue')}</span>
+            <div className="mt-2 pt-2 border-t border-gray-200/80 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+              <span><span className="font-medium text-gray-800">{fmtMoney(pricePerVisit, countryCode)}</span> {t('app.subscription.schedule.perVisitStat')}</span>
+              <span><span className="font-medium text-gray-800">{durationPerVisit} {t('app.subscription.schedule.minPerVisit')}</span></span>
+              <span><span className="font-medium text-gray-800">~{visitsPerYear}×</span> {t('app.subscription.schedule.perYearStat')}</span>
+              <span><span className="font-medium text-gray-800">{fmtMoney(revenuePerYear, countryCode)}</span> {t('app.subscription.schedule.annualRevenue')}</span>
             </div>
           )}
         </div>

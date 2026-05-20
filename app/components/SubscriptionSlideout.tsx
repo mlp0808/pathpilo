@@ -12,6 +12,8 @@ import {
   buildWeeklyForecast,
   buildMonthlyForecast,
   fmtMoney,
+  todayYmdLocal,
+  firstOccurrenceOnOrAfterAnchor,
 } from '../utils/subscriptionHelpers'
 import { useAppI18n } from './I18nProvider'
 
@@ -64,7 +66,8 @@ export default function SubscriptionSlideout({
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [subscriptionTitle, setSubscriptionTitle] = useState('')
-  const [startingDate, setStartingDate] = useState('')
+  const [startAsap, setStartAsap] = useState(true)
+  const [customStartingDate, setCustomStartingDate] = useState('')
   const [recurrenceType, setRecurrenceType] = useState<'weekly' | 'monthly'>('weekly')
   const [dayOfWeek, setDayOfWeek] = useState<number>(1)
   const [intervalWeeks, setIntervalWeeks] = useState<number>(1)
@@ -96,12 +99,43 @@ export default function SubscriptionSlideout({
     : Math.round(52 / intervalWeeks)
   const revenuePerYear = pricePerVisit * visitsPerYear
 
+  const effectiveStartingDate = useMemo(
+    () => (startAsap ? todayYmdLocal() : customStartingDate),
+    [startAsap, customStartingDate],
+  )
+
+  const firstVisitYmd = useMemo(() => {
+    const anchor = startAsap ? todayYmdLocal() : customStartingDate.trim()
+    if (!anchor) return ''
+    return firstOccurrenceOnOrAfterAnchor(
+      anchor,
+      recurrenceType,
+      dayOfWeek,
+      intervalWeeks,
+      dayOfMonth,
+      intervalMonths,
+    )
+  }, [
+    startAsap,
+    customStartingDate,
+    recurrenceType,
+    dayOfWeek,
+    intervalWeeks,
+    dayOfMonth,
+    intervalMonths,
+  ])
+
+  const startingDateForApi = useMemo(
+    () => (startAsap ? firstVisitYmd : customStartingDate.trim()),
+    [startAsap, firstVisitYmd, customStartingDate],
+  )
+
   // forecast: next 16 upcoming dates
   const forecastDates = useMemo(
     () => recurrenceType === 'monthly'
-      ? buildMonthlyForecast(startingDate, dayOfMonth, intervalMonths, 16)
-      : buildWeeklyForecast(startingDate, dayOfWeek, intervalWeeks, 16),
-    [startingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths]
+      ? buildMonthlyForecast(effectiveStartingDate, dayOfMonth, intervalMonths, 16)
+      : buildWeeklyForecast(effectiveStartingDate, dayOfWeek, intervalWeeks, 16),
+    [effectiveStartingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths],
   )
 
   // original price per visit (from when modal opened) for change indicator
@@ -115,7 +149,12 @@ export default function SubscriptionSlideout({
       setActiveTab('details')
       if (subscription) {
         setSubscriptionTitle(subscription.title || '')
-        setStartingDate(subscription.starting_date?.split('T')[0] || subscription.next_occurrence_date?.split('T')[0] || '')
+        setStartAsap(false)
+        setCustomStartingDate(
+          subscription.starting_date?.split('T')[0] ||
+            subscription.next_occurrence_date?.split('T')[0] ||
+            '',
+        )
         const rt = subscription.recurrence_type === 'monthly' ? 'monthly' : 'weekly'
         setRecurrenceType(rt)
         setDayOfWeek(subscription.day_of_week ?? 1)
@@ -165,7 +204,8 @@ export default function SubscriptionSlideout({
 
   const resetForm = () => {
     setSubscriptionTitle('')
-    setStartingDate('')
+    setStartAsap(true)
+    setCustomStartingDate('')
     setRecurrenceType('weekly')
     setDayOfWeek(1)
     setIntervalWeeks(1)
@@ -233,7 +273,8 @@ export default function SubscriptionSlideout({
 
   // ── submit ───────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!subscriptionTitle.trim() || !startingDate || selectedServices.length === 0) return
+    if (!subscriptionTitle.trim() || selectedServices.length === 0) return
+    if (!startAsap && !customStartingDate.trim()) return
     try {
       setIsSubmitting(true)
       const token = localStorage.getItem('token')
@@ -246,9 +287,12 @@ export default function SubscriptionSlideout({
           custom_price: parseFloat(s.customPrice) || s.price,
           custom_duration: s.customDuration,
         })),
-        starting_date: startingDate || null,
+        starting_date: startingDateForApi || null,
         recurrence_type: recurrenceType,
-        day_of_week: recurrenceType === 'weekly' ? dayOfWeek : new Date(startingDate).getDay(),
+        day_of_week:
+          recurrenceType === 'weekly'
+            ? dayOfWeek
+            : new Date(`${startingDateForApi}T12:00:00`).getDay(),
         day_of_month: recurrenceType === 'monthly' ? dayOfMonth : null,
         interval_value: recurrenceType === 'monthly' ? intervalMonths : intervalWeeks,
         // also send interval_weeks for backwards compat with PUT handler
@@ -298,12 +342,12 @@ export default function SubscriptionSlideout({
       {/* Bottom sheet on mobile, centered card on tablet/desktop. Animations
           differ per breakpoint so the surface always slides from the side that
           makes sense for the form factor. */}
-      <div className="relative bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[98vh] sm:min-h-[660px] flex flex-col overflow-hidden border border-gray-200 transform transition-all duration-300 ease-out animate-sheet-in-bottom sm:animate-slideDown pb-safe">
+        <div className="relative bg-white rounded-t-2xl sm:rounded-2xl shadow-lg max-w-2xl w-full max-h-[92vh] sm:max-h-[98vh] sm:min-h-[520px] flex flex-col overflow-hidden border border-gray-200 transform transition-all duration-300 ease-out animate-sheet-in-bottom sm:animate-slideDown pb-safe">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-2xl font-bold text-primary-800 tracking-tight">
+            <h2 className="text-lg font-semibold text-gray-900 tracking-tight">
               {subscription ? t('app.subscription.titleEdit') : t('app.subscription.titleCreate')}
             </h2>
             <p className="text-sm text-gray-500 font-medium mt-0.5">
@@ -313,15 +357,15 @@ export default function SubscriptionSlideout({
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors"
             >
-              <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
+              <XMarkIcon className="w-5 h-5" />
             </button>
           </div>
         </div>
 
         {/* ── Tabs ───────────────────────────────────────────────────────── */}
-        <div className="flex items-center gap-1 px-6 py-3 border-b border-gray-100 bg-white">
+        <div className="flex items-center gap-0.5 px-4 py-2 border-b border-gray-100 bg-gray-50/50">
           {([
             { id: 'details' as const, label: t('app.subscription.tabDetails'), icon: DocumentTextIcon },
             { id: 'schedule' as const, label: t('app.subscription.tabSchedule'), icon: CalendarDaysIcon },
@@ -331,20 +375,20 @@ export default function SubscriptionSlideout({
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                 activeTab === tab.id
-                  ? 'bg-primary-500 text-white'
-                  : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                  ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                  : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              <tab.icon className="w-4 h-4" />
+              <tab.icon className="w-4 h-4 opacity-70" />
               {tab.label}
             </button>
           ))}
         </div>
 
         {/* ── Content ────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-white to-gray-50/50">
+        <div className="flex-1 overflow-y-auto bg-white">
 
           {/* ──────────── DETAILS TAB ──────────── */}
           {activeTab === 'details' && (
@@ -540,8 +584,12 @@ export default function SubscriptionSlideout({
           {activeTab === 'schedule' && (
             <div className="p-6">
               <SchedulePanel
-                startingDate={startingDate}
-                onStartingDateChange={setStartingDate}
+                effectiveStartingDate={effectiveStartingDate}
+                firstVisitYmd={firstVisitYmd}
+                startAsap={startAsap}
+                onStartAsapChange={setStartAsap}
+                customStartingDate={customStartingDate}
+                onCustomStartingDateChange={setCustomStartingDate}
                 recurrenceType={recurrenceType}
                 onRecurrenceTypeChange={setRecurrenceType}
                 dayOfWeek={dayOfWeek}
@@ -585,21 +633,26 @@ export default function SubscriptionSlideout({
         </div>
 
         {/* ── Footer ─────────────────────────────────────────────────────── */}
-        <div className="border-t border-gray-100 px-6 py-4 bg-white flex items-center justify-between gap-3">
-          <div className="text-xs text-gray-400">
-            {selectedServices.length > 0 && startingDate
+        <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-500">
+            {selectedServices.length > 0 && (startAsap ? !!firstVisitYmd : !!customStartingDate)
               ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear')}`
               : ''
             }
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
+              className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
               {t('app.subscription.cancel')}
             </button>
             <button onClick={handleSubmit}
-              disabled={isSubmitting || !subscriptionTitle.trim() || !startingDate || selectedServices.length === 0}
-              className="px-6 py-2.5 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-accent-500/20 hover:shadow-lg hover:shadow-accent-500/30 hover:scale-[1.02] active:scale-[0.98]">
+              disabled={
+                isSubmitting ||
+                !subscriptionTitle.trim() ||
+                !(startAsap ? !!firstVisitYmd : !!customStartingDate.trim()) ||
+                selectedServices.length === 0
+              }
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-primary-600 text-primary-700 bg-white hover:bg-primary-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               {isSubmitting ? t('app.subscription.saving') : subscription ? t('app.subscription.saveChanges') : t('app.subscription.createSubscriptionBtn')}
             </button>
           </div>

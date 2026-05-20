@@ -17,6 +17,8 @@ import {
   buildMonthlyForecast,
   fmtMoney,
   SelectedService,
+  todayYmdLocal,
+  firstOccurrenceOnOrAfterAnchor,
 } from '../utils/subscriptionHelpers'
 import { useAppI18n } from './I18nProvider'
 
@@ -95,7 +97,8 @@ export default function CreateSubscription({
   const [showTimeToPicker, setShowTimeToPicker] = useState(false)
 
   // ── schedule state ────────────────────────────────────────────
-  const [startingDate, setStartingDate] = useState('')
+  const [startAsap, setStartAsap] = useState(true)
+  const [customStartingDate, setCustomStartingDate] = useState('')
   const [recurrenceType, setRecurrenceType] = useState<'weekly' | 'monthly'>('weekly')
   const [dayOfWeek, setDayOfWeek] = useState(1)
   const [intervalWeeks, setIntervalWeeks] = useState(1)
@@ -129,11 +132,43 @@ export default function CreateSubscription({
     : Math.round(52 / intervalWeeks)
   const revenuePerYear = pricePerVisit * visitsPerYear
 
+  const effectiveStartingDate = useMemo(
+    () => (startAsap ? todayYmdLocal() : customStartingDate),
+    [startAsap, customStartingDate],
+  )
+
+  /** First scheduled visit (e.g. next Monday from today). Used for API when ASAP. */
+  const firstVisitYmd = useMemo(() => {
+    const anchor = startAsap ? todayYmdLocal() : customStartingDate.trim()
+    if (!anchor) return ''
+    return firstOccurrenceOnOrAfterAnchor(
+      anchor,
+      recurrenceType,
+      dayOfWeek,
+      intervalWeeks,
+      dayOfMonth,
+      intervalMonths,
+    )
+  }, [
+    startAsap,
+    customStartingDate,
+    recurrenceType,
+    dayOfWeek,
+    intervalWeeks,
+    dayOfMonth,
+    intervalMonths,
+  ])
+
+  const startingDateForApi = useMemo(
+    () => (startAsap ? firstVisitYmd : customStartingDate.trim()),
+    [startAsap, firstVisitYmd, customStartingDate],
+  )
+
   const forecastDates = useMemo(
     () => recurrenceType === 'monthly'
-      ? buildMonthlyForecast(startingDate, dayOfMonth, intervalMonths, 16)
-      : buildWeeklyForecast(startingDate, dayOfWeek, intervalWeeks, 16),
-    [startingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths],
+      ? buildMonthlyForecast(effectiveStartingDate, dayOfMonth, intervalMonths, 16)
+      : buildWeeklyForecast(effectiveStartingDate, dayOfWeek, intervalWeeks, 16),
+    [effectiveStartingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths],
   )
 
   const selectedUser = users.find(u => u.id === selectedUserId) ?? null
@@ -145,7 +180,8 @@ export default function CreateSubscription({
     setSelectedClient(null)
     setSelectedUserId(null)
     setSubscriptionTitle('')
-    setStartingDate('')
+    setStartAsap(true)
+    setCustomStartingDate('')
     setJobTimeFrom('')
     setJobTimeTo('')
     setJobNote('')
@@ -322,7 +358,10 @@ export default function CreateSubscription({
     if (!subscriptionTitle.trim()) { alert(t('app.subscription.errTitleRequired', 'Please enter a subscription title')); return }
     if (!selectedClient && !isAddingNewClient) { alert(t('app.subscription.errClientRequired', 'Please select or add a client')); return }
     if (selectedServices.length === 0) { alert(t('app.subscription.errServiceRequired', 'Please add at least one service')); return }
-    if (!startingDate) { alert(t('app.subscription.errStartingDateRequired', 'Please set a starting date in the Schedule tab')); return }
+    if (!startAsap && !customStartingDate.trim()) {
+      alert(t('app.subscription.errStartingDateRequired', 'Please set a starting date in the Schedule tab'))
+      return
+    }
 
     try {
       setIsSubmitting(true)
@@ -362,9 +401,12 @@ export default function CreateSubscription({
             ? { custom_title: s.customTitle?.trim() || t('app.subscription.customTaskTitle', 'Custom task'), custom_price: parseFloat(s.customPrice) || 0, custom_duration: s.customDuration || 0 }
             : { service_id: s.id, custom_price: parseFloat(s.customPrice) || s.price, custom_duration: s.customDuration }
         ),
-        starting_date: startingDate || null,
+        starting_date: startingDateForApi || null,
         recurrence_type: recurrenceType,
-        day_of_week: recurrenceType === 'weekly' ? dayOfWeek : new Date(startingDate).getDay(),
+        day_of_week:
+          recurrenceType === 'weekly'
+            ? dayOfWeek
+            : new Date(`${startingDateForApi}T12:00:00`).getDay(),
         day_of_month: recurrenceType === 'monthly' ? dayOfMonth : null,
         interval_value: recurrenceType === 'monthly' ? intervalMonths : intervalWeeks,
         scheduled_time_from: jobTimeFrom || null,
@@ -401,18 +443,22 @@ export default function CreateSubscription({
         : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim())
     : null
 
-  const canSubmit = !isSubmitting && subscriptionTitle.trim().length > 0 &&
-    (!!selectedClient || isAddingNewClient) && selectedServices.length > 0 && !!startingDate
+  const canSubmit =
+    !isSubmitting &&
+    subscriptionTitle.trim().length > 0 &&
+    (!!selectedClient || isAddingNewClient) &&
+    selectedServices.length > 0 &&
+    (startAsap ? !!firstVisitYmd : !!customStartingDate.trim())
 
   return (
     <>
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full min-h-[660px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200">
+        <div className="bg-white rounded-2xl shadow-lg max-w-2xl w-full min-h-[520px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200">
 
           {/* ── Header ─────────────────────────────────────────── */}
-          <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             <div>
-              <h2 className="text-2xl font-bold text-primary-800 tracking-tight">{t('app.subscription.titleCreate', 'Create Subscription')}</h2>
+              <h2 className="text-lg font-semibold text-gray-900 tracking-tight">{t('app.subscription.titleCreate', 'Create Subscription')}</h2>
               <p className="text-sm text-gray-500 font-medium mt-0.5">
                 {selectedClient
                   ? `${clientDisplayName} · ${subscriptionTitle || t('app.subscription.newSubscription', 'nyt abonnement')}`
@@ -422,14 +468,15 @@ export default function CreateSubscription({
             </div>
             <button
               onClick={onClose}
-              className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group"
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors"
+              aria-label={t('app.subscription.cancel', 'Cancel')}
             >
-              <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
+              <XMarkIcon className="w-5 h-5" />
             </button>
           </div>
 
           {/* ── Tabs ───────────────────────────────────────────── */}
-          <div className="flex items-center gap-1 px-6 py-3 border-b border-gray-100 bg-white">
+          <div className="flex items-center gap-0.5 px-4 py-2 border-b border-gray-100 bg-gray-50/50">
             {([
               { id: 'details', label: t('app.subscription.tabDetails', 'Details'), icon: DAY_ICON },
               { id: 'schedule', label: t('app.subscription.tabSchedule', 'Schedule'), icon: CalendarDaysIcon },
@@ -439,20 +486,20 @@ export default function CreateSubscription({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
                   activeTab === tab.id
-                    ? 'bg-primary-500 text-white'
-                    : 'text-gray-500 hover:text-primary-500 hover:bg-gray-50'
+                    ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                    : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                <tab.icon className="w-4 h-4" />
+                <tab.icon className="w-4 h-4 opacity-70" />
                 {tab.label}
               </button>
             ))}
           </div>
 
           {/* ── Content ────────────────────────────────────────── */}
-          <div className="flex-1 overflow-y-auto bg-gradient-to-b from-white to-gray-50/50">
+          <div className="flex-1 overflow-y-auto bg-white">
 
             {/* ──────── DETAILS TAB ──────── */}
             {activeTab === 'details' && (
@@ -693,8 +740,12 @@ export default function CreateSubscription({
             {activeTab === 'schedule' && (
               <div className="p-6">
                 <SchedulePanel
-                  startingDate={startingDate}
-                  onStartingDateChange={setStartingDate}
+                  effectiveStartingDate={effectiveStartingDate}
+                  firstVisitYmd={firstVisitYmd}
+                  startAsap={startAsap}
+                  onStartAsapChange={setStartAsap}
+                  customStartingDate={customStartingDate}
+                  onCustomStartingDateChange={setCustomStartingDate}
                   recurrenceType={recurrenceType}
                   onRecurrenceTypeChange={setRecurrenceType}
                   dayOfWeek={dayOfWeek}
@@ -711,6 +762,7 @@ export default function CreateSubscription({
                   durationPerVisit={durationPerVisit}
                   visitsPerYear={visitsPerYear}
                   revenuePerYear={revenuePerYear}
+                  countryCode={companyCountryCode}
                 />
               </div>
             )}
@@ -737,21 +789,21 @@ export default function CreateSubscription({
           </div>
 
           {/* ── Footer ─────────────────────────────────────────── */}
-          <div className="border-t border-gray-100 px-6 py-4 bg-white flex items-center justify-between gap-3">
-            <div className="text-xs text-gray-400">
-              {pricePerVisit > 0 && startingDate
+          <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center justify-between gap-3">
+            <div className="text-xs text-gray-500">
+              {pricePerVisit > 0 && (startAsap ? !!firstVisitYmd : !!customStartingDate)
                 ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit', 'per visit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear', '/ year')}`
                 : ''
               }
             </div>
-            <div className="flex items-center gap-3">
-              <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
+            <div className="flex items-center gap-2">
+              <button onClick={onClose} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
                 {t('app.subscription.cancel', 'Cancel')}
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit}
-                className="px-6 py-2.5 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-accent-500/20 hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]"
+                className="px-4 py-2 text-sm font-medium rounded-lg border border-primary-600 text-primary-700 bg-white hover:bg-primary-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {isSubmitting ? t('app.subscription.saving', 'Saving...') : t('app.subscription.createSubscriptionBtn', 'Create Subscription')}
               </button>

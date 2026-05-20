@@ -1129,7 +1129,7 @@ router.post('/', async (req, res) => {
         `INSERT INTO jobs
          (company_id, client_id, assigned_user_id, title, note, scheduled_date,
           scheduled_time_from, scheduled_time_to, recurring_job_id, is_generated, sort_order)
-         VALUES ($1, $2, $3, $4, NULL, $6, $7, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, NULL::text, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
         [companyId, client_id, assigned_user_id, title || '', scheduled_date,
          scheduled_time_from, scheduled_time_to, null, false, nextSortOrder]

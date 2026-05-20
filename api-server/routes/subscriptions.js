@@ -338,7 +338,7 @@ router.post('/', authenticateToken, async (req, res) => {
           INSERT INTO jobs
           (company_id, client_id, assigned_user_id, title, note, scheduled_date,
            scheduled_time_from, scheduled_time_to, recurring_job_id, recurring_occurrence, is_generated, status, sort_order)
-          VALUES ($1, $2, $3, $4, NULL, $6, $7, $8, $9, $10, $11, $12, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $9), 0))
+          VALUES ($1, $2, $3, $4, NULL::text, $5, $6, $7, $8, $9, $10, $11, COALESCE((SELECT sort_order FROM recurring_jobs WHERE id = $8), 0))
           RETURNING *
         `, [companyId, clientIdNum, assigned_user_id, title, firstOccurrence,
             scheduled_time_from, scheduled_time_to, subscription.id, 1, true, 'scheduled']);

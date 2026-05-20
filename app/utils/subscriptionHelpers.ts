@@ -5,6 +5,40 @@
 
 import { formatMoney as formatMoneyFromCountry } from '../config/countryRules'
 
+/** Local calendar date YYYY-MM-DD (avoids UTC shifting the day). */
+export function todayYmdLocal(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+export function ymdFromLocalDate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** First visit on or after anchor, matching weekly/monthly rules (same idea as API first occurrence). */
+export function firstOccurrenceOnOrAfterAnchor(
+  anchorYmd: string,
+  recurrenceType: 'weekly' | 'monthly',
+  dayOfWeek: number,
+  intervalWeeks: number,
+  dayOfMonth: number,
+  intervalMonths: number,
+): string {
+  if (!anchorYmd.trim()) return ''
+  if (recurrenceType === 'weekly') {
+    const ds = buildWeeklyForecast(anchorYmd, dayOfWeek, intervalWeeks, 1)
+    return ds[0] ? ymdFromLocalDate(ds[0]) : ''
+  }
+  const ds = buildMonthlyForecast(anchorYmd, dayOfMonth, intervalMonths, 1)
+  return ds[0] ? ymdFromLocalDate(ds[0]) : ''
+}
+
 export const DAY_NAMES = [
   'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
 ]
