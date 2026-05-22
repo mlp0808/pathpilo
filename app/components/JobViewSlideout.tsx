@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon, SparklesIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { formatMoney } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
@@ -140,9 +140,14 @@ interface JobNoteCardProps {
   jobNoteText: string
   canEdit: boolean
   onSaveJobNote: (text: string, jobId: number) => Promise<void>
+  // When set, the card mounts directly in editing mode for that job id.
+  // Used after a subscription job is materialized so the user lands straight
+  // in the textarea without a second click.
+  autoStartEditingForJobId?: number | null
+  onAutoStartConsumed?: () => void
 }
 
-function JobNoteCard({ jobId, jobNoteText, canEdit, onSaveJobNote }: JobNoteCardProps) {
+function JobNoteCard({ jobId, jobNoteText, canEdit, onSaveJobNote, autoStartEditingForJobId, onAutoStartConsumed }: JobNoteCardProps) {
   const { t } = useAppI18n()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(jobNoteText)
@@ -159,6 +164,21 @@ function JobNoteCard({ jobId, jobNoteText, canEdit, onSaveJobNote }: JobNoteCard
     setDraft(jobNoteText)
     setEditing(false)
   }, [jobId])
+
+  // Open directly in edit mode when the parent flags an auto-start for this
+  // exact job id (e.g. right after materialization). The flag is consumed
+  // so it only fires once per detach.
+  useEffect(() => {
+    if (
+      canEdit &&
+      jobId != null &&
+      autoStartEditingForJobId != null &&
+      autoStartEditingForJobId === jobId
+    ) {
+      setEditing(true)
+      onAutoStartConsumed?.()
+    }
+  }, [canEdit, jobId, autoStartEditingForJobId, onAutoStartConsumed])
 
   useEffect(() => {
     if (!editing && jobNoteText.trim()) {
@@ -642,6 +662,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'history'>('tasks')
   const [updatingServiceId, setUpdatingServiceId] = useState<number | null>(null)
   const [invoiceSummary, setInvoiceSummary] = useState<{ id: number; status: string; invoice_number?: string | null } | null>(null)
+  // After a projected job is materialized inline, we briefly flag the note
+  // card so it opens directly into edit mode — saves the user an extra click.
+  const [autoStartNoteJobId, setAutoStartNoteJobId] = useState<number | null>(null)
+  // Inline edit state for client email / phone in the slideout header.
+  const [editingClientField, setEditingClientField] = useState<'email' | 'phone' | null>(null)
+  const [clientFieldDraft, setClientFieldDraft] = useState('')
+  const [clientFieldSaving, setClientFieldSaving] = useState(false)
   const [automationBadges, setAutomationBadges] = useState<{
     pending: { key: string; sendAt: string; phase: string }[]
     serverNow: string
@@ -866,7 +893,10 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   }
 
   const handleDeleteJob = async () => {
-    if (parseJobId(currentJob?.id) == null) return
+    // Always materialize first if needed — the detach modal already showed
+    // the user what's happening, so just complete the flow gracefully here.
+    const jobId = await ensureRealJobId()
+    if (jobId == null) return
 
     const confirmed = confirm('Are you sure you want to permanently delete this job? This action cannot be undone and will remove all job data, notes, and logs.')
     if (!confirmed) return
@@ -874,7 +904,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     try {
       setIsDeleting(true)
       const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl(`/jobs/${parseJobId(currentJob.id)}`), {
+      const response = await fetch(apiUrl(`/jobs/${jobId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -893,6 +923,62 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       alert('Failed to delete job. Please try again.')
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  // Inline edit for client email / phone in the slideout header. These are
+  // stored on the client record (not the job), so changes apply across every
+  // job the client has — that's intentional. The slideout is a fast path so
+  // the user doesn't have to navigate to the client profile.
+  const startEditClientField = (field: 'email' | 'phone') => {
+    const cj = jobDetails || job
+    const value =
+      field === 'email'
+        ? cj?.client_email || cj?.email || cj?.client?.email || clientContact?.email || ''
+        : cj?.client_phone || cj?.phone || cj?.client?.phone || clientContact?.phone || ''
+    setClientFieldDraft(String(value || ''))
+    setEditingClientField(field)
+  }
+
+  const cancelEditClientField = () => {
+    setEditingClientField(null)
+    setClientFieldDraft('')
+  }
+
+  const saveClientField = async () => {
+    const cj = jobDetails || job
+    const field = editingClientField
+    if (!cj?.client_id || !field) return
+    const value = clientFieldDraft.trim()
+    setClientFieldSaving(true)
+    try {
+      const token = localStorage.getItem('token')
+      await fetch(apiUrl(`/clients/${cj.client_id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ [field]: value || null }),
+      })
+      // Optimistic local update across both job + cached client contact so
+      // the header reflects the change without needing a refetch.
+      setJobDetails((prev: any) => {
+        const base = prev || cj
+        if (!base) return prev
+        if (field === 'email') {
+          return { ...base, client_email: value || null, email: value || null }
+        }
+        return { ...base, client_phone: value || null, phone: value || null }
+      })
+      setClientContact((prev) => ({
+        email: field === 'email' ? value || undefined : prev?.email,
+        phone: field === 'phone' ? value || undefined : prev?.phone,
+      }))
+      setEditingClientField(null)
+      setClientFieldDraft('')
+      onJobUpdated?.()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : t('app.jobView.errSaveClient', 'Could not save'))
+    } finally {
+      setClientFieldSaving(false)
     }
   }
 
@@ -944,6 +1030,27 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const isProjectedJob = !!(currentJob?.is_projected || (typeof currentJob?.id === 'string' && currentJob.id.startsWith('subscription-')))
   const invoiceIdOnJob = typeof currentJob?.invoice_id === 'number' ? (currentJob.invoice_id as number) : null
   const isLocked = !!invoiceIdOnJob
+
+  // Any edit on a subscription-generated (virtual) job instantly materializes
+  // it into a real standalone job, then runs the user's action. Past visits
+  // and future visits stay tied to the subscription as scheduled.
+  // The header banner already explains this; no confirmation prompt.
+  // The action receives the freshly materialized job id so callers that need
+  // it right now (e.g. flagging "open the note for editing") don't have to
+  // wait for React to flush stale `jobDetails`.
+  const requestDetachOrRun = useCallback(
+    async (action: (newJobId?: number) => Promise<void> | void) => {
+      if (!isProjectedJob) {
+        await action()
+        return
+      }
+      const newId = await ensureRealJobId()
+      if (newId == null) return
+      await action(newId)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isProjectedJob],
+  )
 
   // Fetch invoice summary when job is linked to an invoice
   useEffect(() => {
@@ -1609,53 +1716,6 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     }
   }
 
-  // Materialize a projected job and then fetch full details (so completing/updating tasks works)
-  const materializeAndFetchProjectedJob = async (jobData: any) => {
-    let subId = typeof jobData?.recurring_job_id === 'number' ? jobData.recurring_job_id : null
-    let occ = typeof jobData?.recurring_occurrence === 'number' ? jobData.recurring_occurrence : null
-    if ((!subId || !occ) && typeof jobData?.id === 'string' && jobData.id.startsWith('subscription-')) {
-      const parts = jobData.id.split('-')
-      if (parts.length >= 3) {
-        const parsedSubId = parseInt(parts[1], 10)
-        const parsedOcc = parseInt(parts[2], 10)
-        if (Number.isFinite(parsedSubId) && Number.isFinite(parsedOcc)) {
-          subId = parsedSubId
-          occ = parsedOcc
-        }
-      }
-    }
-    const meta = subId && occ ? { subscriptionId: subId, occurrence: occ } : null
-    if (!meta) {
-      fetchProjectedJobDetails(jobData)
-      return
-    }
-    try {
-      setLoading(true)
-      const token = localStorage.getItem('token')
-      const response = await fetch(
-        apiUrl(`/subscriptions/${meta.subscriptionId}/occurrences/${meta.occurrence}/materialize`),
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scheduled_date: jobData?.scheduled_date })
-        }
-      )
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.error || data.details || 'Failed to materialize')
-      const jobId = data.jobId
-      if (typeof jobId !== 'number') throw new Error('Invalid jobId returned')
-      setJobDetails({ ...jobData, id: jobId, is_projected: false, recurring_job_id: meta.subscriptionId, recurring_occurrence: meta.occurrence })
-      onJobUpdated?.()
-      fetchJobDetails({ ...jobData, id: jobId })
-      fetchJobLogs(jobId)
-    } catch (e) {
-      console.error('Failed to materialize subscription job:', e)
-      fetchProjectedJobDetails(jobData)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   // Initialize job details when modal opens
   useEffect(() => {
     if (isOpen && job) {
@@ -1672,8 +1732,10 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       const isProjectedJob = job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))
       
       if (isProjectedJob) {
-        // Materialize immediately so completing/updating tasks works (job gets recurring_job_id preserved)
-        materializeAndFetchProjectedJob(initialJobData)
+        // Don't eagerly materialize on open — the user needs to see the
+        // "From a subscription" banner first. Materialization now happens
+        // lazily on the first actual edit (handled by requestDetachOrRun).
+        fetchProjectedJobDetails(initialJobData)
       } else if (parseJobId(job.id) != null) {
         // For real jobs, fetch full details with service statuses from GET /jobs/:id (id may be string from list API)
         fetchJobDetails(initialJobData)
@@ -1893,8 +1955,30 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           {/* Header — dark #193434: client name + Person, email, phone (now scrollable) */}
           <div className="bg-primary-500 px-5 pt-5 pb-3">
           {isProjectedJob && (
-            <div className="mb-3 rounded-lg border border-amber-300/60 bg-amber-500/20 px-3 py-2 text-xs text-amber-100">
-              <strong>Subscription preview:</strong> This job is generated from a subscription and hasn’t been created yet. Edit will create a real job for this occurrence.
+            <div className="mb-3 rounded-lg border border-accent-300/60 bg-accent-500/15 px-3 py-2.5 text-xs text-white/90 flex items-start gap-2">
+              <SparklesIcon className="w-4 h-4 mt-0.5 flex-shrink-0 text-accent-200" />
+              <div className="flex-1">
+                <strong className="font-semibold text-white">{t('app.jobView.fromSubscription', 'From a subscription')}</strong>
+                <span className="block text-white/80 leading-snug mt-0.5">
+                  {t(
+                    'app.jobView.fromSubscriptionDesc',
+                    'This visit is auto-created by a subscription. Editing it here will detach this one visit so future visits stay on schedule.',
+                  )}
+                </span>
+                {typeof currentJob?.client_id === 'number' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cid = currentJob.client_id
+                      router.push(`/clients/${cid}?tab=subscriptions`)
+                    }}
+                    className="mt-1 inline-flex items-center gap-1 text-accent-100 hover:text-white underline font-semibold"
+                  >
+                    {t('app.jobView.openSubscription', 'Open subscription')}
+                    <ArrowRightIcon className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             </div>
           )}
           {/* Row 1: Person/Company (left, #BFD1C5) | Status pill + Options + Exit on the right. */}
@@ -1922,12 +2006,12 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     <>
                       <div className="fixed inset-0 z-10" onClick={() => setShowOptionsMenu(false)} aria-hidden />
                       <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                        {!isLocked && !isProjectedJob && (
+                        {!isLocked && (
                           <>
                             <button
                               onClick={() => {
                                 setShowOptionsMenu(false)
-                                toggleCompletion()
+                                requestDetachOrRun(() => toggleCompletion())
                               }}
                               className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                             >
@@ -1939,7 +2023,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         <button
                           onClick={() => {
                             setShowOptionsMenu(false)
-                            if (!isLocked) handleCancelJob()
+                            if (!isLocked) requestDetachOrRun(() => handleCancelJob())
                           }}
                           disabled={isDeleting || isLocked}
                           className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
@@ -1949,7 +2033,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         <button
                           onClick={() => {
                             setShowOptionsMenu(false)
-                            if (!isLocked) handleDeleteJob()
+                            if (!isLocked) requestDetachOrRun(() => handleDeleteJob())
                           }}
                           disabled={isDeleting || isLocked}
                           className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
@@ -2009,22 +2093,95 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           <button onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-2xl font-bold text-white hover:opacity-90 transition-opacity text-left block w-full">
             {[(jobDetails || job)?.first_name || (jobDetails || job)?.name, (jobDetails || job)?.last_name].filter(Boolean).join(' ') || t('app.jobView.unknownClient')}
           </button>
-          {/* Email — from job or client fetch. If empty: "add" link to client. */}
+          {/* Email — inline edit. Saves to the client record (shared across
+              every job for this client). */}
           <div className="flex items-center gap-2 mt-2">
             <EnvelopeIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#BFD1C5' }} />
-            {((jobDetails || job)?.client_email || (jobDetails || job)?.email || (jobDetails || job)?.client?.email || clientContact?.email) ? (
-              <span className="text-sm text-white">{(jobDetails || job)?.client_email || (jobDetails || job)?.email || (jobDetails || job)?.client?.email || clientContact?.email}</span>
+            {editingClientField === 'email' ? (
+              <input
+                autoFocus
+                type="email"
+                value={clientFieldDraft}
+                onChange={(e) => setClientFieldDraft(e.target.value)}
+                onBlur={saveClientField}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void saveClientField()
+                  }
+                  if (e.key === 'Escape') cancelEditClientField()
+                }}
+                disabled={clientFieldSaving}
+                placeholder={t('app.jobView.emailPlaceholder', 'email@example.com')}
+                className="flex-1 bg-white/15 placeholder-white/50 text-sm text-white border border-white/30 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-accent-300"
+              />
             ) : (
-              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">{t('app.jobView.add')}</button>
+              (() => {
+                const value = (jobDetails || job)?.client_email || (jobDetails || job)?.email || (jobDetails || job)?.client?.email || clientContact?.email
+                return value ? (
+                  <button
+                    type="button"
+                    onClick={() => startEditClientField('email')}
+                    className="text-sm text-white hover:underline text-left"
+                    title={t('app.jobView.editEmailTitle', 'Click to edit email')}
+                  >
+                    {value}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startEditClientField('email')}
+                    className="text-xs text-white/90 hover:text-white hover:underline"
+                  >
+                    {t('app.jobView.add')}
+                  </button>
+                )
+              })()
             )}
           </div>
-          {/* Phone — from job or client fetch. If empty: "add" link to client. */}
+          {/* Phone — inline edit, same pattern as email. */}
           <div className="flex items-center gap-2 mt-1">
             <PhoneIcon className="w-4 h-4 flex-shrink-0" style={{ color: '#BFD1C5' }} />
-            {((jobDetails || job)?.client_phone || (jobDetails || job)?.phone || (jobDetails || job)?.client?.phone || clientContact?.phone) ? (
-              <span className="text-sm text-white">{(jobDetails || job)?.client_phone || (jobDetails || job)?.phone || (jobDetails || job)?.client?.phone || clientContact?.phone}</span>
+            {editingClientField === 'phone' ? (
+              <input
+                autoFocus
+                type="tel"
+                value={clientFieldDraft}
+                onChange={(e) => setClientFieldDraft(e.target.value)}
+                onBlur={saveClientField}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void saveClientField()
+                  }
+                  if (e.key === 'Escape') cancelEditClientField()
+                }}
+                disabled={clientFieldSaving}
+                placeholder={t('app.jobView.phonePlaceholder', '+45 12 34 56 78')}
+                className="flex-1 bg-white/15 placeholder-white/50 text-sm text-white border border-white/30 rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-accent-300"
+              />
             ) : (
-              <button type="button" onClick={() => { const id = (jobDetails || job)?.client_id; if (id) router.push(`/clients/${id}`) }} className="text-xs text-white/90 hover:text-white hover:underline">{t('app.jobView.add')}</button>
+              (() => {
+                const value = (jobDetails || job)?.client_phone || (jobDetails || job)?.phone || (jobDetails || job)?.client?.phone || clientContact?.phone
+                return value ? (
+                  <button
+                    type="button"
+                    onClick={() => startEditClientField('phone')}
+                    className="text-sm text-white hover:underline text-left"
+                    title={t('app.jobView.editPhoneTitle', 'Click to edit phone')}
+                  >
+                    {value}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startEditClientField('phone')}
+                    className="text-xs text-white/90 hover:text-white hover:underline"
+                  >
+                    {t('app.jobView.add')}
+                  </button>
+                )
+              })()
             )}
           </div>
           </div>
@@ -2084,18 +2241,20 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       </span>
                       {!isLocked && (
                         <button
-                          onClick={() => {
-                            const cj = jobDetails || job
-                            setAddrDraft({
-                              address: cj?.address || '',
-                              zip_code: cj?.zip_code || '',
-                              city: cj?.city || '',
-                              lat: cj?.lat ?? null,
-                              lng: cj?.lng ?? null,
+                          onClick={() =>
+                            requestDetachOrRun(() => {
+                              const cj = jobDetails || job
+                              setAddrDraft({
+                                address: cj?.address || '',
+                                zip_code: cj?.zip_code || '',
+                                city: cj?.city || '',
+                                lat: cj?.lat ?? null,
+                                lng: cj?.lng ?? null,
+                              })
+                              setEditingAddress(true)
                             })
-                            setEditingAddress(true)
-                          }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex-shrink-0"
+                          }
+                          className="opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex-shrink-0"
                           title={t('app.jobView.editAddress')}
                         >
                           <PencilIcon className="w-3.5 h-3.5" />
@@ -2104,7 +2263,11 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     </div>
                   )}
                   <button
-                    onClick={isLocked ? undefined : openTimeModal}
+                    onClick={
+                      isLocked
+                        ? undefined
+                        : () => requestDetachOrRun(openTimeModal)
+                    }
                     className={`flex items-start gap-2 w-full text-left transition-opacity ${
                       isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
                     }`}
@@ -2118,7 +2281,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     onClick={() => {
                       if (isLocked) return
                       const d = (jobDetails || job)?.scheduled_date
-                      if (d) handleDateChange(d)
+                      if (!d) return
+                      requestDetachOrRun(() => handleDateChange(d))
                     }}
                     className={`flex items-start gap-2 w-full text-left transition-opacity ${
                       isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
@@ -2136,7 +2300,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       type="button"
                       onClick={() => {
                         if (isLocked) return
-                        openAssigneeModal()
+                        requestDetachOrRun(openAssigneeModal)
                       }}
                       className={`flex w-full items-center justify-between text-left transition-opacity ${
                         isLocked ? 'cursor-default opacity-60' : 'hover:opacity-80'
@@ -2168,15 +2332,45 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                 {(() => {
                   const jobNoteText = String((jobDetails || job)?.note ?? '').trim()
                   const realJobId = parseJobId(currentJob?.id)
-                  const canEditJobNote =
-                    realJobId != null && !isProjectedJob && !isLocked
+                  const canEditJobNote = !isLocked
+
+                  // Subscription-generated (projected) jobs surface a button
+                  // that materializes the occurrence and drops the user
+                  // straight into the note editor on the next render.
+                  if (isProjectedJob && !isLocked) {
+                    return (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          requestDetachOrRun(async (newJobId) => {
+                            const id = newJobId ?? parseJobId((jobDetails || job)?.id)
+                            if (id != null) setAutoStartNoteJobId(id)
+                          })
+                        }
+                        className="w-full text-left rounded-lg bg-white/80 border border-dashed border-slate-300 px-3 py-2.5 min-h-[3rem] hover:bg-slate-50 transition-colors"
+                      >
+                        {jobNoteText ? (
+                          <span className="text-sm whitespace-pre-wrap text-primary-600">
+                            {jobNoteText}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-slate-500">
+                            {t('app.jobView.jobDescriptionPlaceholder')}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  }
+
                   return (
                     <JobNoteCard
                       key={realJobId ?? 'no-job'}
                       jobId={realJobId}
                       jobNoteText={jobNoteText}
-                      canEdit={canEditJobNote}
+                      canEdit={canEditJobNote && realJobId != null}
                       onSaveJobNote={saveJobNote}
+                      autoStartEditingForJobId={autoStartNoteJobId}
+                      onAutoStartConsumed={() => setAutoStartNoteJobId(null)}
                     />
                   )
                 })()}
@@ -2217,20 +2411,25 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_duration_minutes ?? s.duration_minutes) || 0), 0)
                   const totalPrice =
                     (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
-                  const canEditServices = parseJobId(currentJob?.id) != null && !isProjectedJob && !isLocked
-                  const handleCheckClick = async (s: any) => {
-                    if (!canEditServices || !s.id) return
+                  // Service status changes are allowed for projected jobs too
+                  // — the detach guard surfaces a confirmation first and then
+                  // materializes the job before applying the change.
+                  const canEditServices = !isLocked
+                  const runServiceMutation = async (s: any, nextStatus: 'scheduled' | 'completed' | 'cancelled') => {
+                    if (!s?.id) return
                     const jobId = await ensureRealJobId()
                     if (!jobId) return
+                    updateServiceStatus(jobId, s.id, nextStatus)
+                  }
+                  const handleCheckClick = async (s: any) => {
+                    if (!canEditServices || !s.id) return
                     const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
-                    updateServiceStatus(jobId, s.id, next)
+                    requestDetachOrRun(() => runServiceMutation(s, next))
                   }
                   const handleCancelClick = async (s: any) => {
                     if (!canEditServices || !s.id) return
-                    const jobId = await ensureRealJobId()
-                    if (!jobId) return
                     const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
-                    updateServiceStatus(jobId, s.id, next)
+                    requestDetachOrRun(() => runServiceMutation(s, next))
                   }
                   return (
                     <>
@@ -2539,10 +2738,16 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                   })()}
                 </div>
               )}
-            {isProjectedJob && <span className="text-amber-700 shrink-0">Subscription preview</span>}
+            {isProjectedJob && (
+              <span className="text-accent-700 shrink-0 inline-flex items-center gap-1 font-semibold">
+                <SparklesIcon className="w-3 h-3" />
+                {t('app.jobView.fromSubscription', 'From a subscription')}
+              </span>
+            )}
           </div>
         </div>
       </div>
+
       {/* Move Job Confirmation Modal (Unified) */}
       <ConfirmModal
         isOpen={showMoveModal && !!(jobDetails || job)}

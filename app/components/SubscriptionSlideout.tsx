@@ -163,9 +163,19 @@ export default function SubscriptionSlideout({
         setDayOfMonth(subscription.day_of_month || 1)
         setIntervalMonths(subscription.recurrence_type === 'monthly' ? (subscription.interval_value || 1) : 1)
         setCustomInterval('')
-        setTimeFrom(subscription.scheduled_time_from || '')
-        setTimeTo(subscription.scheduled_time_to || '')
-        setNote(subscription.note || '')
+        // Postgres TIME columns come back as 'HH:MM:SS'; the picker grid uses
+        // 'HH:MM' so we trim before storing — otherwise the field looks weird
+        // and the selected option never highlights.
+        const trimTime = (v?: string | null) =>
+          typeof v === 'string' ? v.slice(0, 5) : ''
+        setTimeFrom(trimTime(subscription.scheduled_time_from))
+        setTimeTo(trimTime(subscription.scheduled_time_to))
+        const existingNote = subscription.note || ''
+        setNote(existingNote)
+        // Auto-open the inline note editor when an existing subscription has
+        // text already — otherwise it hides behind a chip and looks like the
+        // note isn't there.
+        setShowNoteInput(existingNote.trim().length > 0)
         setSelectedUserId(subscription.assigned_user_id ? Number(subscription.assigned_user_id) : null)
         setIsTimeRangeMode(!!(subscription.scheduled_time_from && subscription.scheduled_time_to))
         if (subscription.services) {
@@ -190,8 +200,17 @@ export default function SubscriptionSlideout({
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      const t = e.target as Element
-      if (!t.closest('.dropdown-container') && !t.closest('[data-time-picker]')) {
+      const target = e.target as Element
+      // The inner TimePicker renders its options grid in a React portal at
+      // <body> with `[data-time-picker-dropdown]`. Without checking for it,
+      // clicking a time option would close the outer popup before the option
+      // had a chance to commit, making the picker feel broken.
+      if (
+        !target.closest('.dropdown-container') &&
+        !target.closest('[data-time-picker]') &&
+        !target.closest('[data-time-picker-trigger]') &&
+        !target.closest('[data-time-picker-dropdown]')
+      ) {
         setShowServiceDropdown(false)
         setShowTimePicker(false)
         setShowUserDropdown(false)
@@ -570,11 +589,16 @@ export default function SubscriptionSlideout({
                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm resize-none bg-white shadow-sm"
                     rows={3}
                   />
-                  <div className="flex justify-end gap-2">
-                    <button type="button" onClick={() => { setNote(''); setShowNoteInput(false) }}
-                      className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">{t('app.subscription.clearNote')}</button>
-                    <button type="button" onClick={() => setShowNoteInput(false)}
-                      className="px-4 py-1.5 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">{t('app.subscription.saveNote')}</button>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] text-gray-400">
+                      {t('app.subscription.noteHint', 'Press “Save changes” to keep this note.')}
+                    </p>
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => { setNote(''); setShowNoteInput(false) }}
+                        className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors">{t('app.subscription.clearNote')}</button>
+                      <button type="button" onClick={() => setShowNoteInput(false)}
+                        className="px-4 py-1.5 bg-primary-500 text-white text-xs font-medium rounded-lg hover:bg-primary-600 transition-colors">{t('app.subscription.done', 'Done')}</button>
+                    </div>
                   </div>
                 </div>
               )}

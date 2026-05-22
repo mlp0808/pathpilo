@@ -815,12 +815,16 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
     const matNotePlain =
       sub.note != null ? String(sub.note).trim() : '';
 
+    // Placeholders must be contiguous: skipping $5 with a literal NULL above
+    // tripped Postgres ("could not determine data type of parameter $5") and
+    // mis-aligned the remaining params, so the INSERT silently failed for
+    // every projected-job edit on the platform.
     const jobRes = await dbClient.query(
       `INSERT INTO jobs (
         company_id, client_id, assigned_user_id, title, note,
         scheduled_date, scheduled_time_from, scheduled_time_to,
         status, recurring_job_id, recurring_occurrence, is_generated, sort_order
-      ) VALUES ($1,$2,$3,$4,NULL,$6,$7,$8,$9,$10,$11,$12,COALESCE($13, 0))
+      ) VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, 0))
       RETURNING id`,
       [
         companyId,
