@@ -8,6 +8,8 @@ import PricingPage from '../../pricing/page'
 import RoutePlanningFeaturePage from '../../features/routeplanning/page'
 import SubscriptionsFeaturePage from '../../features/subscriptions/page'
 import TeamManagementFeaturePage from '../../features/team/page'
+import TermsPage from '../../terms/page'
+import PrivacyPage from '../../privacy/page'
 import { isMarketingLocale } from '../../lib/i18n'
 
 const SEO_BY_ROUTE = {
@@ -107,6 +109,30 @@ const SEO_BY_ROUTE = {
         'Styr ubegraenset antal medarbejdere, tildel jobs og ruter, haandter fri-anmodninger og foelg mobil-fremskridt i realtid med PathPilo.',
     },
   },
+  terms: {
+    en: {
+      title: 'Terms of Service | PathPilo',
+      description:
+        'The PathPilo Terms of Service. The agreement between you and PathPilo when you use our service management platform.',
+    },
+    da: {
+      title: 'Servicevilkår | PathPilo',
+      description:
+        'PathPilos servicevilkår. Aftalen mellem dig og PathPilo, når du bruger vores serviceplatform.',
+    },
+  },
+  privacy: {
+    en: {
+      title: 'Privacy Policy | PathPilo',
+      description:
+        'How PathPilo collects, uses and protects your data. Read our Privacy Policy and your rights under GDPR.',
+    },
+    da: {
+      title: 'Privatlivspolitik | PathPilo',
+      description:
+        'Hvordan PathPilo indsamler, bruger og beskytter dine data. Læs vores privatlivspolitik og dine rettigheder under GDPR.',
+    },
+  },
 } as const
 
 export async function generateMetadata({
@@ -162,6 +188,8 @@ export default async function LocalizedMarketingPage({
   if (route === 'features/routeplanning') return <RoutePlanningFeaturePage locale={resolved.lang} />
   if (route === 'features/subscriptions') return <SubscriptionsFeaturePage locale={resolved.lang} />
   if (route === 'features/team') return <TeamManagementFeaturePage locale={resolved.lang} />
+  if (route === 'terms') return <TermsPage locale={resolved.lang} />
+  if (route === 'privacy') return <PrivacyPage locale={resolved.lang} />
 
   notFound()
 }

@@ -617,15 +617,31 @@ router.patch('/:subscriptionId/pause', authenticateToken, async (req, res) => {
     }
 
     if (paused === true) {
-      // Pause from today
+      // Pause from today. We also remove any already-materialized future
+      // jobs so the calendar reflects "no more visits until resumed" — the
+      // same cleanup `DELETE /subscriptions/:id` performs. Past + completed
+      // + invoiced jobs are preserved by the helper's WHERE clause.
       const today = new Date().toISOString().split('T')[0];
-      await pool.query(
-        'UPDATE recurring_jobs SET paused_at = $1, updated_at = NOW() WHERE id = $2',
-        [today, subscriptionId]
-      );
+      const dbClient = await pool.connect();
+      try {
+        await dbClient.query('BEGIN');
+        await deleteFutureNonCompletedJobsForSubscription(dbClient, companyId, subscriptionId);
+        await dbClient.query(
+          'UPDATE recurring_jobs SET paused_at = $1, updated_at = NOW() WHERE id = $2',
+          [today, subscriptionId]
+        );
+        await dbClient.query('COMMIT');
+      } catch (txErr) {
+        try { await dbClient.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        throw txErr;
+      } finally {
+        dbClient.release();
+      }
       res.json({ message: 'Subscription paused', paused_at: today });
     } else if (paused === false) {
-      // Resume
+      // Resume — generation restarts from today onward. Past dates between
+      // the pause window stay deleted; that's fine because they would have
+      // been deleted on pause anyway and aren't recoverable.
       await pool.query(
         'UPDATE recurring_jobs SET paused_at = NULL, updated_at = NOW() WHERE id = $1',
         [subscriptionId]

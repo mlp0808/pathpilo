@@ -47,6 +47,7 @@ import { apiClient } from './src/api/client';
 import { API_CONFIG } from './src/api/config';
 import AndroidSafeText from './src/components/AndroidSafeText';
 import { flexRowText, flexRowTextSlot } from './src/ui/flexLayout';
+import { androidPillTextFix, androidTextFix } from './src/ui/androidText';
 import {
   MobileClientsListScreen,
   MobileClientDetailScreen,
@@ -77,7 +78,7 @@ const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
 /** Thin-space suffix: helps Android measure full glyph width (last-letter clip). */
 function padAndroidText(value: string): string {
   if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
+  return Platform.OS === 'android' ? `${value}\u2009\u00A0` : value;
 }
 
 /** ISO country code → billing currency; mirrors subscription-composer `clientCurrency`. */
@@ -367,6 +368,19 @@ const TodayIcon = ({ color }: { color: string }) => (
   </Svg>
 );
 
+const ClientsTabIcon = ({ color }: { color: string }) => (
+  <Svg width="22" height="20" viewBox="0 0 22 20">
+    <Path
+      d="M16 19v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M12.5 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z"
+      fill="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.6"
+    />
+  </Svg>
+);
+
 // Job detail icons
 const MailIcon = ({ stroke = '#BFD1C5' }: { stroke?: string }) => (
   <Svg width="14.921" height="11.165" viewBox="0 0 14.921 11.165">
@@ -635,30 +649,252 @@ function DayAppointmentRow({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Auth flow helpers
+//
+// `routeAfterAuth` decides where to send the user after we have a valid token
+// + freshly-fetched user payload (`companies` + `pendingInvites`). The mobile
+// app keeps people permanently signed in (token survives app restarts), so
+// every entry point — Login submit, Bootstrap on cold start, switch-account —
+// funnels through here for a single, predictable behavior:
+//
+//   • 0 companies but pending invites → company picker (only way to accept)
+//   • exactly 1 company AND no invites → straight to that company's tabs
+//     (or Expired screen if the only company is suspended)
+//   • anything else → company picker so the user can choose
+//
+// Persisting the JSON `user` blob lets the Bootstrap screen render a useful
+// shell if /user/profile is briefly unreachable (e.g. flaky cell signal).
+// ---------------------------------------------------------------------------
+
+const SUPPORT_CONTACT_URL = 'https://pathpilo.com/en/contact';
+const REGISTER_URL = 'https://app.pathpilo.com/register';
+
+type AuthCompany = Company & {
+  suspendedAt?: string | null;
+  isOwner?: boolean;
+};
+
+type AuthUser = {
+  id: number | string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  companies?: AuthCompany[];
+  pendingInvites?: any[];
+  activeCompany?: AuthCompany | null;
+};
+
+async function persistAuth(token: string | null, user: AuthUser | null) {
+  try {
+    if (token) {
+      await AsyncStorage.setItem('authToken', token);
+      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    }
+    if (user) {
+      await AsyncStorage.setItem('user', JSON.stringify(user));
+    }
+  } catch {
+    // best-effort — auth still works for this session
+  }
+}
+
+async function clearAuth() {
+  try {
+    await AsyncStorage.removeItem('authToken');
+    await AsyncStorage.removeItem('user');
+  } catch {
+    // ignore — caller will navigate to Login anyway
+  }
+  delete apiClient.defaults.headers.common['Authorization'];
+}
+
+function normalizeCompany(c: any): AuthCompany {
+  return {
+    ...c,
+    user_role: String(c?.user_role || c?.role || ''),
+  } as AuthCompany;
+}
+
+async function routeAfterAuth(navigation: any, user: AuthUser) {
+  const companies = Array.isArray(user?.companies) ? user.companies : [];
+  const invites = Array.isArray(user?.pendingInvites) ? user.pendingInvites : [];
+
+  // No companies yet — must respond to invites first (or contact support).
+  if (companies.length === 0) {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Companies', params: { user, companies, invites } }],
+    });
+    return;
+  }
+
+  // Multiple companies OR pending invites → always show picker so the user
+  // can pick / respond. Even a single non-suspended company is shown if there
+  // are open invites, because the invite list lives on that same screen.
+  if (companies.length > 1 || invites.length > 0) {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Companies', params: { user, companies, invites } }],
+    });
+    return;
+  }
+
+  // Exactly one company, no invites — auto-open it.
+  const only = normalizeCompany(companies[0]);
+  if ((only as any).suspendedAt) {
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'Expired',
+          params: { user, company: only, allowBackToList: false },
+        },
+      ],
+    });
+    return;
+  }
+
+  try {
+    const res = await apiClient.post('/companies/switch', { company_id: only.id });
+    const { token, user: updatedUser } = res.data || {};
+    if (token) await persistAuth(token, updatedUser || null);
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'CompanyTabs',
+          params: { company: only, user: updatedUser || user },
+        },
+      ],
+    });
+  } catch (err: any) {
+    if (err?.response?.status === 423) {
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'Expired',
+            params: { user, company: only, allowBackToList: false },
+          },
+        ],
+      });
+      return;
+    }
+    // Fall back to the picker so the user is not stuck on a blank screen.
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Companies', params: { user, companies, invites } }],
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// BootstrapScreen
+//
+// Cold-start gate: looks at the stored auth token and either kicks the user
+// back to Login (no token, or token is rejected) or refreshes their profile
+// from the server and hands off to `routeAfterAuth`. This is what makes the
+// app feel "always logged in" between launches.
+// ---------------------------------------------------------------------------
+
+function BootstrapScreen({ navigation }: any) {
+  useEffect(() => {
+    let cancelled = false;
+
+    const init = async () => {
+      try {
+        const token = await AsyncStorage.getItem('authToken');
+        if (!token) {
+          if (!cancelled) navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          return;
+        }
+
+        apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        try {
+          const res = await apiClient.get('/user/profile');
+          const user = res.data?.user as AuthUser;
+          if (cancelled) return;
+          await persistAuth(token, user);
+          await routeAfterAuth(navigation, user);
+        } catch (err: any) {
+          const status = err?.response?.status;
+          if (status === 401 || status === 403) {
+            await clearAuth();
+            if (!cancelled) navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+            return;
+          }
+          // Network error etc — fall back to the cached user blob so the app
+          // still opens. The next API call inside the app surfaces the real
+          // problem with its own error UI.
+          const cached = await AsyncStorage.getItem('user');
+          if (cached) {
+            try {
+              const user = JSON.parse(cached) as AuthUser;
+              if (!cancelled) await routeAfterAuth(navigation, user);
+              return;
+            } catch {
+              // fall through to login
+            }
+          }
+          if (!cancelled) navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+        }
+      } catch {
+        if (!cancelled) navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+      }
+    };
+
+    init();
+    return () => { cancelled = true; };
+  }, [navigation]);
+
+  return (
+    <View style={styles.bootstrapContainer}>
+      <ActivityIndicator size="large" color="#193434" />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LoginScreen
+//
+// Phone-first sign in. Persists token + user blob so cold restarts skip this
+// screen (handled by BootstrapScreen). Two side-flows live here:
+//   • Forgot password — inline, posts to /auth/forgot-password and confirms.
+//   • Don't have an account — opens the marketing/registration page in the
+//     phone browser. We deliberately don't expose multi-step signup inside
+//     the native app to keep the bundle small and avoid duplicating it.
+// ---------------------------------------------------------------------------
+
 function LoginScreen({ navigation }: any) {
+  const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loginError, setLoginError] = useState('');
 
-  // Animation values
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+
   const fadeAnim = useState(new Animated.Value(0))[0];
-  const slideAnim = useState(new Animated.Value(50))[0];
-  const buttonScale = useState(new Animated.Value(1))[0];
+  const slideAnim = useState(new Animated.Value(40))[0];
 
   useEffect(() => {
-    // Fade in and slide up animation
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 800,
+        duration: 600,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(slideAnim, {
         toValue: 0,
-        duration: 600,
+        duration: 500,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
@@ -674,29 +910,26 @@ function LoginScreen({ navigation }: any) {
     }
 
     setIsLoading(true);
-
-    Animated.sequence([
-      Animated.timing(buttonScale, { toValue: 0.95, duration: 100, useNativeDriver: true }),
-      Animated.timing(buttonScale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
-
     try {
-      const response = await apiClient.post('/auth/login', { email: email.trim(), password });
+      const response = await apiClient.post('/auth/login', {
+        email: email.trim(),
+        password,
+      });
       const { user, token } = response.data;
 
-      await AsyncStorage.setItem('authToken', token);
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-      navigation.replace('Companies', { user });
+      await persistAuth(token, user);
+      await routeAfterAuth(navigation, user);
     } catch (error: any) {
-      const status = error.response?.status;
+      const status = error?.response?.status;
       if (status === 401 || status === 400) {
         setLoginError('Incorrect email or password. Please try again.');
+      } else if (status === 403) {
+        setLoginError(error?.response?.data?.error || "This account isn't linked to a company yet. Contact your admin.");
       } else if (status === 404) {
         setLoginError('No account found with that email address.');
       } else if (status === 429) {
         setLoginError('Too many attempts. Please wait a moment and try again.');
-      } else if (!error.response) {
+      } else if (!error?.response) {
         setLoginError('Could not connect. Please check your internet connection.');
       } else {
         setLoginError('Something went wrong. Please try again.');
@@ -706,210 +939,613 @@ function LoginScreen({ navigation }: any) {
     }
   };
 
+  const openForgot = () => {
+    setForgotEmail(email);
+    setForgotError('');
+    setForgotSent(false);
+    setForgotOpen(true);
+  };
+
+  const submitForgot = async () => {
+    setForgotError('');
+    if (!forgotEmail.trim()) {
+      setForgotError('Enter the email for your account.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const res = await apiClient.post('/auth/forgot-password', {
+        email: forgotEmail.trim(),
+      });
+      if (res.status >= 200 && res.status < 300) {
+        setForgotSent(true);
+      } else {
+        setForgotError('Something went wrong. Please try again.');
+      }
+    } catch (err: any) {
+      if (!err?.response) {
+        setForgotError('Could not connect. Check your internet connection.');
+      } else {
+        setForgotError(err?.response?.data?.error || 'Something went wrong. Please try again.');
+      }
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const openRegister = () => {
+    Linking.openURL(REGISTER_URL).catch(() => {
+      Alert.alert('Could not open browser', 'Please visit ' + REGISTER_URL);
+    });
+  };
+
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <View style={styles.container}>
-        <Animated.View
-          style={[
-            styles.loginContainer,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }],
-            },
+    <View style={styles.loginRoot}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.loginScroll,
+            { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 },
           ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.title}>Welcome to PathPilo</Text>
-          <Text style={styles.subtitle}>Sign in to your account</Text>
-
-          <View style={styles.inputContainer}>
-          <Text style={styles.label}>Email</Text>
-          <TextInput
-            style={[styles.input, !!loginError && styles.inputError]}
-            value={email}
-            onChangeText={(t) => { setEmail(t); setLoginError(''); }}
-            placeholder="Enter your email"
-            placeholderTextColor="#19343480"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            selectionColor="#193434"
-            underlineColorAndroid="transparent"
-          />
-          </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Password</Text>
-          <View style={[styles.passwordContainer, !!loginError && styles.inputError]}>
-            <TextInput
-              style={styles.passwordInput}
-              value={password}
-              onChangeText={(t) => { setPassword(t); setLoginError(''); }}
-              placeholder="Enter your password"
-              placeholderTextColor="#19343480"
-              secureTextEntry={!passwordVisible}
-              autoCapitalize="none"
-              autoCorrect={false}
-              selectionColor="#193434"
-              underlineColorAndroid="transparent"
-            />
-            <TouchableOpacity
-              style={styles.eyeIcon}
-              onPress={() => setPasswordVisible(!passwordVisible)}
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <Animated.View
+              style={[
+                styles.loginScreenBlock,
+                { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+              ]}
             >
-              <Text style={styles.eyeIconText}>
-                {passwordVisible ? '🙈' : '👁️'}
-              </Text>
-            </TouchableOpacity>
+              <Image
+                source={require('./assets/pathpilo-logo.png')}
+                style={styles.loginBrandImageAbove}
+                resizeMode="contain"
+              />
+
+              <View style={styles.loginCard}>
+              <Text style={styles.loginTitle}>{padAndroidText('Welcome back')}</Text>
+              <Text style={styles.loginSubtitle}>{padAndroidText('Sign in to continue')}</Text>
+
+              <View style={styles.loginField}>
+                <Text style={styles.loginLabel}>Email</Text>
+                <TextInput
+                  style={[styles.loginInput, !!loginError && styles.loginInputError]}
+                  value={email}
+                  onChangeText={(t) => { setEmail(t); setLoginError(''); }}
+                  placeholder="you@company.com"
+                  placeholderTextColor="#9AA8A4"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  selectionColor="#193434"
+                  underlineColorAndroid="transparent"
+                />
+              </View>
+
+              <View style={styles.loginField}>
+                <Text style={styles.loginLabel}>Password</Text>
+                <View style={[styles.loginPwdWrap, !!loginError && styles.loginInputError]}>
+                  <TextInput
+                    style={styles.loginPwdInput}
+                    value={password}
+                    onChangeText={(t) => { setPassword(t); setLoginError(''); }}
+                    placeholder="Enter your password"
+                    placeholderTextColor="#9AA8A4"
+                    secureTextEntry={!passwordVisible}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    selectionColor="#193434"
+                    underlineColorAndroid="transparent"
+                  />
+                  <TouchableOpacity
+                    style={styles.loginPwdEyeBtn}
+                    onPress={() => setPasswordVisible(!passwordVisible)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={styles.loginPwdEyeText}>{passwordVisible ? '🙈' : '👁'}</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  onPress={openForgot}
+                  style={styles.loginForgotBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <RNText style={styles.loginInlineLink}>{padAndroidText('Forgot password?')}</RNText>
+                </TouchableOpacity>
+              </View>
+
+              {!!loginError && (
+                <View style={styles.loginErrorBanner}>
+                  <Text style={styles.loginErrorBannerText}>{loginError}</Text>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[styles.loginPrimaryBtn, isLoading && styles.loginPrimaryBtnDisabled]}
+                onPress={handleLogin}
+                disabled={isLoading}
+                activeOpacity={0.85}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <RNText style={styles.loginPrimaryBtnText}>{padAndroidText('Sign in')}</RNText>
+                )}
+              </TouchableOpacity>
+
+              <View style={styles.loginDivider}>
+                <View style={styles.loginDividerLine} />
+                <View style={styles.loginDividerLabelWrap}>
+                  <RNText style={styles.loginDividerText}>{padAndroidText('NEW HERE')}</RNText>
+                </View>
+                <View style={styles.loginDividerLine} />
+              </View>
+
+              <TouchableOpacity
+                style={styles.loginSecondaryBtn}
+                onPress={openRegister}
+                activeOpacity={0.85}
+              >
+                <RNText style={styles.loginSecondaryBtnText}>
+                  {padAndroidText("Don't have an account yet?")}
+                </RNText>
+                <RNText style={styles.loginSecondaryBtnHint}>
+                  {padAndroidText('Create one in your browser →')}
+                </RNText>
+              </TouchableOpacity>
+              </View>
+            </Animated.View>
+          </TouchableWithoutFeedback>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={forgotOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForgotOpen(false)}
+      >
+        <View style={styles.modalScrim}>
+          <View style={styles.forgotCard}>
+            {!forgotSent ? (
+              <>
+                <Text style={styles.forgotTitle}>Reset your password</Text>
+                <Text style={styles.forgotBody}>
+                  Enter the email for your PathPilo account. We'll send a link to reset your password.
+                </Text>
+                <TextInput
+                  style={[styles.loginInput, { marginTop: 12 }, !!forgotError && styles.loginInputError]}
+                  value={forgotEmail}
+                  onChangeText={(t) => { setForgotEmail(t); setForgotError(''); }}
+                  placeholder="you@company.com"
+                  placeholderTextColor="#9AA8A4"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {!!forgotError && <Text style={styles.forgotError}>{forgotError}</Text>}
+                <View style={styles.forgotActions}>
+                  <TouchableOpacity
+                    style={styles.forgotCancelBtn}
+                    onPress={() => setForgotOpen(false)}
+                    disabled={forgotLoading}
+                  >
+                    <Text style={styles.forgotCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.forgotSubmitBtn, forgotLoading && styles.loginPrimaryBtnDisabled]}
+                    onPress={submitForgot}
+                    disabled={forgotLoading}
+                  >
+                    {forgotLoading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.forgotSubmitText}>Send reset link</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.forgotTitle}>Check your inbox</Text>
+                <Text style={styles.forgotBody}>
+                  If <Text style={{ fontWeight: '700' }}>{forgotEmail}</Text> has a PathPilo account, a reset link is on its way. It expires in 1 hour.
+                </Text>
+                <View style={[styles.forgotActions, { justifyContent: 'flex-end' }]}>
+                  <TouchableOpacity
+                    style={styles.forgotSubmitBtn}
+                    onPress={() => setForgotOpen(false)}
+                  >
+                    <Text style={styles.forgotSubmitText}>Got it</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </View>
-
-        {!!loginError && (
-          <View style={styles.loginErrorBox}>
-            <Text style={styles.loginErrorText}>{loginError}</Text>
-          </View>
-        )}
-
-          <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
-            <TouchableOpacity
-              style={[styles.loginButton, isLoading && styles.loginButtonDisabled]}
-              onPress={handleLogin}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.loginButtonText}>
-                {isLoading ? 'Signing In...' : 'Sign In'}
-              </Text>
-            </TouchableOpacity>
-          </Animated.View>
-
-          <TouchableOpacity style={styles.forgotPassword}>
-            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
-    </TouchableWithoutFeedback>
+      </Modal>
+    </View>
   );
 }
 
-function CompaniesScreen({ route, navigation }: any) {
-  const { user } = route.params;
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+// ---------------------------------------------------------------------------
+// CompaniesScreen
+//
+// Shown when the signed-in user belongs to more than one company OR has
+// pending invitations they need to respond to. Mirrors the web
+// `/select-company` page: invites are listed first (accept/decline inline),
+// then their company memberships. Suspended companies are still rendered so
+// the user understands which one is on hold, but tapping them goes to
+// `Expired` instead of switching to a dead workspace.
+// ---------------------------------------------------------------------------
 
-  console.log('🏢 CompaniesScreen loaded');
-  console.log('👤 User from route:', user);
+function CompaniesScreen({ route, navigation }: any) {
+  const initialUser = (route.params?.user || null) as AuthUser | null;
+  const [user, setUser] = useState<AuthUser | null>(initialUser);
+  const [companies, setCompanies] = useState<AuthCompany[]>(
+    Array.isArray(route.params?.companies) ? route.params.companies : (initialUser?.companies || [])
+  );
+  const [invites, setInvites] = useState<any[]>(
+    Array.isArray(route.params?.invites) ? route.params.invites : (initialUser?.pendingInvites || [])
+  );
+  const [isLoading, setIsLoading] = useState(false);
+  const [actionToken, setActionToken] = useState<string | null>(null);
+  const [switchingId, setSwitchingId] = useState<number | string | null>(null);
+
+  const refresh = async () => {
+    try {
+      const res = await apiClient.get('/user/profile');
+      const u = res.data?.user as AuthUser;
+      setUser(u);
+      setCompanies(Array.isArray(u?.companies) ? u.companies : []);
+      setInvites(Array.isArray(u?.pendingInvites) ? u.pendingInvites : []);
+      await persistAuth(null, u);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) {
+        await clearAuth();
+        navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+      }
+    }
+  };
 
   useEffect(() => {
-    console.log('🔄 useEffect triggered, calling fetchCompanies');
-    fetchCompanies();
+    // Always re-fetch on mount so a suspended/unsuspended status flip is
+    // reflected as soon as the user comes back to this screen.
+    setIsLoading(true);
+    refresh().finally(() => setIsLoading(false));
   }, []);
 
-  const fetchCompanies = async () => {
-    console.log('📡 Starting companies fetch...');
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      console.log('🎫 Retrieved token from storage:', token ? 'Present' : 'Missing');
+  const handleSignOut = async () => {
+    Alert.alert(
+      'Sign out',
+      'You will need to log in again next time you open the app.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAuth();
+            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          },
+        },
+      ]
+    );
+  };
 
-      if (token) {
-        apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        console.log('✅ Authorization header set');
-      }
+  const handleCompanyPress = async (raw: AuthCompany) => {
+    const company = normalizeCompany(raw);
 
-      console.log('🌐 Making GET /companies request');
-      console.log('📡 API Base URL:', apiClient.defaults.baseURL);
-
-      const response = await apiClient.get('/companies');
-      console.log('📦 Companies API response:', response);
-      console.log('📦 Response status:', response.status);
-      console.log('📦 Response data:', response.data);
-
-      setCompanies(response.data.companies);
-      console.log('✅ Companies state updated with:', response.data.companies);
-      console.log('📊 Companies array length:', response.data.companies.length);
-    } catch (error: any) {
-      console.error('❌ Fetch companies error:', error);
-      console.error('❌ Error details:', {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        config: error.config,
+    if ((company as any).suspendedAt) {
+      navigation.navigate('Expired', {
+        user,
+        company,
+        allowBackToList: (companies.length > 0),
       });
-      Alert.alert('Error', 'Failed to load companies');
-    } finally {
-      console.log('🏁 Setting loading to false');
-      setIsLoading(false);
+      return;
     }
-  };
 
-  const handleCompanyPress = async (company: Company) => {
-    const raw = company as any;
-    // GET /companies returns `role` (membership in this company), not `user_role`.
-    // Fill `user_role` so older checks and types stay consistent everywhere.
-    const normalized = {
-      ...company,
-      user_role: String(raw.user_role || raw.role || ''),
-    } as Company;
-
+    setSwitchingId(company.id);
     try {
-      // Switch active company — the server re-issues the JWT with
-      // activeCompanyId embedded. All subsequent API calls depend on this.
       const res = await apiClient.post('/companies/switch', { company_id: company.id });
-      const { token, user: updatedUser } = res.data;
-      if (token) {
-        await AsyncStorage.setItem('authToken', token);
-        apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      }
-      navigation.navigate('CompanyTabs', { company: normalized, user: updatedUser || user });
+      const { token, user: updatedUser } = res.data || {};
+      if (token) await persistAuth(token, updatedUser || null);
+      navigation.navigate('CompanyTabs', { company, user: updatedUser || user });
     } catch (err: any) {
-      console.error('[CompaniesScreen] switch failed:', err?.response?.data, err?.message);
-      // Fall back to navigating anyway — worst case API calls will 400 and
-      // show their own empty states, which is still better than being stuck.
-      navigation.navigate('CompanyTabs', { company: normalized, user });
+      if (err?.response?.status === 423) {
+        navigation.navigate('Expired', {
+          user,
+          company,
+          allowBackToList: (companies.length > 0),
+        });
+        return;
+      }
+      Alert.alert('Could not open company', err?.response?.data?.error || 'Please try again.');
+    } finally {
+      setSwitchingId(null);
     }
   };
 
-  const renderCompany = ({ item }: { item: Company }) => {
-    console.log('🎨 Rendering company:', item);
-    return (
-      <TouchableOpacity
-        style={styles.companyContainer}
-        onPress={() => handleCompanyPress(item)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.companyContent}>
-          <View style={styles.companyInfo}>
-            <Text style={styles.companyName}>{item.name}</Text>
-            <Text style={styles.companyRole}>
-              {(item as any).user_role || (item as any).role || ''}
-            </Text>
-          </View>
-          <View style={styles.arrowContainer}>
-            <Text style={styles.arrow}>→</Text>
-          </View>
-        </View>
-      </TouchableOpacity>
+  const handleAccept = async (invite: any) => {
+    if (actionToken) return;
+    setActionToken(invite.token);
+    try {
+      const res = await apiClient.post(`/invitations/${invite.token}/accept`, {});
+      const data = res.data;
+      if (data?.token && data?.user) {
+        await persistAuth(data.token, data.user);
+        await routeAfterAuth(navigation, data.user);
+        return;
+      }
+      await refresh();
+    } catch (err: any) {
+      Alert.alert('Could not accept invite', err?.response?.data?.error || 'Please try again.');
+    } finally {
+      setActionToken(null);
+    }
+  };
+
+  const handleDecline = async (invite: any) => {
+    if (actionToken) return;
+    Alert.alert(
+      'Decline invitation',
+      `Decline the invite from ${invite.companyName || 'this company'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Decline',
+          style: 'destructive',
+          onPress: async () => {
+            setActionToken(invite.token);
+            try {
+              await apiClient.post(`/invitations/${invite.token}/decline`, {});
+              await refresh();
+            } catch (err: any) {
+              Alert.alert('Could not decline invite', err?.response?.data?.error || 'Please try again.');
+            } finally {
+              setActionToken(null);
+            }
+          },
+        },
+      ]
     );
   };
 
   if (isLoading) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading companies...</Text>
+      <View style={styles.bootstrapContainer}>
+        <ActivityIndicator size="large" color="#193434" />
       </View>
     );
   }
 
+  const showEmptyState = companies.length === 0 && invites.length === 0;
+
   return (
-    <View style={styles.companiesContainer}>
-      <Text style={styles.companiesTitle}>Select Company</Text>
-      <FlatList
-        data={companies}
-        renderItem={renderCompany}
-        keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={styles.companiesList}
+    <View style={styles.companyPickerRoot}>
+      <ScrollView
+        contentContainerStyle={styles.companyPickerScroll}
         showsVerticalScrollIndicator={false}
-      />
+      >
+        <View style={styles.companyPickerHeader}>
+          <Text style={styles.companyPickerEyebrow}>
+            {user?.firstName ? `Hi, ${user.firstName}` : 'Welcome'}
+          </Text>
+          <Text style={styles.companyPickerTitle}>Choose a workspace</Text>
+          <Text style={styles.companyPickerSubtitle}>
+            {invites.length > 0
+              ? 'Respond to invites or open one of your companies.'
+              : 'Pick the company you want to work in.'}
+          </Text>
+        </View>
+
+        {invites.length > 0 && (
+          <View style={styles.companyPickerSection}>
+            <View style={styles.companyPickerSectionHeader}>
+              <Text style={styles.companyPickerSectionLabel}>Pending invitations</Text>
+              <View style={styles.invitePill}>
+                <Text style={styles.invitePillText}>{invites.length}</Text>
+              </View>
+            </View>
+            {invites.map((inv: any) => {
+              const busy = actionToken === inv.token;
+              return (
+                <View key={inv.token} style={styles.inviteCard}>
+                  <Text style={styles.inviteCompanyName}>{inv.companyName || 'A team'}</Text>
+                  <Text style={styles.inviteMeta}>
+                    {(inv.role ? String(inv.role).replace(/\b\w/g, (c: string) => c.toUpperCase()) + ' · ' : '')}
+                    Invited by {inv.invitedByName || 'your team'}
+                  </Text>
+                  <View style={styles.inviteActions}>
+                    <TouchableOpacity
+                      style={[styles.inviteDeclineBtn, busy && { opacity: 0.5 }]}
+                      onPress={() => handleDecline(inv)}
+                      disabled={busy}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.inviteDeclineText}>Decline</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.inviteAcceptBtn, busy && { opacity: 0.7 }]}
+                      onPress={() => handleAccept(inv)}
+                      disabled={busy}
+                      activeOpacity={0.85}
+                    >
+                      {busy ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.inviteAcceptText}>Accept</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {companies.length > 0 && (
+          <View style={styles.companyPickerSection}>
+            <Text style={styles.companyPickerSectionLabel}>Your companies</Text>
+            {companies.map((c) => {
+              const company = normalizeCompany(c);
+              const suspended = !!(company as any).suspendedAt;
+              const role = String((company as any).user_role || (company as any).role || '');
+              const busy = switchingId === company.id;
+              return (
+                <TouchableOpacity
+                  key={String(company.id)}
+                  style={[styles.companyRow, suspended && styles.companyRowSuspended]}
+                  onPress={() => handleCompanyPress(company)}
+                  activeOpacity={0.8}
+                  disabled={!!switchingId}
+                >
+                  <View style={styles.companyRowAvatar}>
+                    <Text style={styles.companyRowAvatarText}>
+                      {(company.name || '?').trim().charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.companyRowBody}>
+                    <View style={styles.companyRowTitleRow}>
+                      <RNText style={styles.companyRowName} numberOfLines={1}>
+                        {padAndroidText(company.name || '')}
+                      </RNText>
+                      {suspended && (
+                        <View style={styles.expiredBadge}>
+                          <RNText style={styles.expiredBadgeText}>{padAndroidText('Expired')}</RNText>
+                        </View>
+                      )}
+                    </View>
+                    {!!role && (
+                      <Text style={styles.companyRowRole}>{role}</Text>
+                    )}
+                  </View>
+                  {busy ? (
+                    <ActivityIndicator color="#193434" />
+                  ) : (
+                    <Text style={styles.companyRowArrow}>›</Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {showEmptyState && (
+          <View style={styles.companyPickerEmpty}>
+            <Text style={styles.companyPickerEmptyTitle}>You're not in a company yet</Text>
+            <Text style={styles.companyPickerEmptyBody}>
+              Ask your admin to invite you to your company, or create one from your browser.
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={styles.companyPickerSignOutBtn}
+          onPress={handleSignOut}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.companyPickerSignOutText}>Sign out</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ExpiredScreen
+//
+// Shown when a user tries to open a suspended company (or is auto-routed to
+// their only company and that one is suspended). Server returns HTTP 423 on
+// /companies/switch for suspended workspaces, which we catch upstream. This
+// screen has no in-app way forward by design — billing/support lives on the
+// public site to keep mobile out of the payment loop.
+// ---------------------------------------------------------------------------
+
+function ExpiredScreen({ route, navigation }: any) {
+  const insets = useSafeAreaInsets();
+  const { company, user, allowBackToList } = route.params || {};
+
+  const openSupport = () => {
+    Linking.openURL(SUPPORT_CONTACT_URL).catch(() => {
+      Alert.alert('Could not open browser', 'Please visit ' + SUPPORT_CONTACT_URL);
+    });
+  };
+
+  const onSignOut = async () => {
+    await clearAuth();
+    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+  };
+
+  const onBackToList = () => {
+    const companies = Array.isArray(user?.companies) ? user.companies : [];
+    const invites = Array.isArray(user?.pendingInvites) ? user.pendingInvites : [];
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Companies', params: { user, companies, invites } }],
+    });
+  };
+
+  return (
+    <View style={styles.expiredRoot}>
+      <View style={[styles.expiredContent, { paddingTop: insets.top + 32, paddingBottom: insets.bottom + 24 }]}>
+        <View style={styles.expiredIconWrap}>
+          <RNText style={styles.expiredIconText}>{padAndroidText('!')}</RNText>
+        </View>
+
+        <View style={styles.expiredTextBlock}>
+          <RNText style={styles.expiredTitle}>
+            {padAndroidText('Your account has expired')}
+          </RNText>
+          {!!company?.name && (
+            <RNText style={styles.expiredCompany}>
+              {padAndroidText(String(company.name))}
+            </RNText>
+          )}
+          <RNText style={styles.expiredBody}>
+            {padAndroidText(
+              'Please contact support for more information about reactivating your workspace.',
+            )}
+          </RNText>
+        </View>
+
+        <TouchableOpacity
+          style={styles.expiredPrimaryBtn}
+          onPress={openSupport}
+          activeOpacity={0.85}
+        >
+          <RNText style={styles.expiredPrimaryBtnText}>
+            {padAndroidText('Contact support')}
+          </RNText>
+        </TouchableOpacity>
+
+        {allowBackToList && (
+          <TouchableOpacity
+            style={styles.expiredSecondaryBtn}
+            onPress={onBackToList}
+            activeOpacity={0.85}
+          >
+            <RNText style={styles.expiredSecondaryBtnText}>
+              {padAndroidText('Back to company list')}
+            </RNText>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={styles.expiredSignOutBtn}
+          onPress={onSignOut}
+          activeOpacity={0.8}
+        >
+          <RNText style={styles.expiredSignOutText}>
+            {padAndroidText('Sign out')}
+          </RNText>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -950,7 +1586,7 @@ function AdminOverview({ company, user }: { company: Company; user: User }) {
     null,
   );
   const [companyPendingCount, setCompanyPendingCount] = useState(0);
-  const [timeOffVisible, setTimeOffVisible] = useState(false);
+  const [appointmentVisible, setAppointmentVisible] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   const todayIso = useMemo(() => todayIsoLocal(), []);
@@ -1051,50 +1687,34 @@ function AdminOverview({ company, user }: { company: Company; user: User }) {
         }}
         showsVerticalScrollIndicator={false}
       >
-        <TouchableOpacity
-          style={[
-            styles.adminPendingPill,
-            companyPendingCount === 0 && styles.adminPendingPillZero,
-          ]}
-          activeOpacity={0.85}
-          onPress={() =>
-            navigation.navigate('AdminRequests', { company, user })
-          }
-        >
-          <View
-            style={[
-              styles.adminPendingPillIcon,
-              companyPendingCount === 0 && styles.adminPendingPillIconZero,
-            ]}
+        {companyPendingCount > 0 ? (
+          <TouchableOpacity
+            style={styles.adminPendingPill}
+            activeOpacity={0.85}
+            onPress={() =>
+              navigation.navigate('AdminRequests', { company, user })
+            }
           >
-            <Text style={styles.adminPendingPillIconText}>
-              {companyPendingCount === 0 ? '📋' : '🔔'}
-            </Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.adminPendingPillTitle}>
-              {companyPendingCount === 0
-                ? 'Team requests'
-                : companyPendingCount === 1
+            <View style={styles.adminPendingPillIcon}>
+              <Text style={styles.adminPendingPillIconText}>🔔</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.adminPendingPillTitle}>
+                {companyPendingCount === 1
                   ? '1 request needs your review'
                   : `${companyPendingCount} requests need your review`}
-            </Text>
-            <Text style={styles.adminPendingPillSubtitle}>
-              {companyPendingCount === 0
-                ? 'No pending requests. Tap to manage your team.'
-                : 'Tap to approve, edit or decline'}
-            </Text>
-          </View>
-          {companyPendingCount > 0 ? (
+              </Text>
+              <Text style={styles.adminPendingPillSubtitle}>
+                Tap to approve, edit or decline
+              </Text>
+            </View>
             <View style={styles.adminPendingPillCount}>
               <Text style={styles.adminPendingPillCountText}>
                 {companyPendingCount}
               </Text>
             </View>
-          ) : (
-            <Text style={styles.requestsOverviewChevron}>›</Text>
-          )}
-        </TouchableOpacity>
+          </TouchableOpacity>
+        ) : null}
 
         <RouteCard
           summary={routeSummary}
@@ -1113,25 +1733,27 @@ function AdminOverview({ company, user }: { company: Company; user: User }) {
         <TouchableOpacity
           style={styles.timeOffPrimaryBtn}
           activeOpacity={0.9}
-          onPress={() => setTimeOffVisible(true)}
+          onPress={() => setAppointmentVisible(true)}
         >
           <View style={styles.timeOffPrimaryBtnIcon}>
             <Text style={styles.timeOffPrimaryBtnIconText}>+</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.timeOffPrimaryBtnTitle}>Book time off</Text>
+            <Text style={styles.timeOffPrimaryBtnTitle}>Add appointment</Text>
             <Text style={styles.timeOffPrimaryBtnSubtitle}>
-              Holiday, appointments or a full day off
+              Schedule work or time off for any teammate
             </Text>
           </View>
         </TouchableOpacity>
       </ScrollView>
 
-      <TimeOffRequestModal
-        visible={timeOffVisible}
-        onClose={() => setTimeOffVisible(false)}
-        onSubmitted={() => {
-          setTimeOffVisible(false);
+      <MobileAdminAppointmentModal
+        visible={appointmentVisible}
+        onClose={() => setAppointmentVisible(false)}
+        company={company}
+        currentUser={user}
+        onCreated={() => {
+          setAppointmentVisible(false);
           setRefreshTick((n) => n + 1);
         }}
       />
@@ -5124,6 +5746,7 @@ function TodayTab({ route }: any) {
                   job={selectedJob}
                   date={todayString}
                   company={company}
+                  user={user}
                   onClose={closePopup}
                   onCopy={handleCopy}
                   isExpanded={isExpanded}
@@ -5546,7 +6169,7 @@ function JobAssigneePickerSheet({
   );
 }
 
-function JobDetailSlideout({ job, date, company, onClose, onCopy, isExpanded, onJobUpdate, onJobDeleted, scrollViewRef, scrollOffsetYRef }: { job: Job & { timeline?: Array<{ id?: number; description?: string; message?: string; created_at: string; user_id?: number; action?: string }> }; date: string; company?: Company | any; onClose: () => void; onCopy: (text: string) => void; isExpanded?: boolean; onJobUpdate?: (updatedJob: Job) => void; onJobDeleted?: (jobId: number) => void; scrollViewRef?: React.RefObject<ScrollView | null>; scrollOffsetYRef?: React.MutableRefObject<number> }) {
+function JobDetailSlideout({ job, date, company, user, onClose, onCopy, isExpanded, onJobUpdate, onJobDeleted, scrollViewRef, scrollOffsetYRef }: { job: Job & { timeline?: Array<{ id?: number; description?: string; message?: string; created_at: string; user_id?: number; action?: string }> }; date: string; company?: Company | any; user?: any; onClose: () => void; onCopy: (text: string) => void; isExpanded?: boolean; onJobUpdate?: (updatedJob: Job) => void; onJobDeleted?: (jobId: number) => void; scrollViewRef?: React.RefObject<ScrollView | null>; scrollOffsetYRef?: React.MutableRefObject<number> }) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const billingCurrency = businessCurrencyFromCompany(company);
@@ -5564,8 +6187,11 @@ function JobDetailSlideout({ job, date, company, onClose, onCopy, isExpanded, on
 
   // --- Inline editing (time / date / assignee / job note) --------------------
   // Admins can change any of these by tapping the chip. Non-admin members
-  // still see the same values, just non-tappable.
-  const canEditJob = isAdminRole(company);
+  // still see the same values, just non-tappable. We pass both `company`
+  // (which carries the membership `role`/`user_role`/`isOwner`) AND `user`
+  // (which carries `role` for super-admins / activeCompany payloads) so
+  // owners signing in from the new auth flow are recognised reliably.
+  const canEditJob = isAdminRole(company, user);
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
@@ -8785,6 +9411,532 @@ function MobileCreateWorkAppointmentModal({
   );
 }
 
+// --- MobileAdminAppointmentModal --------------------------------------------
+//
+// Admin-only modal for owners and managers to schedule appointments for
+// themselves or any teammate. Mirrors the platform's add-appointment dialog:
+//   - kind toggle: Work appointment / Time off
+//   - assignee picker (defaults to the current user)
+//   - title + category
+//   - date range via InlineRangeCalendar
+//   - time mode: All day / Time range / Hours
+//   - notes
+// Created appointments are auto-approved by the API (admin caller).
+function MobileAdminAppointmentModal({
+  visible,
+  onClose,
+  company,
+  currentUser,
+  onCreated,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  company: Company;
+  currentUser: User;
+  onCreated: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [kind, setKind] = useState<'work' | 'time_off'>('work');
+  const [assigneeId, setAssigneeId] = useState<number>(currentUser.id);
+  const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
+  const [teamUsers, setTeamUsers] = useState<TeamUserRow[]>([]);
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState<ApptCategoryMobile>('personal');
+  const [startDate, setStartDate] = useState<string | null>(todayIsoLocal());
+  const [endDate, setEndDate] = useState<string | null>(todayIsoLocal());
+  const [timeMode, setTimeMode] = useState<'all_day' | 'span' | 'hours'>(
+    'span',
+  );
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('10:00');
+  const [hoursOff, setHoursOff] = useState('1');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const today = todayIsoLocal();
+  const isSingleDay = !!startDate && !!endDate && startDate === endDate;
+
+  useEffect(() => {
+    if (!visible) return;
+    setKind('work');
+    setAssigneeId(currentUser.id);
+    setAssigneePickerOpen(false);
+    setTitle('');
+    setCategory('personal');
+    setStartDate(today);
+    setEndDate(today);
+    setTimeMode('span');
+    setStartTime('09:00');
+    setEndTime('10:00');
+    setHoursOff('1');
+    setNotes('');
+    setSaving(false);
+  }, [visible, today, currentUser.id]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('authToken');
+        if (token) {
+          apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        }
+        const res = await apiClient.get('/users').catch(() => null);
+        if (!alive) return;
+        const rows: TeamUserRow[] = (res?.data?.users || []).map((u: any) => ({
+          id: Number(u.id),
+          first_name: String(u.first_name || ''),
+          last_name: String(u.last_name || ''),
+        }));
+        setTeamUsers(rows);
+      } catch {
+        // Best-effort. Falls back to a single-user list.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSingleDay && timeMode !== 'all_day') {
+      setTimeMode('all_day');
+    }
+  }, [isSingleDay, timeMode]);
+
+  const assigneeName = useMemo(() => {
+    if (assigneeId === currentUser.id) {
+      const a = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim();
+      return a ? `${a} (you)` : 'You';
+    }
+    const t = teamUsers.find((u) => u.id === assigneeId);
+    if (!t) return 'Pick someone';
+    const n = `${t.first_name} ${t.last_name}`.trim();
+    return n || `User #${t.id}`;
+  }, [assigneeId, currentUser, teamUsers]);
+
+  const rangeSummary = useMemo(() => {
+    if (!startDate || !endDate) return 'Pick a day';
+    if (startDate === endDate) return formatLongDate(startDate);
+    return `${formatShortDate(startDate)} – ${formatShortDate(endDate)} (${daysBetween(
+      startDate,
+      endDate,
+    )}d)`;
+  }, [startDate, endDate]);
+
+  const canSave = (() => {
+    if (saving) return false;
+    if (!title.trim()) return false;
+    if (!startDate || !endDate) return false;
+    if (endDate < startDate) return false;
+    if (isSingleDay && timeMode === 'span') {
+      if (!/^\d{2}:\d{2}$/.test(startTime)) return false;
+      if (!/^\d{2}:\d{2}$/.test(endTime)) return false;
+      if (endTime <= startTime) return false;
+    }
+    if (isSingleDay && timeMode === 'hours') {
+      const n = Number(String(hoursOff).replace(',', '.'));
+      if (!Number.isFinite(n) || n <= 0 || n > 24) return false;
+    }
+    return true;
+  })();
+
+  const submit = async () => {
+    if (!canSave || !startDate || !endDate) return;
+    setSaving(true);
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (token) {
+        apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      }
+      const payload: Record<string, unknown> = {
+        user_id: assigneeId,
+        kind,
+        title: title.trim(),
+        category,
+        notes: notes.trim() || null,
+        appointment_date: startDate,
+      };
+      if (!isSingleDay) {
+        payload.end_date = endDate;
+        payload.time_mode = 'all_day';
+      } else if (timeMode === 'span') {
+        payload.time_mode = 'span';
+        payload.start_time = startTime;
+        payload.end_time = endTime;
+      } else if (timeMode === 'hours') {
+        payload.time_mode = 'hours';
+        payload.hours_off = Number(String(hoursOff).replace(',', '.'));
+      } else {
+        payload.time_mode = 'all_day';
+      }
+      await apiClient.post('/appointments', payload);
+      onCreated();
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.error ||
+        e?.message ||
+        'Could not save the appointment.';
+      Alert.alert('Could not save', String(msg));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!visible) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      onRequestClose={onClose}
+      transparent
+      statusBarTranslucent
+    >
+      <View style={styles.adminApptModalRoot}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={styles.adminApptModalBackdrop} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.adminApptModalSheetWrap}
+        >
+          <View style={styles.adminApptSheet}>
+            <View style={styles.adminApptGrip} />
+            <View style={styles.adminApptSheetHeader}>
+              <RNText style={styles.adminApptSheetTitle}>
+                {padAndroidText('New appointment')}
+              </RNText>
+            </View>
+
+            <ScrollView
+              style={styles.adminApptScroll}
+              contentContainerStyle={styles.adminApptScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.adminApptField}>
+                <RNText style={styles.adminApptLabel}>
+                  {padAndroidText('Type')}
+                </RNText>
+                <View style={styles.adminApptKindRow}>
+                  {(
+                    [
+                      {
+                        id: 'work' as const,
+                        label: 'Work',
+                        hint: 'Meeting, errand, on-site task',
+                      },
+                      {
+                        id: 'time_off' as const,
+                        label: 'Time off',
+                        hint: 'Vacation, sick, personal',
+                      },
+                    ]
+                  ).map((opt) => {
+              const on = kind === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  onPress={() => setKind(opt.id)}
+                  activeOpacity={0.85}
+                  style={[
+                    styles.adminApptKindTile,
+                    on && styles.adminApptKindTileOn,
+                  ]}
+                >
+                  <RNText
+                    style={[
+                      styles.adminApptKindLabel,
+                      on && styles.adminApptKindLabelOn,
+                    ]}
+                  >
+                    {padAndroidText(opt.label)}
+                  </RNText>
+                  <RNText
+                    style={[
+                      styles.adminApptKindHint,
+                      on && styles.adminApptKindHintOn,
+                    ]}
+                  >
+                    {padAndroidText(opt.hint)}
+                  </RNText>
+                </TouchableOpacity>
+              );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.adminApptField}>
+                <RNText style={styles.adminApptLabel}>
+                  {padAndroidText('For')}
+                </RNText>
+                <TouchableOpacity
+                  style={styles.adminApptPicker}
+                  onPress={() => setAssigneePickerOpen((v) => !v)}
+                  activeOpacity={0.85}
+                >
+                  <RNText style={styles.adminApptPickerLabel}>
+                    {padAndroidText(assigneeName)}
+                  </RNText>
+                  <RNText style={styles.adminApptPickerChevron}>
+                    {assigneePickerOpen ? '▴' : '▾'}
+                  </RNText>
+                </TouchableOpacity>
+                {assigneePickerOpen ? (
+                  <View style={styles.adminApptAssignList}>
+              {teamUsers.map((u) => {
+                const isSelf = u.id === currentUser.id;
+                const fullName =
+                  `${u.first_name} ${u.last_name}`.trim() || `User #${u.id}`;
+                const label = isSelf ? `${fullName} (you)` : fullName;
+                const on = assigneeId === u.id;
+                return (
+                  <TouchableOpacity
+                    key={u.id}
+                    style={[
+                      styles.adminApptAssignRow,
+                      on && styles.adminApptAssignRowOn,
+                    ]}
+                    onPress={() => {
+                      setAssigneeId(u.id);
+                      setAssigneePickerOpen(false);
+                    }}
+                  >
+                    <RNText
+                      style={[
+                        styles.adminApptAssignText,
+                        on && styles.adminApptAssignTextOn,
+                      ]}
+                    >
+                      {padAndroidText(label)}
+                    </RNText>
+                    {on ? (
+                      <RNText style={styles.adminApptAssignCheck}>
+                        {padAndroidText('✓')}
+                      </RNText>
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+                </View>
+              ) : null}
+              </View>
+
+              <View style={styles.adminApptField}>
+                <RNText style={styles.adminApptLabel}>
+                  {padAndroidText('Title')}
+                </RNText>
+                <TextInput
+                  style={styles.adminApptInput}
+            placeholder={
+              kind === 'work'
+                ? 'e.g. Team meeting, on-site visit…'
+                : 'e.g. Vacation, dentist…'
+            }
+            placeholderTextColor="#94A3B8"
+                  value={title}
+                  onChangeText={setTitle}
+                />
+              </View>
+
+              <View style={styles.adminApptField}>
+                <RNText style={styles.adminApptLabel}>
+                  {padAndroidText('Category')}
+                </RNText>
+                <View style={styles.adminApptCatRow}>
+            {APPT_CATEGORY_OPTIONS_MOBILE.map((opt) => {
+              const on = category === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[
+                    styles.adminApptCatChip,
+                    on && styles.adminApptCatChipOn,
+                  ]}
+                  onPress={() => setCategory(opt.value)}
+                >
+                  <RNText
+                    style={[
+                      styles.adminApptCatChipText,
+                      on && styles.adminApptCatChipTextOn,
+                    ]}
+                  >
+                    {padAndroidText(opt.label)}
+                  </RNText>
+                </TouchableOpacity>
+              );
+            })}
+                </View>
+              </View>
+
+              <View style={styles.adminApptField}>
+                <View style={styles.adminApptWhenHeader}>
+                  <RNText style={styles.adminApptLabel}>
+                    {padAndroidText('When')}
+                  </RNText>
+                  <RNText style={styles.adminApptRangeSummary}>
+                    {padAndroidText(rangeSummary)}
+                  </RNText>
+                </View>
+                <InlineRangeCalendar
+            startIso={startDate}
+            endIso={endDate}
+                  onChange={(s, e) => {
+                    setStartDate(s);
+                    setEndDate(e);
+                  }}
+                />
+                <RNText style={styles.adminApptHint}>
+                  {padAndroidText(
+                    'Tap a start day, then an end day. Tap once for a single-day appointment.',
+                  )}
+                </RNText>
+              </View>
+
+              {isSingleDay ? (
+                <View style={styles.adminApptField}>
+                  <RNText style={styles.adminApptLabel}>
+                    {padAndroidText('How long?')}
+                  </RNText>
+                  <View style={styles.adminApptModeRow}>
+                {(
+                  [
+                    { id: 'all_day' as const, label: 'All day' },
+                    { id: 'span' as const, label: 'Time range' },
+                    { id: 'hours' as const, label: 'Hours' },
+                  ]
+                ).map((m) => {
+                  const on = timeMode === m.id;
+                  return (
+                    <TouchableOpacity
+                      key={m.id}
+                      style={[
+                        styles.adminApptModeChip,
+                        on && styles.adminApptModeChipOn,
+                      ]}
+                      onPress={() => setTimeMode(m.id)}
+                    >
+                      <RNText
+                        style={[
+                          styles.adminApptModeChipText,
+                          on && styles.adminApptModeChipTextOn,
+                        ]}
+                      >
+                        {padAndroidText(m.label)}
+                      </RNText>
+                    </TouchableOpacity>
+                  );
+                })}
+                  </View>
+
+                  {timeMode === 'span' ? (
+                    <View style={styles.adminApptTimeRow}>
+                      <View style={styles.adminApptTimeCol}>
+                        <RNText style={styles.adminApptSubLabel}>
+                          {padAndroidText('Start')}
+                        </RNText>
+                        <TextInput
+                          style={styles.adminApptInput}
+                          placeholder="09:00"
+                          placeholderTextColor="#94A3B8"
+                          value={startTime}
+                          onChangeText={setStartTime}
+                          keyboardType="numbers-and-punctuation"
+                        />
+                      </View>
+                      <View style={styles.adminApptTimeCol}>
+                        <RNText style={styles.adminApptSubLabel}>
+                          {padAndroidText('End')}
+                        </RNText>
+                        <TextInput
+                          style={styles.adminApptInput}
+                          placeholder="10:00"
+                          placeholderTextColor="#94A3B8"
+                          value={endTime}
+                          onChangeText={setEndTime}
+                          keyboardType="numbers-and-punctuation"
+                        />
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {timeMode === 'hours' ? (
+                    <View style={styles.adminApptHoursBlock}>
+                      <RNText style={styles.adminApptSubLabel}>
+                        {padAndroidText('Hours')}
+                      </RNText>
+                      <TextInput
+                        style={styles.adminApptInput}
+                        placeholder="e.g. 2"
+                        placeholderTextColor="#94A3B8"
+                        keyboardType="decimal-pad"
+                        value={hoursOff}
+                        onChangeText={(v) =>
+                          setHoursOff(v.replace(/[^0-9.,]/g, ''))
+                        }
+                      />
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              <View style={styles.adminApptField}>
+                <RNText style={styles.adminApptLabel}>
+                  {padAndroidText('Notes (optional)')}
+                </RNText>
+                <TextInput
+                  style={[styles.adminApptInput, styles.adminApptInputMultiline]}
+                  placeholder="Details, location, links…"
+                  placeholderTextColor="#94A3B8"
+                  value={notes}
+                  onChangeText={setNotes}
+                  multiline
+                />
+              </View>
+            </ScrollView>
+
+            <View
+              style={[
+                styles.adminApptFooter,
+                { paddingBottom: Math.max(insets.bottom, 12) },
+              ]}
+            >
+              <TouchableOpacity
+                style={styles.adminApptFooterCancel}
+                onPress={onClose}
+                activeOpacity={0.85}
+                disabled={saving}
+              >
+                <RNText style={styles.adminApptFooterCancelText}>
+                  {padAndroidText('Cancel')}
+                </RNText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.adminApptFooterSave,
+                  !canSave && styles.adminApptFooterSaveDisabled,
+                ]}
+                onPress={submit}
+                activeOpacity={0.88}
+                disabled={!canSave}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <RNText style={styles.adminApptFooterSaveText}>
+                    {padAndroidText('Save')}
+                  </RNText>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+}
+
 function DayViewScreen({ route, navigation }: any) {
   const { date, company, user, openJobId, openAppointmentComposer } =
     route.params || {};
@@ -9665,6 +10817,7 @@ function DayViewScreen({ route, navigation }: any) {
                   job={selectedJob}
                   date={date}
                   company={company}
+                  user={user}
                   onClose={closeSlideout}
                   onCopy={handleCopy}
                   isExpanded={isExpanded}
@@ -10042,9 +11195,9 @@ function SettingsRow({
 
 function SettingsSectionHeader({ children }: { children: string }) {
   return (
-    <Text style={styles.settingsGroupLabel} numberOfLines={1}>
+    <RNText style={styles.settingsGroupLabel}>
       {padAndroidText(children)}
-    </Text>
+    </RNText>
   );
 }
 
@@ -10310,15 +11463,14 @@ function MobileUserSettingsPage({
                   ]}
                   activeOpacity={0.85}
                 >
-                  <Text
+                  <RNText
                     style={[
                       styles.settingsToggleBtnText,
                       on && styles.settingsToggleBtnTextOn,
                     ]}
-                    numberOfLines={1}
                   >
                     {padAndroidText(code === 'en' ? 'English' : 'Dansk')}
-                  </Text>
+                  </RNText>
                 </TouchableOpacity>
               );
             })}
@@ -10401,7 +11553,7 @@ function MobileSettingsDrawer({
   onClose,
   company,
   user,
-  onLogout,
+  onSwitchAccount,
   onNavigateToClients,
   onNavigateToServices,
   onNavigateToInvoices,
@@ -10416,7 +11568,7 @@ function MobileSettingsDrawer({
   onClose: () => void;
   company: Company;
   user: User;
-  onLogout: () => void;
+  onSwitchAccount: () => void;
   /** Native Clients stack (list → detail); desktop parity without leaving the app. */
   onNavigateToClients?: () => void;
   onNavigateToServices?: () => void;
@@ -10581,11 +11733,12 @@ function MobileSettingsDrawer({
           },
         ]}
       >
+        <View style={styles.settingsDrawerInner}>
         {/* Drawer header (menu mode) */}
         <View style={styles.settingsDrawerHeader}>
-          <Text style={styles.settingsDrawerTitle} numberOfLines={1}>
+          <RNText style={styles.settingsDrawerTitle}>
             {padAndroidText('Menu')}
-          </Text>
+          </RNText>
           <TouchableOpacity
             onPress={onClose}
             style={styles.settingsDrawerHeaderBtn}
@@ -10604,15 +11757,16 @@ function MobileSettingsDrawer({
             onPress={() => switchDrawerTab('main')}
             activeOpacity={0.85}
           >
-            <Text
-              style={[
-                styles.drawerTabText,
-                menuTab === 'main' && styles.drawerTabTextOn,
-              ]}
-              numberOfLines={1}
-            >
-              {padAndroidText('Main')}
-            </Text>
+            <View style={styles.drawerTabLabelWrap}>
+              <RNText
+                style={[
+                  styles.drawerTabText,
+                  menuTab === 'main' && styles.drawerTabTextOn,
+                ]}
+              >
+                {padAndroidText('Main')}
+              </RNText>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             style={[
@@ -10622,15 +11776,16 @@ function MobileSettingsDrawer({
             onPress={() => switchDrawerTab('settings')}
             activeOpacity={0.85}
           >
-            <Text
-              style={[
-                styles.drawerTabText,
-                menuTab === 'settings' && styles.drawerTabTextOn,
-              ]}
-              numberOfLines={1}
-            >
-              {padAndroidText('Settings')}
-            </Text>
+            <View style={styles.drawerTabLabelWrap}>
+              <RNText
+                style={[
+                  styles.drawerTabText,
+                  menuTab === 'settings' && styles.drawerTabTextOn,
+                ]}
+              >
+                {padAndroidText('Settings')}
+              </RNText>
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -10764,20 +11919,25 @@ function MobileSettingsDrawer({
                 </View>
               ))}
 
-              <TouchableOpacity
-                onPress={onLogout}
-                style={styles.settingsLogoutBtn}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.settingsLogoutBtnText} numberOfLines={1}>
-                  {padAndroidText('Log out')}
-                </Text>
-              </TouchableOpacity>
-
               <Text style={styles.settingsVersionText}>PathPilo · mobile</Text>
             </>
           )}
         </ScrollView>
+
+        <View style={styles.settingsDrawerFooter}>
+          <TouchableOpacity
+            onPress={onSwitchAccount}
+            style={styles.settingsSwitchAccountBtn}
+            activeOpacity={0.85}
+          >
+            <View style={styles.settingsSwitchAccountTextWrap}>
+              <RNText style={styles.settingsSwitchAccountBtnText}>
+                {padAndroidText('Switch account')}
+              </RNText>
+            </View>
+          </TouchableOpacity>
+        </View>
+        </View>
 
         {/* Sub-page overlay (slides over the menu) */}
         {menuTab === 'settings' && page !== 'menu' ? (
@@ -10830,16 +11990,29 @@ function CompanyTabsScreen({ route }: any) {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const admin = isAdminRole(company, user);
 
-  const onLogout = async () => {
+  const promptSwitchAccount = useCallback(() => {
+    Alert.alert(
+      'Switch account',
+      'You will be signed out and asked to log in with a different user.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Switch account',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAuth();
+            navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          },
+        },
+      ]
+    );
+  }, [navigation]);
+
+  const onSwitchAccount = () => {
     setDrawerOpen(false);
-    try {
-      await AsyncStorage.removeItem('authToken');
-      await AsyncStorage.removeItem('user');
-    } catch {
-      // best effort — proceed even if storage is unavailable
-    }
-    navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+    promptSwitchAccount();
   };
 
   // The header already consumes the top safe-area inset, so child screens
@@ -10873,15 +12046,23 @@ function CompanyTabsScreen({ route }: any) {
                 return <CalendarIcon color={color} />;
               } else if (route.name === 'Today') {
                 return <TodayIcon color={color} />;
+              } else if (route.name === 'ClientsTab') {
+                return <ClientsTabIcon color={color} />;
               }
               return null;
             },
-            tabBarLabel: ({ focused, color }) => (
-              <View style={styles.tabLabelContainer}>
-                <Text style={[styles.tabLabel, { color }]}>{route.name === 'Today' ? 'Today' : route.name}</Text>
-                {focused && <View style={styles.activeIndicator} />}
-              </View>
-            ),
+            tabBarLabel: ({ focused, color }) => {
+              let label: string;
+              if (route.name === 'Today') label = 'Today';
+              else if (route.name === 'ClientsTab') label = 'Clients';
+              else label = route.name;
+              return (
+                <View style={styles.tabLabelContainer}>
+                  <Text style={[styles.tabLabel, { color }]}>{label}</Text>
+                  {focused && <View style={styles.activeIndicator} />}
+                </View>
+              );
+            },
           })}
         >
           <Tab.Screen
@@ -10894,11 +12075,30 @@ function CompanyTabsScreen({ route }: any) {
             component={CalendarTab}
             initialParams={{ company, user }}
           />
-          <Tab.Screen
-            name="Today"
-            component={TodayTab}
-            initialParams={{ company, user }}
-          />
+          {admin ? (
+            <Tab.Screen
+              name="ClientsTab"
+              component={OverviewTab}
+              initialParams={{ company, user }}
+              listeners={({ navigation: tabNav }) => ({
+                tabPress: (e) => {
+                  e.preventDefault();
+                  const parent = tabNav.getParent?.();
+                  if (parent) {
+                    parent.navigate('Clients', { company, user });
+                  } else {
+                    navigation.navigate('Clients', { company, user });
+                  }
+                },
+              })}
+            />
+          ) : (
+            <Tab.Screen
+              name="Today"
+              component={TodayTab}
+              initialParams={{ company, user }}
+            />
+          )}
         </Tab.Navigator>
       </View>
       </SafeAreaInsetsContext.Provider>
@@ -10907,7 +12107,7 @@ function CompanyTabsScreen({ route }: any) {
         onClose={() => setDrawerOpen(false)}
         company={company}
         user={user}
-        onLogout={onLogout}
+        onSwitchAccount={onSwitchAccount}
         onNavigateToClients={() => {
           setDrawerOpen(false);
           navigation.navigate('Clients', { company, user });
@@ -10953,14 +12153,20 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Login"
+        initialRouteName="Bootstrap"
         screenOptions={{
           headerShown: false,
         }}
       >
+        <Stack.Screen name="Bootstrap" component={BootstrapScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Companies" component={CompaniesScreen} />
         <Stack.Screen name="CompanyTabs" component={CompanyTabsScreen} />
+        <Stack.Screen
+          name="Expired"
+          component={ExpiredScreen}
+          options={{ headerShown: false, animation: 'fade' }}
+        />
         <Stack.Screen
           name="Clients"
           component={MobileClientsListScreen as any}
@@ -11062,200 +12268,688 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // Login screen styles
-  container: {
+  // ── Bootstrap (cold-start splash) ──
+  bootstrapContainer: {
     flex: 1,
     backgroundColor: '#F6F9F7',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
   },
-  loginContainer: {
+
+  // ── Login screen ──
+  loginRoot: {
+    flex: 1,
+    backgroundColor: '#F6F9F7',
+  },
+  loginScroll: {
+    flexGrow: 1,
+    paddingHorizontal: 22,
+    justifyContent: 'center',
+  },
+  loginScreenBlock: {
     width: '100%',
-    maxWidth: 400,
-    paddingHorizontal: 24,
+    maxWidth: 420,
+    alignSelf: 'center',
   },
-  title: {
+  loginCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 26,
+    marginTop: 10,
+    overflow: 'visible',
+    shadowColor: '#0B1F1F',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.07,
+    shadowRadius: 32,
+    elevation: 8,
+  },
+  loginBrandMark: {
+    alignSelf: 'center',
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#193434',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  loginBrandMarkText: {
+    color: '#3DD57A',
     fontSize: 28,
-    fontWeight: 'bold',
+    fontWeight: '800',
+  },
+  loginBrandImage: {
+    alignSelf: 'center',
+    width: 160,
+    height: 64,
+    marginBottom: 12,
+  },
+  /** Logo on page background, above the white form card */
+  loginBrandImageAbove: {
+    alignSelf: 'center',
+    width: 200,
+    height: 72,
+    marginTop: -4,
+    marginBottom: 12,
+  },
+  loginTitle: {
+    fontSize: 24,
+    fontWeight: '700',
     color: '#193434',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
+    width: '100%',
+    paddingHorizontal: 12,
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#193434',
+  loginSubtitle: {
+    fontSize: 14,
+    color: '#5A6B6B',
     textAlign: 'center',
-    marginBottom: 32,
-    opacity: 0.8,
+    marginBottom: 22,
+    width: '100%',
+    paddingHorizontal: 12,
   },
-  inputContainer: {
-    marginBottom: 20,
+  loginField: {
+    marginBottom: 14,
   },
-  label: {
-    fontSize: 16,
+  loginLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  loginLabel: {
+    fontSize: 13,
     fontWeight: '600',
     color: '#193434',
-    marginBottom: 8,
   },
-  input: {
+  loginForgotBtn: {
+    alignSelf: 'flex-end',
+    marginTop: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    overflow: 'visible',
+  },
+  loginInlineLink: {
+    fontSize: 13,
+    color: '#1A8F4E',
+    fontWeight: '600',
+    textAlign: 'right',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  loginInput: {
     borderWidth: 1,
-    borderColor: '#19343420',
+    borderColor: '#E2EBE7',
     borderRadius: 12,
-    padding: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
     fontSize: 16,
     color: '#193434',
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    backgroundColor: '#FBFDFC',
   },
-  passwordContainer: {
-    position: 'relative',
-  },
-  passwordInput: {
-    borderWidth: 1,
-    borderColor: '#19343420',
-    borderRadius: 12,
-    padding: 16,
-    paddingRight: 50, // Make room for eye icon
-    fontSize: 16,
-    color: '#193434',
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  eyeIcon: {
-    position: 'absolute',
-    right: 16,
-    top: 16,
-    padding: 4,
-  },
-  eyeIconText: {
-    fontSize: 16,
-  },
-  inputError: {
+  loginInputError: {
     borderColor: '#E53935',
     borderWidth: 1.5,
+    backgroundColor: '#FFF7F7',
   },
-  loginErrorBox: {
-    backgroundColor: '#FFF0F0',
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 12,
+  loginPwdWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#FFCDD2',
+    borderColor: '#E2EBE7',
+    borderRadius: 12,
+    backgroundColor: '#FBFDFC',
+    paddingRight: 6,
   },
-  loginErrorText: {
-    color: '#C62828',
-    fontSize: 14,
+  loginPwdInput: {
+    flex: 1,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    color: '#193434',
+  },
+  loginPwdEyeBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  loginPwdEyeText: {
+    fontSize: 16,
+  },
+  loginErrorBanner: {
+    backgroundColor: '#FFEDED',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#FFD2D2',
+  },
+  loginErrorBannerText: {
+    color: '#B71C1C',
+    fontSize: 13,
     fontWeight: '500',
     textAlign: 'center',
   },
-  loginButton: {
-    backgroundColor: '#3DD57A',
+  loginPrimaryBtn: {
+    width: '100%',
+    alignSelf: 'stretch',
+    backgroundColor: '#193434',
     borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-    shadowColor: '#3DD57A',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  loginButtonDisabled: {
-    opacity: 0.6,
-    shadowOpacity: 0.1,
-  },
-  loginButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  forgotPassword: {
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  forgotPasswordText: {
-    color: '#193434',
-    fontSize: 14,
-    opacity: 0.7,
-  },
-
-  // Companies screen styles
-  companiesContainer: {
-    flex: 1,
-    backgroundColor: '#F6F9F7',
-    paddingTop: 60,
+    paddingVertical: 15,
     paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    overflow: 'visible',
+    shadowColor: '#193434',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  companiesTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#193434',
+  loginPrimaryBtnDisabled: {
+    opacity: 0.6,
+  },
+  loginPrimaryBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
     textAlign: 'center',
-    marginBottom: 30,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
   },
-  companiesList: {
-    paddingBottom: 20,
-  },
-  companyContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  companyContent: {
+  loginDivider: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    marginTop: 22,
+    marginBottom: 14,
+    overflow: 'visible',
   },
-  companyInfo: {
+  loginDividerLine: {
     flex: 1,
+    minWidth: 0,
+    height: 1,
+    backgroundColor: '#E2EBE7',
   },
-  companyName: {
+  loginDividerLabelWrap: {
+    flexShrink: 0,
+    paddingHorizontal: 14,
+    overflow: 'visible',
+  },
+  loginDividerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8A9A95',
+    textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, letterSpacing: 0, paddingRight: 10 }
+      : { letterSpacing: 1 }),
+  },
+  loginSecondaryBtn: {
+    width: '100%',
+    borderRadius: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 18,
+    borderWidth: 1.5,
+    borderColor: '#193434',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    overflow: 'visible',
+  },
+  loginSecondaryBtnText: {
+    color: '#193434',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+    width: '100%',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  loginSecondaryBtnHint: {
+    color: '#5A6B6B',
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
+    width: '100%',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+
+  // ── Forgot password modal ──
+  modalScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(13, 26, 26, 0.55)',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  forgotCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 22,
+    shadowColor: '#0B1F1F',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  forgotTitle: {
     fontSize: 18,
+    fontWeight: '700',
+    color: '#193434',
+    marginBottom: 6,
+  },
+  forgotBody: {
+    fontSize: 14,
+    color: '#5A6B6B',
+    lineHeight: 20,
+  },
+  forgotError: {
+    color: '#B71C1C',
+    fontSize: 13,
+    marginTop: 8,
+  },
+  forgotActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 16,
+    gap: 10,
+  },
+  forgotCancelBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F4',
+  },
+  forgotCancelText: {
+    color: '#193434',
     fontWeight: '600',
+    fontSize: 14,
+  },
+  forgotSubmitBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: '#193434',
+    alignItems: 'center',
+    minWidth: 140,
+  },
+  forgotSubmitText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // ── Company picker (select-company) ──
+  companyPickerRoot: {
+    flex: 1,
+    backgroundColor: '#F6F9F7',
+  },
+  companyPickerScroll: {
+    padding: 22,
+    paddingTop: 64,
+    paddingBottom: 36,
+  },
+  companyPickerHeader: {
+    marginBottom: 20,
+  },
+  companyPickerEyebrow: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1A8F4E',
+    marginBottom: 6,
+  },
+  companyPickerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#193434',
+    marginBottom: 6,
+  },
+  companyPickerSubtitle: {
+    fontSize: 14,
+    color: '#5A6B6B',
+    lineHeight: 20,
+  },
+  companyPickerSection: {
+    marginTop: 18,
+  },
+  companyPickerSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  companyPickerSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#193434',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 10,
+    marginRight: 8,
+  },
+  invitePill: {
+    backgroundColor: '#FFF3D9',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    marginBottom: 10,
+  },
+  invitePillText: {
+    color: '#7A5300',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  inviteCard: {
+    backgroundColor: '#FFFDF5',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F2E2A8',
+  },
+  inviteCompanyName: {
+    fontSize: 16,
+    fontWeight: '700',
     color: '#193434',
     marginBottom: 4,
   },
-  companyRole: {
-    fontSize: 14,
-    color: '#193434',
-    opacity: 0.7,
-    textTransform: 'capitalize',
+  inviteMeta: {
+    fontSize: 13,
+    color: '#7A6A2E',
   },
-  arrowContainer: {
-    justifyContent: 'center',
+  inviteActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 12,
+  },
+  inviteAcceptBtn: {
+    backgroundColor: '#193434',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    minWidth: 110,
     alignItems: 'center',
   },
-  arrow: {
-    fontSize: 20,
+  inviteAcceptText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  inviteDeclineBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E2EBE7',
+  },
+  inviteDeclineText: {
     color: '#193434',
-    opacity: 0.5,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  companyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#EAF1ED',
+    shadowColor: '#0B1F1F',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  companyRowSuspended: {
+    backgroundColor: '#FBF7F7',
+    borderColor: '#F2D7D7',
+  },
+  companyRowAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#EAF6EF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  companyRowAvatarText: {
+    color: '#1A8F4E',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  companyRowBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  companyRowTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  expiredBadge: {
+    backgroundColor: '#FBE5E5',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+    flexShrink: 0,
+    overflow: 'visible',
+  },
+  expiredBadgeText: {
+    color: '#B12C2C',
+    fontSize: 11,
+    fontWeight: '700',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, letterSpacing: 0, paddingRight: 8 }
+      : { letterSpacing: 0.3 }),
+  },
+  companyRowName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#193434',
+    flex: 1,
+    minWidth: 0,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 8 }
+      : {}),
+  },
+  companyRowRole: {
+    fontSize: 13,
+    color: '#5A6B6B',
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  companyRowArrow: {
+    fontSize: 28,
+    color: '#193434',
+    opacity: 0.4,
+    marginLeft: 8,
+  },
+  companyPickerEmpty: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#EAF1ED',
+    marginTop: 18,
+  },
+  companyPickerEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#193434',
+    marginBottom: 6,
+  },
+  companyPickerEmptyBody: {
+    fontSize: 14,
+    color: '#5A6B6B',
+    lineHeight: 20,
+  },
+  companyPickerSignOutBtn: {
+    alignSelf: 'center',
+    marginTop: 28,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  companyPickerSignOutText: {
+    color: '#5A6B6B',
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+
+  // ── Expired account screen ──
+  expiredRoot: {
+    flex: 1,
+    backgroundColor: '#F6F9F7',
+  },
+  expiredContent: {
+    flex: 1,
+    width: '100%',
+    paddingHorizontal: 24,
+    justifyContent: 'center',
+    alignItems: 'stretch',
+    overflow: 'visible',
+  },
+  expiredIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FBE5E5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 18,
+    alignSelf: 'center',
+    overflow: 'visible',
+  },
+  expiredIconText: {
+    color: '#B12C2C',
+    fontSize: 36,
+    fontWeight: '800',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 8 }
+      : {}),
+  },
+  expiredTextBlock: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
+    marginBottom: 28,
+    paddingHorizontal: 8,
+    overflow: 'visible',
+  },
+  expiredTitle: {
+    width: '100%',
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  expiredCompany: {
+    width: '100%',
+    fontSize: 15,
+    color: '#5A6B6B',
+    fontWeight: '600',
+    marginBottom: 12,
+    textAlign: 'center',
+    paddingHorizontal: 12,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  expiredBody: {
+    width: '100%',
+    fontSize: 15,
+    color: '#5A6B6B',
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 12,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  expiredPrimaryBtn: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
+    backgroundColor: '#193434',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+    shadowColor: '#193434',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  expiredPrimaryBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  expiredSecondaryBtn: {
+    width: '100%',
+    maxWidth: 360,
+    alignSelf: 'center',
+    marginTop: 12,
+    borderRadius: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 24,
+    borderWidth: 1.5,
+    borderColor: '#193434',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  expiredSecondaryBtnText: {
+    color: '#193434',
+    fontWeight: '700',
+    fontSize: 14,
+    textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
+  },
+  expiredSignOutBtn: {
+    alignSelf: 'center',
+    marginTop: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    overflow: 'visible',
+  },
+  expiredSignOutText: {
+    color: '#5A6B6B',
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+    textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 12 }
+      : {}),
   },
 
   // Loading styles
@@ -11410,6 +13104,47 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 16,
   },
+  settingsDrawerInner: {
+    flex: 1,
+    flexDirection: 'column',
+  },
+  settingsDrawerFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  settingsSwitchAccountBtn: {
+    width: '100%',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#193434',
+    overflow: 'visible',
+  },
+  settingsSwitchAccountTextWrap: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    overflow: 'visible',
+  },
+  settingsSwitchAccountBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#193434',
+    textAlign: 'center',
+    flexShrink: 0,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 14 }
+      : {}),
+  },
   settingsDrawerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -11432,12 +13167,19 @@ const styles = StyleSheet.create({
   },
   drawerTab: {
     flex: 1,
-    minWidth: 0,
     paddingVertical: 10,
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'visible',
+  },
+  drawerTabLabelWrap: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    overflow: 'visible',
   },
   drawerTabOn: {
     backgroundColor: '#FFFFFF',
@@ -11452,17 +13194,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748B',
     textAlign: 'center',
+    flexShrink: 0,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 10 }
+      : {}),
   },
   drawerTabTextOn: {
     color: '#193434',
   },
   settingsDrawerTitle: {
     flex: 1,
-    minWidth: 0,
     fontSize: 17,
     fontWeight: '800',
     color: '#193434',
     textAlign: 'center',
+    paddingHorizontal: 8,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, paddingRight: 10 }
+      : {}),
   },
   settingsDrawerHeaderBtn: {
     flexShrink: 0,
@@ -11505,9 +13254,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748B',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
     marginBottom: 8,
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
+    ...(Platform.OS === 'android'
+      ? { textBreakStrategy: 'simple', includeFontPadding: false, letterSpacing: 0, paddingRight: 8 }
+      : { letterSpacing: 0.6 }),
   },
   settingsGroupCard: {
     backgroundColor: '#FFFFFF',
@@ -11562,20 +13313,6 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#E2E8F0',
     marginLeft: 16,
-  },
-  settingsLogoutBtn: {
-    marginTop: 22,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  settingsLogoutBtnText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#B91C1C',
   },
   settingsVersionText: {
     marginTop: 18,
@@ -11671,15 +13408,15 @@ const styles = StyleSheet.create({
   },
   settingsToggleBtn: {
     flex: 1,
-    minWidth: 0,
     paddingVertical: 12,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'visible',
   },
   settingsToggleBtnOn: {
     backgroundColor: '#193434',
@@ -11689,6 +13426,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#334155',
+    textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? {
+          textBreakStrategy: 'simple',
+          includeFontPadding: false,
+          paddingRight: 10,
+        }
+      : {}),
   },
   settingsToggleBtnTextOn: {
     color: '#FFFFFF',
@@ -11712,6 +13457,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     textAlign: 'center',
+    ...(Platform.OS === 'android'
+      ? {
+          textBreakStrategy: 'simple',
+          includeFontPadding: false,
+          paddingRight: 10,
+        }
+      : {}),
   },
   settingsSaveBtnTextActive: {
     color: '#FFFFFF',
@@ -15441,6 +17193,328 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     borderWidth: 1,
     borderColor: 'rgba(25,52,52,0.08)',
+  },
+  adminApptModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  adminApptModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(10, 22, 22, 0.45)',
+  },
+  adminApptModalSheetWrap: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  adminApptSheet: {
+    backgroundColor: '#F6F9F7',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    height: '88%',
+    overflow: 'hidden',
+  },
+  adminApptGrip: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(25,52,52,0.2)',
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  adminApptSheetHeader: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E2E8F0',
+  },
+  adminApptSheetTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#193434',
+    ...androidTextFix,
+  },
+  adminApptScroll: {
+    flex: 1,
+  },
+  adminApptScrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+  adminApptField: {
+    marginBottom: 20,
+  },
+  adminApptLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 10,
+    ...androidTextFix,
+  },
+  adminApptWhenHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 10,
+  },
+  adminApptRangeSummary: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#193434',
+    lineHeight: 18,
+    ...androidTextFix,
+  },
+  adminApptFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E2E8F0',
+  },
+  adminApptFooterCancel: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  adminApptFooterCancelText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#475569',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
+  adminApptFooterSave: {
+    flex: 1.35,
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: '#193434',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  adminApptFooterSaveDisabled: {
+    backgroundColor: '#CBD5E1',
+  },
+  adminApptFooterSaveText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
+  adminApptKindRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  adminApptKindTile: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'visible',
+  },
+  adminApptKindTileOn: {
+    backgroundColor: '#193434',
+    borderColor: '#193434',
+  },
+  adminApptKindLabel: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#193434',
+    ...androidTextFix,
+  },
+  adminApptKindLabelOn: {
+    color: '#FFFFFF',
+  },
+  adminApptKindHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 17,
+    ...androidTextFix,
+  },
+  adminApptKindHintOn: {
+    color: '#BFD1C5',
+  },
+  adminApptPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  adminApptPickerLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#193434',
+    ...androidTextFix,
+  },
+  adminApptPickerChevron: {
+    fontSize: 16,
+    color: '#64748B',
+    flexShrink: 0,
+    paddingLeft: 8,
+  },
+  adminApptAssignList: {
+    marginTop: 6,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+  },
+  adminApptAssignRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#F1F5F9',
+  },
+  adminApptAssignRowOn: {
+    backgroundColor: '#ECFDF5',
+  },
+  adminApptAssignText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#193434',
+    ...androidTextFix,
+  },
+  adminApptAssignTextOn: {
+    color: '#0F766E',
+    fontWeight: '800',
+  },
+  adminApptAssignCheck: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F766E',
+    flexShrink: 0,
+    paddingLeft: 8,
+  },
+  adminApptInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#193434',
+  },
+  adminApptInputMultiline: {
+    minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  adminApptCatRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  adminApptCatChip: {
+    flexShrink: 0,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'visible',
+  },
+  adminApptCatChipOn: {
+    backgroundColor: '#193434',
+    borderColor: '#193434',
+  },
+  adminApptCatChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+    ...androidPillTextFix,
+  },
+  adminApptCatChipTextOn: {
+    color: '#FFFFFF',
+  },
+  adminApptHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#94A3B8',
+    lineHeight: 17,
+    ...androidTextFix,
+  },
+  adminApptModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  adminApptModeChip: {
+    flex: 1,
+    minHeight: 44,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  adminApptModeChipOn: {
+    backgroundColor: '#193434',
+    borderColor: '#193434',
+  },
+  adminApptModeChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+    textAlign: 'center',
+    ...androidPillTextFix,
+  },
+  adminApptModeChipTextOn: {
+    color: '#FFFFFF',
+  },
+  adminApptTimeRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  adminApptTimeCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  adminApptHoursBlock: {
+    marginTop: 12,
+  },
+  adminApptSubLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    ...androidTextFix,
   },
   timeOffPrimaryBtn: {
     flexDirection: 'row',

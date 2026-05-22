@@ -20,13 +20,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidTextFix,
+  fmtMoneyDisplay,
+  padAndroidText,
+} from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -55,19 +55,6 @@ function clientCurrency(company: any): string {
   if (cc === 'GB') return 'GBP';
   if (cc === 'US') return 'USD';
   return 'DKK';
-}
-
-function fmtMoney(amount: number, currency: string): string {
-  if (!Number.isFinite(amount)) return '—';
-  try {
-    return new Intl.NumberFormat('en-GB', {
-      style: 'currency',
-      currency: currency || 'DKK',
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${currency || 'DKK'}`;
-  }
 }
 
 function fmtDuration(minutes: number): string {
@@ -409,7 +396,7 @@ export function MobileServicesListScreen(props: any) {
                 </View>
                 <View style={styles.servicePriceCol}>
                   <Text style={styles.servicePrice}>
-                    {padAndroidText(fmtMoney(priceNum, currency))}
+                    {padAndroidText(fmtMoneyDisplay(priceNum, currency))}
                   </Text>
                   <View style={styles.serviceChevron}>
                     <MoreIcon />
@@ -621,9 +608,9 @@ export function MobileServiceComposerScreen(props: any) {
           <CloseIcon />
         </TouchableOpacity>
         <View style={styles.titleWrap}>
-          <Text style={styles.titleText}>
+          <RNText style={styles.titleText}>
             {padAndroidText(isEdit ? 'Edit service' : 'New service')}
-          </Text>
+          </RNText>
           {isEdit ? (
             <Text style={styles.subtitleText} numberOfLines={1}>
               {padAndroidText(
@@ -664,7 +651,7 @@ export function MobileServiceComposerScreen(props: any) {
             <View style={styles.previewMetaRow}>
               <View style={styles.previewPill}>
                 <Text style={styles.previewPillText}>
-                  {padAndroidText(fmtMoney(priceNum, currency))}
+                  {padAndroidText(fmtMoneyDisplay(priceNum, currency))}
                 </Text>
               </View>
               <View style={styles.previewPillSoft}>
@@ -899,9 +886,11 @@ export function MobileServiceComposerScreen(props: any) {
             {submitting ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.btnPrimaryText}>
-                {padAndroidText(isEdit ? 'Save changes' : 'Create service')}
-              </Text>
+              <View style={styles.btnPrimaryInner}>
+                <RNText style={styles.btnPrimaryText}>
+                  {padAndroidText(isEdit ? 'Save changes' : 'Create service')}
+                </RNText>
+              </View>
             )}
           </TouchableOpacity>
         </View>
@@ -938,8 +927,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleWrap: { flex: 1, minWidth: 0, alignItems: 'center' },
-  titleText: { fontSize: 17, fontWeight: '800', color: '#193434' },
+  titleWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  titleText: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   subtitleText: {
     marginTop: 2,
     fontSize: 12,
@@ -1276,8 +1276,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnPrimary: { backgroundColor: '#193434' },
-  btnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
+  btnPrimary: { backgroundColor: '#193434', flex: 1 },
+  btnPrimaryInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingHorizontal: 12,
+  },
+  btnPrimaryText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 15,
+    lineHeight: 20,
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   btnGhost: {
     backgroundColor: '#F1F5F9',
     borderWidth: 1,

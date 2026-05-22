@@ -21,13 +21,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidPillTextFix,
+  androidTextFix,
+  padAndroidText,
+} from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -467,7 +467,9 @@ export function MobileNotificationsSettingsScreen(props: any) {
           >
             <View style={[styles.modalHeader, { paddingTop: Math.max(insets.top, 12) }]}>
               <TouchableOpacity onPress={closeEditor} style={styles.modalCloseHit}>
-                <Text style={styles.modalCloseTxt}>{padAndroidText('Close')}</Text>
+                <RNText style={styles.modalCloseTxt}>
+                  {padAndroidText('Close')}
+                </RNText>
               </TouchableOpacity>
               <Text style={styles.modalTitle} numberOfLines={1}>
                 {padAndroidText(MANUAL_UI.find((m) => m.templateKey === templateKey)?.title || '')}
@@ -478,7 +480,7 @@ export function MobileNotificationsSettingsScreen(props: any) {
               style={styles.modalScroll}
               contentContainerStyle={{
                 padding: 16,
-                paddingBottom: 24 + insets.bottom,
+                paddingBottom: 16,
               }}
               keyboardShouldPersistTaps="handled"
             >
@@ -527,12 +529,43 @@ export function MobileNotificationsSettingsScreen(props: any) {
                   }}
                   activeOpacity={0.88}
                 >
-                  <Text style={styles.secondaryBtnTxt}>
+                  <RNText style={styles.secondaryBtnTxt}>
                     {padAndroidText('Reset to default text')}
-                  </Text>
+                  </RNText>
                 </TouchableOpacity>
               ) : null}
             </ScrollView>
+            {canEdit ? (
+              <View
+                style={[
+                  styles.modalFooter,
+                  { paddingBottom: Math.max(insets.bottom, 12) },
+                ]}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtn,
+                    (saving || !dirty) && styles.saveBtnOff,
+                  ]}
+                  onPress={async () => {
+                    await save();
+                    closeEditor();
+                  }}
+                  disabled={saving || !dirty}
+                  activeOpacity={0.88}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <RNText style={styles.saveBtnTxt}>
+                      {padAndroidText(
+                        savedFlash ? 'Saved ✓' : 'Save changes',
+                      )}
+                    </RNText>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </KeyboardAvoidingView>
         </Modal>
       );
@@ -562,7 +595,9 @@ export function MobileNotificationsSettingsScreen(props: any) {
         >
           <View style={[styles.modalHeader, { paddingTop: Math.max(insets.top, 12) }]}>
             <TouchableOpacity onPress={closeEditor} style={styles.modalCloseHit}>
-              <Text style={styles.modalCloseTxt}>{padAndroidText('Close')}</Text>
+              <RNText style={styles.modalCloseTxt}>
+                {padAndroidText('Close')}
+              </RNText>
             </TouchableOpacity>
             <Text style={styles.modalTitle} numberOfLines={1}>
               {padAndroidText(meta?.title || '')}
@@ -573,7 +608,7 @@ export function MobileNotificationsSettingsScreen(props: any) {
             style={styles.modalScroll}
             contentContainerStyle={{
               padding: 16,
-              paddingBottom: 32 + insets.bottom,
+              paddingBottom: 16,
             }}
             keyboardShouldPersistTaps="handled"
           >
@@ -708,12 +743,43 @@ export function MobileNotificationsSettingsScreen(props: any) {
                 }}
                 activeOpacity={0.88}
               >
-                <Text style={styles.secondaryBtnTxt}>
+                <RNText style={styles.secondaryBtnTxt}>
                   {padAndroidText('Reset template & timing')}
-                </Text>
+                </RNText>
               </TouchableOpacity>
             ) : null}
           </ScrollView>
+          {canEdit ? (
+            <View
+              style={[
+                styles.modalFooter,
+                { paddingBottom: Math.max(insets.bottom, 12) },
+              ]}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.saveBtn,
+                  (saving || !dirty) && styles.saveBtnOff,
+                ]}
+                onPress={async () => {
+                  await save();
+                  closeEditor();
+                }}
+                disabled={saving || !dirty}
+                activeOpacity={0.88}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <RNText style={styles.saveBtnTxt}>
+                    {padAndroidText(
+                      savedFlash ? 'Saved ✓' : 'Save changes',
+                    )}
+                  </RNText>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </KeyboardAvoidingView>
       </Modal>
     );
@@ -828,14 +894,14 @@ export function MobileNotificationsSettingsScreen(props: any) {
                         item.channel === 'email' ? styles.pillEmail : styles.pillSms,
                       ]}
                     >
-                      <Text
+                      <RNText
                         style={[
                           styles.channelPillTxt,
                           item.channel === 'sms' && styles.channelPillTxtSms,
                         ]}
                       >
                         {padAndroidText(item.channel.toUpperCase())}
-                      </Text>
+                      </RNText>
                     </View>
                     <View
                       style={[
@@ -876,7 +942,9 @@ export function MobileNotificationsSettingsScreen(props: any) {
                 >
                   <View style={styles.cardTop}>
                     <View style={[styles.channelPill, styles.pillEmail]}>
-                      <Text style={styles.channelPillTxt}>{padAndroidText('EMAIL')}</Text>
+                      <RNText style={styles.channelPillTxt}>
+                        {padAndroidText('EMAIL')}
+                      </RNText>
                     </View>
                   </View>
                   <Text style={styles.cardTitle}>{padAndroidText(item.title)}</Text>
@@ -933,9 +1001,9 @@ export function MobileNotificationsSettingsScreen(props: any) {
                 {saving ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.saveBtnTxt}>
+                  <RNText style={styles.saveBtnTxt}>
                     {padAndroidText(savedFlash ? 'Saved ✓' : 'Save changes')}
-                  </Text>
+                  </RNText>
                 )}
               </TouchableOpacity>
             </View>
@@ -1037,13 +1105,20 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   channelPill: {
-    paddingHorizontal: 10,
+    flexShrink: 0,
+    paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 999,
+    overflow: 'visible',
   },
   pillEmail: { backgroundColor: '#DBEAFE' },
   pillSms: { backgroundColor: '#EDE9FE' },
-  channelPillTxt: { fontSize: 10, fontWeight: '800', color: '#1E3A8A' },
+  channelPillTxt: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1E3A8A',
+    ...androidPillTextFix,
+  },
   channelPillTxtSms: { color: '#5B21B6' },
   statusDot: {
     width: 10,
@@ -1097,7 +1172,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   saveBtnOff: { opacity: 0.5 },
-  saveBtnTxt: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
+  saveBtnTxt: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16,
+    textAlign: 'center',
+    ...androidTextFix,
+  },
+  modalFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E2E8F0',
+  },
   modalRoot: { flex: 1, backgroundColor: '#F6F9F7' },
   modalHeader: {
     flexDirection: 'row',
@@ -1110,7 +1198,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   modalCloseHit: { width: 72, paddingVertical: 8 },
-  modalCloseTxt: { fontSize: 16, fontWeight: '700', color: '#0F766E' },
+  modalCloseTxt: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F766E',
+    ...androidTextFix,
+  },
   modalTitle: {
     flex: 1,
     textAlign: 'center',
@@ -1211,5 +1304,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  secondaryBtnTxt: { fontSize: 15, fontWeight: '800', color: '#193434' },
+  secondaryBtnTxt: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
 });

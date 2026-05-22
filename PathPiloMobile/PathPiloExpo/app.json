@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "PathPiloExpo",
-    "slug": "PathPiloExpo",
-    "version": "1.0.0",
+    "name": "PathPilo",
+    "slug": "pathpilo",
+    "version": "1.0.3",
     "scheme": "pathpilo",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -17,14 +17,17 @@
       "supportsTablet": true
     },
     "android": {
-      "versionCode": 1,
+      "versionCode": 4,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.PathPiloExpo"
+      "package": "com.pathpilo.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -37,6 +40,12 @@
           "photosPermission": "Allow PathPilo to choose a photo for your company logo."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f1b50cfe-bc76-4720-b642-5bcaf6bf6462"
+      }
+    }
   }
 }

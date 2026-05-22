@@ -1859,27 +1859,72 @@ function ScheduleStep({
           <Text style={styles.sectionTitle}>
             {padAndroidText('Repeat every')}
           </Text>
+          {/*
+            3×2 grid: 1, 2, 3, 4, 6 + custom weeks cell. Mirrors the new web
+            SchedulePanel (`btnChoice`) — preset chips for the common cadences
+            and a single number input for anything else. Custom is "active"
+            (dark) whenever the current value is not one of the presets.
+          */}
           <View style={styles.intervalGrid}>
-            {[1, 2, 3, 4, 6, 8, 12].map((n) => {
+            {[1, 2, 3, 4, 6].map((n) => {
               const on = intervalWeeks === n;
               return (
                 <TouchableOpacity
                   key={n}
-                  style={[styles.intervalChip, on && styles.intervalChipOn]}
+                  style={[styles.intervalCell, on && styles.intervalCellOn]}
                   onPress={() => onIntervalWeeks(n)}
                   activeOpacity={0.85}
                 >
                   <Text
                     style={[
-                      styles.intervalChipText,
-                      on && styles.intervalChipTextOn,
+                      styles.intervalCellText,
+                      on && styles.intervalCellTextOn,
                     ]}
                   >
-                    {padAndroidText(n === 1 ? 'Weekly' : `${n} weeks`)}
+                    {padAndroidText(n === 1 ? 'Weekly' : `${n} wks`)}
                   </Text>
                 </TouchableOpacity>
               );
             })}
+            {(() => {
+              const presets = [1, 2, 3, 4, 6];
+              const isCustom = !presets.includes(intervalWeeks);
+              return (
+                <View
+                  style={[
+                    styles.intervalCell,
+                    styles.intervalCellCustom,
+                    isCustom && styles.intervalCellOn,
+                  ]}
+                >
+                  <TextInput
+                    style={[
+                      styles.intervalCellInput,
+                      isCustom && styles.intervalCellInputOn,
+                    ]}
+                    value={isCustom ? String(intervalWeeks) : ''}
+                    onChangeText={(t) => {
+                      const digits = t.replace(/[^0-9]/g, '');
+                      if (!digits) return;
+                      const n = Math.max(1, Math.min(52, parseInt(digits, 10)));
+                      onIntervalWeeks(n);
+                    }}
+                    keyboardType="number-pad"
+                    placeholder="N"
+                    placeholderTextColor="#94A3B8"
+                    maxLength={2}
+                  />
+                  <Text
+                    style={[
+                      styles.intervalCellSuffix,
+                      isCustom && styles.intervalCellTextOn,
+                    ]}
+                  >
+                    {padAndroidText('wks')}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
         </>
       ) : null}
@@ -1915,39 +1960,39 @@ function ScheduleStep({
             )}
           </Text>
 
+          {/*
+            Monthly cadence: simplified to a single number input. The web
+            version dropped the [1, 2, 3] / Quarterly / Yearly presets in
+            favour of "Repeat every N months" because the presets covered
+            barely any real-world cases. Default value is 1 (every month);
+            anything 1–24 is accepted.
+          */}
           <Text style={styles.sectionTitle}>
             {padAndroidText('Repeat every')}
           </Text>
-          <View style={styles.intervalGrid}>
-            {[1, 2, 3, 4, 6, 12].map((n) => {
-              const on = intervalMonths === n;
-              const lbl =
-                n === 1
-                  ? 'Monthly'
-                  : n === 3
-                    ? 'Quarterly'
-                    : n === 12
-                      ? 'Yearly'
-                      : `${n} months`;
-              return (
-                <TouchableOpacity
-                  key={n}
-                  style={[styles.intervalChip, on && styles.intervalChipOn]}
-                  onPress={() => onIntervalMonths(n)}
-                  activeOpacity={0.85}
-                >
-                  <Text
-                    style={[
-                      styles.intervalChipText,
-                      on && styles.intervalChipTextOn,
-                    ]}
-                  >
-                    {padAndroidText(lbl)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={styles.monthIntervalRow}>
+            <TextInput
+              style={styles.monthIntervalInput}
+              value={String(intervalMonths || 1)}
+              onChangeText={(t) => {
+                const digits = t.replace(/[^0-9]/g, '');
+                if (!digits) { onIntervalMonths(1); return; }
+                const n = Math.max(1, Math.min(24, parseInt(digits, 10)));
+                onIntervalMonths(n);
+              }}
+              keyboardType="number-pad"
+              maxLength={2}
+              selectTextOnFocus
+            />
+            <Text style={styles.monthIntervalSuffix}>
+              {padAndroidText(intervalMonths === 1 ? 'month' : 'months')}
+            </Text>
           </View>
+          <Text style={styles.hint}>
+            {padAndroidText(
+              'Enter how many months between visits. 1 = every month, 2 = every other month, 3 = quarterly, etc.',
+            )}
+          </Text>
         </>
       ) : null}
 
@@ -2978,8 +3023,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   dowChipOn: {
-    backgroundColor: '#3DD57A',
-    borderColor: '#3DD57A',
+    backgroundColor: '#193434',
+    borderColor: '#193434',
   },
   dowChipText: { fontSize: 12, fontWeight: '800', color: '#475569' },
   dowChipTextOn: { color: '#FFFFFF' },
@@ -2990,29 +3035,84 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 14,
   },
-  intervalChip: {
-    minWidth: '30%',
-    flexGrow: 1,
+  // New 3×2 grid cells (1, 2, 3 / 4, 6, custom). Each cell takes exactly a
+  // third of the row width so the layout stays balanced; the custom cell
+  // hosts a number input + suffix instead of a static label.
+  intervalCell: {
+    width: '31.5%',
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 38,
   },
-  intervalChipOn: {
+  intervalCellOn: {
     backgroundColor: '#193434',
     borderColor: '#193434',
   },
-  intervalChipText: {
+  intervalCellText: {
     fontSize: 13,
     fontWeight: '700',
     color: '#475569',
     lineHeight: 18,
     includeFontPadding: false,
   },
-  intervalChipTextOn: { color: '#FFFFFF' },
+  intervalCellTextOn: { color: '#FFFFFF' },
+  intervalCellCustom: {
+    paddingHorizontal: 6,
+  },
+  intervalCellInput: {
+    minWidth: 28,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#193434',
+    textAlign: 'center',
+    paddingVertical: 0,
+    padding: 0,
+  },
+  intervalCellInputOn: { color: '#FFFFFF' },
+  intervalCellSuffix: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+
+  // Monthly "Repeat every" — single number input row, deliberately spacious
+  // so phone-thumbs can land on it without zooming.
+  monthIntervalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    marginBottom: 6,
+  },
+  monthIntervalInput: {
+    minWidth: 56,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  monthIntervalSuffix: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#475569',
+  },
 
   domGrid: {
     flexDirection: 'row',
@@ -3031,8 +3131,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   domChipOn: {
-    backgroundColor: '#3DD57A',
-    borderColor: '#3DD57A',
+    backgroundColor: '#193434',
+    borderColor: '#193434',
   },
   domChipText: { fontSize: 12, fontWeight: '800', color: '#475569' },
   domChipTextOn: { color: '#FFFFFF' },

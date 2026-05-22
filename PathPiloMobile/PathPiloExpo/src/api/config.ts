@@ -1,28 +1,23 @@
-// API Configuration for PathPilo Mobile App
+// Where the phone app talks to your server.
+// For a Play Store build, EAS uses production URLs (see eas.json).
+// For testing on your phone at home, copy .env.example to .env and use your PC's IP.
+
+const trim = (s: string | undefined) => String(s ?? '').trim();
 
 export const API_CONFIG = {
-  BASE_URL: 'http://192.168.1.52:8000/api', // PathPilo API server (use computer IP for mobile)
-  // Web (Next.js) origin used for "open on web" deep links (invoice editor,
-  // settings pages without a native equivalent, etc.). Port 8000 is the API
-  // server; the Next.js dev server lives on 3000. Production should point
-  // this at the public app URL (e.g. https://app.pathpilo.com).
-  WEB_BASE_URL: 'http://192.168.1.52:3000',
-  TIMEOUT: 10000, // 10 seconds
+  BASE_URL:
+    trim(process.env.EXPO_PUBLIC_API_URL) || 'https://app.pathpilo.com/api',
+  WEB_BASE_URL:
+    trim(process.env.EXPO_PUBLIC_WEB_URL) || 'https://app.pathpilo.com',
+  TIMEOUT: 10000,
 };
 
 export const API_ENDPOINTS = {
-  // Authentication
   LOGIN: '/auth/login',
   REGISTER: '/auth/register',
-
-  // User data
   COMPANIES: '/companies',
-
-  // Business data
   CLIENTS: '/clients',
   JOBS: '/jobs',
   SERVICES: '/services',
-
-  // Advanced features
   SUBSCRIPTIONS: '/subscriptions',
 } as const;

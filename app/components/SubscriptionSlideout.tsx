@@ -46,13 +46,14 @@ interface SubscriptionSlideoutProps {
   onClose: () => void
   onSubscriptionCreated?: () => void
   onPauseToggle?: (subscription: any, paused: boolean) => void
+  onDelete?: (subscription: any) => void | Promise<void>
   clientId: number
   subscription?: any
 }
 
 
 export default function SubscriptionSlideout({
-  isOpen, onClose, onSubscriptionCreated, onPauseToggle, clientId, subscription
+  isOpen, onClose, onSubscriptionCreated, onPauseToggle, onDelete, clientId, subscription
 }: SubscriptionSlideoutProps) {
   const { t } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
@@ -634,13 +635,24 @@ export default function SubscriptionSlideout({
 
         {/* ── Footer ─────────────────────────────────────────────────────── */}
         <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center justify-between gap-3">
-          <div className="text-xs text-gray-500">
-            {selectedServices.length > 0 && (startAsap ? !!firstVisitYmd : !!customStartingDate)
-              ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear')}`
-              : ''
-            }
+          <div className="flex items-center gap-3 min-w-0">
+            {subscription && onDelete ? (
+              <button
+                onClick={() => onDelete(subscription)}
+                className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete this subscription. Past jobs are kept; future jobs are removed."
+              >
+                Delete
+              </button>
+            ) : null}
+            <div className="text-xs text-gray-500 truncate">
+              {selectedServices.length > 0 && (startAsap ? !!firstVisitYmd : !!customStartingDate)
+                ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear')}`
+                : ''
+              }
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button onClick={onClose}
               className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
               {t('app.subscription.cancel')}

@@ -994,9 +994,13 @@ router.get('/:clientId/subscriptions', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
-    // Get subscriptions for the client
+    // Get subscriptions for the client.
+    // Hidden from the list once `is_active = false` so deleting a subscription
+    // actually makes it disappear from the client profile (both web + mobile
+    // share this list). Past jobs are kept regardless because they live in
+    // `jobs`, not `recurring_jobs`.
     const subscriptionsResult = await pool.query(
-      `SELECT 
+      `SELECT
         rj.*,
         COUNT(rjs.id) as service_count,
         u.first_name as assigned_user_first_name,
@@ -1004,7 +1008,9 @@ router.get('/:clientId/subscriptions', authenticateToken, async (req, res) => {
       FROM recurring_jobs rj
       LEFT JOIN recurring_job_services rjs ON rj.id = rjs.recurring_job_id
       LEFT JOIN users u ON rj.assigned_user_id = u.id
-      WHERE rj.client_id = $1 AND rj.company_id = $2
+      WHERE rj.client_id = $1
+        AND rj.company_id = $2
+        AND rj.is_active = true
       GROUP BY rj.id, u.first_name, u.last_name
       ORDER BY rj.created_at DESC`,
       [clientId, companyId]

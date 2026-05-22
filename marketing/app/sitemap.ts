@@ -10,6 +10,8 @@ const ROUTES = [
   '/features/routeplanning',
   '/features/subscriptions',
   '/features/team',
+  '/terms',
+  '/privacy',
 ] as const
 
 export default function sitemap(): MetadataRoute.Sitemap {

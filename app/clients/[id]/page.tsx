@@ -412,12 +412,27 @@ export default function ClientDetailPage() {
   }
 
   const handleDeleteSubscription = async (id: number) => {
-    if (!confirm('Delete this subscription?')) return
+    // Past jobs stay on the timeline because they live in `jobs`, not
+    // `recurring_jobs`. The server also deletes any not-yet-completed
+    // future jobs and flips `is_active` so the row disappears from
+    // /subscriptions and from this client profile list.
+    if (!confirm('Delete this subscription?\n\nFuture visits will be removed and the subscription will no longer appear on the client profile. Already completed or invoiced jobs are kept.')) return
     try {
       const token = localStorage.getItem('token')
       const res = await fetch(apiUrl(`/subscriptions/${id}`), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
-      if (res.ok) fetchSubscriptions()
-    } catch {}
+      if (!res.ok) {
+        let msg = 'Failed to delete subscription'
+        try { const d = await res.json(); if (d?.error) msg = d.error } catch {}
+        alert(msg)
+        return
+      }
+      // Optimistic: drop it from the local list so the row vanishes without
+      // waiting for the refetch — matches the user's "delete = gone" model.
+      setSubscriptions(prev => prev.filter((s: any) => s.id !== id))
+      fetchSubscriptions()
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete subscription')
+    }
   }
 
   // Invoice actions
@@ -1423,6 +1438,10 @@ export default function ClientDetailPage() {
           onClose={() => setEditingSub(null)}
           onSubscriptionCreated={() => fetchSubscriptions()}
           onPauseToggle={handlePauseSubscription}
+          onDelete={async (sub) => {
+            await handleDeleteSubscription(sub.id)
+            setEditingSub(null)
+          }}
           clientId={client.id}
           subscription={editingSub}
         />

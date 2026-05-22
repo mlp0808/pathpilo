@@ -22,13 +22,13 @@ import * as Clipboard from 'expo-clipboard';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidPillTextFix,
+  androidTextFix,
+  padAndroidText,
+} from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -556,27 +556,25 @@ export function MobileTeamScreen(props: any) {
           onPress={() => switchTab('employees')}
           activeOpacity={0.85}
         >
-          <Text
+          <RNText
             style={[styles.tabText, activeTab === 'employees' && styles.tabTextOn]}
-            numberOfLines={1}
           >
             {padAndroidText(`Employees · ${employeeUsers.length}`)}
-          </Text>
+          </RNText>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'management' && styles.tabOn]}
           onPress={() => switchTab('management')}
           activeOpacity={0.85}
         >
-          <Text
+          <RNText
             style={[
               styles.tabText,
               activeTab === 'management' && styles.tabTextOn,
             ]}
-            numberOfLines={1}
           >
             {padAndroidText(`Management · ${managementUsers.length}`)}
-          </Text>
+          </RNText>
         </TouchableOpacity>
       </View>
 
@@ -754,9 +752,9 @@ function UserCard({
         </Text>
         <View style={styles.userMetaRow}>
           <View style={[styles.rolePill, { backgroundColor: badge.bg }]}>
-            <Text style={[styles.rolePillText, { color: badge.fg }]}>
+            <RNText style={[styles.rolePillText, { color: badge.fg }]}>
               {padAndroidText(badge.label)}
-            </Text>
+            </RNText>
           </View>
           {teamUser.created_at ? (
             <Text style={styles.userJoined} numberOfLines={1}>
@@ -934,7 +932,9 @@ function EmptyState({
           activeOpacity={0.85}
         >
           <PlusIcon />
-          <Text style={styles.emptyAddBtnText}>{padAndroidText(ctaLabel)}</Text>
+          <RNText style={styles.emptyAddBtnText}>
+            {padAndroidText(ctaLabel)}
+          </RNText>
         </TouchableOpacity>
       ) : null}
     </View>
@@ -1301,7 +1301,13 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
-  tabText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   tabTextOn: { color: '#193434' },
 
   retryBtn: {
@@ -1381,11 +1387,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   rolePill: {
-    paddingHorizontal: 8,
+    flexShrink: 0,
+    paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: 999,
+    overflow: 'visible',
   },
-  rolePillText: { fontSize: 11, fontWeight: '800' },
+  rolePillText: { fontSize: 11, fontWeight: '800', ...androidPillTextFix },
   userJoined: { fontSize: 11, color: '#94A3B8' },
   moreBtn: {
     width: 32,
@@ -1528,13 +1536,20 @@ const styles = StyleSheet.create({
     marginTop: 18,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#193434',
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 14,
     gap: 8,
+    overflow: 'visible',
   },
-  emptyAddBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
+  emptyAddBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 14,
+    ...androidTextFix,
+  },
 
   // sheet (invite + action sheet)
   sheetOverlay: {

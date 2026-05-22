@@ -24,13 +24,9 @@ import Svg, { Path } from 'react-native-svg';
 import { API_CONFIG } from '../api/config';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import { androidTextFix, padAndroidText } from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -1227,18 +1223,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#193434',
     borderRadius: 12,
     paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingHorizontal: 18,
     minHeight: 44,
     alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
   logoBtnTxt: {
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 14,
     textAlign: 'center',
-    includeFontPadding: false,
-    lineHeight: 18,
-    minHeight: 18,
+    ...androidTextFix,
   },
   logoBtnGhost: {
     borderWidth: 1,
@@ -1255,9 +1251,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 14,
     textAlign: 'center',
-    includeFontPadding: false,
-    lineHeight: 18,
-    minHeight: 18,
+    ...androidTextFix,
   },
   monoHint: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
@@ -1336,9 +1330,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 16,
     textAlign: 'center',
-    includeFontPadding: false,
-    lineHeight: 20,
-    minHeight: 20,
+    ...androidTextFix,
   },
   saveBtnTxtOn: { color: '#FFFFFF' },
   saveBtnTxtIdle: { color: '#64748B' },

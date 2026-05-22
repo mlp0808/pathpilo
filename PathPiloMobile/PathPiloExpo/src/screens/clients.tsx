@@ -27,14 +27,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidPillTextFix,
+  androidTextFix,
+  padAndroidText,
+} from '../ui/androidText';
 import type { Company, User } from '../types';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -746,9 +746,17 @@ export function MobileClientsListScreen(props: any) {
             </Text>
             {item.client_type === 'company' ? (
               <View style={styles.typePill}>
-                <Text style={styles.typePillText}>{padAndroidText('Company')}</Text>
+                <RNText style={styles.typePillText}>
+                  {padAndroidText('Company')}
+                </RNText>
               </View>
-            ) : null}
+            ) : (
+              <View style={styles.typePill}>
+                <RNText style={styles.typePillText}>
+                  {padAndroidText('Person')}
+                </RNText>
+              </View>
+            )}
           </View>
           {location ? (
             <Text style={styles.listRowMeta} numberOfLines={1}>
@@ -796,7 +804,7 @@ export function MobileClientsListScreen(props: any) {
           <ChevronLeftIcon />
         </TouchableOpacity>
         <View style={styles.toolbarTitleWrap}>
-          <Text style={styles.clientsTitle}>{padAndroidText('Clients')}</Text>
+          <RNText style={styles.clientsTitle}>{padAndroidText('Clients')}</RNText>
           {!loading ? (
             <Text style={styles.clientsSubtitle}>
               {padAndroidText(
@@ -822,7 +830,6 @@ export function MobileClientsListScreen(props: any) {
           >
             <RNText
               style={[styles.filterChipText, filterType === 'all' && styles.filterChipTextOn]}
-              numberOfLines={1}
             >
               {padAndroidText(`All (${clients.length})`)}
             </RNText>
@@ -833,7 +840,6 @@ export function MobileClientsListScreen(props: any) {
           >
             <RNText
               style={[styles.filterChipText, filterType === 'person' && styles.filterChipTextOn]}
-              numberOfLines={1}
             >
               {padAndroidText(`People (${personCount})`)}
             </RNText>
@@ -847,9 +853,8 @@ export function MobileClientsListScreen(props: any) {
                 styles.filterChipText,
                 filterType === 'company' && styles.filterChipTextOn,
               ]}
-              numberOfLines={1}
             >
-              {padAndroidText(`Companies (${companyCount})`)}
+              {padAndroidText(`Company (${companyCount})`)}
             </RNText>
           </TouchableOpacity>
         </ScrollView>
@@ -1155,12 +1160,12 @@ export function MobileClientDetailScreen(props: any) {
     (sub: SubscriptionRow) => {
       if (busySubId) return;
       Alert.alert(
-        'Stop subscription?',
-        'No new jobs will be generated. Existing jobs are kept.',
+        'Delete subscription?',
+        'Future visits are removed and the subscription disappears from this client. Already completed or invoiced jobs are kept.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
-            text: 'Stop',
+            text: 'Delete',
             style: 'destructive',
             onPress: async () => {
               setBusySubId(sub.id);
@@ -1173,7 +1178,7 @@ export function MobileClientDetailScreen(props: any) {
                 );
               } catch (e: any) {
                 Alert.alert(
-                  'Could not stop',
+                  'Could not delete',
                   e?.response?.data?.error || e?.message || 'Try again.',
                 );
               } finally {
@@ -1384,11 +1389,11 @@ export function MobileClientDetailScreen(props: any) {
             <Text style={styles.heroName}>{padAndroidText(displayName)}</Text>
             <View style={styles.heroBadgeRow}>
               <View style={styles.typePill}>
-                <Text style={styles.typePillText}>
+                <RNText style={styles.typePillText}>
                   {padAndroidText(
                     client.client_type === 'company' ? 'Company' : 'Person',
                   )}
-                </Text>
+                </RNText>
               </View>
             </View>
 
@@ -1863,7 +1868,7 @@ function SubscriptionsTab({
                     activeOpacity={0.85}
                     disabled={busy}
                   >
-                    <RNText style={styles.subMenuItemDangerText}>{padAndroidText('Stop')}</RNText>
+                    <RNText style={styles.subMenuItemDangerText}>{padAndroidText('Delete')}</RNText>
                   </TouchableOpacity>
                 </View>
               ) : null}
@@ -2170,14 +2175,16 @@ const styles = StyleSheet.create({
   },
   toolbarTitleWrap: {
     flex: 1,
-    minWidth: 0,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
   },
   clientsTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#193434',
     textAlign: 'center',
+    ...androidTextFix,
   },
   clientsSubtitle: {
     marginTop: 2,
@@ -2225,6 +2232,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#64748B',
+    ...androidTextFix,
   },
   filterChipTextOn: {
     color: '#FFFFFF',
@@ -2332,15 +2340,18 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   typePill: {
-    paddingHorizontal: 8,
+    flexShrink: 0,
+    paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: 8,
     backgroundColor: '#F1F5F9',
+    overflow: 'visible',
   },
   typePillText: {
     fontSize: 10,
     fontWeight: '700',
     color: '#64748B',
+    ...androidPillTextFix,
   },
   listRowMeta: {
     marginTop: 3,

@@ -127,9 +127,12 @@ export default function Footer() {
             © {new Date().getFullYear()} PathPilo. {da ? 'Alle rettigheder forbeholdes.' : 'All rights reserved.'}
           </p>
           <div className="flex space-x-6 text-sm text-gray-400">
-            <Link href="#" className="hover:text-white transition-colors">{da ? 'Privatlivspolitik' : 'Privacy Policy'}</Link>
-            <Link href="#" className="hover:text-white transition-colors">{da ? 'Servicevilkår' : 'Terms of Service'}</Link>
-            <Link href="#" className="hover:text-white transition-colors">{da ? 'Cookiepolitik' : 'Cookie Policy'}</Link>
+            <Link href={navHref('/privacy')} className="hover:text-white transition-colors">
+              {da ? 'Privatlivspolitik' : 'Privacy Policy'}
+            </Link>
+            <Link href={navHref('/terms')} className="hover:text-white transition-colors">
+              {da ? 'Servicevilkår' : 'Terms of Service'}
+            </Link>
           </div>
         </div>
       </div>

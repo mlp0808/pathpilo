@@ -217,24 +217,19 @@ The script pulls, installs, builds app + marketing, and restarts all three PM2 p
 
 ---
 
-## Part 5: Mobile app
+## Part 5: Mobile app (Android)
 
-The mobile app **does not run on your server**. It runs on users’ phones and connects to your API.
+The mobile app **does not run on your server**. Phones install it from Google Play; it then talks to `https://app.pathpilo.com/api`.
 
-### What you need to do
+**Simple step-by-step guide:** `PathPiloMobile/PathPiloExpo/ANDROID-PLAY-STORE.md`
 
-1. **Point the app to the live API**  
-   Edit `PathPiloMobile/src/api/config.ts` and set:
-   ```ts
-   BASE_URL: 'https://app.pathpilo.com/api',
-   ```
-   Commit and push this change.
+Production URLs are already configured in `PathPiloExpo/eas.json` and `src/api/config.ts`. Build with:
 
-2. **Build and submit to stores** (when you’re ready)  
-   - **iOS:** Build with Xcode or EAS Build → submit to App Store Connect  
-   - **Android:** Build with `./gradlew assembleRelease` or EAS Build → submit to Google Play Console  
+```bash
+cd PathPiloMobile/PathPiloExpo && eas build --platform android --profile production
+```
 
-This is separate from the web deployment. The API must be live first (which happens when app.pathpilo.com is running).
+The API must be live first (app.pathpilo.com working in a browser).
 
 ---
 

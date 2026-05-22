@@ -21,13 +21,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidPillTextFix,
+  androidTextFix,
+  fmtMoneyDisplay,
+  padAndroidText,
+} from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -55,19 +56,6 @@ function ymd(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-function fmtMoney(amount: number, currency: string): string {
-  if (!Number.isFinite(amount)) return '—';
-  try {
-    return new Intl.NumberFormat('en-GB', {
-      style: 'currency',
-      currency: currency || 'DKK',
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${currency || 'DKK'}`;
-  }
 }
 
 function fmtDate(value: string | undefined): string {
@@ -689,7 +677,7 @@ export function MobileInvoiceComposerScreen(props: any) {
             activeOpacity={0.85}
             disabled={submitting}
           >
-            <Text style={styles.btnGhostText}>{padAndroidText('Back')}</Text>
+            <RNText style={styles.btnGhostText}>{padAndroidText('Back')}</RNText>
           </TouchableOpacity>
         ) : null}
 
@@ -700,15 +688,15 @@ export function MobileInvoiceComposerScreen(props: any) {
             activeOpacity={0.85}
             disabled={submitting}
           >
-            <Text style={styles.btnGhostText}>{padAndroidText('Back')}</Text>
+            <RNText style={styles.btnGhostText}>{padAndroidText('Back')}</RNText>
           </TouchableOpacity>
         ) : null}
 
         {step === 'client' ? (
           <View style={styles.actionBarSpacer}>
-            <Text style={styles.actionBarHint} numberOfLines={1}>
+            <RNText style={styles.actionBarHint}>
               {padAndroidText('Pick a client to continue')}
-            </Text>
+            </RNText>
           </View>
         ) : step === 'jobs' ? (
           <TouchableOpacity
@@ -721,13 +709,15 @@ export function MobileInvoiceComposerScreen(props: any) {
             activeOpacity={0.85}
             disabled={selectedJobs.length === 0}
           >
-            <Text style={styles.btnPrimaryText}>
-              {padAndroidText(
-                selectedJobs.length === 0
-                  ? 'Pick a job'
-                  : `Continue · ${fmtMoney(subtotal, currency)}`,
-              )}
-            </Text>
+            <View style={styles.btnPrimaryInner}>
+              <RNText style={styles.btnPrimaryText}>
+                {padAndroidText(
+                  selectedJobs.length === 0
+                    ? 'Pick a job'
+                    : `Continue · ${fmtMoneyDisplay(subtotal, currency)}`,
+                )}
+              </RNText>
+            </View>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -743,9 +733,13 @@ export function MobileInvoiceComposerScreen(props: any) {
             {submitting ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.btnPrimaryText}>
-                {padAndroidText(`Create · ${fmtMoney(grandTotal, currency)}`)}
-              </Text>
+              <View style={styles.btnPrimaryInner}>
+                <RNText style={styles.btnPrimaryText}>
+                  {padAndroidText(
+                    `Create · ${fmtMoneyDisplay(grandTotal, currency)}`,
+                  )}
+                </RNText>
+              </View>
             )}
           </TouchableOpacity>
         )}
@@ -913,9 +907,9 @@ function ClientStep({
                 </View>
                 {count > 0 ? (
                   <View style={styles.jobBadge}>
-                    <Text style={styles.jobBadgeText}>
+                    <RNText style={styles.jobBadgeText}>
                       {padAndroidText(`${count} ready`)}
-                    </Text>
+                    </RNText>
                   </View>
                 ) : null}
               </TouchableOpacity>
@@ -983,9 +977,9 @@ function JobsStep({
             {padAndroidText(clientFullName(client))}
           </Text>
           <TouchableOpacity onPress={onChangeClient} hitSlop={10}>
-            <Text style={styles.clientPillChange}>
+            <RNText style={styles.clientPillChange}>
               {padAndroidText('Change')}
-            </Text>
+            </RNText>
           </TouchableOpacity>
         </View>
         <Text style={styles.stepTitle}>
@@ -1098,19 +1092,18 @@ function JobRow({
           </Text>
         </View>
         <View style={styles.jobAmountWrap}>
-          <Text
+          <RNText
             style={[
               styles.jobAmount,
               discount > 0 && styles.jobAmountStriked,
             ]}
-            numberOfLines={1}
           >
-            {padAndroidText(fmtMoney(total, currency))}
-          </Text>
+            {fmtMoneyDisplay(total, currency)}
+          </RNText>
           {discount > 0 ? (
-            <Text style={styles.jobAmountNet} numberOfLines={1}>
-              {padAndroidText(fmtMoney(lineNet, currency))}
-            </Text>
+            <RNText style={styles.jobAmountNet}>
+              {fmtMoneyDisplay(lineNet, currency)}
+            </RNText>
           ) : null}
         </View>
       </TouchableOpacity>
@@ -1266,25 +1259,25 @@ function DetailsStep({
         {/* Summary card */}
         <View style={styles.totalsCard}>
           <Text style={styles.totalsLbl}>{padAndroidText('Total')}</Text>
-          <Text style={styles.totalsValue}>
-            {padAndroidText(fmtMoney(grandTotal, currency))}
-          </Text>
+          <RNText style={styles.totalsValue}>
+            {fmtMoneyDisplay(grandTotal, currency)}
+          </RNText>
           <View style={styles.totalsBreakdown}>
             <View style={styles.totalsRow}>
               <Text style={styles.totalsRowLbl}>
                 {padAndroidText('Subtotal')}
               </Text>
-              <Text style={styles.totalsRowVal}>
-                {padAndroidText(fmtMoney(subtotal, currency))}
-              </Text>
+              <RNText style={styles.totalsRowVal}>
+                {fmtMoneyDisplay(subtotal, currency)}
+              </RNText>
             </View>
             <View style={styles.totalsRow}>
               <Text style={styles.totalsRowLbl}>
                 {padAndroidText(`Tax · ${taxRate}%`)}
               </Text>
-              <Text style={styles.totalsRowVal}>
-                {padAndroidText(fmtMoney(taxAmount, currency))}
-              </Text>
+              <RNText style={styles.totalsRowVal}>
+                {fmtMoneyDisplay(taxAmount, currency)}
+              </RNText>
             </View>
           </View>
         </View>
@@ -1366,14 +1359,14 @@ function DetailsStep({
                   {discount > 0 ? (
                     <Text style={styles.lineItemMeta}>
                       {padAndroidText(
-                        `${fmtMoney(total, currency)} − ${fmtMoney(discount, currency)} discount`,
+                        `${fmtMoneyDisplay(total, currency)} − ${fmtMoneyDisplay(discount, currency)} discount`,
                       )}
                     </Text>
                   ) : null}
                 </View>
-                <Text style={styles.lineItemAmount}>
-                  {padAndroidText(fmtMoney(net, currency))}
-                </Text>
+                <RNText style={styles.lineItemAmount}>
+                  {fmtMoneyDisplay(net, currency)}
+                </RNText>
               </View>
             );
           })}
@@ -1720,17 +1713,20 @@ const styles = StyleSheet.create({
   clientCardName: { fontSize: 15, fontWeight: '700', color: '#193434' },
   clientCardSub: { marginTop: 2, fontSize: 12, color: '#64748B' },
   jobBadge: {
-    paddingHorizontal: 10,
+    flexShrink: 0,
+    paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 999,
     backgroundColor: '#DCFCE7',
+    overflow: 'visible',
   },
   jobBadgeText: {
     fontSize: 11,
     fontWeight: '800',
     color: '#166534',
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    ...(Platform.OS === 'android' ? {} : { letterSpacing: 0.4 }),
+    ...androidPillTextFix,
   },
 
   emptyBox: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 24 },
@@ -1771,7 +1767,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#0F766E',
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
+    flexShrink: 0,
+    ...androidTextFix,
   },
 
   jobCard: {
@@ -1805,14 +1803,38 @@ const styles = StyleSheet.create({
   jobRowText: { flex: 1, minWidth: 0 },
   jobTitle: { fontSize: 15, fontWeight: '700', color: '#193434' },
   jobMeta: { marginTop: 2, fontSize: 12, color: '#64748B' },
-  jobAmountWrap: { alignItems: 'flex-end' },
-  jobAmount: { fontSize: 14, fontWeight: '800', color: '#193434' },
+  jobAmountWrap: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    minWidth: 88,
+    paddingLeft: 8,
+    overflow: 'visible',
+  },
+  jobAmount: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#193434',
+    ...androidTextFix,
+  },
   jobAmountStriked: {
     color: '#94A3B8',
     textDecorationLine: 'line-through',
     fontWeight: '600',
   },
-  jobAmountNet: { marginTop: 2, fontSize: 14, fontWeight: '800', color: '#193434' },
+  jobAmountNet: {
+    marginTop: 2,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#193434',
+    ...androidTextFix,
+  },
+  btnPrimaryInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingHorizontal: 12,
+  },
 
   jobDiscountRow: { marginTop: 10 },
   jobDiscountAdd: { fontSize: 13, fontWeight: '700', color: '#0F766E' },
@@ -1865,7 +1887,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     marginBottom: 4,
   },
-  totalsValue: { fontSize: 30, fontWeight: '800', color: '#FFFFFF' },
+  totalsValue: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    ...androidTextFix,
+  },
   totalsBreakdown: {
     width: '100%',
     marginTop: 16,
@@ -1880,7 +1907,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   totalsRowLbl: { fontSize: 13, color: '#BFD1C5' },
-  totalsRowVal: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  totalsRowVal: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    ...androidTextFix,
+  },
 
   sectionTitle: {
     fontSize: 11,
@@ -1958,7 +1990,15 @@ const styles = StyleSheet.create({
   lineItemMain: { flex: 1, minWidth: 0 },
   lineItemTitle: { fontSize: 14, fontWeight: '700', color: '#193434' },
   lineItemMeta: { marginTop: 2, fontSize: 12, color: '#64748B' },
-  lineItemAmount: { fontSize: 14, fontWeight: '800', color: '#193434' },
+  lineItemAmount: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#193434',
+    flexShrink: 0,
+    minWidth: 72,
+    textAlign: 'right',
+    ...androidTextFix,
+  },
 
   payRow: {
     flexDirection: 'row',
@@ -2029,7 +2069,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionBarHint: { fontSize: 13, color: '#94A3B8' },
+  actionBarHint: {
+    fontSize: 13,
+    color: '#94A3B8',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   btn: {
     flex: 1,
     height: 50,
@@ -2037,14 +2082,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnPrimary: { backgroundColor: '#193434' },
-  btnPrimaryText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
+  btnPrimary: { backgroundColor: '#193434', flex: 1 },
+  btnPrimaryText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 15,
+    lineHeight: 20,
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   btnGhost: {
     backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: '#E2E8F0',
     flex: 0.55,
   },
-  btnGhostText: { color: '#193434', fontWeight: '700', fontSize: 15 },
+  btnGhostText: {
+    color: '#193434',
+    fontWeight: '700',
+    fontSize: 15,
+    ...androidTextFix,
+  },
   btnDisabled: { backgroundColor: '#CBD5E1' },
 });

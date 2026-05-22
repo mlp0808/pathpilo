@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, Suspense } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon, CheckIcon } from '@heroicons/react/24/outline'
@@ -434,11 +435,15 @@ function RegisterForm() {
       <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
         <div className="max-w-md mx-auto w-full">
           <div className="text-center mb-8">
-            <Link href="/" className="inline-flex items-center space-x-2 mb-6">
-              <div className="w-8 h-8 bg-gradient-to-br from-accent-500 to-accent-600 rounded-xl flex items-center justify-center shadow-lg shadow-accent-500/20">
-                <span className="text-white font-bold text-lg">V</span>
-              </div>
-              <span className="text-xl font-bold text-primary-800 tracking-tight">PathPilo</span>
+            <Link href="/" className="inline-flex items-center mb-6">
+              <Image
+                src="/images/brand/logo.png"
+                alt="PathPilo"
+                width={180}
+                height={56}
+                priority
+                className="h-12 w-auto"
+              />
             </Link>
             <h1 className="text-2xl font-bold text-primary-800 tracking-tight mb-2">You&apos;re already signed in</h1>
             <p className="text-gray-600">
@@ -508,15 +513,26 @@ function RegisterForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/50 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
-      <div className="max-w-md mx-auto w-full">
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-white via-white to-primary-50/60 pt-safe pb-safe">
+      {/* soft accent blobs */}
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="absolute -top-32 -right-32 h-80 w-80 rounded-full bg-accent-200/40 blur-3xl" />
+        <div className="absolute bottom-0 -left-20 h-72 w-72 rounded-full bg-primary-200/40 blur-3xl" />
+      </div>
+
+      <div className="flex min-h-screen flex-col justify-center px-4 sm:px-6 py-10 sm:py-14">
+        <div className="mx-auto w-full max-w-md">
         {/* Header */}
         <div className="text-center mb-8">
-          <Link href="/" className="inline-flex items-center space-x-2 mb-6">
-            <div className="w-8 h-8 bg-gradient-to-br from-accent-500 to-accent-600 rounded-xl flex items-center justify-center shadow-lg shadow-accent-500/20">
-              <span className="text-white font-bold text-lg">V</span>
-            </div>
-            <span className="text-xl font-bold text-primary-800 tracking-tight">PathPilo</span>
+          <Link href="/" className="inline-flex items-center mb-6">
+            <Image
+              src="/images/brand/logo.png"
+              alt="PathPilo"
+              width={180}
+              height={56}
+              priority
+              className="h-12 w-auto"
+            />
           </Link>
           <h1 className="text-3xl font-bold text-primary-800 tracking-tight mb-2">
             {registrationStep === 'details' ? 'Create your account' : 'Verify your email'}
@@ -551,8 +567,8 @@ function RegisterForm() {
                 {/* Name Fields */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
-                      First Name
+                    <label htmlFor="firstName" className="block text-sm font-semibold text-primary-800 mb-2">
+                      First name
                     </label>
                     <input
                       type="text"
@@ -567,8 +583,8 @@ function RegisterForm() {
                     />
                   </div>
                   <div>
-                    <label htmlFor="lastName" className="block text-xs font-semibold text-primary-700 mb-2">
-                      Last Name
+                    <label htmlFor="lastName" className="block text-sm font-semibold text-primary-800 mb-2">
+                      Last name
                     </label>
                     <input
                       type="text"
@@ -586,8 +602,8 @@ function RegisterForm() {
 
                 {/* Email */}
                 <div>
-                  <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                    Email Address
+                  <label htmlFor="email" className="block text-sm font-semibold text-primary-800 mb-2">
+                    Email address
                   </label>
                   {emailError && (
                     <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
@@ -611,7 +627,7 @@ function RegisterForm() {
 
                 {/* Password */}
                 <div>
-                  <label htmlFor="password" className="block text-xs font-semibold text-primary-700 mb-2">
+                  <label htmlFor="password" className="block text-sm font-semibold text-primary-800 mb-2">
                     Password
                   </label>
                   <div className="relative">
@@ -641,8 +657,8 @@ function RegisterForm() {
 
                 {/* Confirm Password */}
                 <div>
-                  <label htmlFor="confirmPassword" className="block text-xs font-semibold text-primary-700 mb-2">
-                    Confirm Password
+                  <label htmlFor="confirmPassword" className="block text-sm font-semibold text-primary-800 mb-2">
+                    Confirm password
                   </label>
                   <div className="relative">
                     <input
@@ -687,13 +703,23 @@ function RegisterForm() {
                   </div>
                   <label htmlFor="acceptTerms" className="text-sm text-gray-600">
                     I agree to the{' '}
-                    <Link href="/terms" className="text-accent-600 hover:text-accent-700 font-medium">
+                    <a
+                      href={`https://pathpilo.com/${requestedLang}/terms`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent-700 hover:text-accent-800 font-semibold"
+                    >
                       Terms of Service
-                    </Link>{' '}
+                    </a>{' '}
                     and{' '}
-                    <Link href="/privacy" className="text-accent-600 hover:text-accent-700 font-medium">
+                    <a
+                      href={`https://pathpilo.com/${requestedLang}/privacy`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent-700 hover:text-accent-800 font-semibold"
+                    >
                       Privacy Policy
-                    </Link>
+                    </a>
                   </label>
                 </div>
               </>
@@ -711,7 +737,7 @@ function RegisterForm() {
                   </div>
                 ) : null}
                 <div>
-                  <label htmlFor="verificationCode" className="block text-xs font-semibold text-primary-700 mb-2">
+                  <label htmlFor="verificationCode" className="block text-sm font-semibold text-primary-800 mb-2">
                     Verification code
                   </label>
                   <input
@@ -795,7 +821,7 @@ function RegisterForm() {
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
               Already have an account?{' '}
-              <Link href={`/login?lang=${requestedLang}`} className="text-blue-600 hover:text-blue-700 font-medium">
+              <Link href={`/login?lang=${requestedLang}`} className="text-accent-700 hover:text-accent-800 font-semibold">
                 Sign in
               </Link>
             </p>
@@ -805,22 +831,28 @@ function RegisterForm() {
         {/* Features strip — only for non-invite registrations */}
         {!inviteToken && (
           <div className="mt-8 text-center">
-            <div className="flex items-center justify-center space-x-6 text-sm text-gray-600">
-              <div className="flex items-center space-x-1">
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm text-gray-600">
+              <div className="flex items-center gap-1">
                 <CheckIcon className="w-4 h-4 text-accent-500" />
                 <span>Free to get started</span>
               </div>
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center gap-1">
                 <CheckIcon className="w-4 h-4 text-accent-500" />
                 <span>No credit card required</span>
               </div>
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center gap-1">
                 <CheckIcon className="w-4 h-4 text-accent-500" />
                 <span>Cancel anytime</span>
               </div>
             </div>
           </div>
         )}
+
+        {/* Footer */}
+        <p className="mt-8 text-center text-xs text-gray-500">
+          © {new Date().getFullYear()} PathPilo. All rights reserved.
+        </p>
+        </div>
       </div>
     </div>
   )

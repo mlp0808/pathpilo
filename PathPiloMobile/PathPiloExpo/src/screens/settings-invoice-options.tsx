@@ -18,13 +18,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import { androidTextFix, padAndroidText } from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -566,7 +562,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
                         {bankSaving ? (
                           <ActivityIndicator color="#193434" />
                         ) : (
-                          <Text style={styles.secondaryBtnTxt}>
+                          <RNText style={styles.secondaryBtnTxt}>
                             {padAndroidText(
                               bankSavedFlash
                                 ? 'Saved ✓'
@@ -574,7 +570,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
                                   ? 'Save payment details'
                                   : 'Up to date',
                             )}
-                          </Text>
+                          </RNText>
                         )}
                       </TouchableOpacity>
                     ) : null}
@@ -600,11 +596,11 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
                 {defaultsSaving ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.saveBtnTxt}>
+                  <RNText style={styles.saveBtnTxt}>
                     {padAndroidText(
                       defaultsSavedFlash ? 'Saved ✓' : 'Save invoice settings',
                     )}
-                  </Text>
+                  </RNText>
                 )}
               </TouchableOpacity>
             </View>
@@ -767,7 +763,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   secondaryBtnOff: { opacity: 0.45 },
-  secondaryBtnTxt: { fontSize: 15, fontWeight: '800', color: '#193434' },
   stickyBar: {
     position: 'absolute',
     left: 0,
@@ -787,5 +782,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   saveBtnOff: { opacity: 0.7 },
-  saveBtnTxt: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
+  saveBtnTxt: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16,
+    textAlign: 'center',
+    ...androidTextFix,
+  },
+  secondaryBtnTxt: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
 });

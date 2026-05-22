@@ -18,13 +18,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { apiClient } from '../api/client';
 import AndroidSafeText from '../components/AndroidSafeText';
+import {
+  androidPillTextFix,
+  androidTextFix,
+  padAndroidText,
+} from '../ui/androidText';
 
 const Text = Platform.OS === 'android' ? AndroidSafeText : RNText;
-
-function padAndroidText(value: string): string {
-  if (!value) return value;
-  return Platform.OS === 'android' ? `${value}\u2009` : value;
-}
 
 if (
   Platform.OS === 'android' &&
@@ -241,19 +241,6 @@ export function MobileWorkHoursSettingsScreen(props: any) {
     }
   };
 
-  const copyMondayToWeekdays = () => {
-    if (!canEdit) return;
-    LayoutAnimation.configureNext(SNAPPY);
-    setSchedule((prev) => {
-      const mon = prev.monday;
-      const next = { ...prev };
-      for (const key of ['tuesday', 'wednesday', 'thursday', 'friday'] as Weekday[]) {
-        next[key] = { ...mon };
-      }
-      return next;
-    });
-  };
-
   const totalWeek = useMemo(() => {
     let total = 0;
     for (const { key } of WEEKDAYS) {
@@ -381,12 +368,11 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Text
+                  <RNText
                     style={[styles.segTxt, mode === 'fixed' && styles.segTxtOn]}
-                    numberOfLines={1}
                   >
                     {padAndroidText('Fixed hours')}
-                  </Text>
+                  </RNText>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.segBtn, mode === 'flexible' && styles.segBtnOn]}
@@ -397,29 +383,16 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Text
+                  <RNText
                     style={[
                       styles.segTxt,
                       mode === 'flexible' && styles.segTxtOn,
                     ]}
-                    numberOfLines={1}
                   >
                     {padAndroidText('Flexible hours')}
-                  </Text>
+                  </RNText>
                 </TouchableOpacity>
               </View>
-
-              {canEdit ? (
-                <TouchableOpacity
-                  style={styles.copyLink}
-                  onPress={copyMondayToWeekdays}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.copyLinkTxt}>
-                    {padAndroidText('Copy Monday → Tue–Fri')}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
 
               <View style={styles.hintBox}>
                 <Text style={styles.hint}>
@@ -462,15 +435,14 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                               d.off && styles.dayAvatarOff,
                             ]}
                           >
-                            <Text
+                            <RNText
                               style={[
                                 styles.dayAvatarTxt,
                                 d.off && styles.dayAvatarTxtOff,
                               ]}
-                              numberOfLines={1}
                             >
                               {padAndroidText(short)}
-                            </Text>
+                            </RNText>
                           </View>
                           <View style={styles.dayTitleCol}>
                             <Text
@@ -499,9 +471,9 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                         <View style={styles.dayRight}>
                           {!d.off ? (
                             <View style={styles.netChip}>
-                              <Text style={styles.netChipTxt} numberOfLines={1}>
+                              <RNText style={styles.netChipTxt}>
                                 {padAndroidText(`${netH.toFixed(1)} h net`)}
-                              </Text>
+                              </RNText>
                             </View>
                           ) : null}
                           <TouchableOpacity
@@ -513,15 +485,14 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                             ]}
                             activeOpacity={0.85}
                           >
-                            <Text
+                            <RNText
                               style={[
                                 styles.pillTxt,
                                 d.off ? styles.pillTxtOff : styles.pillTxtOn,
                               ]}
-                              numberOfLines={1}
                             >
                               {padAndroidText(d.off ? 'Off' : 'Working')}
-                            </Text>
+                            </RNText>
                           </TouchableOpacity>
                         </View>
                       </View>
@@ -541,9 +512,9 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                                 }
                                 activeOpacity={0.85}
                               >
-                                <Text style={styles.timePillTxt}>
+                                <RNText style={styles.timePillTxt}>
                                   {padAndroidText(d.start)}
-                                </Text>
+                                </RNText>
                               </TouchableOpacity>
                             </View>
                             <Text style={styles.timeArrow}>→</Text>
@@ -644,9 +615,9 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                 {saving ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.saveBtnTxt}>
+                  <RNText style={styles.saveBtnTxt}>
                     {padAndroidText(savedFlash ? 'Saved ✓' : 'Save changes')}
-                  </Text>
+                  </RNText>
                 )}
               </TouchableOpacity>
             </View>
@@ -688,11 +659,11 @@ export function MobileWorkHoursSettingsScreen(props: any) {
                         setTimePick(null);
                       }}
                     >
-                      <Text
+                      <RNText
                         style={[styles.timeCellTxt, on && styles.timeCellTxtOn]}
                       >
                         {padAndroidText(t)}
-                      </Text>
+                      </RNText>
                     </TouchableOpacity>
                   );
                 })}
@@ -776,14 +747,21 @@ const styles = StyleSheet.create({
   segBtn: {
     flex: 1,
     paddingVertical: 10,
+    paddingHorizontal: 8,
     borderRadius: 11,
     alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
   segBtnOn: { backgroundColor: '#FFFFFF' },
-  segTxt: { fontSize: 13, fontWeight: '700', color: '#64748B' },
+  segTxt: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   segTxtOn: { color: '#193434' },
-  copyLink: { alignSelf: 'flex-start', marginBottom: 10 },
-  copyLinkTxt: { fontSize: 13, fontWeight: '800', color: '#0F766E' },
   hintBox: {
     backgroundColor: '#F8FAFC',
     borderRadius: 12,
@@ -872,22 +850,31 @@ const styles = StyleSheet.create({
   },
   dayRight: { alignItems: 'flex-end', gap: 8 },
   netChip: {
-    paddingHorizontal: 10,
+    flexShrink: 0,
+    paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 999,
     backgroundColor: '#E6F2EC',
     borderWidth: 1,
     borderColor: '#BBF7D0',
+    overflow: 'visible',
   },
-  netChipTxt: { fontSize: 11, fontWeight: '800', color: '#166534' },
+  netChipTxt: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+    ...androidPillTextFix,
+  },
   pill: {
-    paddingHorizontal: 12,
+    flexShrink: 0,
+    paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 999,
+    overflow: 'visible',
   },
   pillOn: { backgroundColor: '#E6F2EC' },
   pillOff: { backgroundColor: '#E2E8F0' },
-  pillTxt: { fontSize: 12, fontWeight: '800' },
+  pillTxt: { fontSize: 12, fontWeight: '800', ...androidPillTextFix },
   pillTxtOn: { color: '#166534' },
   pillTxtOff: { color: '#64748B' },
   dayFieldsPanel: {
@@ -913,14 +900,23 @@ const styles = StyleSheet.create({
   },
   timePill: {
     paddingVertical: 11,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     backgroundColor: '#F8FAFC',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 88,
+    overflow: 'visible',
   },
-  timePillTxt: { fontSize: 16, fontWeight: '800', color: '#193434' },
+  timePillTxt: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#193434',
+    fontVariant: ['tabular-nums'],
+    ...androidTextFix,
+  },
   timeArrow: {
     paddingBottom: 12,
     fontSize: 14,
@@ -986,7 +982,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   saveBtnOff: { opacity: 0.7 },
-  saveBtnTxt: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
+  saveBtnTxt: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 16,
+    textAlign: 'center',
+    ...androidTextFix,
+  },
   modalScrim: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -1015,14 +1017,24 @@ const styles = StyleSheet.create({
   },
   timeCell: {
     width: '22%',
-    maxWidth: 88,
+    minWidth: 72,
+    maxWidth: 92,
     paddingVertical: 10,
+    paddingHorizontal: 6,
     borderRadius: 10,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
   },
   timeCellOn: { backgroundColor: '#193434' },
-  timeCellTxt: { fontSize: 13, fontWeight: '700', color: '#475569' },
+  timeCellTxt: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+    fontVariant: ['tabular-nums'],
+    ...androidTextFix,
+  },
   timeCellTxtOn: { color: '#FFFFFF' },
   modalClose: { paddingVertical: 14, alignItems: 'center' },
   modalCloseTxt: { fontSize: 16, fontWeight: '700', color: '#64748B' },
