@@ -2,7 +2,10 @@ const express = require('express');
 const { pool } = require('../utils/database');
 const { scheduleAutomationSendsForJob } = require('../utils/automatedEmails');
 const { setJobAutoTitleIfEmpty } = require('../utils/jobAutoTitle');
-const { deleteFutureNonCompletedJobsForSubscription } = require('../utils/subscriptionStopCleanup');
+const {
+  deleteFutureNonCompletedJobsForSubscription,
+  removeSubscriptionCompletely,
+} = require('../utils/subscriptionStopCleanup');
 const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
 
 const router = express.Router();
@@ -166,7 +169,7 @@ router.get('/', authenticateToken, async (req, res) => {
         LEFT JOIN clients c ON rj.client_id = c.id
         LEFT JOIN recurring_job_services rjs ON rj.id = rjs.recurring_job_id
         LEFT JOIN services s ON rjs.service_id = s.id
-        WHERE rj.company_id = $1
+        WHERE rj.company_id = $1 AND rj.is_active = true
         GROUP BY rj.id, c.name, c.last_name
         ORDER BY rj.created_at DESC
       `, [companyId]);
@@ -570,16 +573,20 @@ router.delete('/:subscriptionId', authenticateToken, async (req, res) => {
     }
 
     await dbClient.query('BEGIN');
-    // Remove planned materialized occurrences from today onward (keeps completed / invoiced jobs).
-    await deleteFutureNonCompletedJobsForSubscription(dbClient, companyId, subscriptionId);
-    await dbClient.query(
-      'UPDATE recurring_jobs SET is_active = false, updated_at = NOW() WHERE id = $1',
-      [subscriptionId]
+    // Same future-job cleanup as pause, then remove the subscription row entirely.
+    const removed = await removeSubscriptionCompletely(
+      dbClient,
+      companyId,
+      subscriptionId,
     );
+    if (removed === 0) {
+      await dbClient.query('ROLLBACK');
+      return res.status(404).json({ error: 'Subscription not found or access denied' });
+    }
     await dbClient.query('COMMIT');
 
     return res.json({
-      message: 'Subscription deactivated successfully'
+      message: 'Subscription deleted successfully',
     });
   } catch (error) {
     try {

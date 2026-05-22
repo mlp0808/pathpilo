@@ -413,9 +413,8 @@ export default function ClientDetailPage() {
 
   const handleDeleteSubscription = async (id: number) => {
     // Past jobs stay on the timeline because they live in `jobs`, not
-    // `recurring_jobs`. The server also deletes any not-yet-completed
-    // future jobs and flips `is_active` so the row disappears from
-    // /subscriptions and from this client profile list.
+    // `recurring_jobs`. The server removes future planned visits (same as
+    // pause) and deletes the subscription row so it vanishes from this list.
     if (!confirm('Delete this subscription?\n\nFuture visits will be removed and the subscription will no longer appear on the client profile. Already completed or invoiced jobs are kept.')) return
     try {
       const token = localStorage.getItem('token')
