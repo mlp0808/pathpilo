@@ -8,8 +8,8 @@ import PricingPage from '../../pricing/page'
 import RoutePlanningFeaturePage from '../../features/routeplanning/page'
 import SubscriptionsFeaturePage from '../../features/subscriptions/page'
 import TeamManagementFeaturePage from '../../features/team/page'
-import TermsPage from '../../terms/page'
-import PrivacyPage from '../../privacy/page'
+import { TermsContent } from '../../terms/TermsContent'
+import { PrivacyContent } from '../../privacy/PrivacyContent'
 import { isMarketingLocale } from '../../lib/i18n'
 
 const SEO_BY_ROUTE = {
@@ -188,8 +188,8 @@ export default async function LocalizedMarketingPage({
   if (route === 'features/routeplanning') return <RoutePlanningFeaturePage locale={resolved.lang} />
   if (route === 'features/subscriptions') return <SubscriptionsFeaturePage locale={resolved.lang} />
   if (route === 'features/team') return <TeamManagementFeaturePage locale={resolved.lang} />
-  if (route === 'terms') return <TermsPage locale={resolved.lang} />
-  if (route === 'privacy') return <PrivacyPage locale={resolved.lang} />
+  if (route === 'terms') return <TermsContent locale={resolved.lang} />
+  if (route === 'privacy') return <PrivacyContent locale={resolved.lang} />
 
   notFound()
 }
