@@ -1226,7 +1226,12 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         }
       )
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.error || data.details || 'Failed to create real job')
+      if (!response.ok) {
+        const msg = data.details
+          ? `${data.error || 'Failed to create real job'}: ${data.details}`
+          : (data.error || 'Failed to create real job')
+        throw new Error(msg)
+      }
 
       const jobId = data.jobId
       if (typeof jobId !== 'number') throw new Error('Invalid jobId returned from server')

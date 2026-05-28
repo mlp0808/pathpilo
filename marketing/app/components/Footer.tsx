@@ -4,14 +4,16 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { marketingImages } from '../config/marketingImages'
-import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
+import { getLocaleFromPathname, stripLocalePrefix, withAppLanguageParam, withLocalePath } from '../lib/i18n'
 import { pushCtaClick } from '../lib/dataLayer'
 
 export default function Footer() {
   const pathname = usePathname()
   const locale = getLocaleFromPathname(pathname || '/')
+  const basePath = stripLocalePrefix(pathname || '/')
   const da = locale === 'da'
   const navHref = (href: string) => withLocalePath(locale, href)
+  const switchTo = (next: 'en' | 'da') => withLocalePath(next, basePath)
   const loginHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/login')
   const registerHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
 
@@ -126,7 +128,25 @@ export default function Footer() {
           <p className="text-gray-400 text-sm mb-4 md:mb-0">
             © {new Date().getFullYear()} PathPilo. {da ? 'Alle rettigheder forbeholdes.' : 'All rights reserved.'}
           </p>
-          <div className="flex space-x-6 text-sm text-gray-400">
+          <div className="flex items-center gap-5 text-sm text-gray-400">
+            <div className="flex items-center gap-1 rounded-lg border border-primary-600 bg-primary-700/70 px-1 py-1">
+              <Link
+                href={switchTo('en')}
+                className={`px-2 py-1 text-xs font-semibold rounded transition-colors ${
+                  locale === 'en' ? 'bg-accent-500 text-white' : 'text-gray-200 hover:text-white'
+                }`}
+              >
+                EN
+              </Link>
+              <Link
+                href={switchTo('da')}
+                className={`px-2 py-1 text-xs font-semibold rounded transition-colors ${
+                  locale === 'da' ? 'bg-accent-500 text-white' : 'text-gray-200 hover:text-white'
+                }`}
+              >
+                DA
+              </Link>
+            </div>
             <Link href={navHref('/privacy')} className="hover:text-white transition-colors">
               {da ? 'Privatlivspolitik' : 'Privacy Policy'}
             </Link>

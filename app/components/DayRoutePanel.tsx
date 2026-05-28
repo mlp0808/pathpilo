@@ -336,6 +336,7 @@ function UserRoutePanel({
   availableMinutes,
   drawMode,
   drawOrder,
+  drawRouteComparison,
   onDrawStart,
   onDrawAssign,
   onDrawReset,
@@ -353,6 +354,7 @@ function UserRoutePanel({
   availableMinutes?: number
   drawMode?: boolean
   drawOrder?: (number | string)[]
+  drawRouteComparison?: { diffMinutes: number } | null
   onDrawStart?: () => void
   onDrawAssign?: (jobId: number | string) => void
   onDrawReset?: () => void
@@ -397,6 +399,16 @@ function UserRoutePanel({
   const overMinutes =
     availableMinutes != null && availableMinutes > 0 ? fullMinutes - availableMinutes : null
 
+  /** Driving time vs first directions snapshot this day (negative = saved time). */
+  const driveVsBaselineDiff = useMemo(() => {
+    const total = route.totalMinutes
+    const baseline = baselineMinutes
+    if (baseline == null || baseline <= 0 || total == null || !Number.isFinite(total)) return null
+    const diff = total - baseline
+    if (Math.abs(diff) < 0.5) return null
+    return diff
+  }, [route.totalMinutes, baselineMinutes])
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event
@@ -424,6 +436,23 @@ function UserRoutePanel({
             <p className="text-[13px] font-bold text-accent-600 leading-tight">
               {route.totalMinutes != null ? fmtMin(route.totalMinutes) : '—'}
             </p>
+            {driveVsBaselineDiff != null && (
+              <p
+                className={`mt-1 text-[9px] font-semibold leading-tight ${
+                  driveVsBaselineDiff < 0 ? 'text-emerald-600' : 'text-orange-600'
+                }`}
+              >
+                {driveVsBaselineDiff < 0
+                  ? t('app.routePlanner.driveDeltaSavedShort', '{{amount}} saved').replace(
+                      '{{amount}}',
+                      fmtDeltaMin(driveVsBaselineDiff),
+                    )
+                  : t('app.routePlanner.driveDeltaExtraShort', '{{amount}} extra').replace(
+                      '{{amount}}',
+                      fmtDeltaMin(driveVsBaselineDiff),
+                    )}
+              </p>
+            )}
           </div>
           <div className="rounded-lg px-2.5 py-2 text-center bg-gray-50 border border-gray-100">
             <p className="text-[9px] uppercase tracking-widest font-bold mb-0.5 text-gray-400">{t('app.routePlanner.distance', 'Dist.')}</p>
@@ -526,9 +555,30 @@ function UserRoutePanel({
                   : t('app.routePlanner.drawNext', 'Pick stop #{{n}}').replace('{{n}}', String(nextDrawNumber))}
               </p>
               <p className="text-[10.5px] text-gray-500 mt-0.5 leading-tight">
-                {drawComplete
-                  ? t('app.routePlanner.drawCompleteHint', 'Saving order…')
-                  : t('app.routePlanner.drawRouteHint', 'Click stops in the order you want to visit them.')}
+                {drawComplete ? (
+                  drawRouteComparison != null &&
+                  Math.abs(drawRouteComparison.diffMinutes) >= 0.5 ? (
+                    drawRouteComparison.diffMinutes > 0 ? (
+                      <span className="text-emerald-700 font-semibold">
+                        {t(
+                          'app.routePlanner.drawSavedVsPreviousShort',
+                          'Saved {{time}} of driving vs your previous route order.',
+                        ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                      </span>
+                    ) : (
+                      <span className="text-amber-700 font-semibold">
+                        {t(
+                          'app.routePlanner.drawAddedVsPreviousShort',
+                          'About {{time}} more driving than your previous route order.',
+                        ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                      </span>
+                    )
+                  ) : (
+                    t('app.routePlanner.drawCompleteHint', 'Saving order…')
+                  )
+                ) : (
+                  t('app.routePlanner.drawRouteHint', 'Click stops in the order you want to visit them.')
+                )}
               </p>
             </div>
           </div>
@@ -876,6 +926,8 @@ interface DayRoutePanelProps {
   /** Manual route-drawing mode (one click per stop). */
   drawMode?: boolean
   drawOrder?: (number | string)[]
+  /** Driving time delta after draw-route vs order before draw (+ = saved). */
+  drawRouteComparison?: { diffMinutes: number } | null
   onDrawStart?: () => void
   onDrawAssign?: (jobId: number | string) => void
   onDrawReset?: () => void
@@ -902,6 +954,7 @@ export default function DayRoutePanel({
   availableMinutesByUser,
   drawMode,
   drawOrder,
+  drawRouteComparison,
   onDrawStart,
   onDrawAssign,
   onDrawReset,
@@ -979,6 +1032,48 @@ export default function DayRoutePanel({
       {/* Divider */}
       <div className="mx-5 mb-3 h-px bg-gray-200" />
 
+      {focusedRoute &&
+        drawRouteComparison != null &&
+        Math.abs(drawRouteComparison.diffMinutes) >= 0.5 && (
+          <div
+            className={`mx-5 mb-3 rounded-xl px-3 py-2.5 text-[12px] leading-snug border ${
+              drawRouteComparison.diffMinutes > 0
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-amber-50 border-amber-200 text-amber-950'
+            }`}
+          >
+            {drawRouteComparison.diffMinutes > 0 ? (
+              <>
+                <span className="font-bold">
+                  {t('app.routePlanner.drawSavedHeadline', 'Time saved')}
+                </span>
+                <span className="font-medium">
+                  {' '}
+                  —{' '}
+                  {t(
+                    'app.routePlanner.drawSavedVsPreviousBanner',
+                    'About {{time}} less driving than before you reordered.',
+                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="font-bold">
+                  {t('app.routePlanner.drawAddedHeadline', 'Longer drive')}
+                </span>
+                <span className="font-medium">
+                  {' '}
+                  —{' '}
+                  {t(
+                    'app.routePlanner.drawAddedVsPreviousBanner',
+                    'About {{time}} more driving than your previous order.',
+                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
       {/* ── Scrollable body ─────────────────────────────────────── */}
       <div
         className="flex-1 overflow-y-auto px-5 pb-4"
@@ -998,6 +1093,7 @@ export default function DayRoutePanel({
             availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
             drawMode={drawMode}
             drawOrder={drawOrder}
+            drawRouteComparison={drawRouteComparison}
             onDrawStart={onDrawStart}
             onDrawAssign={onDrawAssign}
             onDrawReset={onDrawReset}

@@ -844,19 +844,33 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
     const jobId = jobRes.rows[0].id;
 
     if (matNotePlain) {
-      await jobEncryptedNotes.setJobNoteText({
-        companyId,
-        jobId,
-        plainText: matNotePlain,
-        userId: jobEncryptedNotes.secureNoteUserId(req),
-        dbClient,
-      });
+      try {
+        await jobEncryptedNotes.setJobNoteText({
+          companyId,
+          jobId,
+          plainText: matNotePlain,
+          userId: jobEncryptedNotes.secureNoteUserId(req),
+          dbClient,
+        });
+      } catch (noteErr) {
+        // Production may lack SECURE_NOTES_MASTER_KEY in api-server/.env
+        // (deploy overwrites .env). Fall back to legacy plaintext on jobs.note
+        // so materialization still succeeds.
+        console.warn(
+          'Materialize: encrypted note save failed, using legacy jobs.note:',
+          noteErr?.message || noteErr,
+        );
+        await dbClient.query(
+          'UPDATE jobs SET note = $1 WHERE id = $2 AND company_id = $3',
+          [matNotePlain, jobId, companyId],
+        );
+      }
     }
 
     for (const s of subServices) {
       await dbClient.query(
-        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
-         VALUES ($1,$2,$3,$4,'scheduled')
+        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes)
+         VALUES ($1,$2,$3,$4)
          ON CONFLICT (job_id, service_id) DO NOTHING`,
         [jobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null]
       );
@@ -864,7 +878,11 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     // If the parent subscription had no title, derive one for this
     // materialized occurrence from the services that were just attached.
-    await setJobAutoTitleIfEmpty(dbClient, jobId);
+    try {
+      await setJobAutoTitleIfEmpty(dbClient, jobId);
+    } catch (titleErr) {
+      console.warn('Could not auto-title materialized job:', titleErr?.message || titleErr);
+    }
 
     try {
       await dbClient.query(

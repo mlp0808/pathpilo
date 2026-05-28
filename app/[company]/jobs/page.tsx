@@ -32,6 +32,12 @@ const USER_COLORS = [
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
+function coordOrNull(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 /** Task count for job cards — list API exposes all_service_count, not job_services[]. */
 function getJobTaskCount(job: any): number {
   const fromApi = Number(job.all_service_count ?? job.service_count ?? 0)
@@ -101,7 +107,10 @@ async function ensureRealJobIdForAction(job: any, token: string): Promise<number
   )
   const matData = await mat.json().catch(() => ({}))
   if (!mat.ok) {
-    throw new Error(matData.error || matData.details || 'Failed to create real job from subscription')
+    const msg = matData.details
+      ? `${matData.error || 'Failed to create real job from subscription'}: ${matData.details}`
+      : (matData.error || 'Failed to create real job from subscription')
+    throw new Error(msg)
   }
   const jobId = matData.jobId
   if (typeof jobId !== 'number') {
@@ -220,6 +229,10 @@ function JobsPageContent() {
   // Manual draw-route mode (per focused user — only one drawable at a time)
   const [drawMode, setDrawMode] = useState(false)
   const [drawOrder, setDrawOrder] = useState<(number | string)[]>([])
+  /** After finishing a drawn route: driving time vs order before draw (+ = saved). */
+  const [drawRouteComparison, setDrawRouteComparison] = useState<{ diffMinutes: number } | null>(null)
+  const drawCompareBaselineRef = useRef<number | null>(null)
+  const drawRouteComparisonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Bumped every time routes are rebuilt so the directions effect always re-fires
   const [dayRoutesVersion, setDayRoutesVersion] = useState(0)
   const directionsFetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1585,7 +1598,10 @@ function JobsPageContent() {
                 })
                 const matData = await mat.json().catch(() => ({}))
                 if (!mat.ok) {
-                    throw new Error(matData.error || matData.details || 'Failed to create real job from subscription')
+                    const msg = matData.details
+                      ? `${matData.error || 'Failed to create real job from subscription'}: ${matData.details}`
+                      : (matData.error || 'Failed to create real job from subscription')
+                    throw new Error(msg)
                 }
                 realJobId = matData.jobId
                 if (typeof realJobId !== 'number') {
@@ -1769,8 +1785,8 @@ function JobsPageContent() {
         color: USER_COLORS[idx % USER_COLORS.length],
         jobs: sorted.map(job => ({
           id: job.id,
-          lat: job.lat ?? job.client_lat ?? null,
-          lng: job.lng ?? job.client_lng ?? null,
+          lat: coordOrNull(job.lat ?? job.client_lat),
+          lng: coordOrNull(job.lng ?? job.client_lng),
           label: job.name
             ? (job.last_name ? `${job.name} ${job.last_name}` : job.name)
             : (job.title || 'Untitled'),
@@ -1784,7 +1800,7 @@ function JobsPageContent() {
           is_cancelled: job.status === 'cancelled',
           // True only when the job row itself has coords — NOT the client fallback.
           // Used to decide whether geocoding should run to get a more accurate pin position.
-          has_own_coords: !!(job.lat && job.lng),
+          has_own_coords: coordOrNull(job.lat) != null && coordOrNull(job.lng) != null,
           estimated_duration_minutes: typeof job.estimated_duration === 'number'
             ? job.estimated_duration
             : parseFloat(String(job.estimated_duration)) || 0,
@@ -1815,7 +1831,9 @@ function JobsPageContent() {
     // Use the centroid of already-known coordinates as a geographic proximity hint.
     // This dramatically improves accuracy: Mapbox will prefer results near existing pins
     // rather than returning the same street name from a different country.
-    const knownCoords = routes.flatMap(r => r.jobs.filter(j => j.lat && j.lng))
+    const knownCoords = routes.flatMap(r =>
+      r.jobs.filter(j => j.lat != null && j.lng != null && Number.isFinite(j.lat) && Number.isFinite(j.lng))
+    )
     const proximityParam = knownCoords.length > 0
       ? `&proximity=${(knownCoords.reduce((s, j) => s + j.lng, 0) / knownCoords.length).toFixed(4)},${(knownCoords.reduce((s, j) => s + j.lat, 0) / knownCoords.length).toFixed(4)}`
       : ''
@@ -1864,7 +1882,7 @@ function JobsPageContent() {
     if (!MAPBOX_TOKEN) return {}
     // Exclude cancelled jobs — they appear as grey unconnected pins and must not affect
     // the road geometry or leg-minute calculations for active stops.
-    const pts = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
+    const pts = route.jobs.filter(j => j.lat != null && j.lng != null && !j.is_cancelled)
     if (pts.length < 2) return {}
     // Mapbox Directions supports up to 25 waypoints
     const waypointPts = pts.slice(0, 25)
@@ -1882,7 +1900,7 @@ function JobsPageContent() {
       const routeGeometry = r.geometry as { type: string; coordinates: [number, number][] }
       let cumulative = 0
       const updatedJobs = route.jobs.map((job) => {
-        if (!job.lat || !job.lng || job.is_cancelled) return job
+        if (job.lat == null || job.lng == null || job.is_cancelled) return job
         const ptIdx = waypointPts.findIndex(p => p.id === job.id)
         if (ptIdx <= 0) return { ...job, legMinutes: 0, etaMinutes: 0 }
         const legSec = r.legs[ptIdx - 1]?.duration ?? 0
@@ -2060,12 +2078,29 @@ function JobsPageContent() {
   //   assign them order numbers. When every middle stop has a number we apply
   //   the order via handleDayReorder and exit draw mode.
   const handleDrawStart = useCallback(() => {
+    const uid =
+      dayFocusUserId ?? (dayRoutes.length === 1 ? dayRoutes[0]?.userId ?? null : null)
+    const route = uid != null ? dayRoutes.find(r => r.userId === uid) : null
+    const tm = route?.totalMinutes
+    drawCompareBaselineRef.current =
+      tm != null && Number.isFinite(tm) && tm > 0 ? tm : null
+    if (drawRouteComparisonTimerRef.current) {
+      clearTimeout(drawRouteComparisonTimerRef.current)
+      drawRouteComparisonTimerRef.current = null
+    }
+    setDrawRouteComparison(null)
     setDrawMode(true)
     setDrawOrder([])
     setHoveredJobId(null)
-  }, [])
+  }, [dayFocusUserId, dayRoutes])
 
   const handleDrawExit = useCallback(() => {
+    drawCompareBaselineRef.current = null
+    if (drawRouteComparisonTimerRef.current) {
+      clearTimeout(drawRouteComparisonTimerRef.current)
+      drawRouteComparisonTimerRef.current = null
+    }
+    setDrawRouteComparison(null)
     setDrawMode(false)
     setDrawOrder([])
     setHoveredJobId(null)
@@ -2108,6 +2143,33 @@ function JobsPageContent() {
           ...(endJob ? [endJob] : []),
           ...cancelled,
         ]
+        const routeForDirections: UserRoute = { ...route, jobs: fullOrder }
+        queueMicrotask(() => {
+          void (async () => {
+            const baseline = drawCompareBaselineRef.current
+            try {
+              const patch = await fetchDirections(routeForDirections)
+              const newTotal = patch.totalMinutes
+              if (
+                baseline != null &&
+                newTotal != null &&
+                Math.abs(baseline - newTotal) >= 0.5
+              ) {
+                if (drawRouteComparisonTimerRef.current) {
+                  clearTimeout(drawRouteComparisonTimerRef.current)
+                  drawRouteComparisonTimerRef.current = null
+                }
+                setDrawRouteComparison({ diffMinutes: baseline - newTotal })
+                drawRouteComparisonTimerRef.current = setTimeout(() => {
+                  setDrawRouteComparison(null)
+                  drawRouteComparisonTimerRef.current = null
+                }, 8000)
+              }
+            } catch {
+              /* ignore */
+            }
+          })()
+        })
         setTimeout(() => {
           handleDayReorder(userId, fullOrder)
           setDrawMode(false)
@@ -2117,12 +2179,18 @@ function JobsPageContent() {
       }
       return next
     })
-  }, [dayDrawUserId, dayRoutes, handleDayReorder])
+  }, [dayDrawUserId, dayRoutes, handleDayReorder, fetchDirections])
 
   // Auto-exit draw mode if the focused user changes or there's no focus anymore
   useEffect(() => {
     if (!drawMode) return
     if (dayDrawUserId == null) {
+      drawCompareBaselineRef.current = null
+      if (drawRouteComparisonTimerRef.current) {
+        clearTimeout(drawRouteComparisonTimerRef.current)
+        drawRouteComparisonTimerRef.current = null
+      }
+      setDrawRouteComparison(null)
       setDrawMode(false)
       setDrawOrder([])
     }
@@ -2480,7 +2548,19 @@ function JobsPageContent() {
                         optimizing={dayOptimizing}
                         geocodingCount={dayGeocodingCount}
                         onSave={handleSaveAndApply}
-                        onBackToWeek={() => { setViewMode('week'); setDayFocusUserId(null); setHoveredJobId(null); setDrawMode(false); setDrawOrder([]) }}
+                        onBackToWeek={() => {
+                          setViewMode('week')
+                          setDayFocusUserId(null)
+                          setHoveredJobId(null)
+                          drawCompareBaselineRef.current = null
+                          if (drawRouteComparisonTimerRef.current) {
+                            clearTimeout(drawRouteComparisonTimerRef.current)
+                            drawRouteComparisonTimerRef.current = null
+                          }
+                          setDrawRouteComparison(null)
+                          setDrawMode(false)
+                          setDrawOrder([])
+                        }}
                         dateLabel={currentWeek.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'short' })}
                         highlightedJobId={hoveredJobId}
                         onJobCardHover={setHoveredJobId}
@@ -2497,6 +2577,7 @@ function JobsPageContent() {
                         onDrawAssign={handleDrawAssign}
                         onDrawReset={handleDrawReset}
                         onDrawExit={handleDrawExit}
+                        drawRouteComparison={drawRouteComparison}
                       />
                     </div>
 
@@ -2504,13 +2585,7 @@ function JobsPageContent() {
                     <div className="flex-1 relative overflow-hidden">
                       <RouteMap
                         routes={dayRoutes}
-                        focusUserId={
-                          dayFocusUserId != null
-                            ? dayFocusUserId
-                            : dayRoutes.length === 1
-                              ? dayRoutes[0]?.userId ?? null
-                              : null
-                        }
+                        focusUserId={dayFocusUserId}
                         onJobClick={id => {
                           const job = allJobs.find(j => j.id === id)
                           if (job) { setViewingJob(job); setIsViewModalOpen(true) }

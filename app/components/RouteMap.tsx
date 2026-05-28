@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { buildSequentialPickMapFeatures } from '@/app/lib/sequentialPick/buildMapPinFeatures'
@@ -78,6 +78,114 @@ function safeRemoveSource(map: mapboxgl.Map, id: string) {
   try { if (map.getSource(id)) map.removeSource(id) } catch { /* ignore */ }
 }
 
+/** Keep route planner strictly top-down: style reloads and wide fitBounds can restore globe / pitch. */
+function enforceFlatRoadView(map: mapboxgl.Map) {
+  try {
+    map.setProjection({ name: 'mercator' })
+  } catch {
+    /* ignore */
+  }
+  try {
+    map.setTerrain(null)
+  } catch {
+    /* ignore */
+  }
+  map.setMaxPitch(0)
+  map.setMinPitch(0)
+  map.setPitch(0)
+  map.setBearing(0)
+  try {
+    map.dragRotate.disable()
+    map.touchPitch.disable()
+    map.touchZoomRotate.disableRotation()
+  } catch {
+    /* ignore */
+  }
+}
+
+function parseCoord(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Mapbox [lng, lat] or null when coords are missing / invalid (API may return strings). */
+function jobLngLat(job: Pick<RouteJob, 'lat' | 'lng'>): [number, number] | null {
+  const lat = parseCoord(job.lat)
+  const lng = parseCoord(job.lng)
+  if (lat == null || lng == null) return null
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null
+  return [lng, lat]
+}
+
+function visibleRoutesForMap(routes: UserRoute[], focusUserId: number | null): UserRoute[] {
+  const effectiveFocus =
+    focusUserId ?? (routes.length === 1 ? routes[0]?.userId ?? null : null)
+  const focused =
+    effectiveFocus != null ? routes.filter(r => r.userId === effectiveFocus) : routes
+  // Stale focus id (employee with no jobs today) — still fit/show everyone
+  return focused.length > 0 ? focused : routes
+}
+
+function collectCoordsForRoutes(routes: UserRoute[], focusUserId: number | null): [number, number][] {
+  const visible = visibleRoutesForMap(routes, focusUserId)
+  const coords: [number, number][] = []
+  const seen = new Set<string>()
+  const add = (lng: number, lat: number) => {
+    const key = `${lng.toFixed(6)},${lat.toFixed(6)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    coords.push([lng, lat])
+  }
+  for (const route of visible) {
+    for (const job of route.jobs) {
+      const pair = jobLngLat(job)
+      if (pair) add(pair[0], pair[1])
+    }
+    const geom = route.routeGeometry?.coordinates
+    if (Array.isArray(geom)) {
+      for (const c of geom) {
+        if (!Array.isArray(c) || c.length < 2) continue
+        const lng = parseCoord(c[0])
+        const lat = parseCoord(c[1])
+        if (lng != null && lat != null) add(lng, lat)
+      }
+    }
+  }
+  return coords
+}
+
+function fitMapToRouteCoords(
+  map: mapboxgl.Map,
+  coords: [number, number][],
+  opts?: { animated?: boolean },
+) {
+  if (coords.length === 0) return
+  const animated = opts?.animated !== false
+  const camera = { pitch: 0 as const, bearing: 0 as const }
+  try {
+    if (coords.length === 1) {
+      if (animated) {
+        map.easeTo({ center: coords[0], zoom: 13, duration: 600, ...camera })
+      } else {
+        map.jumpTo({ center: coords[0], zoom: 13, ...camera })
+      }
+    } else {
+      const bounds = coords.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(coords[0], coords[0]),
+      )
+      if (animated) {
+        map.fitBounds(bounds, { padding: 80, duration: 600, maxZoom: 14, ...camera })
+      } else {
+        map.fitBounds(bounds, { padding: 80, maxZoom: 14, duration: 0, ...camera })
+      }
+    }
+  } catch (e) {
+    console.warn('[RouteMap] camera fit failed', e)
+  }
+}
+
 type PinSourceMeta = {
   pickActive: boolean
   pickOrder: SequentialPickId[]
@@ -148,6 +256,14 @@ export default function RouteMap({
   const mapClickHandlersRef = useRef<{ fn: (e: mapboxgl.MapMouseEvent) => void }[]>([])
   const onDrawAssignRef = useRef(onDrawAssign)
   onDrawAssignRef.current = onDrawAssign
+  /** Cancel stale moveend listener when draw() runs again before camera animation finishes. */
+  const pendingMoveEndEnforceRef = useRef<(() => void) | null>(null)
+  const hasFittedCameraRef = useRef(false)
+
+  const routesFitKey = useMemo(
+    () => collectCoordsForRoutes(routes, focusUserId).map(c => c.join(',')).join('|'),
+    [routes, focusUserId],
+  )
 
   // ── Init map once ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -158,13 +274,80 @@ export default function RouteMap({
     const map = new mapboxgl.Map({
       container: containerRef.current,
       style: 'mapbox://styles/mapbox/light-v11',
-      center: [10.2, 56.15],
-      zoom: 9,
+      // Neutral default until route coords load (old default was Denmark and stuck when fit skipped)
+      center: [-1.5, 52.5],
+      zoom: 6,
+      // Always top-down “on the road” map — never oblique / bird’s-eye (pitch)
+      pitch: 0,
+      bearing: 0,
+      minPitch: 0,
+      maxPitch: 0,
+      dragRotate: false,
+      touchPitch: false,
+      pitchWithRotate: false,
+      // v3 defaults can use globe at low zoom; mercator stays flat for route planning
+      projection: { name: 'mercator' },
     })
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
+    // Belt-and-suspenders: block any gesture that could reintroduce tilt or spin
+    map.dragRotate.disable()
+    map.touchPitch.disable()
+    map.touchZoomRotate.disableRotation()
+    const onStyleLoad = () => { enforceFlatRoadView(map) }
+    const onInitialLoad = () => { enforceFlatRoadView(map) }
+    // Style JSON and style updates can reset projection / pitch (common on first wide fitBounds)
+    map.once('load', onInitialLoad)
+    map.on('style.load', onStyleLoad)
     mapRef.current = map
-    return () => { map.remove(); mapRef.current = null }
+    return () => {
+      if (pendingMoveEndEnforceRef.current) {
+        try { map.off('moveend', pendingMoveEndEnforceRef.current) } catch { /* ignore */ }
+        pendingMoveEndEnforceRef.current = null
+      }
+      try { map.off('load', onInitialLoad) } catch { /* ignore */ }
+      try { map.off('style.load', onStyleLoad) } catch { /* ignore */ }
+      hasFittedCameraRef.current = false
+      map.remove()
+      mapRef.current = null
+    }
   }, [])
+
+  // Fit camera when coords appear (geocode, load day routes) — separate from layer draw().
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !routesFitKey) {
+      hasFittedCameraRef.current = false
+      return
+    }
+
+    const scheduleEnforceAfterMove = () => {
+      if (pendingMoveEndEnforceRef.current) {
+        try { map.off('moveend', pendingMoveEndEnforceRef.current) } catch { /* ignore */ }
+      }
+      const onMoveEnd = () => {
+        pendingMoveEndEnforceRef.current = null
+        enforceFlatRoadView(map)
+      }
+      pendingMoveEndEnforceRef.current = onMoveEnd
+      map.once('moveend', onMoveEnd)
+    }
+
+    const runFit = () => {
+      const coords = collectCoordsForRoutes(routes, focusUserId)
+      if (coords.length === 0) return
+      const animated = hasFittedCameraRef.current
+      fitMapToRouteCoords(map, coords, { animated })
+      hasFittedCameraRef.current = true
+      enforceFlatRoadView(map)
+      scheduleEnforceAfterMove()
+    }
+
+    if (map.isStyleLoaded()) runFit()
+    else {
+      map.once('load', runFit)
+      return () => { try { map.off('load', runFit) } catch { /* ignore */ } }
+    }
+  }, [routesFitKey, routes, focusUserId])
 
   // Pin data refresh on hover / pick order (layer swap handled in draw() + useLayoutEffect).
   useEffect(() => {
@@ -220,30 +403,26 @@ export default function RouteMap({
     pinSourceJobsRef.current = {}
     pinSourceMetaRef.current = {}
 
-    const visibleRoutes = focusUserId != null
-      ? routes.filter(r => r.userId === focusUserId)
-      : routes
+    const visibleRoutes = visibleRoutesForMap(routes, focusUserId)
 
     // Solo companies may show a route before dayFocusUserId is set — align draw mode
     // with the single visible route in that case.
     const drawTargetUserId =
       focusUserId ?? (visibleRoutes.length === 1 ? visibleRoutes[0].userId : null)
 
-    const allCoords: [number, number][] = []
-
     visibleRoutes.forEach(route => {
-      const pts = route.jobs.filter(j => j.lat && j.lng)
+      const pts = route.jobs.filter(j => jobLngLat(j) != null)
       if (pts.length === 0) return
 
       const activeJobs = pts.filter(j => !j.is_cancelled)
       const cancelledJobs = pts.filter(j => j.is_cancelled)
 
-      allCoords.push(...pts.map(j => [j.lng, j.lat] as [number, number]))
-
       const isRouteInDrawMode = !!drawMode && drawTargetUserId === route.userId
 
       // ── Route line — 3-layer glow (hidden during draw mode) ──────────────
-      const rawCoords: [number, number][] = activeJobs.map(j => [j.lng, j.lat])
+      const rawCoords: [number, number][] = activeJobs
+        .map(j => jobLngLat(j))
+        .filter((c): c is [number, number] => c != null)
       const lineCoords = route.routeGeometry?.coordinates ?? rawCoords
 
       if (!isRouteInDrawMode && activeJobs.length >= 2) {
@@ -565,11 +744,17 @@ export default function RouteMap({
       // ── Cancelled pins — grey ────────────────────────────────────────────
       if (cancelledJobs.length > 0) {
         const cId = `pins-cancelled-${route.userId}`
-        const cFeatures = cancelledJobs.map((job) => ({
-          type: 'Feature' as const,
-          properties: { jobId: job.id, label: job.label, address: job.address || '' },
-          geometry: { type: 'Point' as const, coordinates: [job.lng, job.lat] as [number, number] },
-        }))
+        const cFeatures = cancelledJobs
+          .map((job) => {
+            const ll = jobLngLat(job)
+            if (!ll) return null
+            return {
+              type: 'Feature' as const,
+              properties: { jobId: job.id, label: job.label, address: job.address || '' },
+              geometry: { type: 'Point' as const, coordinates: ll },
+            }
+          })
+          .filter((f): f is NonNullable<typeof f> => f != null)
         try {
           map.addSource(cId, { type: 'geojson', data: { type: 'FeatureCollection', features: cFeatures } })
           map.addLayer({ id: `${cId}-circle`, type: 'circle', source: cId, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 8, 14, 11], 'circle-color': '#CBD5E1', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff', 'circle-opacity': 0.7 } })
@@ -605,17 +790,6 @@ export default function RouteMap({
         } catch (e) { console.warn('cancelled pins add failed', e) }
       }
     })
-
-    // Fit bounds
-    if (allCoords.length === 1) {
-      map.easeTo({ center: allCoords[0], zoom: 13, duration: 600 })
-    } else if (allCoords.length >= 2) {
-      const bounds = allCoords.reduce(
-        (b, c) => b.extend(c),
-        new mapboxgl.LngLatBounds(allCoords[0], allCoords[0])
-      )
-      map.fitBounds(bounds, { padding: 80, duration: 600, maxZoom: 14 })
-    }
   }, [routes, focusUserId, onJobClick, onPinHover, highlightedJobId, drawMode, drawOrder, onDrawAssign])
 
   const drawRef = useRef(draw)

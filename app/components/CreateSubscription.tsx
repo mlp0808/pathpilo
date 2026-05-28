@@ -7,7 +7,11 @@ import {
   CheckCircleIcon, CalendarDaysIcon, ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
-import { formatMoney } from '../config/countryRules'
+import { formatMoney, getCountryRule } from '../config/countryRules'
+import {
+  ClientStandardNotesPicker,
+  type ClientStandardNoteRow,
+} from './ClientStandardNotesPicker'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
@@ -57,6 +61,7 @@ export default function CreateSubscription({
 }: CreateSubscriptionProps) {
   const { t } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
+  const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
 
   // ── tab ──────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<'details' | 'schedule' | 'forecast'>('details')
@@ -75,6 +80,9 @@ export default function CreateSubscription({
   const [jobTimeTo, setJobTimeTo] = useState('')
   const [jobNote, setJobNote] = useState('')
   const [showNoteInput, setShowNoteInput] = useState(false)
+  const [clientStandardNotes, setClientStandardNotes] = useState<ClientStandardNoteRow[]>([])
+  const [clientStandardNotesLoading, setClientStandardNotesLoading] = useState(false)
+  const [clientStandardNotesError, setClientStandardNotesError] = useState<string | null>(null)
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [editingDuration, setEditingDuration] = useState<number | null>(null)
   const [editingTitle, setEditingTitle] = useState<number | null>(null)
@@ -230,6 +238,59 @@ export default function CreateSubscription({
       return () => document.removeEventListener('mousedown', handler)
     }
   }, [showClientDropdown, showServiceDropdown, showUserDropdown])
+
+  useEffect(() => {
+    if (!showNoteInput || !selectedClient?.id || selectedClient.id < 1) {
+      setClientStandardNotes([])
+      setClientStandardNotesLoading(false)
+      setClientStandardNotesError(null)
+      return
+    }
+    let cancelled = false
+    setClientStandardNotesLoading(true)
+    setClientStandardNotesError(null)
+    const token = localStorage.getItem('token')
+    fetch(apiUrl(`/clients/${selectedClient.id}/secure-notes`), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (res.ok && Array.isArray(data.notes)) {
+          setClientStandardNotes(
+            data.notes.map((n: { id: number; note: string }) => ({
+              id: n.id,
+              note: typeof n.note === 'string' ? n.note : '',
+            })),
+          )
+        } else {
+          setClientStandardNotes([])
+          setClientStandardNotesError(
+            typeof data.error === 'string' ? data.error : 'Could not load client notes',
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClientStandardNotes([])
+          setClientStandardNotesError('Network error')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setClientStandardNotesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showNoteInput, selectedClient?.id])
+
+  const applyClientStandardNote = (text: string) => {
+    setJobNote((prev) => {
+      const p = prev.trim()
+      if (!p) return text
+      return `${p}\n\n${text}`
+    })
+  }
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -611,14 +672,17 @@ export default function CreateSubscription({
                           <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
                             <span className="text-xs text-gray-500">{t('app.subscription.price', 'Price:')}</span>
                             {editingPrice === service.id ? (
-                              <input autoFocus type="number" defaultValue={service.customPrice}
-                                onBlur={e => { updateService(service.id, 'customPrice', e.target.value); setEditingPrice(null) }}
-                                onKeyPress={e => e.key === 'Enter' && e.currentTarget.blur()}
-                                className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-16 focus:outline-none"
-                              />
+                              <>
+                                <input autoFocus type="number" defaultValue={service.customPrice}
+                                  onBlur={e => { updateService(service.id, 'customPrice', e.target.value); setEditingPrice(null) }}
+                                  onKeyPress={e => e.key === 'Enter' && e.currentTarget.blur()}
+                                  className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-16 focus:outline-none"
+                                />
+                                <span className="text-xs text-gray-500">{companyCurrency}</span>
+                              </>
                             ) : (
                               <button onClick={() => setEditingPrice(service.id)} className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline decoration-1 underline-offset-2">
-                                {service.customPrice}kr.
+                                {formatMoney(parseFloat(service.customPrice) || 0, companyCountryCode)}
                               </button>
                             )}
                           </div>
@@ -950,11 +1014,23 @@ export default function CreateSubscription({
         confirmLabel={t('app.subscription.saveNote', 'Save note')}
         enableNotification={false}
       >
-        <div>
-          <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.common.note', 'Note')}</label>
-          <textarea value={jobNote} onChange={e => setJobNote(e.target.value)}
-            placeholder={t('app.subscription.notePlaceholder', 'Add a note for this subscription…')} rows={5}
-            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none bg-white shadow-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.common.note', 'Note')}</label>
+            <textarea value={jobNote} onChange={e => setJobNote(e.target.value)}
+              placeholder={t('app.subscription.notePlaceholder', 'Add a note for this subscription…')} rows={5}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none bg-white shadow-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500" />
+          </div>
+          <ClientStandardNotesPicker
+            clientId={selectedClient?.id}
+            loading={clientStandardNotesLoading}
+            error={clientStandardNotesError}
+            notes={clientStandardNotes}
+            onUse={applyClientStandardNote}
+            t={t}
+            addLabelKey="app.subscription.useClientStandardNote"
+            addLabelFallback="Add to subscription note"
+          />
         </div>
       </ConfirmModal>
     </>

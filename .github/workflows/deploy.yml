@@ -138,6 +138,7 @@ jobs:
             "PORT=${{ vars.PORT }}" \
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
+            "SECURE_NOTES_MASTER_KEY=${{ secrets.SECURE_NOTES_MASTER_KEY }}" \
             "NEXT_PUBLIC_API_URL=" > .env
 
           printf '%s\n' \
@@ -152,7 +153,8 @@ jobs:
             "FRONTEND_URL=${{ vars.APP_URL }}" \
             "API_PORT=${{ vars.API_PORT }}" \
             "NODE_ENV=production" \
-            "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" > api-server/.env
+            "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
+            "SECURE_NOTES_MASTER_KEY=${{ secrets.SECURE_NOTES_MASTER_KEY }}" > api-server/.env
 
           echo "==> Installing production dependencies..."
           npm ci --omit=dev

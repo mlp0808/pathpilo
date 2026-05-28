@@ -11,7 +11,6 @@ import {
   stripLocalePrefix,
   withAppLanguageParam,
   withLocalePath,
-  type MarketingLocale,
 } from '../lib/i18n'
 import { pushCtaClick } from '../lib/dataLayer'
 
@@ -24,10 +23,10 @@ export default function Header() {
   const locale = getLocaleFromPathname(pathname || '/')
   const basePath = stripLocalePrefix(pathname || '/')
   const da = locale === 'da'
-  const switchTo = (next: MarketingLocale) => withLocalePath(next, basePath)
   const navHref = (href: string) => withLocalePath(locale, href)
   const loginHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/login')
   const registerHref = withAppLanguageParam(locale, 'https://app.pathpilo.com/register')
+  const helpHref = 'https://help.pathpilo.com/'
   const featureItems = [
     {
       title: da ? 'Routeplanning' : 'Route Planning',
@@ -164,10 +163,16 @@ export default function Header() {
             >
               {locale === 'da' ? 'Kontakt' : 'Contact'}
             </Link>
-            <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white/80 px-1 py-1">
-              <Link href={switchTo('en')} className={`px-2 py-1 text-xs font-semibold rounded ${locale === 'en' ? 'bg-primary-500 text-white' : 'text-gray-600 hover:text-primary-800'}`}>EN</Link>
-              <Link href={switchTo('da')} className={`px-2 py-1 text-xs font-semibold rounded ${locale === 'da' ? 'bg-primary-500 text-white' : 'text-gray-600 hover:text-primary-800'}`}>DA</Link>
-            </div>
+            <a
+              href={helpHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`font-medium transition-colors ${
+                isDarkTop ? 'text-white/85 hover:text-white' : 'text-gray-600 hover:text-primary-800'
+              }`}
+            >
+              Help
+            </a>
             <Link
               href={loginHref}
               className={`font-medium transition-colors ${
@@ -241,6 +246,16 @@ export default function Header() {
             >
               {locale === 'da' ? 'Kontakt' : 'Contact'}
             </Link>
+            <a
+              href={helpHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`block py-2 font-medium transition-colors ${
+                isDarkTop ? 'text-white/85 hover:text-white' : 'text-gray-600 hover:text-primary-800'
+              }`}
+            >
+              Help
+            </a>
             <button
               type="button"
               onClick={() => setMobileFeaturesOpen((v) => !v)}
@@ -268,10 +283,6 @@ export default function Header() {
                 ))}
               </div>
             )}
-            <div className="flex items-center gap-2 pt-1">
-              <Link href={switchTo('en')} className={`px-2 py-1 text-xs font-semibold rounded border ${locale === 'en' ? 'bg-primary-500 text-white border-primary-500' : 'text-gray-600 border-gray-300'}`}>EN</Link>
-              <Link href={switchTo('da')} className={`px-2 py-1 text-xs font-semibold rounded border ${locale === 'da' ? 'bg-primary-500 text-white border-primary-500' : 'text-gray-600 border-gray-300'}`}>DA</Link>
-            </div>
             <Link
               href={loginHref}
               className={`block py-2 font-medium transition-colors ${

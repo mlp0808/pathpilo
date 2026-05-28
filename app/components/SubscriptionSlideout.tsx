@@ -3,7 +3,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
-import { formatMoney } from '../config/countryRules'
+import { formatMoney, getCountryRule } from '../config/countryRules'
+import {
+  ClientStandardNotesPicker,
+  type ClientStandardNoteRow,
+} from './ClientStandardNotesPicker'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import TimePicker from './TimePicker'
 import { SchedulePanel, ForecastPanel } from './SubscriptionPanels'
@@ -57,6 +61,7 @@ export default function SubscriptionSlideout({
 }: SubscriptionSlideoutProps) {
   const { t } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
+  const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
 
   const [activeTab, setActiveTab] = useState<'details' | 'schedule' | 'forecast'>('details')
   const [services, setServices] = useState<Service[]>([])
@@ -85,6 +90,9 @@ export default function SubscriptionSlideout({
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [editingDuration, setEditingDuration] = useState<number | null>(null)
+  const [clientStandardNotes, setClientStandardNotes] = useState<ClientStandardNoteRow[]>([])
+  const [clientStandardNotesLoading, setClientStandardNotesLoading] = useState(false)
+  const [clientStandardNotesError, setClientStandardNotesError] = useState<string | null>(null)
 
   // ── computed values ──────────────────────────────────────────────────────────
   const pricePerVisit = useMemo(
@@ -197,6 +205,59 @@ export default function SubscriptionSlideout({
       }
     }
   }, [isOpen, subscription])
+
+  useEffect(() => {
+    if (!showNoteInput || !clientId || clientId < 1) {
+      setClientStandardNotes([])
+      setClientStandardNotesLoading(false)
+      setClientStandardNotesError(null)
+      return
+    }
+    let cancelled = false
+    setClientStandardNotesLoading(true)
+    setClientStandardNotesError(null)
+    const token = localStorage.getItem('token')
+    fetch(apiUrl(`/clients/${clientId}/secure-notes`), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (res.ok && Array.isArray(data.notes)) {
+          setClientStandardNotes(
+            data.notes.map((n: { id: number; note: string }) => ({
+              id: n.id,
+              note: typeof n.note === 'string' ? n.note : '',
+            })),
+          )
+        } else {
+          setClientStandardNotes([])
+          setClientStandardNotesError(
+            typeof data.error === 'string' ? data.error : 'Could not load client notes',
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClientStandardNotes([])
+          setClientStandardNotesError('Network error')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setClientStandardNotesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showNoteInput, clientId])
+
+  const applyClientStandardNote = (text: string) => {
+    setNote((prev) => {
+      const p = prev.trim()
+      if (!p) return text
+      return `${p}\n\n${text}`
+    })
+  }
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -460,15 +521,18 @@ export default function SubscriptionSlideout({
                       <div className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-lg border border-gray-200/50">
                         <span className="text-xs text-gray-500">Price:</span>
                         {editingPrice === service.id ? (
-                          <input autoFocus type="number" defaultValue={service.customPrice}
-                            onBlur={e => finishEditingPrice(service.id, e.target.value)}
-                            onKeyPress={e => e.key === 'Enter' && finishEditingPrice(service.id, e.currentTarget.value)}
-                            className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-16 focus:outline-none"
-                          />
+                          <>
+                            <input autoFocus type="number" defaultValue={service.customPrice}
+                              onBlur={e => finishEditingPrice(service.id, e.target.value)}
+                              onKeyPress={e => e.key === 'Enter' && finishEditingPrice(service.id, e.currentTarget.value)}
+                              className="text-xs text-accent-600 bg-white border border-accent-400 rounded px-1.5 py-0.5 w-16 focus:outline-none"
+                            />
+                            <span className="text-xs text-gray-500">{companyCurrency}</span>
+                          </>
                         ) : (
                           <button onClick={() => setEditingPrice(service.id)}
                             className="text-xs font-semibold text-accent-600 hover:text-accent-700 underline decoration-1 underline-offset-2">
-                            {service.customPrice}kr.
+                            {formatMoney(parseFloat(service.customPrice) || 0, companyCountryCode)}
                           </button>
                         )}
                       </div>
@@ -588,6 +652,16 @@ export default function SubscriptionSlideout({
                     placeholder={t('app.subscription.notePlaceholder')}
                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm resize-none bg-white shadow-sm"
                     rows={3}
+                  />
+                  <ClientStandardNotesPicker
+                    clientId={clientId}
+                    loading={clientStandardNotesLoading}
+                    error={clientStandardNotesError}
+                    notes={clientStandardNotes}
+                    onUse={applyClientStandardNote}
+                    t={t}
+                    addLabelKey="app.subscription.useClientStandardNote"
+                    addLabelFallback="Add to subscription note"
                   />
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] text-gray-400">

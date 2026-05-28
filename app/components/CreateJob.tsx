@@ -4,12 +4,16 @@ import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
-import { formatMoney } from '../config/countryRules'
+import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
 import TimePicker from './TimePicker'
 import { useAppI18n } from './I18nProvider'
+import {
+  ClientStandardNotesPicker,
+  type ClientStandardNoteRow,
+} from './ClientStandardNotesPicker'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -278,64 +282,6 @@ function CalendarView({ selectedDate, onDateSelect, selectedUserId, selectedServ
   )
 }
 
-type ClientStandardNoteRow = { id: number; note: string }
-
-function ClientStandardNotesPicker({
-  clientId,
-  loading,
-  error,
-  notes,
-  onUse,
-  t,
-}: {
-  clientId: number | null | undefined
-  loading: boolean
-  error: string | null
-  notes: ClientStandardNoteRow[]
-  onUse: (text: string) => void
-  t: (key: string, fallback?: string) => string
-}) {
-  if (clientId == null || clientId < 1) return null
-  return (
-    <div className="pt-3 mt-3 border-t border-gray-100">
-      <div className="text-xs font-semibold text-primary-700 mb-2">
-        {t('app.createJob.clientStandardNotesHeading', 'From client standard notes')}
-      </div>
-      <p className="text-[11px] text-gray-500 mb-2">
-        {t(
-          'app.createJob.clientStandardNotesHint',
-          'Encrypted notes from the client profile. Tap one to add it to this job note.',
-        )}
-      </p>
-      {loading ? (
-        <div className="text-xs text-gray-400 py-2">{t('app.createJob.clientStandardNotesLoading', 'Loading…')}</div>
-      ) : error ? (
-        <div className="text-xs text-red-600 py-1">{error}</div>
-      ) : notes.length === 0 ? (
-        <div className="text-xs text-gray-400 py-1">
-          {t('app.createJob.noClientStandardNotes', 'No standard notes saved for this client yet.')}
-        </div>
-      ) : (
-        <div className="max-h-44 overflow-y-auto space-y-2 pr-0.5">
-          {notes.map((row) => (
-            <button
-              key={row.id}
-              type="button"
-              onClick={() => onUse(row.note)}
-              className="w-full text-left px-3 py-2.5 rounded-xl border border-gray-200 bg-white hover:border-accent-300 hover:bg-accent-50/40 text-sm text-gray-800 transition-colors shadow-sm"
-            >
-              <span className="line-clamp-3 whitespace-pre-wrap block">{row.note}</span>
-              <span className="mt-1.5 block text-xs font-semibold text-accent-600">
-                {t('app.createJob.useClientStandardNote', 'Add to job note')}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 interface Service {
   id: number
   title: string
@@ -410,6 +356,7 @@ interface CreateJobProps {
 export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false }: CreateJobProps) {
   const { t, locale } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
+  const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
   const [services, setServices] = useState<Service[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -1037,7 +984,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="text-sm font-semibold text-primary-800">{service.title}</div>
                             <div className="flex items-center gap-2">
                               <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500">{t('app.createJob.currencyUnit', 'kr.')}</span>
+                              <span className="text-xs text-gray-500 tabular-nums">{companyCurrency}</span>
                               <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
                               <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
                               <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
@@ -1869,17 +1816,20 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                 <div className="flex items-center space-x-1.5">
                             <span className="text-xs text-gray-500">Price:</span>
                             {editingPrice === service.id ? (
-                              <input
-                                type="number"
-                                defaultValue={service.customPrice}
-                                      onBlur={(e) => { updateService(service.id, 'customPrice', e.target.value); setEditingPrice(null) }}
-                                      onKeyPress={(e) => e.key === 'Enter' && (e.currentTarget.blur())}
-                                      className="text-xs text-blue-600 bg-white border border-blue-300 rounded px-1.5 py-0.5 w-16"
-                                autoFocus
-                              />
+                              <>
+                                <input
+                                  type="number"
+                                  defaultValue={service.customPrice}
+                                  onBlur={(e) => { updateService(service.id, 'customPrice', e.target.value); setEditingPrice(null) }}
+                                  onKeyPress={(e) => e.key === 'Enter' && (e.currentTarget.blur())}
+                                  className="text-xs text-blue-600 bg-white border border-blue-300 rounded px-1.5 py-0.5 w-16"
+                                  autoFocus
+                                />
+                                <span className="text-xs text-gray-500">{companyCurrency}</span>
+                              </>
                             ) : (
-                                    <button onClick={() => setEditingPrice(service.id)} className="text-xs text-blue-600 underline cursor-pointer bg-transparent border-none hover:text-blue-700 transition-colors">
-                                {service.customPrice}kr.
+                              <button onClick={() => setEditingPrice(service.id)} className="text-xs text-blue-600 underline cursor-pointer bg-transparent border-none hover:text-blue-700 transition-colors">
+                                {formatMoney(parseFloat(String(service.customPrice)) || 0, companyCountryCode)}
                               </button>
                             )}
                           </div>
