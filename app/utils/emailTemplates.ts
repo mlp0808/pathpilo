@@ -1,11 +1,11 @@
 import { apiUrl } from './api'
-import { getDefaultTemplate, getCompanyCountryCodeSync } from './emailTemplateDefaults'
+import { getDefaultTemplate, getCompanyCountryCodeSync, getCompanyNameSync } from './emailTemplateDefaults'
 
 interface EmailTemplate {
   subject: string
   message: string
 }
-type TemplateType = 'change_date' | 'change_time' | 'change_employee' | 'cancel_job' | 'send_invoice'
+type TemplateType = 'change_date' | 'change_time' | 'change_employee' | 'cancel_job' | 'send_invoice' | 'on_the_way'
 
 interface TemplateData {
   clientName?: string
@@ -34,6 +34,10 @@ interface TemplateData {
   jobServices?: string
   jobTotalPrice?: string
   jobTimeRange?: string
+  selectedMinutes?: string
+  currentDate?: string
+  currentTime?: string
+  clientLocation?: string
 }
 
 // Cache for templates
@@ -149,16 +153,44 @@ function replacePlaceholders(text: string, data: TemplateData): string {
   else if (tf || tt) jobTimeDetail = `• Time: ${tf || tt}`
   const jobTimeDetailBlock = jobTimeDetail ? `${jobTimeDetail}\n` : ''
 
+  // Smart date+time tags — includes time only when available
+  const buildDateTime = (date: string | undefined, from: string | undefined, to: string | undefined): string => {
+    if (!date) return ''
+    const f = (from || '').toString().trim()
+    const t = (to || '').toString().trim()
+    if (f && t) return `${date} at ${f} – ${t}`
+    if (f) return `${date} at ${f}`
+    return date
+  }
+  const jobDateTime    = buildDateTime(data.jobDate,    data.jobTimeFrom,    data.jobTimeTo)
+  const jobOldDateTime = buildDateTime(data.jobOldDate, data.jobOldTimeFrom, data.jobOldTimeTo)
+  const jobNewDateTime = buildDateTime(data.jobNewDate, data.jobNewTimeFrom, data.jobNewTimeTo)
+
+  // Smart time-only tags — shows range "09:00 – 11:00" when both ends are set, otherwise just the start
+  const buildTimeRange = (explicit: string | undefined, from: string | undefined, to: string | undefined): string => {
+    if (explicit && explicit.trim()) return explicit.trim()
+    const f = (from || '').toString().trim()
+    const t = (to || '').toString().trim()
+    if (f && t && f !== t) return `${f} – ${t}`
+    return f || t || ''
+  }
+  const jobTimeSmart    = buildTimeRange(data.jobTime,    data.jobTimeFrom,    data.jobTimeTo)
+  const jobOldTimeSmart = buildTimeRange(data.jobOldTime, data.jobOldTimeFrom, data.jobOldTimeTo)
+  const jobNewTimeSmart = buildTimeRange(data.jobNewTime, data.jobNewTimeFrom, data.jobNewTimeTo)
+
   return text
     .replace(/{Client name}/g, clientFull)
     .replace(/{Client first name}/g, greetFirst)
     .replace(/{Client last name}/g, clientLast)
+    .replace(/{Job date\/time}/g, jobDateTime)
+    .replace(/{Job old date\/time}/g, jobOldDateTime)
+    .replace(/{Job new date\/time}/g, jobNewDateTime)
     .replace(/{Job date}/g, data.jobDate || '')
     .replace(/{Job old date}/g, data.jobOldDate || '')
     .replace(/{Job new date}/g, data.jobNewDate || '')
-    .replace(/{Job time}/g, data.jobTime || '')
-    .replace(/{Job old time}/g, data.jobOldTime || '')
-    .replace(/{Job new time}/g, data.jobNewTime || '')
+    .replace(/{Job time}/g, jobTimeSmart)
+    .replace(/{Job old time}/g, jobOldTimeSmart)
+    .replace(/{Job new time}/g, jobNewTimeSmart)
     .replace(/{Job time from}/g, data.jobTimeFrom || '')
     .replace(/{Job time to}/g, data.jobTimeTo || '')
     .replace(/{Job time range}/g, data.jobTimeRange || '')
@@ -172,14 +204,19 @@ function replacePlaceholders(text: string, data: TemplateData): string {
     .replace(/{Assigned user}/g, data.employeeName || '') // Same as Employee name
     .replace(/{User name}/g, data.userName || 'We')
     .replace(/{Current user}/g, data.userName || 'We') // Same as User name
-    .replace(/{Company name}/g, data.companyName || '')
+    .replace(/{Company name}/g, data.companyName || getCompanyNameSync())
     .replace(/{Company owner}/g, data.companyOwner || '')
+    .replace(/{Owner name}/g, data.companyOwner || data.userName || '')
     .replace(/{Job address}/g, data.jobAddress || '')
     .replace(/{Job city}/g, data.jobCity || '')
     .replace(/{Job services}/g, data.jobServices || '')
     .replace(/{Job total price}/g, data.jobTotalPrice != null && data.jobTotalPrice !== '' ? data.jobTotalPrice : '—')
     .replace(/\[Insert total price\]/gi, data.jobTotalPrice != null && data.jobTotalPrice !== '' ? data.jobTotalPrice : '—')
     .replace(/{Job time detail}/g, jobTimeDetailBlock)
+    .replace(/{Selected minutes}/g, data.selectedMinutes != null ? String(data.selectedMinutes) : '')
+    .replace(/{Current date}/g, data.currentDate || '')
+    .replace(/{Current time}/g, data.currentTime || '')
+    .replace(/{Client location}/g, data.clientLocation || data.jobAddress || '')
 }
 
 // Clear cache (useful after saving templates)

@@ -381,6 +381,12 @@ const ClientsTabIcon = ({ color }: { color: string }) => (
   </Svg>
 );
 
+const MenuTabIcon = ({ color }: { color: string }) => (
+  <Svg width="22" height="18" viewBox="0 0 22 18">
+    <Path d="M1 1h20M1 9h20M1 17h20" stroke={color} strokeWidth="2" strokeLinecap="round" />
+  </Svg>
+);
+
 // Job detail icons
 const MailIcon = ({ stroke = '#BFD1C5' }: { stroke?: string }) => (
   <Svg width="14.921" height="11.165" viewBox="0 0 14.921 11.165">
@@ -4119,6 +4125,8 @@ function CalendarTab({ route }: any) {
   const [approvedBadgeByDate, setApprovedBadgeByDate] = useState<{ [key: string]: string }>({});
   const [offWeekdays, setOffWeekdays] = useState<Set<number>>(new Set([0, 6]));
   const [quickAddDate, setQuickAddDate] = useState<string | null>(null);
+  const [quickAddPos, setQuickAddPos] = useState<{ x: number; y: number } | null>(null);
+  const screenHeight = Dimensions.get('window').height;
 
   // Month banner images mapping (months are 0-indexed in JavaScript)
   const monthBanners: { [key: number]: any } = {
@@ -4677,9 +4685,12 @@ function CalendarTab({ route }: any) {
                       navigation.navigate('DayView', { date: dateString, company, user });
                     }
                   }}
-                  onLongPress={() => {
+                  onLongPress={(e) => {
                     if (navigation && company && user) {
                       setQuickAddDate(dateString);
+                      // Anchor to the cell's bottom edge using locationY (finger pos within cell)
+                      const cellBottom = e.nativeEvent.pageY - e.nativeEvent.locationY + 88;
+                      setQuickAddPos({ x: e.nativeEvent.pageX, y: cellBottom });
                     }
                   }}
                   delayLongPress={380}
@@ -4762,59 +4773,54 @@ function CalendarTab({ route }: any) {
         visible={!!quickAddDate}
         transparent
         animationType="fade"
-        onRequestClose={() => setQuickAddDate(null)}
+        onRequestClose={() => { setQuickAddDate(null); setQuickAddPos(null); }}
       >
         <Pressable
-          style={styles.calendarQuickAddOverlay}
-          onPress={() => setQuickAddDate(null)}
+          style={{ flex: 1 }}
+          onPress={() => { setQuickAddDate(null); setQuickAddPos(null); }}
         >
-          <Pressable style={styles.calendarQuickAddCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.calendarQuickAddTitle}>
-              {quickAddDate ? padAndroidText(quickAddDate) : ''}
-            </Text>
-            <TouchableOpacity
-              style={styles.calendarQuickAddRow}
-              activeOpacity={0.85}
-              onPress={() => {
-                const d = quickAddDate;
-                setQuickAddDate(null);
-                if (!d || !company || !user) return;
-                (navigation as any).navigate?.('JobCompose', {
-                  company,
-                  user,
-                  scheduledDate: d,
-                });
-              }}
+          {quickAddPos && (
+            <Pressable
+              style={[
+                styles.calendarQuickAddCard,
+                {
+                  position: 'absolute',
+                  top: Math.max(50, Math.min(quickAddPos.y, screenHeight - 160)),
+                  ...(quickAddPos.x > screenWidth / 2
+                    ? { right: screenWidth - quickAddPos.x + 10 }
+                    : { left: quickAddPos.x + 10 }),
+                },
+              ]}
+              onPress={(e) => e.stopPropagation()}
             >
-              <RNText style={styles.calendarQuickAddRowText}>{padAndroidText('Add job')}</RNText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.calendarQuickAddRow}
-              activeOpacity={0.85}
-              onPress={() => {
-                const d = quickAddDate;
-                setQuickAddDate(null);
-                if (!d || !company || !user) return;
-                (navigation as any).navigate?.('DayView', {
-                  date: d,
-                  company,
-                  user,
-                  openAppointmentComposer: true,
-                });
-              }}
-            >
-              <RNText style={styles.calendarQuickAddRowText}>
-                {padAndroidText('Add appointment')}
-              </RNText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.calendarQuickAddCancel}
-              onPress={() => setQuickAddDate(null)}
-              activeOpacity={0.8}
-            >
-              <RNText style={styles.calendarQuickAddCancelText}>{padAndroidText('Cancel')}</RNText>
-            </TouchableOpacity>
-          </Pressable>
+              <TouchableOpacity
+                style={styles.calendarQuickAddRow}
+                activeOpacity={0.85}
+                onPress={() => {
+                  const d = quickAddDate;
+                  setQuickAddDate(null); setQuickAddPos(null);
+                  if (!d || !company || !user) return;
+                  (navigation as any).navigate?.('JobCompose', { company, user, scheduledDate: d });
+                }}
+              >
+                <IconDocumentText color="#0F3C2A" size={18} />
+                <RNText style={[styles.calendarQuickAddRowText, { marginLeft: 10 }]}>{padAndroidText('Add job')}</RNText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.calendarQuickAddRow}
+                activeOpacity={0.85}
+                onPress={() => {
+                  const d = quickAddDate;
+                  setQuickAddDate(null); setQuickAddPos(null);
+                  if (!d || !company || !user) return;
+                  (navigation as any).navigate?.('DayView', { date: d, company, user, openAppointmentComposer: true });
+                }}
+              >
+                <IconCalendarDays color="#0F3C2A" size={18} />
+                <RNText style={[styles.calendarQuickAddRowText, { marginLeft: 10 }]}>{padAndroidText('Add event')}</RNText>
+              </TouchableOpacity>
+            </Pressable>
+          )}
         </Pressable>
       </Modal>
       
@@ -5369,6 +5375,7 @@ function TodayTab({ route }: any) {
 
   const closePopup = () => {
     closeSheet();
+    setTimeout(() => fetchTodayJobs(), 280);
   };
 
   const handleJobPress = (job: Job) => {
@@ -5751,13 +5758,20 @@ function TodayTab({ route }: any) {
                   onCopy={handleCopy}
                   isExpanded={isExpanded}
                   onJobUpdate={(updatedJob) => {
-                    setSelectedJob(updatedJob);
-                    setJobs(prevJobs =>
-                      prevJobs.map(j => j.id === updatedJob.id ? updatedJob : j)
-                    );
+                    const movedDate = appointmentDateOnly(updatedJob.scheduled_date);
+                    if (movedDate && movedDate !== todayString) {
+                      setJobs(prev => prev.filter(j => j.id !== updatedJob.id));
+                      closePopup();
+                    } else {
+                      setSelectedJob(updatedJob);
+                      setJobs(prevJobs =>
+                        prevJobs.map(j => j.id === updatedJob.id ? updatedJob : j)
+                      );
+                    }
                   }}
                   onJobDeleted={(jobId) => {
                     setJobs((prev) => prev.filter((j) => j.id !== jobId));
+                    closePopup();
                   }}
                 />
               </View>
@@ -5773,6 +5787,8 @@ function TodayTab({ route }: any) {
             insetsBottom={insets.bottom}
             onPress={handleCompleteJob}
             isBusy={isCompletingJob}
+            company={company}
+            user={user}
           />
 
           {/* Next-job handoff sheet - slides up over the job sheet
@@ -6170,6 +6186,7 @@ function JobAssigneePickerSheet({
 }
 
 function JobDetailSlideout({ job, date, company, user, onClose, onCopy, isExpanded, onJobUpdate, onJobDeleted, scrollViewRef, scrollOffsetYRef }: { job: Job & { timeline?: Array<{ id?: number; description?: string; message?: string; created_at: string; user_id?: number; action?: string }> }; date: string; company?: Company | any; user?: any; onClose: () => void; onCopy: (text: string) => void; isExpanded?: boolean; onJobUpdate?: (updatedJob: Job) => void; onJobDeleted?: (jobId: number) => void; scrollViewRef?: React.RefObject<ScrollView | null>; scrollOffsetYRef?: React.MutableRefObject<number> }) {
+  const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const billingCurrency = businessCurrencyFromCompany(company);
@@ -6777,7 +6794,19 @@ function JobDetailSlideout({ job, date, company, user, onClose, onCopy, isExpand
             {padAndroidText(clientType)}
           </Text>
 
-          <TouchableOpacity onPress={() => handleCopy(clientName)} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={() => {
+              if (job.client_id && company && user) {
+                navigation.navigate('ClientDetail', {
+                  clientId: job.client_id,
+                  company,
+                  user,
+                });
+              }
+            }}
+            onLongPress={() => handleCopy(clientName)}
+            activeOpacity={0.7}
+          >
             <Text style={styles.jobDetailClientNameHero}>{clientName || 'Unknown Client'}</Text>
           </TouchableOpacity>
 
@@ -6829,219 +6858,132 @@ function JobDetailSlideout({ job, date, company, user, onClose, onCopy, isExpand
       {/* White content area. Everything here is "scrolled" by
           dragging the whole panel up. */}
       <View style={styles.jobDetailContent}>
-        {/* Time / date row - compact side-by-side chips. Admins can tap
-            either chip to open the matching picker. Non-admin members
-            still see the same values, just non-interactive. */}
+        {/* Time · date · assignee — single compact row */}
         <View style={styles.scheduleRow}>
           <TouchableOpacity
             style={[
               styles.scheduleChip,
+              styles.scheduleChipCompact,
               canEditJob && styles.scheduleChipEditable,
             ]}
             activeOpacity={canEditJob ? 0.7 : 1}
             disabled={!canEditJob || savingField === 'time'}
             onPress={() => setTimePickerOpen(true)}
           >
-            <View style={styles.scheduleChipIcon}>
+            <View style={styles.scheduleChipIconCompact}>
               <TimeIcon />
             </View>
             <View style={styles.scheduleChipText}>
               <Text style={styles.scheduleChipLabel}>Time</Text>
               <Text
-                style={styles.scheduleChipValue}
-                numberOfLines={2}
-                adjustsFontSizeToFit
-                minimumFontScale={0.85}
+                style={styles.scheduleChipValueCompact}
+                numberOfLines={1}
+                ellipsizeMode="tail"
               >
-                {savingField === 'time' ? 'Saving…' : formattedTime}
+                {savingField === 'time' ? '…' : formattedTime || '—'}
               </Text>
             </View>
-            {canEditJob ? (
-              <Text style={styles.scheduleChipChevron}>{'›'}</Text>
-            ) : null}
           </TouchableOpacity>
           <TouchableOpacity
             style={[
               styles.scheduleChip,
+              styles.scheduleChipCompact,
               canEditJob && styles.scheduleChipEditable,
             ]}
             activeOpacity={canEditJob ? 0.7 : 1}
             disabled={!canEditJob || savingField === 'date'}
             onPress={() => setDatePickerOpen(true)}
           >
-            <View style={styles.scheduleChipIcon}>
+            <View style={styles.scheduleChipIconCompact}>
               <DateIcon />
             </View>
             <View style={styles.scheduleChipText}>
               <Text style={styles.scheduleChipLabel}>Date</Text>
               <Text
-                style={styles.scheduleChipValue}
+                style={styles.scheduleChipValueCompact}
                 numberOfLines={1}
                 ellipsizeMode="tail"
               >
-                {savingField === 'date' ? 'Saving…' : formattedDate}
+                {savingField === 'date' ? '…' : formattedDate}
               </Text>
             </View>
-            {canEditJob ? (
-              <Text style={styles.scheduleChipChevron}>{'›'}</Text>
-            ) : null}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.scheduleChip,
+              styles.scheduleChipCompact,
+              canEditJob && styles.scheduleChipEditable,
+            ]}
+            activeOpacity={canEditJob ? 0.7 : 1}
+            disabled={!canEditJob || savingField === 'assignee'}
+            onPress={() => setAssigneePickerOpen(true)}
+          >
+            <View style={styles.scheduleChipIconCompact}>
+              <Text style={styles.assigneeChipIconGlyph}>👤</Text>
+            </View>
+            <View style={[styles.scheduleChipText, flexRowTextSlot]}>
+              <Text style={styles.scheduleChipLabel}>Staff</Text>
+              <Text
+                style={[styles.scheduleChipValueCompact, flexRowText]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {savingField === 'assignee' ? '…' : assignedUserLabel}
+              </Text>
+            </View>
           </TouchableOpacity>
         </View>
 
-        {/* Assigned to. Always visible so the team knows who's on the
-            job. Admins can tap to reassign; everyone else sees a
-            read-only chip. */}
-        <TouchableOpacity
+        {/* Job note — matches web: dashed border, light grey / white fill */}
+        <View
           style={[
-            styles.assigneeChip,
-            canEditJob && styles.scheduleChipEditable,
+            styles.jobNoteField,
+            jobNoteText || editingJobNote
+              ? styles.jobNoteFieldFilled
+              : styles.jobNoteFieldEmpty,
           ]}
-          activeOpacity={canEditJob ? 0.7 : 1}
-          disabled={!canEditJob || savingField === 'assignee'}
-          onPress={() => setAssigneePickerOpen(true)}
         >
-          <View style={styles.scheduleChipIcon}>
-            <Text style={styles.assigneeChipIconGlyph}>👤</Text>
-          </View>
-          <View style={[styles.scheduleChipText, flexRowTextSlot]}>
-            <Text style={styles.scheduleChipLabel}>Assigned to</Text>
-            <Text
-              style={[styles.scheduleChipValue, flexRowText]}
-              numberOfLines={2}
-            >
-              {savingField === 'assignee' ? 'Saving…' : assignedUserLabel}
-            </Text>
-          </View>
-          {canEditJob ? (
-            <Text style={styles.scheduleChipChevron}>{'›'}</Text>
-          ) : null}
-        </TouchableOpacity>
-
-        {/* Job-level note (plain text on the job), not client secure notes.
-            Admins can tap "Edit" to inline-edit; members see the read-only
-            card with long-press to copy. When the note is empty we show an
-            "Add note" CTA for admins so the field is discoverable. */}
-        {editingJobNote ? (
-          <View style={styles.secureNoteCard}>
-            <View style={styles.secureNoteHeader}>
-              <View style={styles.secureNoteIcon}>
-                <Text style={styles.secureNoteIconText}>📝</Text>
-              </View>
-              <View style={flexRowTextSlot}>
-                <Text style={[styles.secureNoteTitle, flexRowText]}>
-                  Job note
-                </Text>
-                <Text
-                  style={[styles.secureNoteSubtitle, flexRowText]}
-                  numberOfLines={2}
-                >
-                  Visible to everyone on this job
-                </Text>
-              </View>
-            </View>
-            <TextInput
-              value={jobNoteDraft}
-              onChangeText={setJobNoteDraft}
-              placeholder="Add a note for this job"
-              placeholderTextColor="#94A3B8"
-              multiline
-              textAlignVertical="top"
-              style={[
-                styles.secureNoteInput,
-                { marginTop: JOB_DETAIL_SECTION_GAP },
-              ]}
-            />
-            <View style={styles.secureNoteActions}>
+          <TextInput
+            value={editingJobNote ? jobNoteDraft : jobNoteText}
+            onChangeText={(t) => {
+              setJobNoteDraft(t);
+              if (!editingJobNote) setEditingJobNote(true);
+            }}
+            onFocus={() => {
+              if (!editingJobNote) {
+                setJobNoteDraft(jobNoteText);
+                setEditingJobNote(true);
+              }
+            }}
+            placeholder="Add a note for this job…"
+            placeholderTextColor="#64748B"
+            multiline
+            textAlignVertical="top"
+            editable={canEditJob}
+            style={styles.jobNoteFieldInput}
+          />
+          {editingJobNote && (
+            <View style={styles.jobNoteFieldActions}>
               <TouchableOpacity
                 onPress={() => {
                   setEditingJobNote(false);
                   setJobNoteDraft('');
                 }}
-                style={styles.secureNoteCancelBtn}
                 disabled={savingField === 'note'}
               >
-                <Text style={styles.secureNoteCancelBtnText}>Cancel</Text>
+                <Text style={styles.jobNoteFieldCancel}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleSaveJobNote}
-                style={[
-                  styles.secureNoteSaveBtn,
-                  savingField === 'note' && styles.secureNoteSaveBtnDisabled,
-                ]}
                 disabled={savingField === 'note'}
               >
-                <Text style={styles.secureNoteSaveBtnText}>
+                <Text style={styles.jobNoteFieldSave}>
                   {savingField === 'note' ? 'Saving…' : 'Save'}
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
-        ) : jobNoteText ? (
-          <TouchableOpacity
-            style={styles.secureNoteCard}
-            onLongPress={() => handleCopy(jobNoteText)}
-            activeOpacity={1}
-          >
-            <View style={styles.secureNoteHeader}>
-              <View style={styles.secureNoteIcon}>
-                <Text style={styles.secureNoteIconText}>📝</Text>
-              </View>
-              <View style={flexRowTextSlot}>
-                <Text style={[styles.secureNoteTitle, flexRowText]}>
-                  Job note
-                </Text>
-                <Text
-                  style={[styles.secureNoteSubtitle, flexRowText]}
-                  numberOfLines={2}
-                >
-                  Saved with this job · long-press to copy
-                </Text>
-              </View>
-              {canEditJob ? (
-                <TouchableOpacity
-                  onPress={() => {
-                    setJobNoteDraft(jobNoteText);
-                    setEditingJobNote(true);
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  style={styles.secureNoteEditBtn}
-                >
-                  <Text style={styles.secureNoteEditBtnText}>Edit</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-            <Text style={[styles.secureNoteBody, { marginTop: JOB_DETAIL_SECTION_GAP }]}>
-              {jobNoteText}
-            </Text>
-          </TouchableOpacity>
-        ) : canEditJob ? (
-          <TouchableOpacity
-            style={[styles.secureNoteCard, styles.secureNoteCardEmpty]}
-            activeOpacity={0.85}
-            onPress={() => {
-              setJobNoteDraft('');
-              setEditingJobNote(true);
-            }}
-          >
-            <View style={styles.secureNoteHeader}>
-              <View style={styles.secureNoteIcon}>
-                <Text style={styles.secureNoteIconText}>📝</Text>
-              </View>
-              <View style={flexRowTextSlot}>
-                <Text style={[styles.secureNoteTitle, flexRowText]}>
-                  Add a job note
-                </Text>
-                <Text
-                  style={[styles.secureNoteSubtitle, flexRowText]}
-                  numberOfLines={2}
-                >
-                  Visible to everyone on this job
-                </Text>
-              </View>
-              <Text style={styles.scheduleChipChevron}>{'›'}</Text>
-            </View>
-          </TouchableOpacity>
-        ) : null}
+          )}
+        </View>
 
         <View style={styles.jobDetailTabsWrap}>
           <TouchableOpacity
@@ -7678,20 +7620,65 @@ function HandoffSheet({
 // screen whenever the job sheet is open. Tapping "Complete" bulk-
 // completes every scheduled task on the job and the caller is in
 // charge of fetching the handoff data + opening the HandoffSheet.
+function BellIcon({ color = '#047857', size = 16 }: { color?: string; size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+        stroke={color}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function SendIcon({ color = '#FFFFFF', size = 18 }: { color?: string; size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 function StickyCompleteBar({
   visible,
   job,
   insetsBottom,
   onPress,
   isBusy,
+  company,
+  user,
 }: {
   visible: boolean;
   job: Job | null;
   insetsBottom: number;
   onPress: () => void;
   isBusy: boolean;
+  company?: Company | any;
+  user?: User | any;
 }) {
+  const navigation = useNavigation<any>();
   const translateY = useRef(new Animated.Value(140)).current;
+
+  // --- Notify-on-way state ---
+  const [notifyPickerOpen, setNotifyPickerOpen] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<5 | 15 | 30>(15);
+  const [etaMode, setEtaMode] = useState<'preset' | 'custom'>('preset');
+  const [customEta, setCustomEta] = useState('');
+  const [routeMinutes, setRouteMinutes] = useState<number | null>(null);
+  const [isSendingNotify, setIsSendingNotify] = useState(false);
+  const [notifySent, setNotifySent] = useState(false);
+  const pickerAnim = useRef(new Animated.Value(0)).current;
+
+  // Slide the bar in/out
   useEffect(() => {
     Animated.spring(translateY, {
       toValue: visible ? 0 : 140,
@@ -7702,14 +7689,51 @@ function StickyCompleteBar({
     }).start();
   }, [visible, translateY]);
 
+  // Fetch drive time to prefill the smart ETA
+  useEffect(() => {
+    if (!visible || !job?.id) return;
+    setNotifySent(false);
+    setNotifyPickerOpen(false);
+    setSelectedPreset(15);
+    setEtaMode('preset');
+    setCustomEta('');
+    setRouteMinutes(null);
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('authToken');
+        if (token) apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        const res = await apiClient.get(`/jobs/${job.id}/handoff`);
+        const secs = res.data?.drive?.duration_seconds;
+        if (!cancelled && secs > 0) {
+          const mins = Math.round(secs / 60);
+          setRouteMinutes(mins);
+          setCustomEta(String(mins));
+          setEtaMode('custom');
+          setSelectedPreset(15);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [visible, job?.id]);
+
+  // Animate the ETA picker open/close
+  useEffect(() => {
+    Animated.spring(pickerAnim, {
+      toValue: notifyPickerOpen ? 1 : 0,
+      useNativeDriver: false,
+      stiffness: 420,
+      damping: 32,
+      mass: 0.8,
+    }).start();
+  }, [notifyPickerOpen, pickerAnim]);
+
   if (!job) return null;
+
   const streetLine = job.address || '';
   const cityLine = [job.zip_code, job.city].filter(Boolean).join(' ').trim();
   const fullAddress = [streetLine, cityLine].filter(Boolean).join(', ');
 
-  // Figure out how many tasks are still pending so we can (1) disable
-  // the button when there's nothing to do and (2) give the label a
-  // little extra context.
   const services = job.services || [];
   const pendingCount = services.filter(
     (s) =>
@@ -7726,6 +7750,56 @@ function StickyCompleteBar({
     ? 'Complete job'
     : `Complete ${pendingCount} remaining`;
 
+  const hasEmail = !!job.client_email;
+  const customEtaMinutes = parseInt(customEta.replace(/\D/g, ''), 10);
+  const effectiveEta =
+    etaMode === 'custom'
+      ? customEtaMinutes > 0
+        ? customEtaMinutes
+        : routeMinutes
+      : selectedPreset;
+
+  const sendNotification = async () => {
+    if (isSendingNotify || notifySent || !hasEmail) return;
+    if (!effectiveEta || effectiveEta < 1) {
+      Alert.alert('ETA required', 'Choose a time or enter minutes before sending.');
+      return;
+    }
+    setIsSendingNotify(true);
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      if (token) apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      await apiClient.post(`/jobs/${job.id}/notify-on-way`, {
+        eta_minutes: effectiveEta,
+      });
+      setNotifySent(true);
+      setNotifyPickerOpen(false);
+    } catch {
+      Alert.alert('Error', 'Could not send the notification. Please try again.');
+    } finally {
+      setIsSendingNotify(false);
+    }
+  };
+
+  const pickerHeight = pickerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 52],
+  });
+  const pickerOpacity = pickerAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const openClientForLocation = () => {
+    if (job?.client_id && company && user) {
+      navigation.navigate('ClientDetail', {
+        clientId: job.client_id,
+        company,
+        user,
+      });
+    }
+  };
+
   return (
     <Animated.View
       pointerEvents={visible ? 'auto' : 'none'}
@@ -7737,32 +7811,179 @@ function StickyCompleteBar({
         },
       ]}
     >
-      {fullAddress ? (
+      {/* Maps + On my way — side by side */}
+      <View style={styles.stickyQuickRow}>
         <TouchableOpacity
-          style={styles.stickyAddressCard}
-          onPress={() => openInMaps(fullAddress)}
+          style={[
+            styles.stickyQuickBtn,
+            !fullAddress && styles.stickyQuickBtnMuted,
+          ]}
+          onPress={() => {
+            if (fullAddress) openInMaps(fullAddress);
+            else openClientForLocation();
+          }}
           activeOpacity={0.82}
         >
-          <View style={styles.stickyAddressPin}>
+          <View
+            style={[
+              styles.stickyQuickBtnIcon,
+              !fullAddress && styles.stickyQuickBtnIconMuted,
+            ]}
+          >
             <LocationIcon />
           </View>
-          <View style={styles.stickyAddressBody}>
-            <Text style={styles.stickyAddressTitle} numberOfLines={1}>
-              {streetLine || cityLine}
-            </Text>
-            {streetLine && cityLine ? (
-              <Text style={styles.stickyAddressSub} numberOfLines={1}>
-                {cityLine}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.stickyAddressAction}>
-            <Text style={styles.stickyAddressActionText}>Open maps</Text>
-            <ArrowRightIcon color="#047857" />
+          <View style={styles.stickyQuickBtnTextCol}>
+            {fullAddress ? (
+              <>
+                <Text style={styles.stickyQuickBtnTitle} numberOfLines={1}>
+                  Directions
+                </Text>
+                <Text style={styles.stickyQuickBtnSub} numberOfLines={1}>
+                  {streetLine || cityLine}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.stickyQuickBtnTitleMuted} numberOfLines={1}>
+                  No location
+                </Text>
+                <Text style={styles.stickyQuickBtnLink}>Add location →</Text>
+              </>
+            )}
           </View>
         </TouchableOpacity>
-      ) : null}
 
+        <TouchableOpacity
+          style={[
+            styles.stickyQuickBtn,
+            notifySent && styles.stickyQuickBtnSent,
+            !hasEmail && styles.stickyQuickBtnMuted,
+          ]}
+          onPress={() => {
+            if (!hasEmail || notifySent) return;
+            setNotifyPickerOpen((v) => !v);
+          }}
+          activeOpacity={hasEmail && !notifySent ? 0.82 : 1}
+          disabled={!hasEmail || notifySent}
+        >
+          <View
+            style={[
+              styles.stickyQuickBtnIcon,
+              styles.stickyQuickBtnIconNotify,
+              notifySent && styles.stickyQuickBtnIconSent,
+              !hasEmail && styles.stickyQuickBtnIconMuted,
+            ]}
+          >
+            <BellIcon
+              color={notifySent ? '#047857' : hasEmail ? '#047857' : '#94A3B8'}
+              size={15}
+            />
+          </View>
+          <View style={styles.stickyQuickBtnTextCol}>
+            <Text
+              style={[
+                styles.stickyQuickBtnTitle,
+                !hasEmail && styles.stickyQuickBtnTitleMuted,
+                notifySent && styles.stickyQuickBtnTitleSent,
+              ]}
+              numberOfLines={1}
+            >
+              {notifySent ? 'Sent ✓' : 'On my way'}
+            </Text>
+            <Text
+              style={[
+                styles.stickyQuickBtnSub,
+                !hasEmail && styles.stickyQuickBtnSubMuted,
+              ]}
+              numberOfLines={1}
+            >
+              {notifySent
+                ? 'Client notified'
+                : hasEmail
+                ? effectiveEta
+                  ? `ETA ${effectiveEta} min`
+                  : 'Notify client'
+                : 'No email on file'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* ETA grid: 5 | 15 | 30 | custom | send */}
+      <Animated.View
+        style={{
+          height: pickerHeight,
+          opacity: pickerOpacity,
+          overflow: 'hidden',
+        }}
+        pointerEvents={notifyPickerOpen ? 'auto' : 'none'}
+      >
+        <View style={styles.notifyEtaGrid}>
+          {([5, 15, 30] as const).map((mins) => {
+            const isActive = etaMode === 'preset' && selectedPreset === mins;
+            return (
+              <TouchableOpacity
+                key={mins}
+                style={[
+                  styles.notifyEtaGridCell,
+                  isActive && styles.notifyEtaGridCellActive,
+                ]}
+                onPress={() => {
+                  setEtaMode('preset');
+                  setSelectedPreset(mins);
+                }}
+                activeOpacity={0.8}
+              >
+                <View style={styles.notifyEtaGridCellInner}>
+                  <Text style={styles.notifyEtaGridNum}>{mins}</Text>
+                  <Text style={styles.notifyEtaGridMinLabel}>min</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+
+          <TouchableOpacity
+            style={[
+              styles.notifyEtaGridCell,
+              styles.notifyEtaGridInputCell,
+              etaMode === 'custom' && styles.notifyEtaGridCellActive,
+            ]}
+            activeOpacity={1}
+            onPress={() => setEtaMode('custom')}
+          >
+            <TextInput
+              style={styles.notifyEtaGridInput}
+              value={customEta}
+              onChangeText={(t) => {
+                setCustomEta(t.replace(/\D/g, '').slice(0, 3));
+                setEtaMode('custom');
+              }}
+              onFocus={() => setEtaMode('custom')}
+              keyboardType="number-pad"
+              placeholder={routeMinutes ? String(routeMinutes) : ''}
+              placeholderTextColor="#94A3B8"
+              maxLength={3}
+              selectTextOnFocus
+            />
+            <Text style={styles.notifyEtaGridMinSuffix}>min</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.notifyEtaGridCell,
+              styles.notifyEtaGridSendCell,
+              isSendingNotify && { opacity: 0.65 },
+            ]}
+            onPress={sendNotification}
+            disabled={isSendingNotify}
+            activeOpacity={0.85}
+          >
+            <SendIcon color="#FFFFFF" size={20} />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+
+      {/* Complete */}
       <TouchableOpacity
         style={[
           styles.stickyCompleteButton,
@@ -9959,7 +10180,28 @@ function DayViewScreen({ route, navigation }: any) {
   const [isStartingJob, setIsStartingJob] = useState(false);
   const [addMenuVisible, setAddMenuVisible] = useState(false);
   const [createApptOpen, setCreateApptOpen] = useState(false);
+  const [dayViewDrawerOpen, setDayViewDrawerOpen] = useState(false);
   const adminUser = isAdminRole(company, user);
+
+  // Keep a ref so the swipe PanResponder (created once) always reads current date
+  const dateRef = useRef(date);
+  useEffect(() => { dateRef.current = date; }, [date]);
+
+  const daySwipePanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > Math.abs(g.dy) * 1.5 && Math.abs(g.dx) > 12,
+      onPanResponderRelease: (_, g) => {
+        if (Math.abs(g.dx) < 30 && Math.abs(g.vx) < 0.2) return;
+        const parts = dateRef.current.split('-').map(Number);
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        d.setDate(d.getDate() + (g.dx < 0 ? 1 : -1));
+        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        navigation.setParams({ date: iso });
+      },
+    })
+  ).current;
 
   // Month banner images mapping (months are 0-indexed in JavaScript)
   const monthBanners: { [key: number]: any } = {
@@ -10336,6 +10578,9 @@ function DayViewScreen({ route, navigation }: any) {
 
   const closeSlideout = () => {
     closeSheet();
+    // Refresh the list after the sheet closes so any changes (date move,
+    // time update, reassign) are immediately reflected without a manual pull.
+    setTimeout(() => fetchDayJobs(), 280);
   };
 
   // Main "Complete" CTA on the sticky bottom bar. Finishes every task
@@ -10545,7 +10790,7 @@ function DayViewScreen({ route, navigation }: any) {
   }
 
   return (
-    <View style={styles.dayViewContainer}>
+    <View style={styles.dayViewContainer} {...daySwipePanResponder.panHandlers}>
       {/* Banner — absolutely positioned at the BOTTOM layer (zIndex 0).
           The list sits above it (zIndex 1) with a transparent paddingTop
           that lets the banner show through at rest, and covers it as
@@ -10742,11 +10987,20 @@ function DayViewScreen({ route, navigation }: any) {
             );
           }}
           ListFooterComponent={
-            jobs.length > 0 && routeEnd ? (
-              <View style={styles.dayViewListStripPadded}>
-                <RouteStopRow type="end" address={routeEnd} />
-              </View>
-            ) : null
+            <View>
+              {jobs.length > 0 && routeEnd ? (
+                <View style={styles.dayViewListStripPadded}>
+                  <RouteStopRow type="end" address={routeEnd} />
+                </View>
+              ) : null}
+              <TouchableOpacity
+                onPress={() => navigation.navigate('JobCompose', { company, user, scheduledDate: date })}
+                style={{ paddingVertical: 22, alignItems: 'center' }}
+                activeOpacity={0.5}
+              >
+                <Text style={{ color: '#94A3B8', fontSize: 14, fontWeight: '500', letterSpacing: 0.2 }}>+ Add new job</Text>
+              </TouchableOpacity>
+            </View>
           }
           ListEmptyComponent={
             <View style={[styles.dayViewEmpty, styles.dayViewListStripPadded]}>
@@ -10822,13 +11076,21 @@ function DayViewScreen({ route, navigation }: any) {
                   onCopy={handleCopy}
                   isExpanded={isExpanded}
                   onJobUpdate={(updatedJob) => {
-                    setSelectedJob(updatedJob);
-                    setJobs(prevJobs =>
-                      prevJobs.map(j => j.id === updatedJob.id ? updatedJob : j)
-                    );
+                    const movedDate = appointmentDateOnly(updatedJob.scheduled_date);
+                    if (movedDate && movedDate !== date) {
+                      // Job was moved to a different day — remove immediately and close
+                      setJobs(prev => prev.filter(j => j.id !== updatedJob.id));
+                      closeSlideout();
+                    } else {
+                      setSelectedJob(updatedJob);
+                      setJobs(prevJobs =>
+                        prevJobs.map(j => j.id === updatedJob.id ? updatedJob : j)
+                      );
+                    }
                   }}
                   onJobDeleted={(jobId) => {
                     setJobs((prev) => prev.filter((j) => j.id !== jobId));
+                    closeSlideout();
                   }}
                 />
               </View>
@@ -10844,6 +11106,8 @@ function DayViewScreen({ route, navigation }: any) {
             insetsBottom={insets.bottom}
             onPress={handleCompleteJob}
             isBusy={isCompletingJob}
+            company={company}
+            user={user}
           />
 
           {/* Next-job handoff sheet - slides up over the job sheet
@@ -10890,34 +11154,20 @@ function DayViewScreen({ route, navigation }: any) {
           <TouchableOpacity
             style={styles.bottomNavItem}
             onPress={() =>
-              navigation.navigate('CompanyTabs', {
-                company,
-                user,
-                initialTab: 'Calender',
-              })
+              navigation.navigate('CompanyTabs', { company, user, initialTab: 'Calender' })
             }
             activeOpacity={0.75}
           >
             <ArrowLeftIcon color="#193434" />
-            <Text style={styles.bottomNavLabel} numberOfLines={2}>
-              Back
-            </Text>
+            <Text style={styles.bottomNavLabel} numberOfLines={2}>Back</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.bottomNavItem}
-            onPress={() =>
-              navigation.navigate('JobCompose', {
-                company,
-                user,
-                scheduledDate: date,
-              })
-            }
+            onPress={() => navigation.navigate('JobCompose', { company, user, scheduledDate: date })}
             activeOpacity={0.75}
           >
             <IconDocumentText color="#193434" size={20} />
-            <Text style={styles.bottomNavLabel} numberOfLines={2}>
-              Add job
-            </Text>
+            <Text style={styles.bottomNavLabel} numberOfLines={2}>Add job</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.bottomNavItem}
@@ -10925,12 +11175,35 @@ function DayViewScreen({ route, navigation }: any) {
             activeOpacity={0.75}
           >
             <IconCalendarDays color="#193434" size={20} />
-            <Text style={styles.bottomNavLabel} numberOfLines={2}>
-              Add event
-            </Text>
+            <Text style={styles.bottomNavLabel} numberOfLines={2}>Add event</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.bottomNavItem}
+            onPress={() => setDayViewDrawerOpen(true)}
+            activeOpacity={0.75}
+          >
+            <BurgerIcon color="#193434" />
+            <Text style={styles.bottomNavLabel} numberOfLines={2}>Menu</Text>
           </TouchableOpacity>
         </View>
       )}
+
+      <MobileSettingsDrawer
+        visible={dayViewDrawerOpen}
+        onClose={() => setDayViewDrawerOpen(false)}
+        company={company}
+        user={user}
+        onSwitchAccount={() => { setDayViewDrawerOpen(false); navigation.navigate('SelectCompany'); }}
+        onNavigateToClients={() => { setDayViewDrawerOpen(false); navigation.navigate('Clients', { company, user }); }}
+        onNavigateToServices={() => { setDayViewDrawerOpen(false); navigation.navigate('Services', { company, user }); }}
+        onNavigateToInvoices={() => { setDayViewDrawerOpen(false); navigation.navigate('Invoices', { company, user }); }}
+        onNavigateToTeam={() => { setDayViewDrawerOpen(false); navigation.navigate('Team', { company, user }); }}
+        onNavigateToUserSettings={() => { setDayViewDrawerOpen(false); navigation.navigate('SettingsUser', { company, user }); }}
+        onNavigateToBusinessSettings={() => { setDayViewDrawerOpen(false); navigation.navigate('SettingsBusiness', { company, user }); }}
+        onNavigateToWorkHoursSettings={() => { setDayViewDrawerOpen(false); navigation.navigate('SettingsWorkHours', { company, user }); }}
+        onNavigateToInvoiceOptionsSettings={() => { setDayViewDrawerOpen(false); navigation.navigate('SettingsInvoiceOptions', { company, user }); }}
+        onNavigateToNotificationsSettings={() => { setDayViewDrawerOpen(false); navigation.navigate('SettingsNotifications', { company, user }); }}
+      />
 
       {/* Toast Notification */}
       {toastVisible && (
@@ -12040,21 +12313,16 @@ function CompanyTabsScreen({ route }: any) {
             tabBarActiveTintColor: '#3DD57A',
             tabBarInactiveTintColor: '#193434',
             tabBarIcon: ({ color }) => {
-              if (route.name === 'Overview') {
-                return <OverviewIcon color={color} />;
-              } else if (route.name === 'Calender') {
-                return <CalendarIcon color={color} />;
-              } else if (route.name === 'Today') {
-                return <TodayIcon color={color} />;
-              } else if (route.name === 'ClientsTab') {
-                return <ClientsTabIcon color={color} />;
-              }
+              if (route.name === 'Overview') return <OverviewIcon color={color} />;
+              if (route.name === 'Calender') return <CalendarIcon color={color} />;
+              if (route.name === 'ClientsTab') return <ClientsTabIcon color={color} />;
+              if (route.name === 'MenuTab') return <MenuTabIcon color={color} />;
               return null;
             },
             tabBarLabel: ({ focused, color }) => {
               let label: string;
-              if (route.name === 'Today') label = 'Today';
-              else if (route.name === 'ClientsTab') label = 'Clients';
+              if (route.name === 'ClientsTab') label = 'Clients';
+              else if (route.name === 'MenuTab') label = 'Menu';
               else label = route.name;
               return (
                 <View style={styles.tabLabelContainer}>
@@ -12065,40 +12333,35 @@ function CompanyTabsScreen({ route }: any) {
             },
           })}
         >
+          <Tab.Screen name="Overview" component={OverviewTab} initialParams={{ company, user }} />
+          <Tab.Screen name="Calender" component={CalendarTab} initialParams={{ company, user }} />
           <Tab.Screen
-            name="Overview"
+            name="ClientsTab"
             component={OverviewTab}
             initialParams={{ company, user }}
+            listeners={({ navigation: tabNav }) => ({
+              tabPress: (e) => {
+                e.preventDefault();
+                const parent = tabNav.getParent?.();
+                if (parent) {
+                  parent.navigate('Clients', { company, user });
+                } else {
+                  navigation.navigate('Clients', { company, user });
+                }
+              },
+            })}
           />
           <Tab.Screen
-            name="Calender"
-            component={CalendarTab}
+            name="MenuTab"
+            component={OverviewTab}
             initialParams={{ company, user }}
+            listeners={() => ({
+              tabPress: (e) => {
+                e.preventDefault();
+                setDrawerOpen(true);
+              },
+            })}
           />
-          {admin ? (
-            <Tab.Screen
-              name="ClientsTab"
-              component={OverviewTab}
-              initialParams={{ company, user }}
-              listeners={({ navigation: tabNav }) => ({
-                tabPress: (e) => {
-                  e.preventDefault();
-                  const parent = tabNav.getParent?.();
-                  if (parent) {
-                    parent.navigate('Clients', { company, user });
-                  } else {
-                    navigation.navigate('Clients', { company, user });
-                  }
-                },
-              })}
-            />
-          ) : (
-            <Tab.Screen
-              name="Today"
-              component={TodayTab}
-              initialParams={{ company, user }}
-            />
-          )}
         </Tab.Navigator>
       </View>
       </SafeAreaInsetsContext.Provider>
@@ -13864,40 +14127,29 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 4,
   },
-  calendarQuickAddOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
   calendarQuickAddCard: {
-    width: '100%',
-    maxWidth: 340,
+    minWidth: 170,
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 18,
-  },
-  calendarQuickAddTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#193434',
-    marginBottom: 14,
-    textAlign: 'center',
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
   },
   calendarQuickAddRow: {
-    backgroundColor: '#F0F4F2',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 10,
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
   },
   calendarQuickAddRowText: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '600',
     color: '#0F3C2A',
-    textAlign: 'center',
   },
   calendarQuickAddCancel: {
     marginTop: 4,
@@ -15642,6 +15894,50 @@ const styles = StyleSheet.create({
   // Note-style card (job note under schedule, or client secure notes elsewhere). Same width as the
   // surrounding job detail surface; a calm, low-contrast background keeps it
   // distinct from the green address card without screaming.
+  jobNoteField: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(100,116,139,0.75)',
+    marginBottom: JOB_DETAIL_SECTION_GAP,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 52,
+  },
+  jobNoteFieldEmpty: {
+    backgroundColor: '#E8EDEA',
+  },
+  jobNoteFieldFilled: {
+    backgroundColor: '#FFFFFF',
+    borderStyle: 'solid',
+    borderColor: 'rgba(100,116,139,0.9)',
+  },
+  jobNoteFieldInput: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#193434',
+    minHeight: 44,
+    maxHeight: 100,
+    textAlignVertical: 'top',
+    padding: 0,
+  },
+  jobNoteFieldActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 6,
+  },
+  jobNoteFieldCancel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  jobNoteFieldSave: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#193434',
+  },
   secureNoteCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -15792,6 +16088,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
+  scheduleChipCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    minWidth: 0,
+  },
+  scheduleChipIconCompact: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  scheduleChipValueCompact: {
+    fontSize: 12,
+    color: '#193434',
+    fontWeight: '600',
+    marginTop: 1,
+  },
   scheduleChipIcon: {
     width: 28,
     height: 28,
@@ -15884,6 +16200,229 @@ const styles = StyleSheet.create({
   // zIndex make sure it sits above the draggable sheet on Android,
   // where render order alone isn't always enough once the sheet
   // picks up its own implicit layer.
+  stickyQuickRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  stickyQuickBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(25,52,52,0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    minHeight: 52,
+  },
+  stickyQuickBtnMuted: {
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(25,52,52,0.08)',
+  },
+  stickyQuickBtnSent: {
+    backgroundColor: '#ECFDF5',
+    borderColor: 'rgba(16,185,129,0.35)',
+  },
+  stickyQuickBtnIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  stickyQuickBtnIconNotify: {
+    backgroundColor: '#F0FDF8',
+  },
+  stickyQuickBtnIconSent: {
+    backgroundColor: '#D1FAE5',
+  },
+  stickyQuickBtnIconMuted: {
+    backgroundColor: '#F1F5F9',
+  },
+  stickyQuickBtnTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stickyQuickBtnTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#193434',
+  },
+  stickyQuickBtnTitleMuted: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  stickyQuickBtnTitleSent: {
+    color: '#047857',
+  },
+  stickyQuickBtnSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  stickyQuickBtnSubMuted: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 1,
+  },
+  stickyQuickBtnLink: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#047857',
+    marginTop: 2,
+  },
+  // ── Notify on-the-way (legacy row styles kept for reference) ─────────────
+  notifyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF8',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.22)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 8,
+  },
+  notifyRowSent: {
+    backgroundColor: '#ECFDF5',
+    borderColor: 'rgba(16,185,129,0.4)',
+  },
+  notifyRowDisabled: {
+    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(25,52,52,0.08)',
+  },
+  notifyRowLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  notifyRowLabel: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: '#047857',
+  },
+  notifyRowLabelDisabled: {
+    color: '#94A3B8',
+  },
+  notifyRowLabelSent: {
+    color: '#047857',
+  },
+  notifyRowCaret: {
+    fontSize: 9,
+    color: '#047857',
+    marginLeft: 1,
+  },
+  notifyRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  notifySendBtn: {
+    backgroundColor: '#047857',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  notifySendBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700' as const,
+  },
+  notifyEtaPreview: {
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  notifyEtaPreviewText: {
+    color: '#047857',
+    fontSize: 12,
+    fontWeight: '600' as const,
+  },
+  notifyNoEmailHint: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontStyle: 'italic' as const,
+  },
+  notifyEtaGrid: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    width: '100%',
+    gap: 5,
+    marginBottom: 8,
+    height: 48,
+  },
+  notifyEtaGridCell: {
+    flex: 1,
+    minWidth: 0,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(25,52,52,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  notifyEtaGridCellActive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#047857',
+    borderWidth: 2,
+  },
+  notifyEtaGridCellInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notifyEtaGridNum: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#193434',
+    lineHeight: 18,
+  },
+  notifyEtaGridMinLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+    lineHeight: 12,
+    marginTop: 1,
+  },
+  notifyEtaGridInputCell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  notifyEtaGridInput: {
+    width: 32,
+    minWidth: 28,
+    maxWidth: 40,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#193434',
+    textAlign: 'center',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    includeFontPadding: false,
+  },
+  notifyEtaGridMinSuffix: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+    marginLeft: 2,
+    flexShrink: 0,
+  },
+  notifyEtaGridSendCell: {
+    backgroundColor: '#047857',
+    borderColor: '#047857',
+    borderWidth: 1.5,
+  },
+  // ─────────────────────────────────────────────────────────────────────────
   stickyActionBar: {
     position: 'absolute',
     left: 0,

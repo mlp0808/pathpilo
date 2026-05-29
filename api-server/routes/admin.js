@@ -86,6 +86,7 @@ async function initAdminSchema() {
     await pool.query(`ALTER TABLE trial_invites ADD COLUMN IF NOT EXISTS email_sent_count INTEGER NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE trial_invites ADD COLUMN IF NOT EXISTS last_email_sent_at TIMESTAMP NULL`);
     await pool.query(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'`);
+    await pool.query(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS guide_link TEXT`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS registration_verification_codes (
         id SERIAL PRIMARY KEY,
@@ -606,7 +607,7 @@ router.get('/video-guides', async (req, res) => {
   try {
     const languageCode = normalizeVideoLanguageCode(req.query.languageCode || req.query.language_code || 'en');
     const result = await pool.query(`
-      SELECT id, title, description, duration, video_id, sort_order, created_at, language_code
+      SELECT id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link
       FROM video_guides
       WHERE language_code = $1
       ORDER BY sort_order ASC, created_at ASC
@@ -621,6 +622,7 @@ router.get('/video-guides', async (req, res) => {
       languageCode: row.language_code || 'en',
       sortOrder: row.sort_order,
       createdAt: row.created_at,
+      guideLink: row.guide_link || '',
     }));
 
     res.json({ videos });
@@ -633,7 +635,7 @@ router.get('/video-guides', async (req, res) => {
 // POST /api/admin/video-guides - Create
 router.post('/video-guides', async (req, res) => {
   try {
-    const { title, description, duration, videoId, languageCode: rawLanguageCode, language_code: rawLanguageCodeSnake } = req.body;
+    const { title, description, duration, videoId, guideLink, languageCode: rawLanguageCode, language_code: rawLanguageCodeSnake } = req.body;
     const languageCode = normalizeVideoLanguageCode(rawLanguageCode || rawLanguageCodeSnake);
 
     if (!title || !videoId) {
@@ -650,10 +652,10 @@ router.post('/video-guides', async (req, res) => {
     const nextOrder = maxResult.rows[0]?.next_order || 1;
 
     const result = await pool.query(
-      `INSERT INTO video_guides (title, description, duration, video_id, sort_order, language_code)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code`,
-      [title, description || '', duration || '0:00', videoId, nextOrder, languageCode]
+      `INSERT INTO video_guides (title, description, duration, video_id, sort_order, language_code, guide_link)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link`,
+      [title, description || '', duration || '0:00', videoId, nextOrder, languageCode, guideLink || null]
     );
 
     const row = result.rows[0];
@@ -667,6 +669,7 @@ router.post('/video-guides', async (req, res) => {
         languageCode: row.language_code || 'en',
         sortOrder: row.sort_order,
         createdAt: row.created_at,
+        guideLink: row.guide_link || '',
       },
     });
   } catch (error) {
@@ -684,6 +687,7 @@ router.put('/video-guides/:id', async (req, res) => {
       description,
       duration,
       videoId,
+      guideLink,
       sortOrder,
       languageCode: rawLanguageCode,
       language_code: rawLanguageCodeSnake,
@@ -702,10 +706,11 @@ router.put('/video-guides/:id', async (req, res) => {
            video_id = COALESCE($5, video_id),
            sort_order = COALESCE($6, sort_order),
            language_code = COALESCE($7, language_code),
+           guide_link = $8,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
-       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code`,
-      [id, title, description, duration, videoId, sortOrder, languageCode]
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link`,
+      [id, title, description, duration, videoId, sortOrder, languageCode, guideLink || null]
     );
 
     if (result.rows.length === 0) {
@@ -723,6 +728,7 @@ router.put('/video-guides/:id', async (req, res) => {
         languageCode: row.language_code || 'en',
         sortOrder: row.sort_order,
         createdAt: row.created_at,
+        guideLink: row.guide_link || '',
       },
     });
   } catch (error) {

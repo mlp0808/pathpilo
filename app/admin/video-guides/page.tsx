@@ -21,6 +21,7 @@ interface VideoGuide {
   languageCode: string
   sortOrder: number
   createdAt: string
+  guideLink: string
 }
 
 const normalizeLang = (value: unknown): string => {
@@ -47,6 +48,7 @@ export default function AdminVideoGuidesPage() {
     duration: '0:00',
     videoId: '',
     languageCode: 'en',
+    guideLink: '',
   })
   const [saving, setSaving] = useState(false)
 
@@ -114,7 +116,7 @@ export default function AdminVideoGuidesPage() {
 
   const openAddForm = () => {
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '' })
     setShowForm(true)
   }
 
@@ -126,6 +128,7 @@ export default function AdminVideoGuidesPage() {
       duration: video.duration || '0:00',
       videoId: video.videoId,
       languageCode: video.languageCode || 'en',
+      guideLink: video.guideLink || '',
     })
     setShowForm(true)
   }
@@ -133,7 +136,7 @@ export default function AdminVideoGuidesPage() {
   const closeForm = () => {
     setShowForm(false)
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '' })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -154,6 +157,7 @@ export default function AdminVideoGuidesPage() {
         videoId: formData.videoId,
         languageCode: formData.languageCode,
         language_code: formData.languageCode,
+        guideLink: formData.guideLink || null,
       })
 
       const response = await fetch(url, {
@@ -347,6 +351,16 @@ export default function AdminVideoGuidesPage() {
                     <p className="text-sm text-gray-500 mt-1 line-clamp-2">{video.description}</p>
                   )}
                 <p className="text-xs text-gray-400 mt-1">{video.duration} · {(video.languageCode || 'en').toUpperCase()}</p>
+                {video.guideLink && (
+                  <a
+                    href={video.guideLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-accent-600 hover:text-accent-700 mt-1"
+                  >
+                    See full guide →
+                  </a>
+                )}
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
@@ -444,6 +458,19 @@ export default function AdminVideoGuidesPage() {
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   From a YouTube URL: youtube.com/watch?v=<strong>VIDEO_ID</strong>
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Help portal link</label>
+                <input
+                  type="url"
+                  value={formData.guideLink}
+                  onChange={(e) => setFormData({ ...formData, guideLink: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                  placeholder="e.g. https://help.pathpilo.com/article/create-a-client"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Optional. Shows a <strong>See full guide →</strong> button next to this video in the modal.
                 </p>
               </div>
               <div className="flex justify-end gap-3 pt-4">

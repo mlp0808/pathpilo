@@ -3108,9 +3108,9 @@ ${currentUserName}`
                 } catch {}
                 
                 const template = await getEmailTemplate('change_employee', {
-                  clientName: `${(jobData as any).first_name || ''} ${(jobData as any).last_name || ''}`.trim() || 'Customer',
-                  clientFirstName: (jobData as any).first_name || 'Customer',
-                  clientLastName: (jobData as any).last_name || '',
+                  clientName: `${clientFirstNameFromJob(jobData)} ${clientLastNameFromJob(jobData)}`.trim() || 'Customer',
+                  clientFirstName: clientFirstNameFromJob(jobData),
+                  clientLastName: clientLastNameFromJob(jobData),
                   employeeName: newEmployeeName,
                   employeeOldName: oldEmployeeName,
                   employeeNewName: newEmployeeName,

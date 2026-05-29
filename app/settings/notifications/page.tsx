@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChatBubbleLeftRightIcon,
   EnvelopeIcon,
@@ -32,39 +32,121 @@ interface MessagesDraft {
 
 const STORAGE_KEY = 'vevago_messages_v2'
 
-const personalizationTags = [
-  '{Client name}',
-  '{Client first name}',
-  '{Job date}',
-  '{Job old date}',
-  '{Job new date}',
-  '{Job time from}',
-  '{Job time to}',
-  '{Job old time from}',
-  '{Job old time to}',
-  '{Job new time from}',
-  '{Job new time to}',
-  '{Employee name}',
-  '{Employee old name}',
-  '{Employee new name}',
-  '{Company name}',
-  '{Job address}',
-  '{Job city}',
-  '{Job services}',
-  '{Job total price}',
-  '{Job time range}',
-  '{invoice_number}',
-]
+type TemplateTag = { label: string; tag: string; hint?: string }
+
+/** Per-template contextual tags shown as clickable insert buttons inside the editor modal. */
+const TEMPLATE_TAGS: Record<string, TemplateTag[]> = {
+  email_date_changed: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Client last name',  tag: '{Client last name}' },
+    { label: 'Previous date',     tag: '{Job old date}' },
+    { label: 'New date',          tag: '{Job new date}' },
+    { label: 'Time',              tag: '{Job time}', hint: 'The appointment time (e.g. 09:00 – 11:00). The time is unchanged when only the date moves.' },
+    { label: 'Job doer',          tag: '{Employee name}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  email_time_updated: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Client last name',  tag: '{Client last name}' },
+    { label: 'Current date',      tag: '{Job date}' },
+    { label: 'Previous time',     tag: '{Job old time}', hint: 'The old appointment time (e.g. 09:00 – 11:00)' },
+    { label: 'New time',          tag: '{Job new time}', hint: 'The new appointment time (e.g. 10:00 – 12:00)' },
+    { label: 'Job doer',          tag: '{Employee name}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  email_employee_changed: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Client last name',  tag: '{Client last name}' },
+    { label: 'Previous employee', tag: '{Employee old name}' },
+    { label: 'New employee',      tag: '{Employee new name}' },
+    { label: 'Job date',          tag: '{Job date}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  email_job_cancelled: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Client last name',  tag: '{Client last name}' },
+    { label: 'Date/time', tag: '{Job date/time}', hint: 'Shows date + time if a time is set, otherwise just the date' },
+    { label: 'Job date',  tag: '{Job date}' },
+    { label: 'Time',      tag: '{Job time from}' },
+    { label: 'Services',  tag: '{Job services}' },
+    { label: 'Job doer',  tag: '{Employee name}' },
+    { label: 'Owner name', tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name', tag: '{Company name}' },
+  ],
+  email_invoice_send: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Invoice number',    tag: '{invoice_number}' },
+    { label: 'Total price',       tag: '{Job total price}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  email_job_created: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Date/time', tag: '{Job date/time}', hint: 'Shows date + time if a time is set, otherwise just the date' },
+    { label: 'Job date',  tag: '{Job date}' },
+    { label: 'Address',   tag: '{Job address}' },
+    { label: 'Services',  tag: '{Job services}' },
+    { label: 'Owner name', tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name', tag: '{Company name}' },
+  ],
+  email_job_reminder: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Date/time', tag: '{Job date/time}', hint: 'Shows date + time if a time is set, otherwise just the date' },
+    { label: 'Job date',  tag: '{Job date}' },
+    { label: 'Address',   tag: '{Job address}' },
+    { label: 'Services',  tag: '{Job services}' },
+    { label: 'Owner name', tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name', tag: '{Company name}' },
+  ],
+  email_invoice_due_reminder: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Invoice number',    tag: '{invoice_number}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  email_on_the_way: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Client name',       tag: '{Client name}' },
+    { label: 'Current date',      tag: '{Current date}', hint: 'Today’s date when the message is sent' },
+    { label: 'Current time',      tag: '{Current time}', hint: 'Time when the message is sent' },
+    { label: 'Selected minutes',  tag: '{Selected minutes}', hint: 'ETA minutes chosen in the app (e.g. 15)' },
+    { label: 'Job date',          tag: '{Job date}' },
+    { label: 'Job time',          tag: '{Job time}' },
+    { label: 'Location',          tag: '{Client location}', hint: 'Client address for this job' },
+    { label: 'Employee name',     tag: '{Employee name}' },
+    { label: 'Owner name',        tag: '{Owner name}', hint: 'Company owner — used in sign-offs' },
+    { label: 'Company name',      tag: '{Company name}' },
+  ],
+  sms_on_the_way: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Job doer',    tag: '{Employee name}' },
+    { label: 'Address',     tag: '{Job address}' },
+    { label: 'Owner name',  tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name', tag: '{Company name}' },
+  ],
+  sms_day_before: [
+    { label: 'Client first name', tag: '{Client first name}' },
+    { label: 'Date/time', tag: '{Job date/time}', hint: 'Shows date + time if a time is set, otherwise just the date' },
+    { label: 'Job date',  tag: '{Job date}' },
+    { label: 'Time',      tag: '{Job time from}' },
+    { label: 'Owner name', tag: '{Owner name}', hint: 'Company owner name — used in sign-offs' },
+    { label: 'Company name', tag: '{Company name}' },
+  ],
+}
 
 const emailTemplateTypeById: Record<
   string,
-  'change_date' | 'change_time' | 'change_employee' | 'cancel_job' | 'send_invoice'
+  'change_date' | 'change_time' | 'change_employee' | 'cancel_job' | 'send_invoice' | 'on_the_way'
 > = {
   email_date_changed: 'change_date',
   email_time_updated: 'change_time',
   email_employee_changed: 'change_employee',
   email_job_cancelled: 'cancel_job',
   email_invoice_send: 'send_invoice',
+  email_on_the_way: 'on_the_way',
 }
 const automatedEmailTemplateTypeById: Record<
   string,
@@ -268,6 +350,11 @@ export default function NotificationsPage() {
   const [isLoadingRemote, setIsLoadingRemote] = useState(false)
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null)
 
+  // Reset field focus tracking whenever a different template modal opens
+  useEffect(() => {
+    lastFocusedFieldRef.current = 'message'
+  }, [editingTemplateId])
+
   // When opening automation email editor, strip legacy full-body text
   useEffect(() => {
     if (!editingTemplateId) return
@@ -370,6 +457,64 @@ export default function NotificationsPage() {
       ...prev,
       automationSettings: prev.automationSettings.map((s) => (s.id === id ? { ...s, ...patch } : s)),
     }))
+  }
+
+  // ── Insert-at-cursor refs ─────────────────────────────────────────────────
+  const editSubjectRef = useRef<HTMLInputElement | null>(null)
+  const editMessageRef = useRef<HTMLTextAreaElement | null>(null)
+  /** 'subject' | 'message' — which field the user last had focus in */
+  const lastFocusedFieldRef = useRef<'subject' | 'message'>('message')
+
+  /** Called onMouseDown (with preventDefault) on tag buttons so focus stays in the textarea. */
+  const insertTag = (tag: string, templateId: string) => {
+    const field = lastFocusedFieldRef.current
+    const el = (field === 'subject' ? editSubjectRef.current : editMessageRef.current) as HTMLInputElement | HTMLTextAreaElement | null
+    const tpl = draft.templates.find((x) => x.id === templateId)
+    if (!tpl) return
+    const current = field === 'subject' ? (tpl.subject || '') : (tpl.message || '')
+    const start = el?.selectionStart ?? current.length
+    const end   = el?.selectionEnd   ?? start
+    const next  = current.slice(0, start) + tag + current.slice(end)
+    updateTemplate(templateId, field, next)
+    const newPos = start + tag.length
+    requestAnimationFrame(() => {
+      if (el) {
+        el.focus()
+        el.setSelectionRange(newPos, newPos)
+      }
+    })
+  }
+
+  /** Contextual tag-insert buttons rendered inside each modal. */
+  const renderTagButtons = (templateId: string) => {
+    const tags = TEMPLATE_TAGS[templateId] || []
+    if (!tags.length) return null
+    return (
+      <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2 select-none">
+          Insert tag — click to add at cursor
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {tags.map(({ label, tag, hint }) => (
+            <button
+              key={tag}
+              type="button"
+              title={hint ? `${hint}\n\nInserts: ${tag}` : `Inserts: ${tag}`}
+              onMouseDown={(e) => {
+                // Prevent blur so textarea keeps focus and selectionStart stays valid
+                e.preventDefault()
+                insertTag(tag, templateId)
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-dashed border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:border-accent-400 hover:bg-accent-50 hover:text-accent-800 transition-colors select-none"
+            >
+              <span className="text-gray-400 text-[10px]">＋</span>
+              {label}
+              {hint && <span className="ml-0.5 text-gray-300">●</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
   }
 
   /** Reset a single template (any kind) to the company-language default. */
@@ -694,30 +839,24 @@ export default function NotificationsPage() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4 md:p-5">
-            <div className="flex items-start gap-2 mb-3">
-              <InformationCircleIcon className="w-5 h-5 text-blue-700 mt-0.5" />
+          <section className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 md:p-5">
+            <div className="flex items-start gap-2">
+              <InformationCircleIcon className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
               <div>
                 <h3 className="text-sm font-semibold text-blue-900">
-                  {tr('app.messages.personalizationTags', 'Personalization tags')}
+                  {tr('app.messages.personalizationTags', 'Personalisation tags')}
                 </h3>
-                <p className="text-xs text-blue-700 mt-0.5">
+                <p className="text-xs text-blue-700 mt-1 leading-relaxed">
                   {tr(
                     'app.messages.personalizationTagsHelp',
-                    'Use these tags in subject lines and message bodies. They will be replaced with real values when sending.',
+                    'Open any template to see the tags available for that message. Click a tag button to insert it exactly where your cursor is.',
                   )}
+                  {' '}
+                  <span className="font-medium">
+                    {tr('app.messages.personalizationTagsHelpDate', 'Date/time tags show the time only when one is scheduled — otherwise just the date.')}
+                  </span>
                 </p>
               </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {personalizationTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs font-mono text-blue-800"
-                >
-                  {tag}
-                </span>
-              ))}
             </div>
           </section>
         </div>
@@ -844,9 +983,11 @@ export default function NotificationsPage() {
                               {tr('app.messages.modal.subject', 'Subject')}
                             </label>
                             <input
+                              ref={editSubjectRef}
                               type="text"
                               value={template.subject}
                               onChange={(e) => updateTemplate(template.id, 'subject', e.target.value)}
+                              onFocus={() => { lastFocusedFieldRef.current = 'subject' }}
                               disabled={!automationSetting.enabled}
                               className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
                             />
@@ -864,13 +1005,16 @@ export default function NotificationsPage() {
                               {tr('app.messages.modal.openingMessageHelpB', 'are replaced when sending.')}
                             </p>
                             <textarea
+                              ref={editMessageRef}
                               value={template.message}
                               onChange={(e) => updateTemplate(template.id, 'message', e.target.value)}
+                              onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                               disabled={!automationSetting.enabled}
                               rows={3}
                               className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 resize-none disabled:bg-gray-50 disabled:text-gray-400"
                             />
                           </div>
+                          {automationSetting.enabled && renderTagButtons(automationSetting.id)}
                         </>
                       ) : (
                         <div>
@@ -878,12 +1022,15 @@ export default function NotificationsPage() {
                             {tr('app.messages.modal.smsText', 'SMS text')}
                           </label>
                           <textarea
+                            ref={editMessageRef}
                             value={template.message}
                             onChange={(e) => updateTemplate(template.id, 'message', e.target.value)}
+                            onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                             disabled={!automationSetting.enabled}
                             rows={6}
                             className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
                           />
+                          {automationSetting.enabled && renderTagButtons(automationSetting.id)}
                         </div>
                       )}
                     </div>
@@ -933,9 +1080,11 @@ export default function NotificationsPage() {
                           {tr('app.messages.modal.subject', 'Subject')}
                         </label>
                         <input
+                          ref={editSubjectRef}
                           type="text"
                           value={template.subject}
                           onChange={(e) => updateTemplate(template.id, 'subject', e.target.value)}
+                          onFocus={() => { lastFocusedFieldRef.current = 'subject' }}
                           className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100"
                         />
                       </div>
@@ -946,12 +1095,16 @@ export default function NotificationsPage() {
                         {tr('app.messages.modal.messageBody', 'Message body')}
                       </label>
                       <textarea
+                        ref={editMessageRef}
                         value={template.message}
                         onChange={(e) => updateTemplate(template.id, 'message', e.target.value)}
+                        onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                         rows={10}
                         className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100"
                       />
                     </div>
+
+                    {renderTagButtons(template.id)}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 px-5 py-3 shrink-0">

@@ -1525,13 +1525,17 @@ function JobsPageContent() {
                 }
             } catch {}
             
+            const tf = draggedJob.scheduled_time_from ? String(draggedJob.scheduled_time_from).substring(0, 5) : ''
+            const tt = draggedJob.scheduled_time_to   ? String(draggedJob.scheduled_time_to).substring(0, 5)   : ''
             const template = await getEmailTemplate('change_date', {
-                clientName: `${draggedJob.first_name || ''} ${draggedJob.last_name || ''}`.trim() || 'Customer',
-                clientFirstName: draggedJob.first_name || 'Customer',
+                clientName: `${draggedJob.name || ''} ${draggedJob.last_name || ''}`.trim(),
+                clientFirstName: draggedJob.name || '',
                 clientLastName: draggedJob.last_name || '',
                 jobDate: oldDate,
                 jobOldDate: oldDate,
                 jobNewDate: newDate,
+                jobTimeFrom: tf,
+                jobTimeTo: tt,
                 userName: userName,
                 companyName: draggedJob.company_name || ''
             })

@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
     const languageCode = SUPPORTED_LANGUAGES.has(requested) ? requested : 'en';
 
     let result = await pool.query(
-      `SELECT id, title, description, duration, video_id, sort_order, created_at, language_code
+      `SELECT id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link
        FROM video_guides
        WHERE language_code = $1
        ORDER BY sort_order ASC, created_at ASC`,
@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
     // Always fallback to English if no videos exist for requested language.
     if (result.rows.length === 0 && languageCode !== 'en') {
       result = await pool.query(
-        `SELECT id, title, description, duration, video_id, sort_order, created_at, language_code
+        `SELECT id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link
          FROM video_guides
          WHERE language_code = 'en'
          ORDER BY sort_order ASC, created_at ASC`
@@ -51,6 +51,7 @@ router.get('/', async (req, res) => {
       thumbnail: row.video_id
         ? `https://img.youtube.com/vi/${row.video_id}/maxresdefault.jpg`
         : undefined,
+      guideLink: row.guide_link || undefined,
     }));
 
     res.json({ videos });

@@ -59,6 +59,16 @@ const DEFAULT_TEMPLATES = {
     subject: 'Your job on {Job date} has been cancelled',
     message: 'Hi {Client first name},\n\nWe are sorry, but your scheduled job on {Job date} has been cancelled.\n\nOriginal time: {Job time from} - {Job time to}\nServices: {Job services}\n\nPlease contact us if you want to rebook.\n\nBest regards,\n{Company name}'
   },
+  on_the_way: {
+    subject: 'We are on our way',
+    message:
+      'Hi {Client first name},\n\n' +
+      'We are on our way to you right now and expect to arrive in about {Selected minutes} minutes.\n\n' +
+      'The agreed location is {Client location}.\n\n' +
+      'Kind regards,\n' +
+      '{Owner name}\n' +
+      '{Company name}',
+  },
   send_invoice: getSendInvoiceDefaults('US'),
   invoice_due_reminder: getInvoiceDueReminderDefaults('US'),
 };
@@ -113,6 +123,7 @@ async function ensureSchema() {
         'change_time',
         'change_employee',
         'cancel_job',
+        'on_the_way',
         'send_invoice',
         'invoice_due_reminder'
       ))

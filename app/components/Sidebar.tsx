@@ -17,6 +17,7 @@ import {
   RocketLaunchIcon,
   DocumentTextIcon,
   XMarkIcon,
+  QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
@@ -375,8 +376,17 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Get Started - bottom left */}
-      <div className="px-4 py-3 border-t border-white/10 pb-safe-plus">
+      {/* Bottom actions: Get help + Get started */}
+      <div className="px-4 py-3 border-t border-white/10 pb-safe-plus space-y-2">
+        <a
+          href="https://help.pathpilo.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-gray-300 hover:text-white hover:bg-white/5 transition-colors rounded-lg text-sm font-medium"
+        >
+          <QuestionMarkCircleIcon className="w-4 h-4 text-accent-500 flex-shrink-0" />
+          <span>{t('app.sidebar.getHelp', 'Get help')}</span>
+        </a>
         <button
           onClick={() => setIsVideoGuideOpen(true)}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold text-sm rounded-xl shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 transition-all duration-200"

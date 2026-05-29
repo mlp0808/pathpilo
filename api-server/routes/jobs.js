@@ -15,6 +15,12 @@ const {
   subscriptionDateIsOnOrAfterPause,
 } = require('../utils/subscriptionVirtualJob');
 const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
+const {
+  renderManualJobEmail,
+  buildClientLocation,
+  formatJobDate,
+  timePart,
+} = require('../utils/manualJobEmailTemplate');
 
 const router = express.Router();
 
@@ -2023,6 +2029,127 @@ router.post('/:jobId/start', async (req, res) => {
   } catch (error) {
     console.error('Error starting job:', error);
     res.status(500).json({ error: 'Failed to start job: ' + error.message });
+  }
+});
+
+// POST /api/jobs/:jobId/notify-on-way
+//
+// Standalone "on my way" notification — does NOT change job status.
+// Sends a templated email to the job's client with a custom ETA.
+// Body: { eta_minutes: number | null }
+router.post('/:jobId/notify-on-way', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { eta_minutes } = req.body || {};
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const jobRes = await pool.query(
+      `SELECT j.*,
+              c.name AS client_first_name, c.last_name AS client_last_name,
+              c.email AS client_email,
+              c.address AS client_address, c.zip_code AS client_zip, c.city AS client_city,
+              co.name AS company_name,
+              ou.first_name AS owner_first_name, ou.last_name AS owner_last_name,
+              au.first_name AS assignee_first_name, au.last_name AS assignee_last_name
+         FROM jobs j
+         LEFT JOIN clients c ON j.client_id = c.id
+         LEFT JOIN companies co ON co.id = j.company_id
+         LEFT JOIN users ou ON ou.id = co.owner_id
+         LEFT JOIN users au ON au.id = j.assigned_user_id
+        WHERE j.id = $1 AND j.company_id = $2`,
+      [jobId, companyId]
+    );
+    if (jobRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    const job = jobRes.rows[0];
+
+    if (!job.client_email) {
+      return res.status(400).json({ error: 'No client email on file for this job' });
+    }
+
+    const userId = req.user?.userId || null;
+    const clientLocation = buildClientLocation(job);
+    const employeeName = [job.assignee_first_name, job.assignee_last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const ownerName = [job.owner_first_name, job.owner_last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    const actingUserRes = userId
+      ? await pool.query('SELECT first_name, last_name FROM users WHERE id = $1', [userId])
+      : { rows: [] };
+    const acting = actingUserRes.rows[0];
+    const userName = acting
+      ? [acting.first_name, acting.last_name].filter(Boolean).join(' ').trim()
+      : employeeName;
+
+    const templateData = {
+      clientName: [job.client_first_name, job.client_last_name].filter(Boolean).join(' ').trim(),
+      clientFirstName: job.client_first_name || '',
+      clientLastName: job.client_last_name || '',
+      jobDate: formatJobDate(job.scheduled_date),
+      jobTimeFrom: timePart(job.scheduled_time_from),
+      jobTimeTo: timePart(job.scheduled_time_to),
+      employeeName: employeeName || userName || '',
+      userName: userName || employeeName || '',
+      companyName: job.company_name || '',
+      companyOwner: ownerName,
+      jobAddress: clientLocation,
+      jobCity: job.city || job.client_city || '',
+      clientLocation,
+      selectedMinutes: eta_minutes != null ? String(eta_minutes) : '',
+      currentDate: new Date().toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }),
+      currentTime: new Date().toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }),
+    };
+
+    const { subject, message } = await renderManualJobEmail(
+      pool,
+      companyId,
+      'on_the_way',
+      templateData
+    );
+
+    await sendJobCustomerEmail(pool, companyId, {
+      to: job.client_email,
+      subject,
+      text: message,
+    });
+
+    try {
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [
+          jobId,
+          userId,
+          'notification-sent',
+          `"On the way" notification sent (ETA: ${eta_minutes ? eta_minutes + ' min' : 'auto'}) to ${job.client_email}`,
+        ]
+      );
+    } catch (logErr) {
+      console.error('Failed to log on-way notification', logErr.message);
+    }
+
+    res.json({ notified: true, eta_minutes: eta_minutes || null });
+  } catch (error) {
+    console.error('Error sending on-way notification:', error);
+    res.status(500).json({ error: 'Failed to send notification: ' + error.message });
   }
 });
 

@@ -79,6 +79,7 @@ const TEMPLATE_KEYS_FOR_SAVE = [
   'change_employee',
   'cancel_job',
   'send_invoice',
+  'on_the_way',
 ] as const;
 
 const PERSONALIZATION_TAGS = [
@@ -179,6 +180,16 @@ const FACTORY_TEMPLATE_DEFAULTS: Record<string, TemplateRow> = {
     message:
       'Hi {Client first name},\n\nYour invoice is ready. Open the e-invoice from the email to view details and payment options.\n\nBest regards,\n{Company name}',
   },
+  on_the_way: {
+    subject: 'We are on our way',
+    message:
+      'Hi {Client first name},\n\n' +
+      'We are on our way to you right now and expect to arrive in about {Selected minutes} minutes.\n\n' +
+      'The agreed location is {Client location}.\n\n' +
+      'Kind regards,\n' +
+      '{Owner name}\n' +
+      '{Company name}',
+  },
 };
 
 const AUTOMATION_UI: {
@@ -244,6 +255,11 @@ const MANUAL_UI: { templateKey: string; title: string; subtitle: string }[] = [
     templateKey: 'send_invoice',
     title: 'Send invoice',
     subtitle: 'First invoice email to the client',
+  },
+  {
+    templateKey: 'on_the_way',
+    title: 'On the way',
+    subtitle: 'When you notify a client from the app',
   },
 ];
 

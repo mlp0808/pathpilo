@@ -14,6 +14,7 @@ export interface VideoItem {
   videoId: string
   languageCode?: string
   thumbnail?: string
+  guideLink?: string
 }
 
 const normalizeLang = (value: unknown): string => {
@@ -161,18 +162,34 @@ export default function VideoGuideModal({
           className="w-full max-w-3xl bg-page rounded-2xl shadow-2xl overflow-hidden animate-slideDown flex flex-col max-h-[90vh] border border-gray-200/80"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Header - brand dark teal */}
-          <div className="flex items-center justify-between px-6 py-4 bg-primary-500 border-b border-primary-600/50">
-            <h2 className="text-lg font-semibold text-white tracking-tight">
-              {t('app.sidebar.getStarted', 'Get started')}
-            </h2>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-all duration-200"
-              aria-label={t('app.modal.close', 'Close')}
-            >
-              <XMarkIcon className="w-5 h-5" />
-            </button>
+          {/* Header — help portal banner + close */}
+          <div className="flex items-center gap-4 px-5 py-3.5 bg-primary-500 border-b border-primary-600/50">
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-semibold text-sm leading-snug">
+                Need help using the system?
+              </p>
+              <p className="text-white/70 text-xs mt-0.5">
+                Check out our help portal for guides and articles.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <a
+                href="https://help.pathpilo.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-white text-primary-700 hover:bg-white/90 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm"
+              >
+                Visit help portal →
+              </a>
+              <button
+                onClick={onClose}
+                className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-all duration-200"
+                aria-label={t('app.modal.close', 'Close')}
+              >
+                <span className="text-xs font-medium">Close</span>
+                <XMarkIcon className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Main video player - no autoplay */}
@@ -205,7 +222,7 @@ export default function VideoGuideModal({
             )}
           </div>
 
-          {/* Video list - clean, modern */}
+          {/* Video list - scrollable */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-5">
             <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest mb-3">
               More guides
@@ -214,52 +231,73 @@ export default function VideoGuideModal({
               {displayVideos.map((video) => {
                 const isActive = displayCurrent.id === video.id
                 return (
-                  <button
+                  <div
                     key={video.id}
-                    onClick={() => setCurrentVideo(video)}
-                    className={`w-full flex items-center gap-4 px-4 py-3 rounded-xl text-left transition-all duration-200 group ${
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group ${
                       isActive
                         ? 'bg-accent-50 ring-1 ring-accent-500/40 shadow-sm'
                         : 'bg-white/80 hover:bg-white border border-gray-200/60 hover:border-gray-300/80 hover:shadow-sm'
                     }`}
                   >
-                    <div className="relative flex-shrink-0 w-16 h-10 rounded-lg overflow-hidden bg-gray-200/80">
-                      <img
-                        src={video.thumbnail || `https://img.youtube.com/vi/${video.videoId}/mqdefault.jpg`}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
-                        <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-                          <PlayIcon className="w-4 h-4 text-accent-500 ml-0.5" />
+                    {/* Click-to-play area */}
+                    <button
+                      type="button"
+                      onClick={() => setCurrentVideo(video)}
+                      className="flex items-center gap-4 flex-1 min-w-0 text-left"
+                    >
+                      <div className="relative flex-shrink-0 w-16 h-10 rounded-lg overflow-hidden bg-gray-200/80">
+                        <img
+                          src={video.thumbnail || `https://img.youtube.com/vi/${video.videoId}/mqdefault.jpg`}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
+                          <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                            <PlayIcon className="w-4 h-4 text-accent-500 ml-0.5" />
+                          </div>
                         </div>
+                        <span className="absolute bottom-1 right-1 text-[10px] font-medium text-white bg-black/60 px-1.5 py-0.5 rounded">
+                          {video.duration}
+                        </span>
                       </div>
-                      <span className="absolute bottom-1 right-1 text-[10px] font-medium text-white bg-black/60 px-1.5 py-0.5 rounded">
-                        {video.duration}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p
-                        className={`font-medium text-sm truncate ${
-                          isActive ? 'text-primary-800' : 'text-gray-700 group-hover:text-primary-800'
-                        }`}
-                      >
-                        {video.title}
-                      </p>
-                      {video.description && (
-                        <p className="text-xs text-gray-500 truncate mt-0.5">{video.description}</p>
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className={`font-medium text-sm truncate ${
+                            isActive ? 'text-primary-800' : 'text-gray-700 group-hover:text-primary-800'
+                          }`}
+                        >
+                          {video.title}
+                        </p>
+                        {video.description && (
+                          <p className="text-xs text-gray-500 truncate mt-0.5">{video.description}</p>
+                        )}
+                      </div>
+                    </button>
+
+                    {/* Right-side actions */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {isActive && (
+                        <span className="text-[11px] font-semibold text-accent-600 bg-accent-500/15 px-2.5 py-1 rounded-lg">
+                          {t('app.videoGuide.nowPlaying', 'Now playing')}
+                        </span>
+                      )}
+                      {video.guideLink && (
+                        <a
+                          href={video.guideLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-semibold text-primary-600 hover:text-primary-700 bg-primary-500/10 hover:bg-primary-500/20 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap"
+                        >
+                          See full guide →
+                        </a>
                       )}
                     </div>
-                    {isActive && (
-                      <span className="flex-shrink-0 text-[11px] font-semibold text-accent-600 bg-accent-500/15 px-2.5 py-1 rounded-lg">
-                        {t('app.videoGuide.nowPlaying', 'Now playing')}
-                      </span>
-                    )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
           </div>
+
         </div>
       </div>
     </div>

@@ -252,6 +252,60 @@ const translations: Record<string, Record<string, TemplateLang>> = {
     },
   },
 
+  // ── email_on_the_way ──────────────────────────────────────────────────────
+  email_on_the_way: {
+    en: {
+      subject: 'We are on our way',
+      message:
+        'Hi {Client first name},\n\n' +
+        'We are on our way to you right now and expect to arrive in about {Selected minutes} minutes.\n\n' +
+        'The agreed location is {Client location}.\n\n' +
+        'Kind regards,\n' +
+        '{Owner name}\n' +
+        '{Company name}',
+    },
+    da: {
+      subject: 'Vi er på vej',
+      message:
+        'Hej {Client first name},\n\n' +
+        'Vi er på vej til dig nu og forventer at ankomme om cirka {Selected minutes} minutter.\n\n' +
+        'Den aftalte adresse er {Client location}.\n\n' +
+        'Med venlig hilsen,\n' +
+        '{Owner name}\n' +
+        '{Company name}',
+    },
+    sv: {
+      subject: 'Vi är på väg',
+      message:
+        'Hej {Client first name},\n\n' +
+        'Vi är på väg till dig nu och beräknar att vara framme om cirka {Selected minutes} minuter.\n\n' +
+        'Den överenskomna adressen är {Client location}.\n\n' +
+        'Med vänliga hälsningar,\n' +
+        '{Owner name}\n' +
+        '{Company name}',
+    },
+    nb: {
+      subject: 'Vi er på vei',
+      message:
+        'Hei {Client first name},\n\n' +
+        'Vi er på vei til deg nå og forventer å ankomme om cirka {Selected minutes} minutter.\n\n' +
+        'Den avtalte adressen er {Client location}.\n\n' +
+        'Med vennlig hilsen,\n' +
+        '{Owner name}\n' +
+        '{Company name}',
+    },
+    de: {
+      subject: 'Wir sind unterwegs',
+      message:
+        'Guten Tag {Client first name},\n\n' +
+        'Wir sind gerade auf dem Weg zu Ihnen und erwarten in etwa {Selected minutes} Minuten anzukommen.\n\n' +
+        'Der vereinbarte Ort ist {Client location}.\n\n' +
+        'Mit freundlichen Grüßen,\n' +
+        '{Owner name}\n' +
+        '{Company name}',
+    },
+  },
+
   // ── sms_on_the_way ────────────────────────────────────────────────────────
   sms_on_the_way: {
     en: {
@@ -352,6 +406,25 @@ export function getCompanyCountryCodeSync(): string {
   return 'DK'
 }
 
+export function getCompanyNameSync(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    const rawCompany = localStorage.getItem('company')
+    if (rawCompany) {
+      const c = JSON.parse(rawCompany)
+      if (c?.name) return String(c.name)
+    }
+    const u = JSON.parse(localStorage.getItem('user') || '{}')
+    const name =
+      u.activeCompany?.name ||
+      (Array.isArray(u.companies)
+        ? u.companies.find((co: { id?: number }) => co?.id === u.companyId)?.name
+        : undefined)
+    if (name) return String(name)
+  } catch { /* ignore */ }
+  return ''
+}
+
 // ─── Template metadata (titles/descriptions don't change per language) ────────
 
 const templateMeta: Record<string, Pick<MessageTemplate, 'id' | 'kind' | 'channel' | 'title' | 'description'>> = {
@@ -411,6 +484,13 @@ const templateMeta: Record<string, Pick<MessageTemplate, 'id' | 'kind' | 'channe
     title: 'Assigned team member changed',
     description: 'Manual template used when the assigned employee is changed and you choose to notify.',
   },
+  email_on_the_way: {
+    id: 'email_on_the_way',
+    kind: 'template',
+    channel: 'email',
+    title: 'On the way',
+    description: 'Sent from the mobile app when you notify a client that you are on your way.',
+  },
   sms_on_the_way: {
     id: 'sms_on_the_way',
     kind: 'automated',
@@ -436,6 +516,7 @@ const TEMPLATE_ORDER = [
   'email_job_cancelled',
   'email_time_updated',
   'email_employee_changed',
+  'email_on_the_way',
   'sms_on_the_way',
   'sms_day_before',
 ]
