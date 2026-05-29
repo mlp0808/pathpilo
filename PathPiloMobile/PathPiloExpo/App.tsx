@@ -7648,6 +7648,19 @@ function SendIcon({ color = '#FFFFFF', size = 18 }: { color?: string; size?: num
   );
 }
 
+/** Five equal ETA columns; explicit widths avoid Android flex text clipping. */
+const NOTIFY_ETA_COL_COUNT = 5;
+const NOTIFY_ETA_COL_GAP = 5;
+const NOTIFY_ETA_BAR_H_PAD = 16;
+
+function notifyEtaColumnWidth(screenWidth: number): number {
+  const inner =
+    screenWidth -
+    NOTIFY_ETA_BAR_H_PAD * 2 -
+    NOTIFY_ETA_COL_GAP * (NOTIFY_ETA_COL_COUNT - 1);
+  return Math.max(52, Math.floor(inner / NOTIFY_ETA_COL_COUNT));
+}
+
 function StickyCompleteBar({
   visible,
   job,
@@ -7666,6 +7679,11 @@ function StickyCompleteBar({
   user?: User | any;
 }) {
   const navigation = useNavigation<any>();
+  const { width: screenWidth } = useWindowDimensions();
+  const etaColWidth = useMemo(
+    () => notifyEtaColumnWidth(screenWidth),
+    [screenWidth],
+  );
   const translateY = useRef(new Animated.Value(140)).current;
 
   // --- Notify-on-way state ---
@@ -7783,7 +7801,7 @@ function StickyCompleteBar({
 
   const pickerHeight = pickerAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 52],
+    outputRange: [0, 56],
   });
   const pickerOpacity = pickerAnim.interpolate({
     inputRange: [0, 0.5, 1],
@@ -7926,6 +7944,7 @@ function StickyCompleteBar({
                 key={mins}
                 style={[
                   styles.notifyEtaGridCell,
+                  { width: etaColWidth },
                   isActive && styles.notifyEtaGridCellActive,
                 ]}
                 onPress={() => {
@@ -7934,10 +7953,14 @@ function StickyCompleteBar({
                 }}
                 activeOpacity={0.8}
               >
-                <View style={styles.notifyEtaGridCellInner}>
-                  <Text style={styles.notifyEtaGridNum}>{mins}</Text>
-                  <Text style={styles.notifyEtaGridMinLabel}>min</Text>
-                </View>
+                <Text
+                  style={[styles.notifyEtaGridLabel, androidPillTextFix]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                >
+                  {padAndroidText(`${mins} min`)}
+                </Text>
               </TouchableOpacity>
             );
           })}
@@ -7946,32 +7969,47 @@ function StickyCompleteBar({
             style={[
               styles.notifyEtaGridCell,
               styles.notifyEtaGridInputCell,
+              { width: etaColWidth },
               etaMode === 'custom' && styles.notifyEtaGridCellActive,
             ]}
             activeOpacity={1}
             onPress={() => setEtaMode('custom')}
           >
-            <TextInput
-              style={styles.notifyEtaGridInput}
-              value={customEta}
-              onChangeText={(t) => {
-                setCustomEta(t.replace(/\D/g, '').slice(0, 3));
-                setEtaMode('custom');
-              }}
-              onFocus={() => setEtaMode('custom')}
-              keyboardType="number-pad"
-              placeholder={routeMinutes ? String(routeMinutes) : ''}
-              placeholderTextColor="#94A3B8"
-              maxLength={3}
-              selectTextOnFocus
-            />
-            <Text style={styles.notifyEtaGridMinSuffix}>min</Text>
+            <View
+              style={[
+                styles.notifyEtaGridInputRow,
+                { width: Math.max(etaColWidth - 10, 44) },
+              ]}
+            >
+              <TextInput
+                style={[
+                  styles.notifyEtaGridInput,
+                  androidTextFix,
+                  { width: Math.max(etaColWidth - 36, 24) },
+                ]}
+                value={customEta}
+                onChangeText={(t) => {
+                  setCustomEta(t.replace(/\D/g, '').slice(0, 3));
+                  setEtaMode('custom');
+                }}
+                onFocus={() => setEtaMode('custom')}
+                keyboardType="number-pad"
+                placeholder={routeMinutes ? String(routeMinutes) : ''}
+                placeholderTextColor="#94A3B8"
+                maxLength={3}
+                selectTextOnFocus
+              />
+              <Text style={[styles.notifyEtaGridMinSuffix, androidPillTextFix]}>
+                {padAndroidText('min')}
+              </Text>
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[
               styles.notifyEtaGridCell,
               styles.notifyEtaGridSendCell,
+              { width: etaColWidth },
               isSendingNotify && { opacity: 0.65 },
             ]}
             onPress={sendNotification}
@@ -16353,14 +16391,15 @@ const styles = StyleSheet.create({
   notifyEtaGrid: {
     flexDirection: 'row',
     alignItems: 'stretch',
+    alignSelf: 'stretch',
     width: '100%',
-    gap: 5,
+    gap: NOTIFY_ETA_COL_GAP,
     marginBottom: 8,
     height: 48,
   },
   notifyEtaGridCell: {
-    flex: 1,
-    minWidth: 0,
+    flexGrow: 0,
+    flexShrink: 0,
     height: 48,
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
@@ -16368,53 +16407,48 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(25,52,52,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 2,
+    paddingHorizontal: 4,
+    overflow: 'visible',
   },
   notifyEtaGridCellActive: {
     backgroundColor: '#FFFFFF',
     borderColor: '#047857',
     borderWidth: 2,
   },
-  notifyEtaGridCellInner: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  notifyEtaGridNum: {
-    fontSize: 15,
-    fontWeight: '800',
+  notifyEtaGridLabel: {
+    width: '100%',
+    fontSize: 12,
+    fontWeight: '700',
     color: '#193434',
-    lineHeight: 18,
-  },
-  notifyEtaGridMinLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#64748B',
-    lineHeight: 12,
-    marginTop: 1,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   notifyEtaGridInputCell: {
+    paddingHorizontal: 2,
+  },
+  notifyEtaGridInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    alignSelf: 'center',
   },
   notifyEtaGridInput: {
-    width: 32,
-    minWidth: 28,
-    maxWidth: 40,
-    fontSize: 15,
+    flexGrow: 0,
+    flexShrink: 0,
+    fontSize: 14,
     fontWeight: '800',
     color: '#193434',
     textAlign: 'center',
     paddingVertical: 0,
-    paddingHorizontal: 0,
+    paddingHorizontal: 2,
     includeFontPadding: false,
   },
   notifyEtaGridMinSuffix: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '700',
     color: '#64748B',
     marginLeft: 2,
+    flexGrow: 0,
     flexShrink: 0,
   },
   notifyEtaGridSendCell: {
