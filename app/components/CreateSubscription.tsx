@@ -801,19 +801,6 @@ export default function CreateSubscription({
                         )}
                       </div>
                     )}
-
-                    {/* Hint to next tab */}
-                    {selectedServices.length > 0 && (
-                      <div className="flex justify-end pt-2">
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab('schedule')}
-                          className="text-xs text-accent-600 hover:text-accent-700 font-semibold flex items-center gap-1 transition-colors"
-                        >
-                          {t('app.subscription.setSchedule', 'Set schedule')} {'->'}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
