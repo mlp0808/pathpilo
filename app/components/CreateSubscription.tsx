@@ -504,12 +504,31 @@ export default function CreateSubscription({
         : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim())
     : null
 
-  const canSubmit =
-    !isSubmitting &&
+  const canProceedToSchedule =
     subscriptionTitle.trim().length > 0 &&
     (!!selectedClient || isAddingNewClient) &&
-    selectedServices.length > 0 &&
+    selectedServices.length > 0
+
+  const canSubmit =
+    !isSubmitting &&
+    canProceedToSchedule &&
     (startAsap ? !!firstVisitYmd : !!customStartingDate.trim())
+
+  const goToSchedule = () => {
+    if (!subscriptionTitle.trim()) {
+      alert(t('app.subscription.errTitleRequired', 'Please enter a subscription title'))
+      return
+    }
+    if (!selectedClient && !isAddingNewClient) {
+      alert(t('app.subscription.errClientRequired', 'Please select or add a client'))
+      return
+    }
+    if (selectedServices.length === 0) {
+      alert(t('app.subscription.errServiceRequired', 'Please add at least one service'))
+      return
+    }
+    setActiveTab('schedule')
+  }
 
   return (
     <>
@@ -864,13 +883,27 @@ export default function CreateSubscription({
               <button onClick={onClose} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
                 {t('app.subscription.cancel', 'Cancel')}
               </button>
-              <button
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-primary-600 text-primary-700 bg-white hover:bg-primary-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSubmitting ? t('app.subscription.saving', 'Saving...') : t('app.subscription.createSubscriptionBtn', 'Create Subscription')}
-              </button>
+              {activeTab === 'details' ? (
+                <button
+                  type="button"
+                  onClick={goToSchedule}
+                  disabled={!canProceedToSchedule}
+                  className="px-4 py-2 text-sm font-medium rounded-lg border border-primary-600 text-primary-700 bg-white hover:bg-primary-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {t('app.subscription.setSchedule', 'Set schedule')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  className="px-4 py-2 text-sm font-medium rounded-lg border border-primary-600 text-primary-700 bg-white hover:bg-primary-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isSubmitting
+                    ? t('app.subscription.saving', 'Saving...')
+                    : t('app.subscription.createSubscriptionBtn', 'Create Subscription')}
+                </button>
+              )}
             </div>
           </div>
         </div>
