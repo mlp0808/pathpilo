@@ -117,6 +117,25 @@ jobs:
           cd $APP
 
           echo "==> Writing .env..."
+          # Every deploy rewrites .env from GitHub secrets. Preserve the existing
+          # server key when the GitHub secret is missing so manual fixes survive.
+          PRESERVED_SECURE_NOTES_KEY=""
+          if [ -f api-server/.env ]; then
+            PRESERVED_SECURE_NOTES_KEY="$(grep -E '^SECURE_NOTES_MASTER_KEY=' api-server/.env | tail -1 | cut -d= -f2- || true)"
+          fi
+          if [ -z "$PRESERVED_SECURE_NOTES_KEY" ] && [ -f .env ]; then
+            PRESERVED_SECURE_NOTES_KEY="$(grep -E '^SECURE_NOTES_MASTER_KEY=' .env | tail -1 | cut -d= -f2- || true)"
+          fi
+          DEPLOY_SECURE_NOTES_KEY='${{ secrets.SECURE_NOTES_MASTER_KEY }}'
+          if [ -z "$DEPLOY_SECURE_NOTES_KEY" ]; then
+            DEPLOY_SECURE_NOTES_KEY="$PRESERVED_SECURE_NOTES_KEY"
+            if [ -n "$PRESERVED_SECURE_NOTES_KEY" ]; then
+              echo "==> SECURE_NOTES_MASTER_KEY: kept existing server value (GitHub secret not set)"
+            else
+              echo "==> WARNING: SECURE_NOTES_MASTER_KEY is empty — encrypted notes will fail until you add the GitHub secret"
+            fi
+          fi
+
           printf '%s\n' \
             "DATABASE_URL=postgresql://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}" \
             "DB_HOST=${{ vars.DB_HOST }}" \
@@ -138,7 +157,7 @@ jobs:
             "PORT=${{ vars.PORT }}" \
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
-            "SECURE_NOTES_MASTER_KEY=${{ secrets.SECURE_NOTES_MASTER_KEY }}" \
+            "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" \
             "NEXT_PUBLIC_API_URL=" > .env
 
           printf '%s\n' \
@@ -154,7 +173,7 @@ jobs:
             "API_PORT=${{ vars.API_PORT }}" \
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
-            "SECURE_NOTES_MASTER_KEY=${{ secrets.SECURE_NOTES_MASTER_KEY }}" > api-server/.env
+            "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" > api-server/.env
 
           echo "==> Installing production dependencies..."
           npm ci --omit=dev
