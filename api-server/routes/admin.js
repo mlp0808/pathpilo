@@ -434,6 +434,107 @@ router.get('/users', async (req, res) => {
   }
 });
 
+/** Remove a user and owned companies so they can sign up again with the same email. */
+async function purgeUserCompletely(client, user) {
+  const userId = user.id;
+  const normalizedEmail = String(user.email || '').trim().toLowerCase();
+
+  await client.query(`UPDATE invoices SET created_by = NULL WHERE created_by = $1`, [userId]);
+  await client.query(`UPDATE secure_notes SET updated_by = NULL WHERE updated_by = $1`, [userId]);
+  await client.query(`UPDATE secure_notes_audit SET user_id = NULL WHERE user_id = $1`, [userId]);
+  await client.query(`UPDATE employee_appointments SET declined_by = NULL WHERE declined_by = $1`, [userId]);
+  await client.query(`UPDATE employee_appointments SET requested_by = NULL WHERE requested_by = $1`, [userId]);
+  await client.query(`UPDATE employee_appointments SET approved_by = NULL WHERE approved_by = $1`, [userId]);
+
+  const owned = await client.query(`SELECT id FROM companies WHERE owner_id = $1`, [userId]);
+  for (const row of owned.rows) {
+    await client.query(`UPDATE companies SET owner_id = NULL WHERE id = $1`, [row.id]);
+    await client.query(`DELETE FROM companies WHERE id = $1`, [row.id]);
+  }
+
+  if (normalizedEmail) {
+    await client.query(
+      `DELETE FROM registration_verification_codes WHERE LOWER(TRIM(email)) = $1`,
+      [normalizedEmail],
+    );
+    await client.query(
+      `DELETE FROM signup_progress_drafts
+       WHERE email IS NOT NULL AND LOWER(TRIM(email)) = $1`,
+      [normalizedEmail],
+    );
+  }
+
+  const del = await client.query(`DELETE FROM users WHERE id = $1 RETURNING id`, [userId]);
+  return del.rowCount > 0;
+}
+
+// DELETE /api/admin/users/:userId — permanently delete user (and companies they own)
+router.delete('/users/:userId', async (req, res) => {
+  const userId = parseInt(String(req.params.userId), 10);
+  if (!Number.isFinite(userId) || userId < 1) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+
+  const { confirmEmail } = req.body || {};
+  const client = await pool.connect();
+
+  try {
+    const userRes = await client.query(
+      `SELECT id, email, first_name, last_name, role FROM users WHERE id = $1`,
+      [userId],
+    );
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userRes.rows[0];
+    if (user.role === 'admin') {
+      return res.status(400).json({ error: 'Admin accounts cannot be deleted from this panel' });
+    }
+
+    const adminUserId = Number(req.user?.userId || 0);
+    if (adminUserId > 0 && adminUserId === userId) {
+      return res.status(400).json({ error: 'You cannot delete your own account while logged in' });
+    }
+
+    const expectedEmail = String(user.email || '').trim().toLowerCase();
+    const typedEmail = String(confirmEmail || '').trim().toLowerCase();
+    if (!typedEmail || typedEmail !== expectedEmail) {
+      return res.status(400).json({
+        error: 'Confirmation email does not match',
+        expected: user.email,
+      });
+    }
+
+    const ownedCount = (
+      await client.query(`SELECT COUNT(*)::int AS n FROM companies WHERE owner_id = $1`, [userId])
+    ).rows[0].n;
+
+    await client.query('BEGIN');
+    const deleted = await purgeUserCompletely(client, user);
+    if (!deleted) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    await client.query('COMMIT');
+
+    res.json({
+      message: `User "${user.email}" has been permanently deleted.`,
+      deletedCompanies: ownedCount,
+    });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ignore
+    }
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Failed to delete user: ' + error.message });
+  } finally {
+    client.release();
+  }
+});
+
 // DELETE /api/admin/pending-signups — drop test/noise rows from incomplete signup lists
 router.delete('/pending-signups', async (req, res) => {
   try {

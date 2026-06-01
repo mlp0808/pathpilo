@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
@@ -16,6 +16,7 @@ interface User {
   firstName: string
   lastName: string
   email: string
+  role?: string
   companies: Company[]
   createdAt: string
 }
@@ -57,6 +58,11 @@ export default function AdminUsersPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [deletingKey, setDeletingKey] = useState<string | null>(null)
   const [pendingActionError, setPendingActionError] = useState<string | null>(null)
+  const [userToDelete, setUserToDelete] = useState<User | null>(null)
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('')
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const deleteInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     // Check authentication first
@@ -200,6 +206,49 @@ export default function AdminUsersPage() {
       setDeletingKey(null)
     }
   }
+
+  const openDeleteUserModal = (user: User) => {
+    setUserToDelete(user)
+    setDeleteConfirmEmail('')
+    setDeleteError('')
+    setTimeout(() => deleteInputRef.current?.focus(), 50)
+  }
+
+  const handleDeleteUser = async () => {
+    if (!userToDelete || deleteConfirmEmail.trim().toLowerCase() !== userToDelete.email.trim().toLowerCase()) {
+      return
+    }
+
+    const token = localStorage.getItem('token')
+    if (!token) {
+      setDeleteError('Not authenticated.')
+      return
+    }
+
+    setDeleteLoading(true)
+    setDeleteError('')
+    try {
+      const res = await fetch(apiUrl(`/admin/users/${userToDelete.id}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmEmail: deleteConfirmEmail.trim() }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setDeleteError(data.error || 'Failed to delete user')
+        return
+      }
+      setUserToDelete(null)
+      await fetchUsers()
+    } catch (err) {
+      setDeleteError('Network error: ' + (err as Error).message)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const ownedCompanies = (user: User) =>
+    user.companies?.filter((c) => c.role === 'owner') ?? []
 
   // Show loading while checking authentication
   if (!isAuthenticated) {
@@ -386,6 +435,9 @@ export default function AdminUsersPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Registered
                     </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -442,6 +494,19 @@ export default function AdminUsersPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">{formatDate(user.createdAt)}</div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                        {user.role === 'admin' ? (
+                          <span className="text-xs text-gray-400">Protected</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openDeleteUserModal(user)}
+                            className="font-medium text-red-600 hover:text-red-800"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -480,6 +545,103 @@ export default function AdminUsersPage() {
           </div>
         )}
       </div>
+
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Delete user</h2>
+                <p className="text-sm text-gray-500">This cannot be undone</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5 text-sm text-red-800 space-y-2">
+              <p>
+                <strong>
+                  {userToDelete.firstName} {userToDelete.lastName}
+                </strong>{' '}
+                ({userToDelete.email}) will be removed completely. They can register again with the same email as if
+                they were new.
+              </p>
+              {ownedCompanies(userToDelete).length > 0 && (
+                <p>
+                  This user owns{' '}
+                  <strong>
+                    {ownedCompanies(userToDelete).length} compan
+                    {ownedCompanies(userToDelete).length === 1 ? 'y' : 'ies'}
+                  </strong>{' '}
+                  ({ownedCompanies(userToDelete).map((c) => c.name).join(', ')}) — those companies and all their data
+                  will be deleted too.
+                </p>
+              )}
+              <p className="text-red-700">
+                Membership in other companies is removed; those companies stay intact.
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Type <strong className="font-mono">{userToDelete.email}</strong> to confirm
+              </label>
+              <input
+                ref={deleteInputRef}
+                type="email"
+                value={deleteConfirmEmail}
+                onChange={(e) => {
+                  setDeleteConfirmEmail(e.target.value)
+                  setDeleteError('')
+                }}
+                placeholder={userToDelete.email}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400"
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter' &&
+                    deleteConfirmEmail.trim().toLowerCase() === userToDelete.email.trim().toLowerCase()
+                  ) {
+                    handleDeleteUser()
+                  }
+                }}
+              />
+              {deleteError && <p className="text-xs text-red-600 mt-1">{deleteError}</p>}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setUserToDelete(null)
+                  setDeleteError('')
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteUser}
+                disabled={
+                  deleteConfirmEmail.trim().toLowerCase() !== userToDelete.email.trim().toLowerCase() ||
+                  deleteLoading
+                }
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {deleteLoading ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
