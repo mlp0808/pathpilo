@@ -505,7 +505,7 @@ export default function NotificationsPage() {
                 e.preventDefault()
                 insertTag(tag, templateId)
               }}
-              className="inline-flex items-center gap-1 rounded-lg border border-dashed border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:border-accent-400 hover:bg-accent-50 hover:text-accent-800 transition-colors select-none"
+              className="inline-flex items-center gap-1 rounded-lg border border-dashed border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:border-gray-400 hover:bg-gray-100 hover:text-gray-800 transition-colors select-none"
             >
               <span className="text-gray-400 text-[10px]">＋</span>
               {label}
@@ -625,17 +625,11 @@ export default function NotificationsPage() {
   }
 
   const renderTemplateCard = (template: MessageTemplate) => (
-    <div key={template.id} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+    <div key={template.id} className="rounded-xl border border-gray-200 bg-white p-5">
       <div className="mb-4">
         <div className="flex items-start justify-between gap-2">
           <h3 className="text-base font-semibold text-gray-900">{getTemplateTitle(template)}</h3>
-          <span
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-              template.channel === 'email'
-                ? 'bg-blue-100 text-blue-700'
-                : 'bg-violet-100 text-violet-700'
-            }`}
-          >
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-500">
             {template.channel === 'email' ? (
               <EnvelopeIcon className="h-3.5 w-3.5" />
             ) : (
@@ -666,31 +660,26 @@ export default function NotificationsPage() {
   )
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="rounded-3xl border border-gray-200 bg-gradient-to-br from-white via-white to-primary-50/30 shadow-sm">
-        <div className="border-b border-gray-200 p-6 md:p-8">
+    <div className="max-w-3xl mx-auto p-6">
+      <div>
+        <div className="pb-6">
           <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-accent-50 p-2.5">
-                <ChatBubbleLeftRightIcon className="w-6 h-6 text-accent-600" />
-              </div>
-              <div>
-                <h1 className="text-2xl md:text-3xl font-bold text-primary-800">
-                  {tr('app.messages.pageTitle', 'Messages')}
-                </h1>
-                <p className="text-sm md:text-base text-gray-600 mt-1">
-                  {tr(
-                    'app.messages.pageSubtitle',
-                    'Manage automated messages and manual send templates in one place.',
-                  )}
-                </p>
-              </div>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-gray-900">
+                {tr('app.messages.pageTitle', 'Messages')}
+              </h1>
+              <p className="mt-1 text-sm text-gray-500">
+                {tr(
+                  'app.messages.pageSubtitle',
+                  'Manage automated messages and manual send templates in one place.',
+                )}
+              </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 onClick={handleResetDefaults}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 <ArrowPathIcon className="w-4 h-4" />
                 {tr('app.messages.resetAllDefaults', 'Reset all defaults')}
@@ -698,7 +687,7 @@ export default function NotificationsPage() {
               <button
                 onClick={handleSaveDraft}
                 disabled={isSaving}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <SparklesIcon className="w-4 h-4" />
                 {isSaving ? tr('app.messages.saving', 'Saving...') : tr('app.messages.save', 'Save')}
@@ -707,38 +696,36 @@ export default function NotificationsPage() {
           </div>
 
           {savedNotice && (
-            <div className="mt-4 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-700">
-              {savedNotice}
-            </div>
+            <p className="mt-4 text-sm text-gray-500">{savedNotice}</p>
           )}
           {isLoadingRemote && (
-            <div className="mt-3 rounded-xl bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-700">
+            <p className="mt-3 text-sm text-gray-400">
               {tr('app.messages.loadingRemote', 'Loading saved templates...')}
-            </div>
+            </p>
           )}
         </div>
 
-        <div className="p-6 md:p-8 space-y-8">
+        <div className="space-y-8">
           <section>
-            <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-semibold text-primary-800">
+            <div className="rounded-xl border border-gray-200 bg-white p-5">
+              <h2 className="text-sm font-semibold text-gray-900">
                 {tr('app.messages.repliesTo', 'Replies go to')}
               </h2>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 mt-0.5">
                 {tr(
                   'app.messages.repliesToHelp',
                   'Customer replies from email notifications will be routed to this address. Default is company owner email.',
                 )}
               </p>
               <div className="mt-4">
-                <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                <label className="mb-1 block text-xs font-medium text-gray-700">
                   {tr('app.messages.replyToEmail', 'Reply-to email')}
                 </label>
                 <input
                   type="email"
                   value={draft.repliesToEmail}
                   onChange={(e) => setDraft((prev) => ({ ...prev, repliesToEmail: e.target.value }))}
-                  className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                   placeholder="owner@company.com"
                 />
               </div>
@@ -747,8 +734,8 @@ export default function NotificationsPage() {
 
           <section>
             <div className="mb-4 flex items-center gap-2">
-              <ClockIcon className="w-5 h-5 text-primary-700" />
-              <h2 className="text-lg font-semibold text-primary-800">
+              <ClockIcon className="w-5 h-5 text-gray-400" />
+              <h2 className="text-sm font-semibold text-gray-900">
                 {tr('app.messages.sectionAutomated', 'Automated')}
               </h2>
             </div>
@@ -772,7 +759,7 @@ export default function NotificationsPage() {
                     key={setting.id}
                     type="button"
                     onClick={() => setEditingTemplateId(setting.id)}
-                    className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm text-left w-full cursor-pointer hover:border-accent-300 hover:shadow transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+                    className="rounded-xl border border-gray-200 bg-white p-5 text-left w-full cursor-pointer hover:border-gray-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-900/20 focus-visible:ring-offset-2"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -780,13 +767,7 @@ export default function NotificationsPage() {
                           <h3 className="text-base font-semibold text-gray-900">
                             {tr(`app.messages.auto.${setting.id}.title`, setting.title)}
                           </h3>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                              setting.channel === 'email'
-                                ? 'bg-blue-100 text-blue-700'
-                                : 'bg-violet-100 text-violet-700'
-                            }`}
-                          >
+                          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 px-2 py-0.5 text-[11px] font-medium text-gray-500">
                             {setting.channel === 'email' ? (
                               <EnvelopeIcon className="h-3.5 w-3.5" />
                             ) : (
@@ -800,10 +781,11 @@ export default function NotificationsPage() {
                         </p>
                       </div>
                       <span
-                        className={`shrink-0 inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                          setting.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'
+                        className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                          setting.enabled ? 'border-accent-500/40 text-accent-700' : 'border-gray-200 text-gray-500'
                         }`}
                       >
+                        {setting.enabled && <span className="h-1.5 w-1.5 rounded-full bg-accent-500" />}
                         {setting.enabled ? tr('app.messages.statusOn', 'On') : tr('app.messages.statusOff', 'Off')}
                       </span>
                     </div>
@@ -829,8 +811,8 @@ export default function NotificationsPage() {
 
           <section>
             <div className="mb-4 flex items-center gap-2">
-              <EnvelopeIcon className="w-5 h-5 text-primary-700" />
-              <h2 className="text-lg font-semibold text-primary-800">
+              <EnvelopeIcon className="w-5 h-5 text-gray-400" />
+              <h2 className="text-sm font-semibold text-gray-900">
                 {tr('app.messages.sectionTemplates', 'Templates')}
               </h2>
             </div>
@@ -839,20 +821,20 @@ export default function NotificationsPage() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 md:p-5">
+          <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:p-5">
             <div className="flex items-start gap-2">
-              <InformationCircleIcon className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+              <InformationCircleIcon className="w-5 h-5 text-gray-400 mt-0.5 shrink-0" />
               <div>
-                <h3 className="text-sm font-semibold text-blue-900">
+                <h3 className="text-sm font-semibold text-gray-900">
                   {tr('app.messages.personalizationTags', 'Personalisation tags')}
                 </h3>
-                <p className="text-xs text-blue-700 mt-1 leading-relaxed">
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
                   {tr(
                     'app.messages.personalizationTagsHelp',
                     'Open any template to see the tags available for that message. Click a tag button to insert it exactly where your cursor is.',
                   )}
                   {' '}
-                  <span className="font-medium">
+                  <span className="font-medium text-gray-600">
                     {tr('app.messages.personalizationTagsHelpDate', 'Date/time tags show the time only when one is scheduled — otherwise just the date.')}
                   </span>
                 </p>
@@ -939,7 +921,7 @@ export default function NotificationsPage() {
                               updateAutomationSetting(automationSetting.id, { leadValue: next })
                             }}
                             disabled={!automationSetting.enabled}
-                            className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
+                            className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 disabled:bg-gray-50 disabled:text-gray-400"
                           />
                           <span className="shrink-0 text-xs font-semibold text-gray-500">
                             {automationSetting.leadUnit === 'minutes'
@@ -989,7 +971,7 @@ export default function NotificationsPage() {
                               onChange={(e) => updateTemplate(template.id, 'subject', e.target.value)}
                               onFocus={() => { lastFocusedFieldRef.current = 'subject' }}
                               disabled={!automationSetting.enabled}
-                              className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
+                              className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 disabled:bg-gray-50 disabled:text-gray-400"
                             />
                           </div>
                           <div>
@@ -1011,7 +993,7 @@ export default function NotificationsPage() {
                               onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                               disabled={!automationSetting.enabled}
                               rows={3}
-                              className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 resize-none disabled:bg-gray-50 disabled:text-gray-400"
+                              className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 resize-none disabled:bg-gray-50 disabled:text-gray-400"
                             />
                           </div>
                           {automationSetting.enabled && renderTagButtons(automationSetting.id)}
@@ -1028,7 +1010,7 @@ export default function NotificationsPage() {
                             onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                             disabled={!automationSetting.enabled}
                             rows={6}
-                            className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100 disabled:bg-gray-50 disabled:text-gray-400"
+                            className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 disabled:bg-gray-50 disabled:text-gray-400"
                           />
                           {automationSetting.enabled && renderTagButtons(automationSetting.id)}
                         </div>
@@ -1047,7 +1029,7 @@ export default function NotificationsPage() {
                       <button
                         type="button"
                         onClick={() => setEditingTemplateId(null)}
-                        className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600"
+                        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black"
                       >
                         {tr('app.messages.modal.done', 'Done')}
                       </button>
@@ -1085,7 +1067,7 @@ export default function NotificationsPage() {
                           value={template.subject}
                           onChange={(e) => updateTemplate(template.id, 'subject', e.target.value)}
                           onFocus={() => { lastFocusedFieldRef.current = 'subject' }}
-                          className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100"
+                          className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                         />
                       </div>
                     )}
@@ -1100,7 +1082,7 @@ export default function NotificationsPage() {
                         onChange={(e) => updateTemplate(template.id, 'message', e.target.value)}
                         onFocus={() => { lastFocusedFieldRef.current = 'message' }}
                         rows={10}
-                        className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-100"
+                        className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
                       />
                     </div>
 
@@ -1119,7 +1101,7 @@ export default function NotificationsPage() {
                     <button
                       type="button"
                       onClick={() => setEditingTemplateId(null)}
-                      className="rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-600"
+                      className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black"
                     >
                       {tr('app.messages.modal.done', 'Done')}
                     </button>

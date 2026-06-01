@@ -111,7 +111,7 @@ export default function SettingsSidebar({
         { name: t('settings.sidebar.workHours', 'Work hours'), href: `${base}/work-hours`, icon: ClockIcon },
         { name: t('settings.sidebar.leadForm', 'Lead form'), href: `${base}/leads-form`, icon: InboxIcon },
         {
-          name: t('settings.sidebar.invoiceOptions', 'Invoice options'),
+          name: t('settings.sidebar.invoices', 'Invoices'),
           href: `${base}/invoice-options`,
           icon: DocumentTextIcon,
           // Old routes kept as redirects — keep this item highlighted while they run.
@@ -150,16 +150,16 @@ export default function SettingsSidebar({
   const body = (
     <>
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
         <button
           onClick={handleLogout}
-          className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
+          className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-900 transition-colors"
         >
           <ArrowRightOnRectangleIcon className="w-4 h-4" />
           <span className="text-xs font-medium">{t('settings.sidebar.logout', 'Logout')}</span>
         </button>
         <div className="flex items-center gap-2">
-          <span className="text-gray-400 text-xs font-medium">
+          <span className="text-gray-500 text-xs font-medium">
             {t('settings.sidebar.title', 'Settings')}
           </span>
           {isDrawer ? (
@@ -167,7 +167,7 @@ export default function SettingsSidebar({
               type="button"
               aria-label="Close menu"
               onClick={onMobileClose}
-              className="text-white/70 hover:text-white p-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+              className="text-gray-500 hover:text-gray-900 p-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-900/20"
             >
               <XMarkIcon className="w-5 h-5" />
             </button>
@@ -176,10 +176,10 @@ export default function SettingsSidebar({
       </div>
 
       {/* Back */}
-      <div className="px-4 py-3 border-b border-white/10">
+      <div className="px-4 py-3 border-b border-gray-200">
         <button
           onClick={onBack}
-          className="flex items-center space-x-2 text-gray-300 hover:text-white transition-colors"
+          className="flex items-center space-x-2 text-gray-600 hover:text-gray-900 transition-colors"
         >
           <ArrowLeftIcon className="w-4 h-4" />
           <span className="text-sm font-medium">
@@ -196,7 +196,7 @@ export default function SettingsSidebar({
             className={sectionIdx === 0 ? '' : 'mt-4'}
           >
             {section.label && (
-              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500/70">
+              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
                 {section.label}
               </p>
             )}
@@ -208,15 +208,15 @@ export default function SettingsSidebar({
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`group flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-all ${
+                    className={`group flex items-center px-3 py-2 text-sm rounded-lg transition-all ${
                       isActive
-                        ? 'bg-accent-500 text-white'
-                        : 'text-gray-300 hover:bg-white/5 hover:text-white'
+                        ? 'bg-gray-100 text-gray-900 font-semibold'
+                        : 'text-gray-600 font-medium hover:bg-gray-50 hover:text-gray-900'
                     }`}
                   >
                     <Icon
                       className={`mr-3 h-4 w-4 flex-shrink-0 ${
-                        isActive ? 'text-white' : 'text-gray-400 group-hover:text-white'
+                        isActive ? 'text-gray-900' : 'text-gray-400 group-hover:text-gray-700'
                       }`}
                       aria-hidden="true"
                     />
@@ -231,7 +231,7 @@ export default function SettingsSidebar({
 
       {/* Bottom Spacing */}
       <div className="px-4 py-3 pb-safe-plus">
-        <div className="text-xs text-gray-500 text-center">Vevago v1.0</div>
+        <div className="text-xs text-gray-400 text-center">Vevago v1.0</div>
       </div>
     </>
   )
@@ -246,7 +246,7 @@ export default function SettingsSidebar({
           onClick={onMobileClose}
           className="absolute inset-0 bg-black/50 backdrop-blur-[1px] animate-backdrop-in cursor-default"
         />
-        <div className="relative h-full w-[82vw] max-w-[300px] bg-sidebar flex flex-col overflow-hidden shadow-2xl animate-drawer-in-left">
+        <div className="relative h-full w-[82vw] max-w-[300px] bg-white flex flex-col overflow-hidden shadow-2xl animate-drawer-in-left">
           {body}
         </div>
       </div>
@@ -254,7 +254,7 @@ export default function SettingsSidebar({
   }
 
   return (
-    <div className="hidden lg:flex fixed inset-y-0 left-0 w-[200px] bg-sidebar flex-col overflow-hidden z-30">
+    <div className="hidden lg:flex fixed inset-y-0 left-0 w-[200px] bg-white border-r border-gray-200 flex-col overflow-hidden z-30">
       {body}
     </div>
   )

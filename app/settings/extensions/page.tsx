@@ -1,8 +1,18 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRightIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
+import {
+  SettingsHeader,
+  SettingsSection,
+  SettingsLabel,
+  SettingsInput,
+  SettingsButton,
+  SettingsToggle,
+  SettingsHint,
+  SettingsSavedNote,
+  SettingsErrorNote,
+} from '../../components/settings/SettingsUI'
 
 type ProviderId = 'bank_transfer' | string
 
@@ -162,163 +172,110 @@ export default function ExtensionsSettingsPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Extensions</h1>
-        <p className="text-gray-600 mt-1">Manage optional features and provider integrations.</p>
-      </div>
+    <div className="mx-auto max-w-2xl px-6 py-8">
+      <SettingsHeader
+        title="Extensions"
+        description="Manage optional features and provider integrations."
+      />
 
       {loading ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-500">
-          Loading extensions...
+        <div className="flex justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
         </div>
       ) : integrations.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
-          <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-400">
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.7 6.3l-1.4-1.4a1 1 0 00-1.4 0l-7.6 7.6a1 1 0 000 1.4l1.4 1.4a1 1 0 001.4 0l7.6-7.6a1 1 0 000-1.4z" />
-            </svg>
-          </div>
-          <p className="text-base font-semibold text-gray-900">No extensions available yet</p>
-          <p className="mt-1 text-sm text-gray-500 max-w-sm mx-auto">
+        <div className="py-10 text-center">
+          <p className="text-sm font-medium text-gray-900">No extensions available yet</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
             Optional integrations will appear here when they&apos;re ready. Payment options have moved
-            to <strong>Settings → Invoice options</strong>.
+            to Settings → Invoices.
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200">
-              <h2 className="font-semibold text-gray-900">All extensions</h2>
-            </div>
-            <div>
-              {integrations.map((integration) => {
-                const selected = integration.provider === selectedProvider
-                return (
-                  <button
-                    key={integration.provider}
-                    onClick={() => setSelectedProvider(integration.provider)}
-                    className={`w-full px-4 py-4 border-b border-gray-100 text-left hover:bg-gray-50 transition-colors ${
-                      selected ? 'bg-accent-50' : ''
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-medium text-gray-900">{integration.title}</p>
-                        <p className="text-sm text-gray-500 mt-1">{integration.description}</p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {readOnlyToggle(integration.enabled)}
-                        <ChevronRightIcon className="w-4 h-4 text-gray-400" />
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="lg:col-span-3 bg-white rounded-xl border border-gray-200 p-5">
-            {!selectedIntegration ? (
-              <p className="text-gray-500">Select an extension to configure it.</p>
-            ) : (
-              <>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900">{selectedIntegration.title}</h2>
-                    <p className="text-sm text-gray-500 mt-1">{selectedIntegration.description}</p>
+        <SettingsSection title="All extensions">
+          {integrations.map((integration) => {
+            const expanded = integration.provider === selectedProvider
+            return (
+              <div key={integration.provider} className="border-b border-gray-100 last:border-b-0">
+                <div className="flex items-center gap-3 py-3.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-800">{integration.title}</p>
+                    <p className="mt-0.5 text-[13px] text-gray-500">{integration.description}</p>
                   </div>
-                  <label className="inline-flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={draftEnabled}
-                      onChange={(e) => setDraftEnabled(e.target.checked)}
-                      className="sr-only"
-                    />
-                    <span className="text-sm text-gray-700">Enabled</span>
-                    <div
-                      className={`relative h-6 w-11 rounded-full transition-colors ${
-                        draftEnabled ? 'bg-accent-500' : 'bg-gray-300'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                          draftEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </div>
-                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProvider(expanded ? null : integration.provider)}
+                    className="flex-shrink-0 text-[13px] font-medium text-gray-500 hover:text-gray-900"
+                  >
+                    {expanded ? 'Hide' : 'Configure'}
+                  </button>
+                  {readOnlyToggle(integration.enabled)}
                 </div>
 
-                {isBankTransfer && (
-                  <div className="mt-6 space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Account holder</label>
-                        <input
-                          value={draftConfig.accountHolder || ''}
-                          onChange={(e) => setDraftConfig((prev) => ({ ...prev, accountHolder: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">IBAN</label>
-                        <input
-                          value={draftConfig.iban || ''}
-                          onChange={(e) => setDraftConfig((prev) => ({ ...prev, iban: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Registration number (optional)</label>
-                        <input
-                          value={draftConfig.registrationNumber || ''}
-                          onChange={(e) => setDraftConfig((prev) => ({ ...prev, registrationNumber: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Account number (optional)</label>
-                        <input
-                          value={draftConfig.accountNumber || ''}
-                          onChange={(e) => setDraftConfig((prev) => ({ ...prev, accountNumber: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500/30 focus:border-accent-500"
-                        />
-                      </div>
+                {expanded && selectedIntegration && (
+                  <div className="space-y-4 pb-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-800">Enabled</span>
+                      <SettingsToggle checked={draftEnabled} onChange={setDraftEnabled} label="Enabled" />
                     </div>
 
-                    <p className="text-sm text-gray-500">
-                      Payment terms and how to reference the transfer are set on each invoice (payment terms and invoice number).
-                    </p>
+                    {isBankTransfer && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <SettingsLabel>Account holder</SettingsLabel>
+                            <SettingsInput
+                              value={draftConfig.accountHolder || ''}
+                              onChange={(e) => setDraftConfig((prev) => ({ ...prev, accountHolder: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <SettingsLabel>IBAN</SettingsLabel>
+                            <SettingsInput
+                              value={draftConfig.iban || ''}
+                              onChange={(e) => setDraftConfig((prev) => ({ ...prev, iban: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <SettingsLabel>Registration number (optional)</SettingsLabel>
+                            <SettingsInput
+                              value={draftConfig.registrationNumber || ''}
+                              onChange={(e) => setDraftConfig((prev) => ({ ...prev, registrationNumber: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <SettingsLabel>Account number (optional)</SettingsLabel>
+                            <SettingsInput
+                              value={draftConfig.accountNumber || ''}
+                              onChange={(e) => setDraftConfig((prev) => ({ ...prev, accountNumber: e.target.value }))}
+                            />
+                          </div>
+                        </div>
 
-                    {draftEnabled && !canEnableBankTransfer && (
-                      <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                        Fill account holder and IBAN to activate this extension.
+                        <SettingsHint>
+                          Payment terms and how to reference the transfer are set on each invoice (payment
+                          terms and invoice number).
+                        </SettingsHint>
+
+                        {draftEnabled && !canEnableBankTransfer && (
+                          <SettingsHint>Fill account holder and IBAN to activate this extension.</SettingsHint>
+                        )}
                       </div>
                     )}
+
+                    {error && <SettingsErrorNote>{error}</SettingsErrorNote>}
+                    {success && <SettingsSavedNote>{success}</SettingsSavedNote>}
+
+                    <div className="flex justify-end">
+                      <SettingsButton variant="primary" onClick={handleSave} disabled={saving}>
+                        {saving ? 'Saving...' : 'Save extension'}
+                      </SettingsButton>
+                    </div>
                   </div>
                 )}
-
-                {error && (
-                  <div className="mt-4 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
-                )}
-                {success && (
-                  <div className="mt-4 text-sm text-accent-800 bg-accent-50 border border-accent-200 rounded-lg px-3 py-2">{success}</div>
-                )}
-
-                <div className="mt-5 flex justify-end">
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="px-4 py-2 bg-accent-500 text-white rounded-lg font-medium hover:bg-accent-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {saving ? 'Saving...' : 'Save extension'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+              </div>
+            )
+          })}
+        </SettingsSection>
       )}
     </div>
   )

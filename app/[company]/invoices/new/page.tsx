@@ -358,6 +358,9 @@ function NewInvoicePageContent() {
   // let them create an invoice — otherwise we'd silently start them at #1
   // even if they're migrating from a system already at #847.
   const [numberingConfigured, setNumberingConfigured] = useState(false)
+  // Master invoicing gate. null = unknown; false = feature off → bounce the
+  // admin to settings (mirrors the server-side create gate).
+  const [invoicingEnabled, setInvoicingEnabled] = useState<boolean | null>(null)
 
   // ── Payment options (snapshot for THIS invoice) ────────────────────────────
   // We fetch the company-level enabled methods once, then the admin can
@@ -404,6 +407,7 @@ function NewInvoicePageContent() {
       .then((data) => {
         const d = data?.defaults
         if (!d) return
+        setInvoicingEnabled(Boolean(d.invoicingEnabled))
         const savedTerms =
           typeof d.invoiceDefaultPaymentTerms === 'string' ? d.invoiceDefaultPaymentTerms.trim() : ''
         setHasCompanyDefaultTerms(savedTerms.length > 0)
@@ -444,6 +448,15 @@ function NewInvoicePageContent() {
       .catch(() => {})
       .finally(() => setDefaultsLoaded(true))
   }, [])
+
+  // If invoicing is switched off for this company, this page must not be
+  // usable — send the admin to the invoice settings to turn it on.
+  useEffect(() => {
+    if (invoicingEnabled === false) {
+      const settingsHref = company ? `/${company}/settings/invoice-options` : '/settings/invoice-options'
+      router.replace(settingsHref)
+    }
+  }, [invoicingEnabled, company, router])
 
   // Fetch active payment options (only those that can pay an invoice and
   // are enabled at company level). The admin can still turn each one off

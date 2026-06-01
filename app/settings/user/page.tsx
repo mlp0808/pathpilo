@@ -2,9 +2,19 @@
 
 import { useState, useEffect } from 'react'
 import { useUser } from '../../hooks/useUser'
-import { UserIcon, PencilIcon } from '@heroicons/react/24/outline'
+import { PencilIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
+import {
+  SettingsHeader,
+  SettingsSection,
+  SettingsRow,
+  SettingsInput,
+  SettingsSelect,
+  SettingsButton,
+  SettingsSavedNote,
+  SettingsErrorNote,
+} from '../../components/settings/SettingsUI'
 
 interface UserProfile {
   firstName: string
@@ -125,203 +135,152 @@ export default function UserSettingsPage() {
   if (!user) {
     return (
       <div className="p-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-2 text-gray-600">{t('settings.user.loading', 'Loading user data...')}</p>
+        <div className="mx-auto max-w-2xl">
+          <div className="flex justify-center py-24">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
           </div>
         </div>
       </div>
     )
   }
 
+  const rightInput = 'w-56 text-right'
+
   return (
-    <div className="p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">{t('settings.user.title', 'User Settings')}</h1>
-          <p className="text-gray-600 mt-2">{t('settings.user.subtitle', 'Manage your personal information and preferences.')}</p>
-        </div>
+    <div className="px-6 py-8">
+      <div className="mx-auto max-w-2xl">
+        <SettingsHeader
+          title={t('settings.user.title', 'User Settings')}
+          description={t('settings.user.subtitle', 'Manage your personal information and preferences.')}
+        />
 
-        {/* Success Message */}
         {success && (
-          <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
-            <p className="text-green-800 text-sm">{success}</p>
+          <div className="mb-4">
+            <SettingsSavedNote>{success}</SettingsSavedNote>
           </div>
         )}
-
-        {/* Error Message */}
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <p className="text-red-800 text-sm">{error}</p>
+          <div className="mb-4">
+            <SettingsErrorNote>{error}</SettingsErrorNote>
           </div>
         )}
-        
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          {/* Header */}
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                <UserIcon className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">{t('settings.user.personalInformation', 'Personal Information')}</h2>
-                <p className="text-sm text-gray-500">{t('settings.user.personalInformationHelp', 'Update your personal details')}</p>
-              </div>
-            </div>
-            
-            {!isEditing && (
-              <button
-                onClick={() => setIsEditing(true)}
-                className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                <PencilIcon className="w-4 h-4 mr-2" />
-                {t('settings.user.edit', 'Edit')}
-              </button>
-            )}
-          </div>
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* First Name */}
-              <div>
-                <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.firstName', 'First Name')}
-                </label>
-                <input
-                  type="text"
-                  id="firstName"
-                  name="firstName"
-                  value={formData.firstName}
-                  onChange={handleInputChange}
-                  disabled={!isEditing}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
-                    isEditing 
-                      ? 'border-gray-300 bg-white' 
-                      : 'border-gray-200 bg-gray-50 text-gray-600'
-                  }`}
-                  required
-                />
-              </div>
-
-              {/* Last Name */}
-              <div>
-                <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.lastName', 'Last Name')}
-                </label>
-                <input
-                  type="text"
-                  id="lastName"
-                  name="lastName"
-                  value={formData.lastName}
-                  onChange={handleInputChange}
-                  disabled={!isEditing}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
-                    isEditing 
-                      ? 'border-gray-300 bg-white' 
-                      : 'border-gray-200 bg-gray-50 text-gray-600'
-                  }`}
-                  required
-                />
-              </div>
-
-              {/* Email */}
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.email', 'Email Address')}
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
-                  disabled={!isEditing}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
-                    isEditing 
-                      ? 'border-gray-300 bg-white' 
-                      : 'border-gray-200 bg-gray-50 text-gray-600'
-                  }`}
-                  required
-                />
-              </div>
-
-              {/* Role (Read-only) */}
-              <div>
-                <label htmlFor="role" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.role', 'Role')}
-                </label>
-                <input
-                  type="text"
-                  id="role"
-                  name="role"
-                  value={formData.role}
-                  disabled={true}
-                  className="w-full px-3 py-2 border border-gray-200 bg-gray-50 text-gray-600 rounded-lg"
-                />
-              </div>
-
-              {/* Company (Read-only) */}
-              <div className="md:col-span-2">
-                <label htmlFor="companyName" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.company', 'Company')}
-                </label>
-                <input
-                  type="text"
-                  id="companyName"
-                  name="companyName"
-                  value={formData.companyName}
-                  disabled={true}
-                  className="w-full px-3 py-2 border border-gray-200 bg-gray-50 text-gray-600 rounded-lg"
-                />
-              </div>
-
-              <div className="md:col-span-2">
-                <label htmlFor="languageCode" className="block text-sm font-medium text-gray-700 mb-2">
-                  {t('settings.user.language', 'Language')}
-                </label>
-                <select
+        <form onSubmit={handleSubmit}>
+          <SettingsSection
+            title={t('settings.user.personalInformation', 'Personal Information')}
+            action={
+              !isEditing ? (
+                <SettingsButton variant="edit" onClick={() => setIsEditing(true)}>
+                  <PencilIcon className="h-4 w-4" />
+                  {t('settings.user.edit', 'Edit')}
+                </SettingsButton>
+              ) : undefined
+            }
+          >
+            <SettingsRow
+              htmlFor="firstName"
+              title={t('settings.user.firstName', 'First name')}
+              control={
+                isEditing ? (
+                  <SettingsInput
+                    type="text"
+                    id="firstName"
+                    name="firstName"
+                    value={formData.firstName}
+                    onChange={handleInputChange}
+                    className={rightInput}
+                    required
+                  />
+                ) : (
+                  <ReadValue value={formData.firstName} />
+                )
+              }
+            />
+            <SettingsRow
+              htmlFor="lastName"
+              title={t('settings.user.lastName', 'Last name')}
+              control={
+                isEditing ? (
+                  <SettingsInput
+                    type="text"
+                    id="lastName"
+                    name="lastName"
+                    value={formData.lastName}
+                    onChange={handleInputChange}
+                    className={rightInput}
+                    required
+                  />
+                ) : (
+                  <ReadValue value={formData.lastName} />
+                )
+              }
+            />
+            <SettingsRow
+              htmlFor="email"
+              title={t('settings.user.email', 'Email address')}
+              control={
+                isEditing ? (
+                  <SettingsInput
+                    type="email"
+                    id="email"
+                    name="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
+                    className={rightInput}
+                    required
+                  />
+                ) : (
+                  <ReadValue value={formData.email} />
+                )
+              }
+            />
+            <SettingsRow
+              title={t('settings.user.role', 'Role')}
+              description={t('settings.user.roleHelp', 'Set by your company admin.')}
+              control={<ReadValue value={formData.role} />}
+            />
+            <SettingsRow
+              title={t('settings.user.company', 'Company')}
+              control={<ReadValue value={formData.companyName} />}
+            />
+            <SettingsRow
+              htmlFor="languageCode"
+              title={t('settings.user.language', 'Language')}
+              description={t('settings.user.languageHelp', 'Choose the language for your own interface.')}
+              control={
+                <SettingsSelect
                   id="languageCode"
                   name="languageCode"
                   value={formData.languageCode}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, languageCode: e.target.value === 'da' ? 'da' : 'en' }))}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                    setFormData((prev) => ({ ...prev, languageCode: e.target.value === 'da' ? 'da' : 'en' }))
+                  }
                   disabled={!isEditing}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
-                    isEditing
-                      ? 'border-gray-300 bg-white'
-                      : 'border-gray-200 bg-gray-50 text-gray-600'
-                  }`}
+                  className="w-40"
                 >
                   <option value="en">{t('settings.user.language.en', 'English')}</option>
                   <option value="da">{t('settings.user.language.da', 'Danish')}</option>
-                </select>
-                <p className="mt-1 text-xs text-gray-500">{t('settings.user.languageHelp', 'Choose the language for your own interface.')}</p>
-              </div>
-            </div>
+                </SettingsSelect>
+              }
+            />
+          </SettingsSection>
 
-            {/* Action Buttons */}
-            {isEditing && (
-              <div className="mt-8 flex items-center justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={handleCancel}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  {t('settings.user.cancel', 'Cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? t('settings.user.saving', 'Saving...') : t('settings.user.save', 'Save Changes')}
-                </button>
-              </div>
-            )}
-          </form>
-        </div>
+          {isEditing && (
+            <div className="mt-2 flex items-center justify-end gap-3">
+              <SettingsButton variant="secondary" onClick={handleCancel}>
+                {t('settings.user.cancel', 'Cancel')}
+              </SettingsButton>
+              <SettingsButton type="submit" variant="primary" disabled={loading}>
+                {loading ? t('settings.user.saving', 'Saving...') : t('settings.user.save', 'Save Changes')}
+              </SettingsButton>
+            </div>
+          )}
+        </form>
       </div>
     </div>
   )
+}
+
+function ReadValue({ value }: { value: string }) {
+  return <span className="text-sm text-gray-600">{value || '—'}</span>
 }

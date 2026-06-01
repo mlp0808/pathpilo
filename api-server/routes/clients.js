@@ -724,6 +724,24 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       enabled_payment_methods: enabledPaymentMethodsInput,
     } = req.body;
 
+    // ── Gate 0: the whole invoicing feature must be activated for this
+    // company. Invoicing is opt-in (defaults off) and must be switched on in
+    // Settings → Invoices before any invoice can be created. This mirrors the
+    // UI gate so the feature can't be bypassed via direct API calls.
+    await dbClient.query(
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoicing_enabled BOOLEAN NOT NULL DEFAULT FALSE`
+    ).catch(() => {});
+    const invoicingRow = await dbClient.query(
+      `SELECT invoicing_enabled FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    if (invoicingRow.rows[0]?.invoicing_enabled !== true) {
+      return res.status(400).json({
+        error: 'Activate invoicing in Settings → Invoices before creating an invoice.',
+        code: 'invoicing_disabled',
+      });
+    }
+
     // ── Gate 1: company must have explicitly chosen its starting invoice
     // number. We never want to silently start a customer at #1 when they
     // came from a previous system that was already at #847.

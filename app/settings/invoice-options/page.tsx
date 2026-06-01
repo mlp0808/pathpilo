@@ -1,29 +1,37 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAppI18n } from '../../components/I18nProvider'
 import { apiUrl } from '../../utils/api'
+import { BuildingLibraryIcon, CreditCardIcon, ChevronDownIcon } from '@heroicons/react/24/outline'
 import {
-  HashtagIcon,
-  CalendarDaysIcon,
-  DocumentTextIcon,
-  CreditCardIcon,
-  BuildingLibraryIcon,
-  CheckCircleIcon,
-  ExclamationTriangleIcon,
-  Cog6ToothIcon,
-} from '@heroicons/react/24/outline'
+  InvoiceSendEmailCard,
+  InvoiceDueReminderCard,
+} from '../../components/settings/InvoiceEmailSettings'
+import {
+  SettingsHeader,
+  SettingsSection,
+  SettingsRow,
+  SettingsField,
+  SettingsToggle,
+  SettingsInput,
+  SettingsTextarea,
+  SettingsButton,
+  SettingsHint,
+  SettingsErrorNote,
+} from '../../components/settings/SettingsUI'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 type InvoiceDefaults = {
-  invoiceDefaultDueDays: number
+  invoiceDefaultDueDays: number | ''
   invoiceDefaultPaymentTerms: string
-  invoiceNextNumber: number
+  invoiceNextNumber: number | ''
   maxNumericInvoice: number
   invoiceNumberingConfigured: boolean
+  invoicingEnabled: boolean
 }
 
 interface PaymentConfig {
@@ -31,7 +39,6 @@ interface PaymentConfig {
   iban?: string
   accountNumber?: string
   registrationNumber?: string
-  // Future providers can add their own fields freely.
   [key: string]: unknown
 }
 
@@ -44,37 +51,112 @@ interface PaymentOption {
   config: PaymentConfig
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Page
-// ─────────────────────────────────────────────────────────────────────────────
+type PaymentDraft = {
+  enabled: boolean
+  config: PaymentConfig
+}
+
+type SavableInvoiceDefaults = Pick<
+  InvoiceDefaults,
+  'invoiceDefaultDueDays' | 'invoiceDefaultPaymentTerms' | 'invoiceNextNumber'
+>
+
+type ActivationFieldErrors = {
+  nextNumber: boolean
+  dueDays: boolean
+  bankTransfer: boolean
+}
+
+const INPUT_ERROR_CLASS = 'border-red-400 ring-1 ring-red-400'
+const ROW_ERROR_CLASS = 'rounded-lg ring-2 ring-red-400/80 ring-inset'
+
+function isPositiveInt(value: number | ''): value is number {
+  return value !== '' && Number.isFinite(value) && value >= 1
+}
+
+function validateActivationRequirements(
+  form: Pick<InvoiceDefaults, 'invoiceNextNumber' | 'invoiceDefaultDueDays'>,
+  paymentDrafts: Record<string, PaymentDraft>,
+): ActivationFieldErrors {
+  const bank = paymentDrafts.bank_transfer
+  const bankOk =
+    Boolean(bank?.enabled) &&
+    Boolean(String(bank?.config?.accountHolder || '').trim()) &&
+    Boolean(String(bank?.config?.iban || '').trim())
+
+  return {
+    nextNumber: !isPositiveInt(form.invoiceNextNumber),
+    dueDays: !isPositiveInt(form.invoiceDefaultDueDays),
+    bankTransfer: !bankOk,
+  }
+}
+
+function hasActivationErrors(errors: ActivationFieldErrors) {
+  return errors.nextNumber || errors.dueDays || errors.bankTransfer
+}
 
 export default function InvoiceOptionsPage() {
   const { t } = useAppI18n()
 
-  // ── Invoice defaults (numbering + due days + payment terms) ───────────────
   const [defaultsLoading, setDefaultsLoading] = useState(true)
   const [defaultsSaving, setDefaultsSaving] = useState(false)
   const [defaultsError, setDefaultsError] = useState('')
-  const [defaultsSaved, setDefaultsSaved] = useState(false)
-  const [form, setForm] = useState<InvoiceDefaults>({
-    invoiceDefaultDueDays: 30,
+  const [activationSaving, setActivationSaving] = useState(false)
+  const savedDefaultsRef = useRef<SavableInvoiceDefaults>({
+    invoiceDefaultDueDays: '',
     invoiceDefaultPaymentTerms: '',
-    invoiceNextNumber: 1,
+    invoiceNextNumber: '',
+  })
+  const [form, setForm] = useState<InvoiceDefaults>({
+    invoiceDefaultDueDays: '',
+    invoiceDefaultPaymentTerms: '',
+    invoiceNextNumber: '',
     maxNumericInvoice: 0,
     invoiceNumberingConfigured: false,
+    invoicingEnabled: false,
   })
+  const [activationFieldErrors, setActivationFieldErrors] = useState<ActivationFieldErrors>({
+    nextNumber: false,
+    dueDays: false,
+    bankTransfer: false,
+  })
+  const [expandBankTransfer, setExpandBankTransfer] = useState(false)
 
-  // ── Payment options ───────────────────────────────────────────────────────
   const [paymentLoading, setPaymentLoading] = useState(true)
   const [paymentError, setPaymentError] = useState('')
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([])
+  const [paymentDrafts, setPaymentDrafts] = useState<Record<string, PaymentDraft>>({})
+
+  const enabled = form.invoicingEnabled
+
+  const defaultsDirty = useMemo(() => {
+    const saved = savedDefaultsRef.current
+    return (
+      form.invoiceDefaultDueDays !== saved.invoiceDefaultDueDays ||
+      form.invoiceDefaultPaymentTerms !== saved.invoiceDefaultPaymentTerms ||
+      form.invoiceNextNumber !== saved.invoiceNextNumber
+    )
+  }, [form.invoiceDefaultDueDays, form.invoiceDefaultPaymentTerms, form.invoiceNextNumber])
+
+  const paymentDirty = useMemo(() => {
+    return paymentOptions.some((opt) => {
+      const draft = paymentDrafts[opt.provider]
+      if (!draft) return false
+      return (
+        draft.enabled !== opt.enabled ||
+        JSON.stringify(draft.config || {}) !== JSON.stringify(opt.config || {})
+      )
+    })
+  }, [paymentOptions, paymentDrafts])
+
+  const hasUnsavedChanges = defaultsDirty || paymentDirty
 
   const loadDefaults = useCallback(async () => {
     setDefaultsError('')
     try {
       const token = localStorage.getItem('token')
       if (!token) {
-        setDefaultsError('Not signed in')
+        setDefaultsError(t('settings.invoices.notSignedIn', 'Not signed in'))
         setDefaultsLoading(false)
         return
       }
@@ -83,39 +165,42 @@ export default function InvoiceOptionsPage() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setDefaultsError(data.error || 'Failed to load invoice defaults')
+        setDefaultsError(data.error || t('settings.invoices.errLoad', 'Failed to load invoice settings'))
         setDefaultsLoading(false)
         return
       }
       if (data.defaults) {
-        const nextNumber = data.defaults.invoiceNextNumber ?? 1
+        const nextNumberRaw = data.defaults.invoiceNextNumber
+        const dueDaysRaw = data.defaults.invoiceDefaultDueDays
         const maxIssued = data.defaults.maxNumericInvoice ?? 0
-        // Treat numbering as configured if reality says so, regardless of
-        // what the boolean flag column claims. A saved next-number > 1 or
-        // any already-issued invoice both mean somebody has clearly set
-        // this up — even if a legacy save never wrote the flag column.
-        // Only fall back to the explicit boolean when reality is silent.
-        const realityConfigured = Number(nextNumber) > 1 || Number(maxIssued) > 0
-        const configured =
-          realityConfigured
-            ? true
-            : typeof data.defaults.invoiceNumberingConfigured === 'boolean'
-              ? data.defaults.invoiceNumberingConfigured
-              : false
+        const realityConfigured = Number(nextNumberRaw) > 1 || Number(maxIssued) > 0
+        const configured = realityConfigured
+          ? true
+          : typeof data.defaults.invoiceNumberingConfigured === 'boolean'
+            ? data.defaults.invoiceNumberingConfigured
+            : false
+        const nextNumber = nextNumberRaw != null ? Number(nextNumberRaw) : ''
+        const dueDays = dueDaysRaw != null ? Number(dueDaysRaw) : ''
         setForm({
-          invoiceDefaultDueDays: data.defaults.invoiceDefaultDueDays ?? 30,
+          invoiceDefaultDueDays: dueDays,
           invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
           invoiceNextNumber: nextNumber,
           maxNumericInvoice: maxIssued,
           invoiceNumberingConfigured: configured,
+          invoicingEnabled: Boolean(data.defaults.invoicingEnabled),
         })
+        savedDefaultsRef.current = {
+          invoiceDefaultDueDays: dueDays,
+          invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
+          invoiceNextNumber: nextNumber,
+        }
       }
     } catch {
-      setDefaultsError('Network error')
+      setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
     } finally {
       setDefaultsLoading(false)
     }
-  }, [])
+  }, [t])
 
   const loadPaymentOptions = useCallback(async () => {
     setPaymentError('')
@@ -130,541 +215,604 @@ export default function InvoiceOptionsPage() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setPaymentError(data.error || 'Failed to load payment options')
+        setPaymentError(data.error || t('settings.invoices.payment.errLoad', 'Failed to load payment options'))
         setPaymentLoading(false)
         return
       }
       const all: PaymentOption[] = Array.isArray(data.integrations) ? data.integrations : []
-      // Only invoice-payment providers belong on this page. Anything else
-      // (zapier, accounting integrations, etc.) stays in Extensions.
-      const filtered = all.filter((opt) =>
-        Array.isArray(opt.capabilities) && opt.capabilities.includes('invoice_payment')
+      const filtered = all.filter(
+        (opt) => Array.isArray(opt.capabilities) && opt.capabilities.includes('invoice_payment'),
       )
       setPaymentOptions(filtered)
+      setPaymentDrafts(
+        Object.fromEntries(
+          filtered.map((opt) => [opt.provider, { enabled: opt.enabled, config: { ...(opt.config || {}) } }]),
+        ),
+      )
     } catch {
-      setPaymentError('Network error')
+      setPaymentError(t('settings.invoices.errNetwork', 'Network error'))
     } finally {
       setPaymentLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadDefaults()
     loadPaymentOptions()
   }, [loadDefaults, loadPaymentOptions])
 
-  // ── Save invoice defaults (numbering + due days + payment terms) ──────────
-  const handleSaveDefaults = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setDefaultsSaving(true)
+  const handleToggleInvoicing = async (next: boolean) => {
+    if (!next) {
+      setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
+      setForm((f) => ({ ...f, invoicingEnabled: false }))
+      setActivationSaving(true)
+      setDefaultsError('')
+      try {
+        const token = localStorage.getItem('token')
+        if (!token) return
+        const res = await fetch(apiUrl('/companies/invoice-defaults'), {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoicingEnabled: false }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setForm((f) => ({ ...f, invoicingEnabled: true }))
+          setDefaultsError(data.error || t('settings.invoices.errSave', 'Failed to save'))
+        }
+      } catch {
+        setForm((f) => ({ ...f, invoicingEnabled: true }))
+        setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
+      } finally {
+        setActivationSaving(false)
+      }
+      return
+    }
+
+    const errors = validateActivationRequirements(form, paymentDrafts)
+    if (hasActivationErrors(errors)) {
+      setActivationFieldErrors(errors)
+      if (errors.bankTransfer) setExpandBankTransfer(true)
+      setDefaultsError(
+        t(
+          'settings.invoices.activate.missingRequired',
+          'Fill in the required settings highlighted below before turning invoicing on.',
+        ),
+      )
+      return
+    }
+
+    setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
     setDefaultsError('')
-    setDefaultsSaved(false)
+    setActivationSaving(true)
+
     try {
+      const saved = await handleSaveAll()
+      if (!saved) return
+
       const token = localStorage.getItem('token')
       if (!token) return
       const res = await fetch(apiUrl('/companies/invoice-defaults'), {
         method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          invoiceDefaultDueDays: form.invoiceDefaultDueDays,
-          invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
-          invoiceNextNumber: form.invoiceNextNumber,
-        }),
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoicingEnabled: true }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setDefaultsError(data.error || 'Failed to save')
+        setDefaultsError(data.error || t('settings.invoices.errSave', 'Failed to save'))
         return
       }
-      if (data.defaults) {
-        setForm((prev) => ({
-          ...prev,
-          ...data.defaults,
-          // Defensive: a successful PUT that included a starting number
-          // means the server has now locked it in. Force the local flag to
-          // true even if the API response doesn't echo it back (older API
-          // builds returned the old shape and this UI would then keep
-          // showing the red "Action needed" callout indefinitely).
-          invoiceNumberingConfigured: true,
-        }))
-      } else {
-        setForm((prev) => ({ ...prev, invoiceNumberingConfigured: true }))
-      }
-      setDefaultsSaved(true)
-      setTimeout(() => setDefaultsSaved(false), 3500)
+      setForm((f) => ({ ...f, invoicingEnabled: true }))
     } catch {
-      setDefaultsError('Network error')
+      setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
     } finally {
-      setDefaultsSaving(false)
+      setActivationSaving(false)
     }
   }
 
-  // ── Update a single payment option ────────────────────────────────────────
-  const updatePaymentOption = (provider: string, patch: Partial<PaymentOption>) => {
-    setPaymentOptions((prev) =>
-      prev.map((opt) => (opt.provider === provider ? { ...opt, ...patch } : opt)),
+  const handleSaveAll = async (): Promise<boolean> => {
+    setDefaultsSaving(true)
+    setDefaultsError('')
+    setPaymentError('')
+    try {
+      const token = localStorage.getItem('token')
+      if (!token) return false
+
+      if (defaultsDirty) {
+        const payload: Record<string, unknown> = {
+          invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
+        }
+        if (form.invoiceDefaultDueDays !== '') {
+          payload.invoiceDefaultDueDays = form.invoiceDefaultDueDays
+        }
+        if (form.invoiceNextNumber !== '') {
+          payload.invoiceNextNumber = form.invoiceNextNumber
+        }
+
+        const res = await fetch(apiUrl('/companies/invoice-defaults'), {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setDefaultsError(data.error || t('settings.invoices.errSave', 'Failed to save'))
+          return false
+        }
+        const nextSaved: SavableInvoiceDefaults = {
+          invoiceDefaultDueDays: form.invoiceDefaultDueDays,
+          invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
+          invoiceNextNumber: form.invoiceNextNumber,
+        }
+        savedDefaultsRef.current = nextSaved
+        if (data.defaults) {
+          const savedNext =
+            data.defaults.invoiceNextNumber != null ? Number(data.defaults.invoiceNextNumber) : nextSaved.invoiceNextNumber
+          const savedDue =
+            data.defaults.invoiceDefaultDueDays != null
+              ? Number(data.defaults.invoiceDefaultDueDays)
+              : nextSaved.invoiceDefaultDueDays
+          setForm((prev) => ({
+            ...prev,
+            ...data.defaults,
+            invoiceNextNumber: savedNext,
+            invoiceDefaultDueDays: savedDue,
+            invoiceNumberingConfigured: true,
+          }))
+          savedDefaultsRef.current = {
+            invoiceDefaultDueDays: savedDue,
+            invoiceDefaultPaymentTerms:
+              data.defaults.invoiceDefaultPaymentTerms ?? nextSaved.invoiceDefaultPaymentTerms,
+            invoiceNextNumber: savedNext,
+          }
+        } else {
+          setForm((prev) => ({ ...prev, invoiceNumberingConfigured: true }))
+        }
+      }
+
+      for (const opt of paymentOptions) {
+        const draft = paymentDrafts[opt.provider]
+        if (!draft) continue
+        const isDirty =
+          draft.enabled !== opt.enabled ||
+          JSON.stringify(draft.config || {}) !== JSON.stringify(opt.config || {})
+        if (!isDirty) continue
+
+        if (
+          opt.provider === 'bank_transfer' &&
+          draft.enabled &&
+          (!String(draft.config.accountHolder || '').trim() || !String(draft.config.iban || '').trim())
+        ) {
+          setPaymentError(
+            t('settings.invoices.payment.fillToActivateError', 'Fill account holder and IBAN before activating.'),
+          )
+          return false
+        }
+
+        const res = await fetch(apiUrl(`/integrations/${opt.provider}/config`), {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: draft.enabled, config: draft.config }),
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setPaymentError(data.error || t('settings.invoices.payment.failedSave', 'Failed to save'))
+          return false
+        }
+        setPaymentOptions((prev) =>
+          prev.map((row) =>
+            row.provider === opt.provider
+              ? { ...row, enabled: data.integration.enabled, config: data.integration.config || {} }
+              : row,
+          ),
+        )
+      }
+    } catch {
+      setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
+      return false
+    } finally {
+      setDefaultsSaving(false)
+    }
+    return true
+  }
+
+  const handleDiscardAll = () => {
+    setForm((prev) => ({ ...prev, ...savedDefaultsRef.current }))
+    setPaymentDrafts(
+      Object.fromEntries(
+        paymentOptions.map((opt) => [
+          opt.provider,
+          { enabled: opt.enabled, config: { ...(opt.config || {}) } },
+        ]),
+      ),
     )
+    setDefaultsError('')
+    setPaymentError('')
+    setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
+  }
+
+  const updatePaymentDraft = (provider: string, patch: Partial<PaymentDraft>) => {
+    if (provider === 'bank_transfer') {
+      setActivationFieldErrors((prev) => ({ ...prev, bankTransfer: false }))
+    }
+    setPaymentDrafts((prev) => {
+      const current = prev[provider] ?? { enabled: false, config: {} }
+      return {
+        ...prev,
+        [provider]: {
+          enabled: patch.enabled ?? current.enabled,
+          config: patch.config ? { ...current.config, ...patch.config } : current.config,
+        },
+      }
+    })
   }
 
   if (defaultsLoading) {
     return (
       <div className="p-6 flex justify-center py-24">
-        <div className="h-10 w-10 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
       </div>
     )
   }
 
   return (
-    <div className="p-6">
-      <div className="max-w-3xl mx-auto">
-        {/* Header */}
-        <header className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">
-            {t('settings.invoiceOptions.title', 'Invoice options')}
-          </h1>
-          <p className="text-gray-600 mt-2 text-sm">
-            {t(
-              'settings.invoiceOptions.intro',
-              'Everything that controls the invoices you send to clients — numbering, defaults, and how they pay you.',
-            )}
-          </p>
-        </header>
+    <div className={`px-6 py-8 ${hasUnsavedChanges ? 'pb-24' : ''}`}>
+      <div className="mx-auto max-w-2xl">
+        <SettingsHeader
+          title={t('settings.invoices.title', 'Invoices')}
+          description={
+            enabled
+              ? t(
+                  'settings.invoices.introActive',
+                  'Configure how invoices are numbered and sent, then set up how clients pay you and get reminded.',
+                )
+              : t(
+                  'settings.invoices.introInactive',
+                  'Set up your invoice defaults below, then turn invoicing on when you are ready.',
+                )
+          }
+          action={
+            <>
+              {activationSaving && (
+                <span className="text-[13px] text-gray-400">
+                  {t('settings.invoices.saving', 'Saving…')}
+                </span>
+              )}
+              <SettingsToggle
+                checked={enabled}
+                onChange={handleToggleInvoicing}
+                disabled={activationSaving}
+                label={t('settings.invoices.activate.title', 'Invoicing')}
+              />
+            </>
+          }
+        />
 
         {defaultsError && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {defaultsError}
+          <div className="mb-4">
+            <SettingsErrorNote>{defaultsError}</SettingsErrorNote>
           </div>
         )}
 
-        {/* ───────────────────────────────────────────────────────────────── */}
-        {/* Section 1 + 2: Invoice numbering + defaults — share one Save     */}
-        {/* button because they all hit /companies/invoice-defaults.         */}
-        {/* ───────────────────────────────────────────────────────────────── */}
-        <form onSubmit={handleSaveDefaults} className="space-y-6">
-          <SectionCard
-            icon={<HashtagIcon className="h-5 w-5" />}
-            title={t('settings.invoiceOptions.numbering.title', 'Invoice number start')}
-            subtitle={t(
-              'settings.invoiceOptions.numbering.subtitle',
-              'Set the first invoice number. Following invoices keep counting up from there.',
+        <form onSubmit={(e) => { e.preventDefault(); handleSaveAll() }}>
+          <SettingsSection
+            title={t('settings.invoices.numbering.section', 'Invoice numbering')}
+            description={t(
+              'settings.invoices.numbering.sectionHelp',
+              'Choose the first invoice number your account will use. Every new invoice after that counts up automatically, so you never have to assign numbers by hand.',
             )}
-            badge={
-              form.invoiceNumberingConfigured
-                ? null
-                : {
-                    label: t('settings.invoiceOptions.numbering.actionNeeded', 'Action needed'),
-                    tone: 'warn' as const,
-                  }
-            }
           >
+            <div className={activationFieldErrors.nextNumber ? ROW_ERROR_CLASS : undefined}>
+              <SettingsRow
+                htmlFor="next-invoice-number"
+                title={t('settings.invoices.numbering.next', 'Next invoice number')}
+                description={t(
+                  'settings.invoices.numbering.subtitle',
+                  'The number on your very next invoice. If you are moving from another system, set this one step above your highest existing number.',
+                )}
+                control={
+                  <SettingsInput
+                    id="next-invoice-number"
+                    type="number"
+                    min={1}
+                    className={`w-28 text-right ${activationFieldErrors.nextNumber ? INPUT_ERROR_CLASS : ''}`}
+                    value={form.invoiceNextNumber}
+                    placeholder="—"
+                    onChange={(e) => {
+                      setActivationFieldErrors((prev) => ({ ...prev, nextNumber: false }))
+                      const raw = e.target.value
+                      if (!raw) {
+                        setForm((f) => ({ ...f, invoiceNextNumber: '' }))
+                        return
+                      }
+                      const parsed = parseInt(raw, 10)
+                      setForm((f) => ({
+                        ...f,
+                        invoiceNextNumber: Number.isFinite(parsed) && parsed >= 1 ? parsed : '',
+                      }))
+                    }}
+                  />
+                }
+              />
+            </div>
             {!form.invoiceNumberingConfigured && (
-              <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
-                <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <span>
-                  {t(
-                    'settings.invoiceOptions.numbering.required',
-                    'You must save a starting invoice number before any invoice can be created. If you\u2019re moving from another system, set it just above your current highest invoice number.',
-                  )}
-                </span>
-              </div>
+              <SettingsHint>
+                {t(
+                  'settings.invoices.numbering.required',
+                  'You must save a starting number before anyone can create an invoice. If you already have invoices elsewhere, pick a number that does not overlap.',
+                )}
+              </SettingsHint>
             )}
             {form.maxNumericInvoice > 0 && (
-              <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <span>
-                  {t(
-                    'settings.invoiceOptions.numbering.warn',
-                    `Highest invoice number already in use: ${form.maxNumericInvoice}. The next number must not collide with an existing one.`,
-                  )}
-                </span>
-              </div>
+              <SettingsHint>
+                {t('settings.invoices.numbering.warnPrefix', 'Highest number already in use:')}{' '}
+                {form.maxNumericInvoice}.{' '}
+                {t('settings.invoices.numbering.warnSuffix', 'Choose a next number that is not already taken.')}
+              </SettingsHint>
             )}
-            <label className="block text-xs font-medium uppercase tracking-wider text-gray-500 mb-1">
-              {t('settings.invoiceOptions.numbering.next', 'Next invoice number')}
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={form.invoiceNextNumber}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  invoiceNextNumber: Math.max(1, parseInt(e.target.value, 10) || 1),
-                }))
-              }
-              className="w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-            />
-          </SectionCard>
+          </SettingsSection>
 
-          <SectionCard
-            icon={<CalendarDaysIcon className="h-5 w-5" />}
-            title={t('settings.invoiceOptions.due.title', 'Default due day')}
-            subtitle={t(
-              'settings.invoiceOptions.due.subtitle',
-              'How many days clients have to pay, counted from the invoice date.',
+          <SettingsSection
+            title={t('settings.invoices.terms.section', 'Payment terms & due date')}
+            description={t(
+              'settings.invoices.terms.sectionHelp',
+              'Set how long clients have to pay and the standard wording that appears on every invoice. You can still override the text on individual invoices when needed.',
             )}
           >
-            <label className="block text-xs font-medium uppercase tracking-wider text-gray-500 mb-1">
-              {t('settings.invoiceOptions.due.label', 'Days after invoice date')}
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={3650}
-              value={form.invoiceDefaultDueDays}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  invoiceDefaultDueDays: parseInt(e.target.value, 10) || 30,
-                }))
-              }
-              className="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-            />
-          </SectionCard>
-
-          <SectionCard
-            icon={<DocumentTextIcon className="h-5 w-5" />}
-            title={t('settings.invoiceOptions.terms.title', 'Default payment terms')}
-            subtitle={t(
-              'settings.invoiceOptions.terms.subtitle',
-              'Reusable text shown on every invoice. You can still override it per invoice.',
-            )}
-          >
-            <p className="text-xs text-gray-500 mb-2">
-              {t('settings.invoiceOptions.terms.placeholdersHint', 'You can use the placeholders')}{' '}
-              <code className="bg-gray-100 px-1 rounded">{'{due_date}'}</code>,{' '}
-              <code className="bg-gray-100 px-1 rounded">{'{invoice_date}'}</code>,{' '}
-              <code className="bg-gray-100 px-1 rounded">{'{invoice_number}'}</code>,{' '}
-              <code className="bg-gray-100 px-1 rounded">{'{overdue_days}'}</code>.
-            </p>
-            <textarea
-              value={form.invoiceDefaultPaymentTerms}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, invoiceDefaultPaymentTerms: e.target.value }))
-              }
-              rows={7}
-              placeholder={t(
-                'settings.invoiceOptions.terms.placeholder',
-                'e.g. Payment due within {due_date}. After the due date, interest of 1% per month will be charged.',
-              )}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-            />
-          </SectionCard>
-
-          {/* ─────────────────────────────────────────────────────────────── */}
-          {/* Section 4: Payment options — kept inside the form so the Save  */}
-          {/* button visually anchors the whole page. The per-card buttons   */}
-          {/* are type="button" and hit /integrations/:provider/config       */}
-          {/* directly, so they're independent of this submit.               */}
-          {/* ─────────────────────────────────────────────────────────────── */}
-          <SectionCard
-            icon={<CreditCardIcon className="h-5 w-5" />}
-            title={t('settings.invoiceOptions.payment.title', 'Payment options')}
-            subtitle={t(
-              'settings.invoiceOptions.payment.subtitle',
-              'Choose how clients can pay. Active options show on every invoice.',
-            )}
-          >
-            {paymentError && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                {paymentError}
-              </div>
-            )}
-            {paymentLoading ? (
-              <div className="flex justify-center py-6">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
-              </div>
-            ) : paymentOptions.length === 0 ? (
-              <p className="text-sm text-gray-500 py-4 text-center">
-                {t(
-                  'settings.invoiceOptions.payment.empty',
-                  'No payment options available yet.',
+            <div className={activationFieldErrors.dueDays ? ROW_ERROR_CLASS : undefined}>
+              <SettingsRow
+                htmlFor="due-days"
+                title={t('settings.invoices.due.title', 'Default due day')}
+                description={t(
+                  'settings.invoices.due.subtitle',
+                  'How many days after the invoice date the client has to pay. This date is used in your payment terms and on the invoice itself.',
                 )}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {paymentOptions.map((opt) => (
-                  <PaymentOptionCard
-                    key={opt.provider}
-                    option={opt}
-                    onChange={(patch) => updatePaymentOption(opt.provider, patch)}
-                    t={t}
+                control={
+                  <SettingsInput
+                    id="due-days"
+                    type="number"
+                    min={1}
+                    max={3650}
+                    className={`w-24 text-right ${activationFieldErrors.dueDays ? INPUT_ERROR_CLASS : ''}`}
+                    value={form.invoiceDefaultDueDays}
+                    placeholder="—"
+                    onChange={(e) => {
+                      setActivationFieldErrors((prev) => ({ ...prev, dueDays: false }))
+                      const raw = e.target.value
+                      if (!raw) {
+                        setForm((f) => ({ ...f, invoiceDefaultDueDays: '' }))
+                        return
+                      }
+                      const parsed = parseInt(raw, 10)
+                      setForm((f) => ({
+                        ...f,
+                        invoiceDefaultDueDays: Number.isFinite(parsed) && parsed >= 1 ? parsed : '',
+                      }))
+                    }}
                   />
-                ))}
-              </div>
-            )}
-          </SectionCard>
-
-          <div className="flex items-center justify-end gap-3 pt-1">
-            {defaultsSaved && (
-              <span className="inline-flex items-center gap-1.5 text-sm text-emerald-700">
-                <CheckCircleIcon className="h-4 w-4" />
-                {t('settings.invoiceOptions.saved', 'Saved')}
-              </span>
-            )}
-            <button
-              type="submit"
-              disabled={defaultsSaving}
-              className="inline-flex items-center rounded-lg bg-accent-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 disabled:opacity-50"
+                }
+              />
+            </div>
+            <SettingsField
+              title={t('settings.invoices.terms.title', 'Default payment terms')}
+              description={t(
+                'settings.invoices.terms.subtitle',
+                'The legal or practical text printed on every invoice — for example late fees, bank details in prose, or how to reference the payment.',
+              )}
             >
-              {defaultsSaving
-                ? t('app.common.saving', 'Saving…')
-                : t('settings.invoiceOptions.save', 'Save invoice settings')}
-            </button>
+              <SettingsTextarea
+                rows={5}
+                value={form.invoiceDefaultPaymentTerms}
+                onChange={(e) => setForm((f) => ({ ...f, invoiceDefaultPaymentTerms: e.target.value }))}
+                placeholder={t(
+                  'settings.invoices.terms.placeholder',
+                  'e.g. Payment due within {due_date}. After the due date, interest of 1% per month is charged.',
+                )}
+              />
+              <SettingsHint>
+                {t('settings.invoices.terms.placeholdersHint', 'Available placeholders:')}{' '}
+                <code className="rounded bg-gray-100 px-1">{'{due_date}'}</code>,{' '}
+                <code className="rounded bg-gray-100 px-1">{'{invoice_date}'}</code>,{' '}
+                <code className="rounded bg-gray-100 px-1">{'{invoice_number}'}</code>,{' '}
+                <code className="rounded bg-gray-100 px-1">{'{overdue_days}'}</code>.
+              </SettingsHint>
+            </SettingsField>
+          </SettingsSection>
+
+          <div className="mt-16">
+            <InvoiceSendEmailCard />
           </div>
         </form>
+
+        <SettingsSection
+          title={t('settings.invoices.gettingPaid.section', 'Getting paid')}
+          description={t(
+            'settings.invoices.gettingPaid.sectionHelp',
+            'How clients pay you and automatic reminders when payment is coming due.',
+          )}
+        >
+          {paymentError && (
+            <div className="mb-3">
+              <SettingsErrorNote>{paymentError}</SettingsErrorNote>
+            </div>
+          )}
+          {paymentLoading ? (
+            <div className="flex justify-center py-6">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+            </div>
+          ) : paymentOptions.length === 0 ? (
+            <p className="py-4 text-sm text-gray-500">
+              {t('settings.invoices.payment.empty', 'No payment options available yet.')}
+            </p>
+          ) : (
+            <div>
+              {paymentOptions.map((opt) => (
+                <PaymentOptionRow
+                  key={opt.provider}
+                  option={opt}
+                  draft={
+                    paymentDrafts[opt.provider] ?? {
+                      enabled: opt.enabled,
+                      config: opt.config || {},
+                    }
+                  }
+                  onDraftChange={(patch) => updatePaymentDraft(opt.provider, patch)}
+                  invalid={opt.provider === 'bank_transfer' && activationFieldErrors.bankTransfer}
+                  expandRequested={opt.provider === 'bank_transfer' && expandBankTransfer}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
+
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <InvoiceDueReminderCard />
+          </div>
+        </SettingsSection>
       </div>
+
+      {hasUnsavedChanges && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] backdrop-blur lg:left-[200px]">
+          <div className="mx-auto flex max-w-2xl items-center justify-between gap-4 px-6 py-3">
+            <p className="text-sm text-gray-600">
+              {t('settings.invoices.unsaved', 'You have unsaved changes')}
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleDiscardAll}
+                disabled={defaultsSaving}
+                className="text-[13px] font-medium text-gray-500 hover:text-gray-800 disabled:opacity-40"
+              >
+                {t('settings.invoices.discard', 'Discard')}
+              </button>
+              <SettingsButton
+                variant="primary"
+                onClick={handleSaveAll}
+                disabled={defaultsSaving}
+              >
+                {defaultsSaving
+                  ? t('settings.invoices.saving', 'Saving…')
+                  : t('settings.invoices.saveChanges', 'Save changes')}
+              </SettingsButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SectionCard — shared chrome for each numbered section
+// PaymentOptionRow — a single payment provider, with toggle + inline config.
+// No box: label on the left, toggle/setup on the right, config below a divider.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SectionCard({
-  icon,
-  title,
-  subtitle,
-  badge,
-  children,
-}: {
-  icon: React.ReactNode
-  title: string
-  subtitle?: string
-  badge?: { label: string; tone: 'warn' | 'info' } | null
-  children: React.ReactNode
-}) {
-  return (
-    <section className="rounded-2xl border border-gray-200/80 bg-white shadow-sm">
-      <header className="flex items-start gap-3 px-6 pt-5 pb-3">
-        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent-50 text-accent-600">
-          {icon}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-semibold text-gray-900 leading-tight">{title}</h2>
-            {badge && (
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                  badge.tone === 'warn'
-                    ? 'bg-red-100 text-red-800'
-                    : 'bg-accent-100 text-accent-800'
-                }`}
-              >
-                {badge.tone === 'warn' && <ExclamationTriangleIcon className="h-3 w-3" />}
-                {badge.label}
-              </span>
-            )}
-          </div>
-          {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
-        </div>
-      </header>
-      <div className="px-6 pb-6 pt-1">{children}</div>
-    </section>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PaymentOptionCard — a single payment provider, with toggle + inline config
-// ─────────────────────────────────────────────────────────────────────────────
-
-function PaymentOptionCard({
+function PaymentOptionRow({
   option,
-  onChange,
+  draft,
+  onDraftChange,
+  invalid = false,
+  expandRequested = false,
   t,
 }: {
   option: PaymentOption
-  onChange: (patch: Partial<PaymentOption>) => void
+  draft: PaymentDraft
+  onDraftChange: (patch: Partial<PaymentDraft>) => void
+  invalid?: boolean
+  expandRequested?: boolean
   t: (key: string, fallback: string) => string
 }) {
-  const [draftEnabled, setDraftEnabled] = useState<boolean>(option.enabled)
-  const [draftConfig, setDraftConfig] = useState<PaymentConfig>(option.config || {})
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [saved, setSaved] = useState(false)
-  const [expanded, setExpanded] = useState<boolean>(option.enabled)
+  const [expanded, setExpanded] = useState(false)
 
-  // Re-sync if the parent reloads the option from the server.
   useEffect(() => {
-    setDraftEnabled(option.enabled)
-    setDraftConfig(option.config || {})
-  }, [option.provider, option.enabled, option.config])
+    if (expandRequested) setExpanded(true)
+  }, [expandRequested])
 
   const isBankTransfer = option.provider === 'bank_transfer'
 
   const canEnable = useMemo(() => {
     if (!isBankTransfer) return true
     return Boolean(
-      String(draftConfig.accountHolder || '').trim() && String(draftConfig.iban || '').trim(),
+      String(draft.config.accountHolder || '').trim() && String(draft.config.iban || '').trim(),
     )
-  }, [isBankTransfer, draftConfig])
-
-  const dirty = useMemo(() => {
-    if (draftEnabled !== option.enabled) return true
-    const a = JSON.stringify(option.config || {})
-    const b = JSON.stringify(draftConfig || {})
-    return a !== b
-  }, [draftEnabled, option.enabled, option.config, draftConfig])
-
-  const handleToggle = (next: boolean) => {
-    setDraftEnabled(next)
-    if (next && !expanded) setExpanded(true)
-  }
-
-  const handleSave = async () => {
-    if (draftEnabled && !canEnable) {
-      setError(t('settings.invoiceOptions.payment.fillToActivateError', 'Fill account holder and IBAN before activating.'))
-      return
-    }
-    setSaving(true)
-    setError('')
-    setSaved(false)
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/integrations/${option.provider}/config`), {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          enabled: draftEnabled,
-          config: draftConfig,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.error || t('settings.invoiceOptions.payment.failedSave', 'Failed to save'))
-        return
-      }
-      onChange({
-        enabled: data.integration.enabled,
-        config: data.integration.config || {},
-      })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2500)
-    } catch {
-      setError(t('settings.invoiceOptions.payment.networkError', 'Network error'))
-    } finally {
-      setSaving(false)
-    }
-  }
+  }, [isBankTransfer, draft.config])
 
   const ProviderIcon = providerIconFor(option.provider)
 
   return (
     <div
-      className={`rounded-xl border transition-colors ${
-        draftEnabled
-          ? 'border-accent-200 bg-accent-50/30'
-          : 'border-gray-200 bg-white hover:border-gray-300'
-      }`}
+      className={`border-b border-gray-100 last:border-b-0 ${invalid ? 'rounded-lg ring-2 ring-red-400/80 ring-inset -mx-1 px-1' : ''}`}
     >
-      {/* Header row */}
-      <div className="flex items-center gap-3 px-4 py-3">
-        <div
-          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${
-            draftEnabled ? 'bg-white text-accent-600' : 'bg-gray-100 text-gray-500'
-          }`}
-        >
-          <ProviderIcon className="h-5 w-5" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900">{option.title}</p>
-          <p className="text-xs text-gray-500 line-clamp-1">{option.description}</p>
+      <div className="flex items-center justify-between gap-6 py-3.5">
+        <div className="flex max-w-[60%] min-w-0 items-start gap-3">
+          <ProviderIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-gray-400" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-800">{option.title}</p>
+            <p className="mt-0.5 text-[13px] leading-relaxed text-gray-500">{option.description}</p>
+          </div>
         </div>
 
-        {/* Toggle */}
-        <button
-          type="button"
-          onClick={() => handleToggle(!draftEnabled)}
-          aria-pressed={draftEnabled}
-          aria-label={draftEnabled ? t('settings.invoiceOptions.payment.disable', 'Disable') : t('settings.invoiceOptions.payment.enable', 'Enable')}
-          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full p-0.5 transition-colors ${
-            draftEnabled ? 'bg-accent-500' : 'bg-gray-300'
-          }`}
-        >
-          <span
-            className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-              draftEnabled ? 'translate-x-5' : 'translate-x-0'
-            }`}
+        <div className="ml-8 flex flex-shrink-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="inline-flex items-center gap-1 text-[13px] font-medium text-accent-700 hover:text-accent-800"
+          >
+            {expanded
+              ? t('settings.invoices.payment.close', 'Close')
+              : t('settings.invoices.payment.edit', 'Edit')}
+            <ChevronDownIcon
+              className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+            />
+          </button>
+          <SettingsToggle
+            checked={draft.enabled}
+            onChange={(v) => onDraftChange({ enabled: v })}
+            label={
+              draft.enabled
+                ? t('settings.invoices.payment.disable', 'Disable')
+                : t('settings.invoices.payment.enable', 'Enable')
+            }
           />
-        </button>
-
-        {/* Configure / collapse button */}
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="flex-shrink-0 inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
-        >
-          <Cog6ToothIcon className="h-3.5 w-3.5" />
-          {expanded ? t('settings.invoiceOptions.payment.hide', 'Hide') : t('settings.invoiceOptions.payment.setup', 'Setup')}
-        </button>
+        </div>
       </div>
 
-      {/* Expanded config */}
       {expanded && (
-        <div className="border-t border-gray-200/70 px-4 py-4 space-y-4">
+        <div className="-mx-3 mb-3 space-y-4 rounded-md bg-gray-50 px-4 py-4">
           {isBankTransfer && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field
-                label={t('settings.invoiceOptions.payment.accountHolder', 'Account holder')}
+                label={t('settings.invoices.payment.accountHolder', 'Account holder')}
                 required
-                value={String(draftConfig.accountHolder || '')}
-                onChange={(v) => setDraftConfig((prev) => ({ ...prev, accountHolder: v }))}
+                value={String(draft.config.accountHolder || '')}
+                onChange={(v) => onDraftChange({ config: { accountHolder: v } })}
               />
               <Field
-                label={t('settings.invoiceOptions.payment.iban', 'IBAN')}
+                label={t('settings.invoices.payment.iban', 'IBAN')}
                 required
-                value={String(draftConfig.iban || '')}
-                onChange={(v) => setDraftConfig((prev) => ({ ...prev, iban: v }))}
+                value={String(draft.config.iban || '')}
+                onChange={(v) => onDraftChange({ config: { iban: v } })}
               />
               <Field
-                label={t('settings.invoiceOptions.payment.regNumber', 'Registration number')}
-                value={String(draftConfig.registrationNumber || '')}
-                onChange={(v) =>
-                  setDraftConfig((prev) => ({ ...prev, registrationNumber: v }))
-                }
+                label={t('settings.invoices.payment.regNumber', 'Registration number')}
+                value={String(draft.config.registrationNumber || '')}
+                onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
               />
               <Field
-                label={t('settings.invoiceOptions.payment.accountNumber', 'Account number')}
-                value={String(draftConfig.accountNumber || '')}
-                onChange={(v) => setDraftConfig((prev) => ({ ...prev, accountNumber: v }))}
+                label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                value={String(draft.config.accountNumber || '')}
+                onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
               />
             </div>
           )}
 
-          {draftEnabled && !canEnable && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              {t('settings.invoiceOptions.payment.fillToActivate', 'Fill account holder and IBAN to activate.')}
-            </div>
+          {draft.enabled && !canEnable && (
+            <SettingsHint>
+              {t('settings.invoices.payment.fillToActivate', 'Fill account holder and IBAN to activate.')}
+            </SettingsHint>
           )}
-          {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-              {error}
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-3">
-            {saved && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
-                <CheckCircleIcon className="h-4 w-4" />
-                {t('settings.invoiceOptions.payment.saved', 'Saved')}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || !dirty}
-              className="inline-flex items-center rounded-lg bg-accent-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {saving ? t('settings.invoiceOptions.payment.saving', 'Saving…') : dirty ? t('settings.invoiceOptions.payment.saveChanges', 'Save changes') : t('settings.invoiceOptions.payment.upToDate', 'Up to date')}
-            </button>
-          </div>
         </div>
       )}
     </div>
@@ -684,20 +832,15 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-xs font-medium text-gray-600 mb-1">
+      <span className="mb-1 block text-xs font-medium text-gray-700">
         {label}
-        {required && <span className="text-red-500 ml-0.5">*</span>}
+        {required && <span className="ml-0.5 text-gray-400">*</span>}
       </span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-      />
+      <SettingsInput value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   )
 }
 
-// Map providers to icons. Defaults to a generic credit-card icon.
 function providerIconFor(provider: string) {
   if (provider === 'bank_transfer') return BuildingLibraryIcon
   return CreditCardIcon

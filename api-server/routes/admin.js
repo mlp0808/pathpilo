@@ -4,6 +4,11 @@ const fs = require('fs/promises');
 const path = require('path');
 const { pool } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
+const {
+  VIDEO_GUIDE_TOPICS,
+  DEFAULT_VIDEO_GUIDE_TOPIC,
+  normalizeVideoGuideTopic,
+} = require('../utils/videoGuideTopics');
 
 const router = express.Router();
 const SUPPORTED_VIDEO_LANGUAGES = new Set(['en', 'da', 'de', 'sv', 'no']);
@@ -87,6 +92,9 @@ async function initAdminSchema() {
     await pool.query(`ALTER TABLE trial_invites ADD COLUMN IF NOT EXISTS last_email_sent_at TIMESTAMP NULL`);
     await pool.query(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'`);
     await pool.query(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS guide_link TEXT`);
+    await pool.query(
+      `ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS topic VARCHAR(50) NOT NULL DEFAULT '${DEFAULT_VIDEO_GUIDE_TOPIC}'`
+    );
     await pool.query(`
       CREATE TABLE IF NOT EXISTS registration_verification_codes (
         id SERIAL PRIMARY KEY,
@@ -607,7 +615,7 @@ router.get('/video-guides', async (req, res) => {
   try {
     const languageCode = normalizeVideoLanguageCode(req.query.languageCode || req.query.language_code || 'en');
     const result = await pool.query(`
-      SELECT id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link
+      SELECT id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link, topic
       FROM video_guides
       WHERE language_code = $1
       ORDER BY sort_order ASC, created_at ASC
@@ -623,6 +631,7 @@ router.get('/video-guides', async (req, res) => {
       sortOrder: row.sort_order,
       createdAt: row.created_at,
       guideLink: row.guide_link || '',
+      topic: normalizeVideoGuideTopic(row.topic),
     }));
 
     res.json({ videos });
@@ -635,14 +644,18 @@ router.get('/video-guides', async (req, res) => {
 // POST /api/admin/video-guides - Create
 router.post('/video-guides', async (req, res) => {
   try {
-    const { title, description, duration, videoId, guideLink, languageCode: rawLanguageCode, language_code: rawLanguageCodeSnake } = req.body;
+    const { title, description, duration, videoId, guideLink, topic, languageCode: rawLanguageCode, language_code: rawLanguageCodeSnake } = req.body;
     const languageCode = normalizeVideoLanguageCode(rawLanguageCode || rawLanguageCodeSnake);
+    const topicValue = normalizeVideoGuideTopic(topic);
 
     if (!title || !videoId) {
       return res.status(400).json({ error: 'Title and video ID are required' });
     }
     if (!SUPPORTED_VIDEO_LANGUAGES.has(languageCode)) {
       return res.status(400).json({ error: 'Unsupported language code' });
+    }
+    if (!VIDEO_GUIDE_TOPICS.includes(topicValue)) {
+      return res.status(400).json({ error: 'Unsupported topic' });
     }
 
     const maxResult = await pool.query(
@@ -652,10 +665,10 @@ router.post('/video-guides', async (req, res) => {
     const nextOrder = maxResult.rows[0]?.next_order || 1;
 
     const result = await pool.query(
-      `INSERT INTO video_guides (title, description, duration, video_id, sort_order, language_code, guide_link)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link`,
-      [title, description || '', duration || '0:00', videoId, nextOrder, languageCode, guideLink || null]
+      `INSERT INTO video_guides (title, description, duration, video_id, sort_order, language_code, guide_link, topic)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link, topic`,
+      [title, description || '', duration || '0:00', videoId, nextOrder, languageCode, guideLink || null, topicValue]
     );
 
     const row = result.rows[0];
@@ -670,6 +683,7 @@ router.post('/video-guides', async (req, res) => {
         sortOrder: row.sort_order,
         createdAt: row.created_at,
         guideLink: row.guide_link || '',
+        topic: normalizeVideoGuideTopic(row.topic),
       },
     });
   } catch (error) {
@@ -689,13 +703,18 @@ router.put('/video-guides/:id', async (req, res) => {
       videoId,
       guideLink,
       sortOrder,
+      topic,
       languageCode: rawLanguageCode,
       language_code: rawLanguageCodeSnake,
     } = req.body;
     const rawLang = rawLanguageCode != null ? rawLanguageCode : rawLanguageCodeSnake;
     const languageCode = rawLang != null ? normalizeVideoLanguageCode(rawLang) : null;
+    const topicValue = topic != null ? normalizeVideoGuideTopic(topic) : null;
     if (languageCode && !SUPPORTED_VIDEO_LANGUAGES.has(languageCode)) {
       return res.status(400).json({ error: 'Unsupported language code' });
+    }
+    if (topicValue && !VIDEO_GUIDE_TOPICS.includes(topicValue)) {
+      return res.status(400).json({ error: 'Unsupported topic' });
     }
 
     const result = await pool.query(
@@ -707,10 +726,11 @@ router.put('/video-guides/:id', async (req, res) => {
            sort_order = COALESCE($6, sort_order),
            language_code = COALESCE($7, language_code),
            guide_link = $8,
+           topic = COALESCE($9, topic),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1
-       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link`,
-      [id, title, description, duration, videoId, sortOrder, languageCode, guideLink || null]
+       RETURNING id, title, description, duration, video_id, sort_order, created_at, language_code, guide_link, topic`,
+      [id, title, description, duration, videoId, sortOrder, languageCode, guideLink || null, topicValue]
     );
 
     if (result.rows.length === 0) {
@@ -729,6 +749,7 @@ router.put('/video-guides/:id', async (req, res) => {
         sortOrder: row.sort_order,
         createdAt: row.created_at,
         guideLink: row.guide_link || '',
+        topic: normalizeVideoGuideTopic(row.topic),
       },
     });
   } catch (error) {

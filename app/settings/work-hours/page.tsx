@@ -4,9 +4,9 @@
 // first save of their own work-hours row. Existing employees are unaffected.
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { ClockIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
+import { SettingsHeader, SettingsSection, SettingsButton, SettingsHint } from '../../components/settings/SettingsUI'
 
 type WorkHoursMode = 'fixed' | 'flexible'
 type Weekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
@@ -158,47 +158,29 @@ export default function CompanyWorkHoursSettingsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-500" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
       </div>
     )
   }
 
+  const timeInput =
+    'text-sm border border-gray-200 rounded-md px-2 py-1 focus:border-gray-400 outline-none'
+
   return (
-    <div className="p-6">
-      <div className="max-w-3xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">
-          {t('settings.workHours.title', 'Default work hours')}
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {t('settings.workHours.subtitle', 'These hours are applied to new employees when they join. Existing employees keep their own schedule.')}
-        </p>
-      </div>
+    <div className="px-6 py-8">
+      <div className="max-w-2xl mx-auto">
+        <SettingsHeader
+          title={t('settings.workHours.title', 'Default work hours')}
+          description={t('settings.workHours.subtitle', 'These hours are applied to new employees when they join. Existing employees keep their own schedule.')}
+        />
 
-      <div className="bg-white border border-gray-100 rounded-2xl">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-accent-50 rounded-lg flex items-center justify-center">
-              <ClockIcon className="w-4 h-4 text-accent-600" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-900">
-                {t('app.workHours.title', 'Work hours')}
-              </p>
-              <p className="text-[11px] text-gray-400">
-                {t('settings.workHours.cardSubtitle', 'Company-wide default schedule')}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="px-6 py-5">
-          <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
-            <div className="inline-flex bg-gray-100 rounded-xl p-1">
+        <SettingsSection title={t('app.workHours.title', 'Work hours')}>
+          <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+            <div className="inline-flex bg-gray-100 rounded-lg p-0.5">
               <button
                 type="button"
                 onClick={() => setMode('fixed')}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                className={`px-3 py-1 text-[13px] font-medium rounded-md transition-all ${
                   mode === 'fixed' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
@@ -207,7 +189,7 @@ export default function CompanyWorkHoursSettingsPage() {
               <button
                 type="button"
                 onClick={() => setMode('flexible')}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                className={`px-3 py-1 text-[13px] font-medium rounded-md transition-all ${
                   mode === 'flexible' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
@@ -217,28 +199,26 @@ export default function CompanyWorkHoursSettingsPage() {
             <button
               type="button"
               onClick={copyMondayToWeekdays}
-              className="text-xs font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-2.5 py-1.5 rounded-lg transition-colors"
+              className="text-[13px] font-medium text-accent-700 hover:text-accent-800"
             >
               {t('app.workHours.copyMonday', 'Copy Monday to weekdays')}
             </button>
           </div>
 
-          <div className="mb-4 text-[12px] text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+          <SettingsHint>
             {mode === 'fixed'
               ? t('app.workHours.fixedHint', 'Fixed schedule: employee starts and ends at the same time each weekday. Good for route planning.')
               : t('app.workHours.flexibleHint', 'Flexible schedule: employee has a daily hour budget without fixed clock times. Good for contractors.')}
-          </div>
+          </SettingsHint>
 
-          <div className="space-y-2">
+          <div className="mt-4">
             {WEEKDAYS.map(({ key, labelKey }) => {
               const d = schedule[key]
               const netH = mode === 'fixed' ? computeNetHours(d.start, d.end, d.breakMinutes) : d.hours
               return (
                 <div
                   key={key}
-                  className={`flex flex-wrap items-center gap-2 py-2 px-3 rounded-xl border ${
-                    d.off ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-100'
-                  }`}
+                  className="flex flex-wrap items-center gap-2 border-b border-gray-100 py-2.5 last:border-b-0"
                 >
                   <span className={`w-24 text-sm font-medium flex-shrink-0 ${d.off ? 'text-gray-400' : 'text-gray-800'}`}>
                     {t(labelKey, key)}
@@ -246,10 +226,10 @@ export default function CompanyWorkHoursSettingsPage() {
                   <button
                     type="button"
                     onClick={() => setDay(key, { off: !d.off })}
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-md transition-colors ${
+                    className={`text-[12px] font-medium px-2 py-0.5 rounded-md transition-colors ${
                       d.off
-                        ? 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                        : 'bg-accent-50 text-accent-700 hover:bg-accent-100'
+                        ? 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        : 'border border-accent-500/40 text-accent-700 hover:bg-accent-50/60'
                     }`}
                   >
                     {d.off ? t('app.workHours.dayOff', 'Off') : t('app.workHours.dayOn', 'Working')}
@@ -263,7 +243,7 @@ export default function CompanyWorkHoursSettingsPage() {
                           type="time"
                           value={d.start}
                           onChange={(e) => setDay(key, { start: e.target.value })}
-                          className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                          className={timeInput}
                         />
                       </div>
                       <div className="flex items-center gap-1">
@@ -272,7 +252,7 @@ export default function CompanyWorkHoursSettingsPage() {
                           type="time"
                           value={d.end}
                           onChange={(e) => setDay(key, { end: e.target.value })}
-                          className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                          className={timeInput}
                         />
                       </div>
                       <div className="flex items-center gap-1">
@@ -287,7 +267,7 @@ export default function CompanyWorkHoursSettingsPage() {
                             const n = Math.max(0, Math.min(480, parseInt(e.target.value || '0', 10) || 0))
                             setDay(key, { breakMinutes: n })
                           }}
-                          className="w-16 text-sm text-right border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                          className={`w-16 text-right ${timeInput}`}
                         />
                         <span className="text-[11px] text-gray-400">{t('app.workHours.minShort', 'min')}</span>
                       </div>
@@ -307,13 +287,13 @@ export default function CompanyWorkHoursSettingsPage() {
                           const n = Math.max(0, Math.min(24, parseFloat(e.target.value) || 0))
                           setDay(key, { hours: n })
                         }}
-                        className="w-20 text-sm text-right border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                        className={`w-20 text-right ${timeInput}`}
                       />
                       <span className="text-[11px] text-gray-400">h</span>
                     </div>
                   )}
 
-                  <span className="ml-auto text-[11px] font-semibold text-gray-600 tabular-nums">
+                  <span className="ml-auto text-[12px] font-medium text-gray-500 tabular-nums">
                     {d.off ? '—' : `${netH.toFixed(1)} h`}
                   </span>
                 </div>
@@ -321,34 +301,20 @@ export default function CompanyWorkHoursSettingsPage() {
             })}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div className="mt-4 flex items-center justify-between">
             <p className="text-xs text-gray-400">
               {t('app.workHours.total', 'Weekly total:')}{' '}
               <span className="font-semibold text-gray-600">{totalWeek.toFixed(1)} h</span>
             </p>
             <div className="flex items-center gap-3">
               {error && <p className="text-sm text-red-600">{error}</p>}
-              <button
-                type="button"
-                onClick={save}
-                disabled={saving}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
-                style={{
-                  background: saved ? '#10b981' : '#3DD57A',
-                  color: saved ? '#fff' : '#0A1A0A',
-                  boxShadow: saved ? '0 0 16px rgba(16,185,129,0.25)' : '0 2px 12px rgba(61,213,122,0.2)',
-                }}
-              >
-                {saving
-                  ? t('app.common.saving', 'Saving...')
-                  : saved
-                    ? t('app.teamMember.saved', 'Saved')
-                    : t('settings.business.save', 'Save changes')}
-              </button>
+              {saved && <span className="text-sm text-gray-500">{t('app.teamMember.saved', 'Saved')}</span>}
+              <SettingsButton type="button" variant="primary" onClick={save} disabled={saving}>
+                {saving ? t('app.common.saving', 'Saving...') : t('settings.business.save', 'Save changes')}
+              </SettingsButton>
             </div>
           </div>
-        </div>
-      </div>
+        </SettingsSection>
       </div>
     </div>
   )

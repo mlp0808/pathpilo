@@ -5,7 +5,8 @@ import { useParams, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
 import Link from 'next/link'
-import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, GlobeAltIcon, ClockIcon, XMarkIcon, BellAlertIcon } from '@heroicons/react/24/outline'
+import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, BellAlertIcon, EyeIcon } from '@heroicons/react/24/outline'
+import { SettingsToggle } from '@/app/components/settings/SettingsUI'
 import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import type { MessageKey } from '@/app/i18n'
@@ -100,11 +101,16 @@ export default function InvoicePage() {
   const [eInvoice, setEInvoice] = useState<PublicInvoicePayload | null>(null)
   const [hasPaymentMethods, setHasPaymentMethods] = useState(true)
   const [pendingInvoiceReminder, setPendingInvoiceReminder] = useState<{ sendAt: string } | null>(null)
-  const [cancelReminderLoading, setCancelReminderLoading] = useState(false)
   const [manualReminderLoading, setManualReminderLoading] = useState(false)
   const [manualReminderMessage, setManualReminderMessage] = useState<
     { tone: 'success' | 'error'; text: string } | null
   >(null)
+  const [dueReminderAutomation, setDueReminderAutomation] = useState<{
+    enabled: boolean
+    lead_value: number
+    lead_unit: 'hours' | 'minutes'
+  } | null>(null)
+  const [automationToggling, setAutomationToggling] = useState(false)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -122,8 +128,11 @@ export default function InvoicePage() {
       fetch(apiUrl(`/invoices/${id}/e-invoice`), {
         headers: { Authorization: `Bearer ${token}` },
       }).then((res) => res.json()),
+      fetch(apiUrl('/email-templates'), {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json()),
     ])
-      .then(([invData, eData]) => {
+      .then(([invData, eData, tplData]) => {
         if (cancelled) return
         if (invData.invoice) {
           setInvoice(invData.invoice)
@@ -133,6 +142,12 @@ export default function InvoicePage() {
           setEInvoice(eData.invoice)
           setHasPaymentMethods(Boolean(eData.hasPaymentMethods))
         }
+        const reminderSetting = tplData?.automationSettings?.email_invoice_due_reminder
+        setDueReminderAutomation({
+          enabled: Boolean(reminderSetting?.enabled),
+          lead_value: Number(reminderSetting?.lead_value) || 48,
+          lead_unit: reminderSetting?.lead_unit === 'minutes' ? 'minutes' : 'hours',
+        })
       })
       .catch(() => {
         if (!cancelled) setError(tr('invoice.detail.failedLoad', 'Failed to load invoice'))
@@ -186,18 +201,37 @@ export default function InvoicePage() {
     }
   }
 
-  const handleCancelDueReminder = async () => {
+  const handleToggleDueReminderAutomation = async (next: boolean) => {
+    if (!dueReminderAutomation) return
     const token = localStorage.getItem('token')
-    if (!token || !id) return
-    setCancelReminderLoading(true)
+    if (!token) return
+
+    const prev = dueReminderAutomation
+    setDueReminderAutomation({ ...prev, enabled: next })
+    setAutomationToggling(true)
     try {
-      const res = await fetch(apiUrl(`/invoices/${id}/invoice-reminder`), {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await fetch(apiUrl('/email-templates'), {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          automationSettings: {
+            email_invoice_due_reminder: {
+              enabled: next,
+              lead_value: prev.lead_value,
+              lead_unit: prev.lead_unit,
+            },
+          },
+        }),
       })
-      if (res.ok) setPendingInvoiceReminder(null)
+      if (!res.ok) {
+        setDueReminderAutomation(prev)
+        return
+      }
+      await refreshInvoiceReminderStatus()
+    } catch {
+      setDueReminderAutomation(prev)
     } finally {
-      setCancelReminderLoading(false)
+      setAutomationToggling(false)
     }
   }
 
@@ -493,6 +527,34 @@ export default function InvoicePage() {
     }
   }
 
+  const notificationsHref = company ? `/${company}/settings/notifications` : '/settings/notifications'
+
+  const currentStatus = invoice.status || 'draft'
+  const currentIndex = timelineIndex(currentStatus)
+  const dueDate = invoice.due_date
+  const daysUntilOverdue = dueDate
+    ? Math.ceil((new Date(dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
+    : null
+  const overdueLabel =
+    daysUntilOverdue === null
+      ? null
+      : daysUntilOverdue > 0
+        ? tr(
+            daysUntilOverdue === 1 ? 'invoice.detail.daysUntilOverdueOne' : 'invoice.detail.daysUntilOverdueMany',
+            daysUntilOverdue === 1 ? '{n} day until overdue' : '{n} days until overdue',
+          ).replace('{n}', String(daysUntilOverdue))
+        : daysUntilOverdue === 0
+          ? tr('invoice.detail.dueToday', 'Due today')
+          : tr(
+              daysUntilOverdue === -1 ? 'invoice.detail.daysOverdueOne' : 'invoice.detail.daysOverdueMany',
+              daysUntilOverdue === -1 ? '{n} day overdue' : '{n} days overdue',
+            ).replace('{n}', String(Math.abs(daysUntilOverdue)))
+
+  const showPaymentReceived =
+    (invoice.status === 'sent' || invoice.status === 'overdue') && balance > 0
+  const showSendNotification =
+    !isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue')
+
   return (
     <AppLayout>
       <div className="p-6">
@@ -506,125 +568,99 @@ export default function InvoicePage() {
           </Link>
         </div>
 
-        <div className="flex gap-8">
-          {/* Invoice document – professional layout (based on example) */}
-          <div className="min-w-0 flex-1">
-            {/* Status timeline – full width, connecting lines, modern progress */}
-            {(() => {
-              const currentStatus = invoice.status || 'draft'
-              const currentIndex = timelineIndex(currentStatus)
-              const dueDate = invoice.due_date
-              const daysUntilOverdue = dueDate
-                ? Math.ceil((new Date(dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
-                : null
-              const overdueLabel =
-                daysUntilOverdue === null
-                  ? null
-                  : daysUntilOverdue > 0
-                    ? tr(
-                        daysUntilOverdue === 1 ? 'invoice.detail.daysUntilOverdueOne' : 'invoice.detail.daysUntilOverdueMany',
-                        daysUntilOverdue === 1 ? '{n} day until overdue' : '{n} days until overdue',
-                      ).replace('{n}', String(daysUntilOverdue))
-                    : daysUntilOverdue === 0
-                      ? tr('invoice.detail.dueToday', 'Due today')
-                      : tr(
-                          daysUntilOverdue === -1 ? 'invoice.detail.daysOverdueOne' : 'invoice.detail.daysOverdueMany',
-                          daysUntilOverdue === -1 ? '{n} day overdue' : '{n} days overdue',
-                        ).replace('{n}', String(Math.abs(daysUntilOverdue)))
+        {/* Status timeline — full width above invoice + sidebar */}
+        <div className="mb-8 w-full">
+          <nav className="flex w-full items-start gap-0" aria-label={tr('invoice.detail.ariaStatus', 'Invoice status')}>
+            {TIMELINE_ORDER.map((value, index) => {
+              const isOverpaid = currentStatus === 'overpaid'
+              const statusRow = INVOICE_STATUSES.find((s) => s.value === value)
+              const displayLabel = value === 'paid' && isOverpaid
+                ? tr('invoice.detail.statusOverpaid', 'Overpaid')
+                : (statusRow ? tr(statusRow.labelKey, statusRow.fallback) : value)
+              const isActive = currentIndex === index || (value === 'paid' && isOverpaid)
+              const isPast = currentIndex > index && !(value === 'paid' && isOverpaid)
+              const showSentDate = value === 'sent' && (isPast || isActive) && invoice.sent_at
+              const showOverdueDate = value === 'overdue' && dueDate
+              const isLast = index === TIMELINE_ORDER.length - 1
+              const segmentIndex = index
+              const showHalfwayDot = segmentIndex === 1 && currentIndex === 1 && currentStatus === 'sent'
+              const paidIsBlue = value === 'paid' && isOverpaid
 
               return (
-                <div className="mb-8 w-full">
-                  <nav className="flex w-full items-start gap-0" aria-label={tr('invoice.detail.ariaStatus', 'Invoice status')}>
-                    {TIMELINE_ORDER.map((value, index) => {
-                      const isOverpaid = currentStatus === 'overpaid'
-                      const statusRow = INVOICE_STATUSES.find((s) => s.value === value)
-                      const displayLabel = value === 'paid' && isOverpaid
-                        ? tr('invoice.detail.statusOverpaid', 'Overpaid')
-                        : (statusRow ? tr(statusRow.labelKey, statusRow.fallback) : value)
-                      const isActive = currentIndex === index || (value === 'paid' && isOverpaid)
-                      const isPast = currentIndex > index && !(value === 'paid' && isOverpaid)
-                      const isFuture = currentIndex < index
-                      const showSentDate = value === 'sent' && (isPast || isActive) && invoice.sent_at
-                      const showOverdueDate = value === 'overdue' && dueDate
-                      const isLast = index === TIMELINE_ORDER.length - 1
-                      const segmentIndex = index
-                      const showHalfwayDot = segmentIndex === 1 && currentIndex === 1 && currentStatus === 'sent'
-                      const paidIsBlue = value === 'paid' && isOverpaid
-
-                      return (
-                        <React.Fragment key={value}>
-                          <div className="flex flex-shrink-0 flex-col items-center">
-                            <span
-                              className={`inline-flex items-center rounded-full border-2 bg-white px-5 py-2.5 text-sm font-semibold shadow-sm transition-colors ${
-                                paidIsBlue
-                                  ? 'border-blue-500 text-blue-700'
-                                  : isActive
-                                  ? 'border-accent-500 text-accent-700'
-                                  : isPast
-                                  ? 'border-accent-500 text-gray-700'
-                                  : 'border-gray-200 text-gray-400'
-                              }`}
-                            >
-                              {displayLabel}
-                            </span>
-                            {showSentDate && (
-                              <span className="mt-1.5 text-xs font-medium text-gray-500">
-                                {formatDate(invoice.sent_at)}
-                              </span>
-                            )}
-                            {showOverdueDate && (
-                              <span className="mt-1.5 text-xs font-medium text-gray-500">
-                                {formatDate(dueDate)}
-                              </span>
-                            )}
-                          </div>
-                          {!isLast && (
-                            <div
-                              className={`relative flex min-w-0 flex-1 items-center px-1 pt-5 ${showHalfwayDot ? 'pb-8' : ''}`}
-                            >
-                              <div className="h-0.5 w-full flex-1 rounded-full bg-gray-200" aria-hidden />
-                              {segmentIndex === 0 && (
-                                <div
-                                  className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
-                                  style={{ width: currentIndex >= 1 ? '100%' : '0%' }}
-                                />
-                              )}
-                              {segmentIndex === 1 && (
-                                <>
-                                  <div
-                                    className="absolute left-0 top-5 h-0.5 rounded-full bg-accent-400"
-                                    style={{
-                                      width: currentIndex >= 2 ? '100%' : currentIndex === 1 ? '50%' : '0%',
-                                    }}
-                                  />
-                                  {showHalfwayDot && (
-                                    <div className="absolute left-1/2 top-5 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
-                                      <span className="h-3 w-3 rounded-full border-2 border-accent-500 bg-white shadow-sm" />
-                                      {overdueLabel && (
-                                        <span className="mt-3 whitespace-nowrap text-xs font-medium text-gray-600">
-                                          {overdueLabel}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                              {segmentIndex === 2 && (
-                                <div
-                                  className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
-                                  style={{ width: currentIndex >= 3 ? '100%' : '0%' }}
-                                />
+                <React.Fragment key={value}>
+                  <div className="flex flex-shrink-0 flex-col items-center">
+                    <span
+                      className={`inline-flex items-center rounded-full border-2 bg-white px-5 py-2.5 text-sm font-semibold shadow-sm transition-colors ${
+                        paidIsBlue
+                          ? 'border-blue-500 text-blue-700'
+                          : isActive
+                          ? 'border-accent-500 text-accent-700'
+                          : isPast
+                          ? 'border-accent-500 text-gray-700'
+                          : 'border-gray-200 text-gray-400'
+                      }`}
+                    >
+                      {displayLabel}
+                    </span>
+                    {showSentDate && (
+                      <span className="mt-1.5 text-xs font-medium text-gray-500">
+                        {formatDate(invoice.sent_at)}
+                      </span>
+                    )}
+                    {showOverdueDate && (
+                      <span className="mt-1.5 text-xs font-medium text-gray-500">
+                        {formatDate(dueDate)}
+                      </span>
+                    )}
+                  </div>
+                  {!isLast && (
+                    <div
+                      className={`relative flex min-w-0 flex-1 items-center px-1 pt-5 ${showHalfwayDot ? 'pb-8' : ''}`}
+                    >
+                      <div className="h-0.5 w-full flex-1 rounded-full bg-gray-200" aria-hidden />
+                      {segmentIndex === 0 && (
+                        <div
+                          className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
+                          style={{ width: currentIndex >= 1 ? '100%' : '0%' }}
+                        />
+                      )}
+                      {segmentIndex === 1 && (
+                        <>
+                          <div
+                            className="absolute left-0 top-5 h-0.5 rounded-full bg-accent-400"
+                            style={{
+                              width: currentIndex >= 2 ? '100%' : currentIndex === 1 ? '50%' : '0%',
+                            }}
+                          />
+                          {showHalfwayDot && (
+                            <div className="absolute left-1/2 top-5 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+                              <span className="h-3 w-3 rounded-full border-2 border-accent-500 bg-white shadow-sm" />
+                              {overdueLabel && (
+                                <span className="mt-3 whitespace-nowrap text-xs font-medium text-gray-600">
+                                  {overdueLabel}
+                                </span>
                               )}
                             </div>
                           )}
-                        </React.Fragment>
-                      )
-                    })}
-                  </nav>
-                </div>
+                        </>
+                      )}
+                      {segmentIndex === 2 && (
+                        <div
+                          className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
+                          style={{ width: currentIndex >= 3 ? '100%' : '0%' }}
+                        />
+                      )}
+                    </div>
+                  )}
+                </React.Fragment>
               )
-            })()}
+            })}
+          </nav>
+        </div>
 
+        <div className="flex gap-8">
+          {/* Invoice document */}
+          <div className="min-w-0 flex-1">
             {eInvoice ? (
               <div className="overflow-hidden rounded-xl border border-gray-200/80 shadow-sm ring-1 ring-black/5">
                 <DigitalInvoiceView
@@ -740,52 +776,53 @@ export default function InvoicePage() {
                     })}
                   </ul>
                 )}
-                {/* Current balance */}
-                <div className={`mt-4 pt-4 border-t-2 rounded-lg px-3 py-3 ${
-                  balance > 0 ? 'border-gray-200 bg-gray-50' : balance < 0 ? 'border-blue-200 bg-blue-50' : 'border-green-200 bg-green-50'
-                }`}>
-                  <p className="text-xs font-medium uppercase tracking-wider text-gray-500 mb-0.5">{tr('invoice.detail.currentBalance', 'Current balance')}</p>
+                {/* Current balance — compact */}
+                <div className="mt-3 flex items-baseline justify-between gap-2 border-t border-gray-100 pt-3">
+                  <span className="text-xs text-gray-500">{tr('invoice.detail.currentBalance', 'Current balance')}</span>
                   {balance > 0 ? (
-                    <p className="text-lg font-bold text-gray-900 tabular-nums">{formatNumber(balance)} {currency} <span className="text-sm font-normal text-gray-600">{tr('invoice.detail.balanceOwed', 'owed')}</span></p>
+                    <span className="text-sm font-semibold tabular-nums text-gray-900">
+                      {formatNumber(balance)} {currency}{' '}
+                      <span className="font-normal text-gray-500">{tr('invoice.detail.balanceOwed', 'owed')}</span>
+                    </span>
                   ) : balance < 0 ? (
-                    <p className="text-lg font-bold text-blue-700 tabular-nums">{formatNumber(Math.abs(balance))} {currency} <span className="text-sm font-normal text-blue-600">{tr('invoice.detail.balanceWeOwe', 'we owe you')}</span></p>
+                    <span className="text-sm font-semibold tabular-nums text-blue-700">
+                      {formatNumber(Math.abs(balance))} {currency}{' '}
+                      <span className="font-normal text-blue-600">{tr('invoice.detail.balanceWeOwe', 'we owe you')}</span>
+                    </span>
                   ) : (
-                    <p className="text-lg font-bold text-green-700 tabular-nums">{tr('invoice.detail.paidOff', 'Paid off')}</p>
+                    <span className="text-sm font-semibold text-green-700">{tr('invoice.detail.paidOff', 'Paid off')}</span>
                   )}
                 </div>
-                <div className="mt-4 pt-2">
+
+                {/* Actions */}
+                <div className="mt-4 space-y-2 border-t border-gray-100 pt-4">
+                  {showPaymentReceived && (
+                    <button
+                      type="button"
+                      onClick={openPaymentReceivedModal}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-500 bg-accent-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
+                    >
+                      <BanknotesIcon className="h-5 w-5" />
+                      {tr('invoice.detail.paymentReceived', 'Payment received')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={openOnlineInvoice}
                     disabled={onlineInvoiceLoading}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-primary-600/25 bg-primary-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-700 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
+                    className="inline-flex w-full items-center justify-center gap-1.5 text-sm font-medium text-accent-700 hover:text-accent-800 disabled:opacity-60"
                   >
-                    <GlobeAltIcon className="h-5 w-5" aria-hidden />
+                    <EyeIcon className="h-4 w-4" aria-hidden />
                     {onlineInvoiceLoading
                       ? tr('invoice.detail.opening', 'Opening…')
                       : isDraft
                         ? tr('invoice.detail.previewInvoice', 'Preview e-invoice')
-                        : tr('invoice.detail.onlineInvoice', 'Online invoice')}
+                        : tr('invoice.detail.viewInvoice', 'View invoice')}
                   </button>
-                  <p className="mt-2 text-center text-[11px] text-gray-500 leading-snug">
-                    {isDraft
-                      ? tr('invoice.detail.previewHint', 'Staff-only preview (same as the client view). No public link until the invoice is sent.')
-                      : tr('invoice.detail.onlineHint', 'Opens the secure page your client can use to view this invoice and pay with your enabled methods.')}
-                  </p>
                 </div>
               </div>
             </div>
 
-            {(invoice.status === 'sent' || invoice.status === 'overdue') && balance > 0 && (
-              <button
-                type="button"
-                onClick={openPaymentReceivedModal}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent-500 bg-accent-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
-              >
-                <BanknotesIcon className="h-5 w-5" />
-                {tr('invoice.detail.paymentReceived', 'Payment received')}
-              </button>
-            )}
             {(invoice.status === 'draft' || !invoice.status) && (
               <Link
                 href={`/${company}/invoices/${id}/edit`}
@@ -811,7 +848,7 @@ export default function InvoicePage() {
                 {tr('invoice.detail.completeAndSend', 'Complete and send')}
               </button>
             )}
-            {!isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue') && (
+            {showSendNotification && (
               <div className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3">
                 <div className="flex items-start gap-2">
                   <BellAlertIcon className="h-5 w-5 shrink-0 text-gray-700 mt-0.5" aria-hidden />
@@ -851,44 +888,28 @@ export default function InvoicePage() {
                     )}
                   </p>
                 )}
-              </div>
-            )}
-            {!isDraft && balance > 0 && (invoice.status === 'sent' || invoice.status === 'overdue') && (
-              <div className="w-full rounded-xl border border-gray-200 bg-gray-50/90 px-3 py-3">
-                {pendingInvoiceReminder?.sendAt ? (
-                  <div className="flex items-start gap-2">
-                    <ClockIcon className="h-5 w-5 shrink-0 text-accent-600 mt-0.5" aria-hidden />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-gray-900">{tr('invoice.detail.dueReminderScheduled', 'Due reminder scheduled')}</p>
-                      <p className="text-xs text-gray-600 mt-0.5">
-                        {tr('invoice.detail.sendsAt', 'Sends {time}').replace(
-                          '{time}',
-                          new Date(pendingInvoiceReminder.sendAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
-                        )}
-                      </p>
-                      <p className="text-[11px] text-gray-500 mt-1">
-                        {tr('invoice.detail.manageReminder', 'Manage wording and timing in Settings → Messages. Cancel here if you do not want this email.')}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCancelDueReminder}
-                      disabled={cancelReminderLoading}
-                      className="shrink-0 rounded-lg border border-gray-300 bg-white p-1.5 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                      title={tr('invoice.detail.cancelScheduledReminder', 'Cancel scheduled reminder')}
-                    >
-                      <XMarkIcon className="h-4 w-4" aria-hidden />
-                    </button>
+
+                <div className="mt-4 border-t border-gray-100 pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-gray-900">
+                      {dueReminderAutomation?.enabled
+                        ? tr('invoice.detail.automaticNotificationsOn', 'Automatic notifications')
+                        : tr('invoice.detail.turnOnAutomatic', 'Turn on automatic notifications')}
+                    </p>
+                    <SettingsToggle
+                      checked={dueReminderAutomation?.enabled ?? false}
+                      onChange={handleToggleDueReminderAutomation}
+                      disabled={automationToggling || dueReminderAutomation == null}
+                      label={tr('invoice.detail.automaticNotificationsToggle', 'Automatic due-date reminders')}
+                    />
                   </div>
-                ) : (
-                  <p className="text-xs text-gray-600 leading-snug">
-                    {tr('invoice.detail.autoReminderInfo', 'Due-date reminders run automatically when enabled under ')}
-                    <Link href={company ? `/${company}/settings/notifications` : '/settings/notifications'} className="font-medium text-accent-700 underline">
-                      {tr('invoice.detail.settingsMessages', 'Settings → Messages')}
-                    </Link>
-                    {tr('invoice.detail.noReminderScheduled', '. Nothing is scheduled for this invoice (already paid, past due time, or automation off).')}
-                  </p>
-                )}
+                  <Link
+                    href={notificationsHref}
+                    className="mt-2 inline-block text-xs text-gray-400 transition-colors hover:text-gray-600"
+                  >
+                    {tr('invoice.detail.goToSettings', 'Go to settings')}
+                  </Link>
+                </div>
               </div>
             )}
             <button

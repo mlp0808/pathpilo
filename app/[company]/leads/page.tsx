@@ -1,516 +1,677 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
+import CreateJob from '@/app/components/CreateJob'
+import { useAppI18n } from '@/app/components/I18nProvider'
 import { apiUrl } from '@/app/utils/api'
+import {
+  ArrowTopRightOnSquareIcon,
+  Cog6ToothIcon,
+  ChevronRightIcon,
+  ArrowPathIcon,
+  TrashIcon,
+  UserPlusIcon,
+  BriefcaseIcon,
+  CheckBadgeIcon,
+  InboxIcon,
+} from '@heroicons/react/24/outline'
+
+const LEADS_HELP_URL = 'https://help.pathpilo.com/category/leads-forms/'
 
 type LeadStatus = 'new' | 'contacted' | 'won' | 'lost'
 
+type Lead = {
+  id: number
+  status: LeadStatus
+  source: string
+  first_name: string | null
+  last_name: string | null
+  country: string | null
+  address: string | null
+  zip_code: string | null
+  city: string | null
+  email: string | null
+  phone: string | null
+  message: string | null
+  preferred_date: string | null
+  preferred_time: string | null
+  notes: string | null
+  meta: { answers?: Array<{ label: string; value: string; type?: string }> } | null
+  client_id: number | null
+  converted_at: string | null
+  created_at: string
+}
+
+type StatusCounts = { new: number; contacted: number; won: number; lost: number }
+
+const STATUS_META: Record<LeadStatus, { dot: string; chip: string; labelKey: string; fallback: string }> = {
+  new: { dot: 'bg-blue-500', chip: 'bg-blue-50 text-blue-700', labelKey: 'app.leads.status.new', fallback: 'New' },
+  contacted: {
+    dot: 'bg-amber-500',
+    chip: 'bg-amber-50 text-amber-700',
+    labelKey: 'app.leads.status.contacted',
+    fallback: 'Contacted',
+  },
+  won: { dot: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700', labelKey: 'app.leads.status.won', fallback: 'Won' },
+  lost: { dot: 'bg-gray-400', chip: 'bg-gray-100 text-gray-600', labelKey: 'app.leads.status.lost', fallback: 'Lost' },
+}
+
+const STATUS_ORDER: LeadStatus[] = ['new', 'contacted', 'won', 'lost']
+
 export default function LeadsPage() {
+  const { t } = useAppI18n()
+  const params = useParams<{ company?: string }>()
+  const companySlug = params?.company || ''
+
+  const [enabled, setEnabled] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
-  const [leads, setLeads] = useState<any[]>([])
-  const [selectedLead, setSelectedLead] = useState<any | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [editData, setEditData] = useState<any>({})
 
-  const fetchLeads = async () => {
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [counts, setCounts] = useState<StatusCounts>({ new: 0, contacted: 0, won: 0, lost: 0 })
+  const [filter, setFilter] = useState<LeadStatus | 'all'>('all')
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+
+  const [savingNote, setSavingNote] = useState(false)
+  const [noteDraft, setNoteDraft] = useState('')
+  const [converting, setConverting] = useState(false)
+
+  const [jobClientId, setJobClientId] = useState<number | null>(null)
+  const [jobModalOpen, setJobModalOpen] = useState(false)
+
+  const settingsHref = companySlug ? `/${companySlug}/settings/leads-form` : '/settings/leads-form'
+
+  // ── activation gate ───────────────────────────────────────────────────
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) {
+      setEnabled(false)
+      return
+    }
+    fetch(apiUrl('/lead-form'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => setEnabled(Boolean(data?.form?.enabled)))
+      .catch(() => setEnabled(false))
+  }, [])
+
+  const fetchLeads = useCallback(async () => {
     try {
       setLoading(true)
       setError('')
       const token = localStorage.getItem('token')
-      const qs = statusFilter === 'all' ? '' : `?status=${statusFilter}`
-      const res = await fetch(apiUrl(`/leads${qs}`), {
-        headers: { Authorization: `Bearer ${token}` }
-      })
+      const qs = filter === 'all' ? '' : `?status=${filter}`
+      const res = await fetch(apiUrl(`/leads${qs}`), { headers: { Authorization: `Bearer ${token}` } })
       const data = await res.json()
       if (res.ok) {
         setLeads(data.leads || [])
-        // Keep selection in sync
-        if (selectedLead) {
-          const next = (data.leads || []).find((l: any) => l.id === selectedLead.id) || null
-          setSelectedLead(next)
-        }
+        if (data.counts) setCounts(data.counts)
       } else {
         setError(data?.error || 'Failed to fetch leads')
       }
-    } catch (e) {
-      setError('Network error: Failed to fetch leads')
+    } catch {
+      setError('Network error while fetching leads')
     } finally {
       setLoading(false)
     }
-  }
+  }, [filter])
 
   useEffect(() => {
-    fetchLeads()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter])
+    if (enabled) fetchLeads()
+  }, [enabled, fetchLeads])
 
-  const formatDateTime = (v: any) => {
-    if (!v) return ''
-    const d = new Date(v)
-    if (isNaN(d.getTime())) return String(v)
-    return d.toLocaleString()
+  // Auto-select the first lead when the list loads or the filter changes.
+  useEffect(() => {
+    if (leads.length > 0 && (selectedId == null || !leads.some((l) => l.id === selectedId))) {
+      setSelectedId(leads[0].id)
+    } else if (leads.length === 0) {
+      setSelectedId(null)
+    }
+  }, [leads, selectedId])
+
+  const selected = useMemo(() => leads.find((l) => l.id === selectedId) || null, [leads, selectedId])
+
+  useEffect(() => {
+    setNoteDraft(selected?.notes || '')
+  }, [selectedId, selected?.notes])
+
+  const patchLead = async (id: number, patch: Record<string, any>) => {
+    const token = localStorage.getItem('token')
+    const res = await fetch(apiUrl(`/leads/${id}`), {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    const data = await res.json()
+    if (res.ok) {
+      setLeads((prev) => prev.map((l) => (l.id === id ? data.lead : l)))
+      // refresh counts after a status change
+      if (patch.status) fetchLeads()
+    }
+    return res.ok
   }
 
-  const updateLead = async (leadId: number, patch: {
-    status?: LeadStatus;
-    notes?: string;
-    first_name?: string;
-    last_name?: string;
-    country?: string;
-    address?: string;
-    zip_code?: string;
-    city?: string;
-    email?: string;
-    phone?: string;
-  }) => {
-    try {
-      setSaving(true)
-      setError('')
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/leads/${leadId}`), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(patch)
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data?.error || 'Failed to update lead')
-        return
-      }
-      // Update local state without a full reload (snappy)
-      setLeads((prev) => prev.map((l) => (l.id === leadId ? data.lead : l)))
-      setSelectedLead(data.lead)
-    } catch (e) {
-      setError('Network error: Failed to update lead')
-    } finally {
-      setSaving(false)
+  const saveNote = async () => {
+    if (!selected) return
+    setSavingNote(true)
+    await patchLead(selected.id, { notes: noteDraft })
+    setSavingNote(false)
+  }
+
+  const deleteLead = async (id: number) => {
+    const token = localStorage.getItem('token')
+    const res = await fetch(apiUrl(`/leads/${id}`), {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.ok) {
+      setLeads((prev) => prev.filter((l) => l.id !== id))
+      if (selectedId === id) setSelectedId(null)
+      fetchLeads()
     }
   }
 
-  const selectedName = useMemo(() => {
-    if (!selectedLead) return ''
-    const n = `${selectedLead.first_name || ''} ${selectedLead.last_name || ''}`.trim()
-    return n || selectedLead.email || 'Lead'
-  }, [selectedLead])
+  const convertLead = async (lead: Lead) => {
+    setConverting(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/leads/${lead.id}/convert`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setLeads((prev) => prev.map((l) => (l.id === lead.id ? data.lead : l)))
+        setCounts((c) => c) // counts refreshed on next fetch
+        fetchLeads()
+        // Immediately offer to create a job for the new client.
+        setJobClientId(data.client.id)
+        setJobModalOpen(true)
+      } else {
+        setError(data?.error || 'Failed to convert lead')
+      }
+    } catch {
+      setError('Network error while converting lead')
+    } finally {
+      setConverting(false)
+    }
+  }
+
+  const fmtRelative = (v: string | null) => {
+    if (!v) return ''
+    const d = new Date(v)
+    if (isNaN(d.getTime())) return String(v)
+    const diff = Date.now() - d.getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 1) return 'Just now'
+    if (mins < 60) return `${mins}m`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `${hrs}h`
+    const days = Math.floor(hrs / 24)
+    if (days < 7) return `${days}d`
+    return d.toLocaleDateString()
+  }
+  const fmtDateTime = (v: string | null) => {
+    if (!v) return '—'
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? String(v) : d.toLocaleString()
+  }
+
+  const leadName = (l: Lead) =>
+    `${l.first_name || ''} ${l.last_name || ''}`.trim() || l.email || t('app.leads.unnamed', 'Unnamed lead')
+
+  // ── loading the gate ───────────────────────────────────────────────────
+  if (enabled === null) {
+    return (
+      <AppLayout>
+        <div className="flex justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+        </div>
+      </AppLayout>
+    )
+  }
+
+  // ── disabled empty state (mirrors invoices) ────────────────────────────
+  if (enabled === false) {
+    return (
+      <AppLayout>
+        <div className="flex min-h-[60vh] items-center justify-center px-4">
+          <div className="w-full max-w-md text-center">
+            <div className="mb-6 inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-500">
+              <Cog6ToothIcon className="h-4 w-4 text-gray-400" />
+              <ChevronRightIcon className="h-3 w-3 text-gray-300" />
+              <span>{t('app.leads.disabled.crumbLeads', 'Lead form')}</span>
+              <ChevronRightIcon className="h-3 w-3 text-gray-300" />
+              <span className="text-gray-900">{t('app.leads.disabled.crumbTurnOn', 'Turn on leads')}</span>
+            </div>
+
+            <h1 className="text-xl font-semibold tracking-tight text-gray-900">
+              {t('app.leads.disabled.title', 'This is your leads area')}
+            </h1>
+            <p className="mx-auto mt-2 max-w-sm text-sm text-gray-500">
+              {t(
+                'app.leads.disabled.body',
+                'Build a lead form, turn it on, and share it on your website or with a direct link. Every submission shows up here, ready to become a client.',
+              )}
+            </p>
+
+            <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <Link
+                href={settingsHref}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-black sm:w-auto"
+              >
+                <Cog6ToothIcon className="h-4 w-4" />
+                {t('app.leads.disabled.goToSettings', 'Set up your lead form')}
+              </Link>
+              <a
+                href={LEADS_HELP_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 sm:w-auto"
+              >
+                {t('app.leads.disabled.learnMore', 'Learn about leads')}
+                <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 text-gray-400" />
+              </a>
+            </div>
+          </div>
+        </div>
+      </AppLayout>
+    )
+  }
+
+  // ── active leads area ──────────────────────────────────────────────────
+  const totalCount = counts.new + counts.contacted + counts.won + counts.lost
 
   return (
     <AppLayout>
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-start justify-between mb-4">
+      <div className="-mx-4 flex min-h-[calc(100vh-5rem)] flex-col sm:-mx-6 lg:-mx-[40px]">
+        {/* Header */}
+        <div className="flex flex-shrink-0 flex-wrap items-start justify-between gap-4 border-b border-gray-200 px-4 pb-4 sm:px-6 lg:px-10">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Leads</h1>
-            <p className="text-sm text-gray-600">New requests from your website form.</p>
+            <h1 className="text-xl font-semibold tracking-tight text-gray-900 sm:text-2xl">
+              {t('app.leads.title', 'Leads')}
+            </h1>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {t('app.leads.subtitle', 'Requests from your lead form. Follow up and turn them into clients.')}
+            </p>
           </div>
-
           <div className="flex items-center gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-            >
-              <option value="all">All</option>
-              <option value="new">New</option>
-              <option value="contacted">Contacted</option>
-              <option value="won">Won</option>
-              <option value="lost">Lost</option>
-            </select>
             <button
               onClick={fetchLeads}
-              className="text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
               disabled={loading}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 hover:bg-gray-50"
+              aria-label={t('app.leads.refresh', 'Refresh')}
             >
-              Refresh
+              <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
+            <Link
+              href={settingsHref}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              <Cog6ToothIcon className="h-4 w-4 text-gray-400" />
+              {t('app.leads.formSettings', 'Form settings')}
+            </Link>
           </div>
         </div>
 
+        {/* Status tabs */}
+        <div className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-gray-200 px-4 sm:px-6 lg:px-10">
+          <StatusTab active={filter === 'all'} onClick={() => setFilter('all')} label={t('app.leads.filter.all', 'All')} count={totalCount} />
+          {STATUS_ORDER.map((s) => (
+            <StatusTab
+              key={s}
+              active={filter === s}
+              onClick={() => setFilter(s)}
+              label={t(STATUS_META[s].labelKey, STATUS_META[s].fallback)}
+              count={counts[s]}
+              dot={STATUS_META[s].dot}
+            />
+          ))}
+        </div>
+
         {error && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <div className="mx-4 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 sm:mx-6 lg:mx-10">
             <p className="text-sm font-medium text-red-700">{error}</p>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-              <div className="text-sm font-medium text-gray-900">{loading ? 'Loading…' : `${leads.length} lead(s)`}</div>
-            </div>
-
-            <div className="divide-y divide-gray-100">
-              {leads.length === 0 && !loading ? (
-                <div className="p-6 text-sm text-gray-500">No leads yet.</div>
-              ) : (
-                leads.map((lead) => {
-                  const isActive = selectedLead?.id === lead.id
-                  const title = `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email || 'Lead'
+        {/* Split inbox */}
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          {/* Lead list */}
+          <div className="flex w-full flex-col border-b border-gray-200 lg:w-[380px] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
+            {loading && leads.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center p-12 text-sm text-gray-400">
+                {t('app.leads.loading', 'Loading…')}
+              </div>
+            ) : leads.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center p-12 text-center">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
+                  <InboxIcon className="h-6 w-6 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-700">{t('app.leads.empty', 'No leads here yet.')}</p>
+                <p className="mt-1 max-w-xs text-xs text-gray-400">
+                  {t('app.leads.emptyHint', 'Share your form link to start receiving requests.')}
+                </p>
+                <Link
+                  href={settingsHref}
+                  className="mt-4 text-sm font-medium text-accent-700 hover:text-accent-800"
+                >
+                  {t('app.leads.formSettings', 'Form settings')} →
+                </Link>
+              </div>
+            ) : (
+              <ul className="max-h-[320px] overflow-y-auto lg:max-h-none lg:flex-1">
+                {leads.map((lead) => {
+                  const active = lead.id === selectedId
+                  const sm = STATUS_META[lead.status]
+                  const preview =
+                    lead.message?.slice(0, 80) ||
+                    lead.meta?.answers?.[0]?.value?.slice(0, 80) ||
+                    lead.email ||
+                    ''
                   return (
-                    <button
-                      key={lead.id}
-                      onClick={() => setSelectedLead(lead)}
-                      className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${
-                        isActive ? 'bg-blue-50' : 'bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-gray-900 truncate">{title}</div>
-                          <div className="text-xs text-gray-600 truncate">
-                            {lead.email ? lead.email : '—'} {lead.phone ? `• ${lead.phone}` : ''}
+                    <li key={lead.id}>
+                      <button
+                        onClick={() => setSelectedId(lead.id)}
+                        className={`flex w-full items-start gap-3 border-b border-gray-100 px-4 py-3.5 text-left transition-colors sm:px-5 ${
+                          active ? 'bg-gray-50' : 'hover:bg-gray-50/70'
+                        }`}
+                      >
+                        <div className="relative flex-shrink-0">
+                          <Avatar name={leadName(lead)} />
+                          {lead.status === 'new' && (
+                            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-blue-500" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`truncate text-sm ${active ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>
+                              {leadName(lead)}
+                            </span>
+                            <span className="flex-shrink-0 text-[11px] text-gray-400">{fmtRelative(lead.created_at)}</span>
+                          </div>
+                          {preview && (
+                            <p className="mt-0.5 truncate text-xs text-gray-500">{preview}</p>
+                          )}
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${sm.chip}`}>
+                              {t(sm.labelKey, sm.fallback)}
+                            </span>
+                            {lead.client_id && (
+                              <CheckBadgeIcon className="h-3.5 w-3.5 text-emerald-500" aria-label="Converted" />
+                            )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-xs px-2 py-1 rounded-full border ${
-                              lead.status === 'new'
-                                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                : lead.status === 'contacted'
-                                ? 'bg-yellow-50 text-yellow-800 border-yellow-200'
-                                : lead.status === 'won'
-                                ? 'bg-green-50 text-green-700 border-green-200'
-                                : 'bg-gray-50 text-gray-600 border-gray-200'
-                            }`}
-                          >
-                            {lead.status}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="mt-2 text-xs text-gray-500">{formatDateTime(lead.created_at)}</div>
-                    </button>
+                      </button>
+                    </li>
                   )
-                })
-              )}
-            </div>
+                })}
+              </ul>
+            )}
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">Details</div>
-                <div className="text-xs text-gray-500">{selectedLead ? selectedName : 'Select a lead'}</div>
+          {/* Detail panel */}
+          <div className="min-w-0 flex-1 bg-white">
+            {!selected ? (
+              <div className="flex h-full min-h-[280px] items-center justify-center p-12 text-center text-sm text-gray-400">
+                {t('app.leads.selectPrompt', 'Select a lead to see the details.')}
               </div>
-              {selectedLead && (
-                <button
-                  onClick={() => {
-                    if (editing) {
-                      // Save changes
-                      updateLead(selectedLead.id, editData)
-                      setEditing(false)
-                    } else {
-                      // Start editing
-                      setEditData({
-                        first_name: selectedLead.first_name || '',
-                        last_name: selectedLead.last_name || '',
-                        country: selectedLead.country || '',
-                        address: selectedLead.address || '',
-                        zip_code: selectedLead.zip_code || '',
-                        city: selectedLead.city || '',
-                        email: selectedLead.email || '',
-                        phone: selectedLead.phone || '',
-                        status: selectedLead.status,
-                        notes: selectedLead.notes || ''
-                      })
-                      setEditing(true)
-                    }
-                  }}
-                  className="text-sm px-3 py-1 rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                  disabled={saving}
-                >
-                  {saving ? 'Saving…' : editing ? 'Save' : 'Edit'}
-                </button>
-              )}
-            </div>
-
-            {!selectedLead ? (
-              <div className="p-6 text-sm text-gray-500">Click a lead to see details.</div>
             ) : (
-              <div className="p-4 space-y-4">
-                {/* Customer Information */}
-                <div className="space-y-3">
-                  <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Customer Information</div>
-
-                  <div className="grid grid-cols-2 gap-3">
+              <div className="flex h-full flex-col">
+                {/* Detail header */}
+                <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-gray-100 px-5 py-5 sm:px-8">
+                  <div className="flex items-center gap-4">
+                    <Avatar name={leadName(selected)} large />
                     <div>
-                      <div className="text-xs text-gray-500">First Name</div>
-                      {editing ? (
-                        <input
-                          type="text"
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          value={editData.first_name || ''}
-                          onChange={(e) => setEditData({ ...editData, first_name: e.target.value })}
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{selectedLead.first_name || '—'}</div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Last Name</div>
-                      {editing ? (
-                        <input
-                          type="text"
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          value={editData.last_name || ''}
-                          onChange={(e) => setEditData({ ...editData, last_name: e.target.value })}
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{selectedLead.last_name || '—'}</div>
-                      )}
+                      <h2 className="text-lg font-semibold text-gray-900">{leadName(selected)}</h2>
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        {t('app.leads.received', 'Received')} {fmtDateTime(selected.created_at)}
+                      </p>
                     </div>
                   </div>
-
-                  <div>
-                    <div className="text-xs text-gray-500">Email</div>
-                    {editing ? (
-                      <input
-                        type="email"
-                        className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                        value={editData.email || ''}
-                        onChange={(e) => setEditData({ ...editData, email: e.target.value })}
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">{selectedLead.email || '—'}</div>
+                  <div className="flex items-center gap-1">
+                    {!selected.client_id && (
+                      <button
+                        onClick={() => convertLead(selected)}
+                        disabled={converting}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        <UserPlusIcon className="h-4 w-4" />
+                        <span className="hidden sm:inline">
+                          {converting ? t('app.leads.converting', 'Converting…') : t('app.leads.convert', 'Convert to client')}
+                        </span>
+                      </button>
                     )}
-                  </div>
-
-                  <div>
-                    <div className="text-xs text-gray-500">Phone</div>
-                    {editing ? (
-                      <input
-                        type="tel"
-                        className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                        value={editData.phone || ''}
-                        onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">{selectedLead.phone || '—'}</div>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-xs text-gray-500">Country</div>
-                      {editing ? (
-                        <input
-                          type="text"
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          value={editData.country || ''}
-                          onChange={(e) => setEditData({ ...editData, country: e.target.value })}
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{selectedLead.country || '—'}</div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">City</div>
-                      {editing ? (
-                        <input
-                          type="text"
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          value={editData.city || ''}
-                          onChange={(e) => setEditData({ ...editData, city: e.target.value })}
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{selectedLead.city || '—'}</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-xs text-gray-500">Address</div>
-                    {editing ? (
-                      <input
-                        type="text"
-                        className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                        value={editData.address || ''}
-                        onChange={(e) => setEditData({ ...editData, address: e.target.value })}
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">{selectedLead.address || '—'}</div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="text-xs text-gray-500">Zip Code</div>
-                    {editing ? (
-                      <input
-                        type="text"
-                        className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                        value={editData.zip_code || ''}
-                        onChange={(e) => setEditData({ ...editData, zip_code: e.target.value })}
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">{selectedLead.zip_code || '—'}</div>
-                    )}
+                    <button
+                      onClick={() => deleteLead(selected.id)}
+                      className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                      aria-label={t('app.leads.delete', 'Delete')}
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
                   </div>
                 </div>
 
-                {/* Form Data */}
-                {selectedLead.meta && (
-                  <div className="space-y-3">
-                    <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Form Responses</div>
+                {/* Scrollable body */}
+                <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
+                  <div className="mx-auto max-w-3xl space-y-8">
+                    {/* Status */}
+                    <section>
+                      <SectionLabel>{t('app.leads.statusLabel', 'Status')}</SectionLabel>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {STATUS_ORDER.map((s) => {
+                          const on = selected.status === s
+                          const sm = STATUS_META[s]
+                          return (
+                            <button
+                              key={s}
+                              onClick={() => patchLead(selected.id, { status: s })}
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+                                on
+                                  ? 'border-gray-900 bg-gray-900 text-white'
+                                  : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                              }`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${on ? 'bg-white' : sm.dot}`} />
+                              {t(sm.labelKey, sm.fallback)}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </section>
 
-                    {/* Service Selections */}
-                    {selectedLead.meta.serviceSelections && Object.keys(selectedLead.meta.serviceSelections).length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500">Selected Services</div>
-                        <div className="text-sm text-gray-900">
-                          {Object.entries(selectedLead.meta.serviceSelections).map(([serviceId, selections]: [string, any]) => (
-                            <div key={serviceId}>
-                              Service {serviceId}: {Array.isArray(selections) ? selections.join(', ') : selections}
+                    {/* Contact */}
+                    <section>
+                      <SectionLabel>{t('app.leads.contact', 'Contact')}</SectionLabel>
+                      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <ContactCard label={t('app.leads.field.email', 'Email')} value={selected.email} href={selected.email ? `mailto:${selected.email}` : undefined} />
+                        <ContactCard label={t('app.leads.field.phone', 'Phone')} value={selected.phone} href={selected.phone ? `tel:${selected.phone}` : undefined} />
+                        {selected.address && (
+                          <ContactCard label={t('app.leads.field.address', 'Address')} value={selected.address} className="sm:col-span-2" />
+                        )}
+                        {(selected.city || selected.zip_code) && (
+                          <ContactCard
+                            label={t('app.leads.field.location', 'City / Zip')}
+                            value={[selected.zip_code, selected.city].filter(Boolean).join(' ')}
+                          />
+                        )}
+                      </div>
+                    </section>
+
+                    {/* Form responses */}
+                    {selected.meta?.answers && selected.meta.answers.length > 0 && (
+                      <section>
+                        <SectionLabel>{t('app.leads.responses', 'Form responses')}</SectionLabel>
+                        <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200 bg-gray-50/50">
+                          {selected.meta.answers.map((a, i) => (
+                            <div key={i} className="px-4 py-3.5">
+                              <dt className="text-xs font-medium text-gray-500">{a.label}</dt>
+                              <dd className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-gray-900">{a.value || '—'}</dd>
                             </div>
                           ))}
                         </div>
-                      </div>
+                      </section>
                     )}
 
-                    {/* Custom Selections */}
-                    {selectedLead.meta.customSelections && Object.keys(selectedLead.meta.customSelections).length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500">Custom Options</div>
-                        <div className="text-sm text-gray-900">
-                          {Object.entries(selectedLead.meta.customSelections).map(([optionId, selections]: [string, any]) => (
-                            <div key={optionId}>
-                              Option {optionId}: {Array.isArray(selections) ? selections.join(', ') : selections}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Custom Inputs */}
-                    {selectedLead.meta.customInputs && Object.keys(selectedLead.meta.customInputs).length > 0 && (
-                      <div>
-                        <div className="text-xs text-gray-500">Additional Information</div>
-                        <div className="text-sm text-gray-900">
-                          {Object.entries(selectedLead.meta.customInputs).map(([inputId, value]: [string, any]) => (
-                            <div key={inputId}>
-                              Field {inputId}: {value}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Lead Information */}
-                <div className="space-y-3">
-                  <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Lead Information</div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-xs text-gray-500">Status</div>
-                      {editing ? (
-                        <select
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                          value={editData.status}
-                          onChange={(e) => setEditData({ ...editData, status: e.target.value as LeadStatus })}
-                        >
-                          <option value="new">new</option>
-                          <option value="contacted">contacted</option>
-                          <option value="won">won</option>
-                          <option value="lost">lost</option>
-                        </select>
-                      ) : (
-                        <select
-                          className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                          value={selectedLead.status}
-                          onChange={(e) => updateLead(selectedLead.id, { status: e.target.value as LeadStatus })}
-                          disabled={saving}
-                        >
-                          <option value="new">new</option>
-                          <option value="contacted">contacted</option>
-                          <option value="won">won</option>
-                          <option value="lost">lost</option>
-                        </select>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Created</div>
-                      <div className="text-sm text-gray-900">{formatDateTime(selectedLead.created_at)}</div>
-                    </div>
-                  </div>
-
-                  {(selectedLead.preferred_date || selectedLead.preferred_time) && (
-                    <div>
-                      <div className="text-xs text-gray-500">Preferred Time</div>
-                      <div className="text-sm text-gray-900">
-                        {selectedLead.preferred_date ? String(selectedLead.preferred_date) : '—'}{' '}
-                        {selectedLead.preferred_time ? String(selectedLead.preferred_time).substring(0, 5) : ''}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedLead.message && (
-                    <div>
-                      <div className="text-xs text-gray-500">Message</div>
-                      <div className="text-sm text-gray-900 whitespace-pre-wrap">{selectedLead.message}</div>
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="text-xs text-gray-500 mb-1">Internal Notes</div>
-                    {editing ? (
+                    {/* Notes */}
+                    <section>
+                      <SectionLabel>{t('app.leads.notes', 'Internal notes')}</SectionLabel>
                       <textarea
-                        className="w-full min-h-[90px] text-sm border border-gray-200 rounded-lg px-3 py-2"
-                        value={editData.notes || ''}
-                        onChange={(e) => setEditData({ ...editData, notes: e.target.value })}
-                        placeholder="Notes for your team…"
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        placeholder={t('app.leads.notesPlaceholder', 'Notes for your team…')}
+                        rows={4}
+                        className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-gray-400"
                       />
-                    ) : (
-                      <>
-                        <textarea
-                          className="w-full min-h-[90px] text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          value={selectedLead.notes || ''}
-                          onChange={(e) => setSelectedLead({ ...selectedLead, notes: e.target.value })}
-                          placeholder="Notes for your team…"
-                        />
-                        <button
-                          className="mt-2 w-full text-sm px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                          onClick={() => updateLead(selectedLead.id, { notes: selectedLead.notes || '' })}
-                          disabled={saving}
-                        >
-                          {saving ? 'Saving…' : 'Save notes'}
-                        </button>
-                      </>
+                      {noteDraft !== (selected.notes || '') && (
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            onClick={saveNote}
+                            disabled={savingNote}
+                            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black disabled:opacity-50"
+                          >
+                            {savingNote ? t('app.leads.saving', 'Saving…') : t('app.leads.saveNote', 'Save note')}
+                          </button>
+                        </div>
+                      )}
+                    </section>
+
+                    {/* Converted actions */}
+                    {selected.client_id && (
+                      <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-5">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
+                            <CheckBadgeIcon className="h-5 w-5" />
+                            {t('app.leads.converted', 'Converted to a client')}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setJobClientId(selected.client_id)
+                                setJobModalOpen(true)
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50"
+                            >
+                              <BriefcaseIcon className="h-4 w-4" />
+                              {t('app.leads.createJob', 'Create job')}
+                            </button>
+                            <Link
+                              href={companySlug ? `/${companySlug}/clients/${selected.client_id}` : `/clients/${selected.client_id}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50"
+                            >
+                              {t('app.leads.viewClient', 'View client')}
+                              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+                            </Link>
+                          </div>
+                        </div>
+                      </section>
                     )}
                   </div>
                 </div>
-
-                {editing && (
-                  <div className="flex gap-2 pt-4 border-t border-gray-200">
-                    <button
-                      onClick={() => setEditing(false)}
-                      className="flex-1 text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
-                      disabled={saving}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={() => {
-                        updateLead(selectedLead.id, editData)
-                        setEditing(false)
-                      }}
-                      className="flex-1 text-sm px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                      disabled={saving}
-                    >
-                      {saving ? 'Saving…' : 'Save Changes'}
-                    </button>
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {jobModalOpen && jobClientId != null && (
+        <CreateJob
+          isOpen={jobModalOpen}
+          onClose={() => {
+            setJobModalOpen(false)
+            setJobClientId(null)
+          }}
+          onJobCreated={() => {
+            setJobModalOpen(false)
+            setJobClientId(null)
+          }}
+          initialClientId={jobClientId}
+          lockClient
+          mode="job"
+        />
+      )}
     </AppLayout>
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 
+function StatusTab({
+  active,
+  onClick,
+  label,
+  count,
+  dot,
+}: {
+  active: boolean
+  onClick: () => void
+  label: string
+  count: number
+  dot?: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${
+        active ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'
+      }`}
+    >
+      {dot && <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
+      {label}
+      <span className={`text-xs ${active ? 'text-gray-500' : 'text-gray-400'}`}>{count}</span>
+    </button>
+  )
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">{children}</h3>
+}
+
+function ContactCard({
+  label,
+  value,
+  href,
+  className = '',
+}: {
+  label: string
+  value: string | null
+  href?: string
+  className?: string
+}) {
+  const content = value || '—'
+  return (
+    <div className={`rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 ${className}`}>
+      <dt className="text-xs font-medium text-gray-500">{label}</dt>
+      <dd className="mt-1 break-words text-sm text-gray-900">
+        {href && value ? (
+          <a href={href} className="text-accent-700 hover:text-accent-800 hover:underline">
+            {content}
+          </a>
+        ) : (
+          content
+        )}
+      </dd>
+    </div>
+  )
+}
+
+function Avatar({ name, large = false }: { name: string; large?: boolean }) {
+  const initials = name
+    .split(' ')
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+  return (
+    <div
+      className={`flex flex-shrink-0 items-center justify-center rounded-full bg-gray-100 font-semibold text-gray-500 ${
+        large ? 'h-11 w-11 text-base' : 'h-9 w-9 text-sm'
+      }`}
+    >
+      {initials || '?'}
+    </div>
+  )
+}

@@ -747,6 +747,13 @@ async function ensureCompanyInvoiceSettingsColumns() {
   await pool.query(
     'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_numbering_configured BOOLEAN NOT NULL DEFAULT FALSE'
   );
+  // Master on/off switch for the whole invoicing feature. Defaults to FALSE so
+  // invoicing is opt-in: the company must explicitly activate it in settings
+  // before the invoices area becomes usable. This is purely a UI/route gate —
+  // it never mutates existing invoices or saved invoice settings.
+  await pool.query(
+    'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoicing_enabled BOOLEAN NOT NULL DEFAULT FALSE'
+  );
   // One-time, idempotent backfill. Flip the flag to TRUE for any company
   // that has clearly already configured numbering, so we don't lock them out
   // of creating new invoices when the "must explicitly choose a starting
@@ -812,7 +819,8 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
         invoice_next_number,
-        invoice_numbering_configured
+        invoice_numbering_configured,
+        invoicing_enabled
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -831,15 +839,31 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
     );
     const maxNumericInvoice = Number(maxRow.rows[0].max_num) || 0;
 
+    const numberingConfigured = Boolean(row.invoice_numbering_configured);
+    const invoicingOn = Boolean(row.invoicing_enabled);
+    const dueDaysRaw = row.invoice_default_due_days;
+
     const defaults = {
-      invoiceDefaultDueDays: row.invoice_default_due_days != null ? Number(row.invoice_default_due_days) : 30,
+      invoiceDefaultDueDays:
+        invoicingOn || numberingConfigured
+          ? dueDaysRaw != null
+            ? Number(dueDaysRaw)
+            : null
+          : dueDaysRaw != null && Number(dueDaysRaw) !== 30
+            ? Number(dueDaysRaw)
+            : null,
       invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
       invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
       invoiceEmailDefaultBody: row.invoice_email_default_body || '',
       invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
       invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
-      invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
-      invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
+      invoiceNextNumber: numberingConfigured
+        ? row.invoice_next_number != null
+          ? Number(row.invoice_next_number)
+          : 1
+        : null,
+      invoiceNumberingConfigured: numberingConfigured,
+      invoicingEnabled: invoicingOn,
       maxNumericInvoice,
     };
 
@@ -868,11 +892,17 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       invoiceReminderDefaultSubject,
       invoiceReminderDefaultBody,
       invoiceNextNumber,
+      invoicingEnabled,
     } = req.body || {};
 
     const updates = [];
     const values = [];
     let p = 1;
+
+    if (invoicingEnabled !== undefined) {
+      updates.push(`invoicing_enabled = $${p++}`);
+      values.push(Boolean(invoicingEnabled));
+    }
 
     if (invoiceDefaultDueDays != null && invoiceDefaultDueDays !== '') {
       const n = parseInt(String(invoiceDefaultDueDays), 10);
@@ -945,7 +975,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
         invoice_next_number,
-        invoice_numbering_configured
+        invoice_numbering_configured,
+        invoicing_enabled
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -966,14 +997,26 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
 
     res.json({
       defaults: {
-        invoiceDefaultDueDays: row.invoice_default_due_days != null ? Number(row.invoice_default_due_days) : 30,
+        invoiceDefaultDueDays:
+          row.invoice_numbering_configured || row.invoicing_enabled
+            ? row.invoice_default_due_days != null
+              ? Number(row.invoice_default_due_days)
+              : null
+            : row.invoice_default_due_days != null && Number(row.invoice_default_due_days) !== 30
+              ? Number(row.invoice_default_due_days)
+              : null,
         invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
         invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
         invoiceEmailDefaultBody: row.invoice_email_default_body || '',
         invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
         invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
-        invoiceNextNumber: row.invoice_next_number != null ? Number(row.invoice_next_number) : 1,
+        invoiceNextNumber: row.invoice_numbering_configured
+          ? row.invoice_next_number != null
+            ? Number(row.invoice_next_number)
+            : 1
+          : null,
         invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
+        invoicingEnabled: Boolean(row.invoicing_enabled),
         maxNumericInvoice,
       },
     });

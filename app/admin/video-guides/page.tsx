@@ -11,6 +11,13 @@ import {
   PlayIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
+import {
+  VIDEO_GUIDE_TOPICS,
+  DEFAULT_VIDEO_GUIDE_TOPIC,
+  normalizeVideoGuideTopic,
+  topicLabel,
+  type VideoGuideTopicId,
+} from '../../config/videoGuideTopics'
 
 interface VideoGuide {
   id: number
@@ -22,6 +29,7 @@ interface VideoGuide {
   sortOrder: number
   createdAt: string
   guideLink: string
+  topic: VideoGuideTopicId
 }
 
 const normalizeLang = (value: unknown): string => {
@@ -49,6 +57,7 @@ export default function AdminVideoGuidesPage() {
     videoId: '',
     languageCode: 'en',
     guideLink: '',
+    topic: DEFAULT_VIDEO_GUIDE_TOPIC as VideoGuideTopicId,
   })
   const [saving, setSaving] = useState(false)
 
@@ -101,6 +110,7 @@ export default function AdminVideoGuidesPage() {
         const normalized = (Array.isArray(data.videos) ? data.videos : []).map((v: any) => ({
           ...v,
           languageCode: normalizeLang(v.languageCode || v.language_code || 'en'),
+          topic: normalizeVideoGuideTopic(v.topic),
         }))
         // Frontend guard: if backend returns mixed languages, keep selected only.
         setVideos(normalized.filter((v: VideoGuide) => v.languageCode === selectedLanguage))
@@ -116,7 +126,7 @@ export default function AdminVideoGuidesPage() {
 
   const openAddForm = () => {
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '' })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '', topic: DEFAULT_VIDEO_GUIDE_TOPIC })
     setShowForm(true)
   }
 
@@ -129,6 +139,7 @@ export default function AdminVideoGuidesPage() {
       videoId: video.videoId,
       languageCode: video.languageCode || 'en',
       guideLink: video.guideLink || '',
+      topic: normalizeVideoGuideTopic(video.topic),
     })
     setShowForm(true)
   }
@@ -136,7 +147,7 @@ export default function AdminVideoGuidesPage() {
   const closeForm = () => {
     setShowForm(false)
     setEditingVideo(null)
-    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '' })
+    setFormData({ title: '', description: '', duration: '0:00', videoId: '', languageCode: selectedLanguage, guideLink: '', topic: DEFAULT_VIDEO_GUIDE_TOPIC })
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -158,6 +169,7 @@ export default function AdminVideoGuidesPage() {
         languageCode: formData.languageCode,
         language_code: formData.languageCode,
         guideLink: formData.guideLink || null,
+        topic: formData.topic,
       })
 
       const response = await fetch(url, {
@@ -346,7 +358,12 @@ export default function AdminVideoGuidesPage() {
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-gray-900">{video.title}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-gray-900">{video.title}</p>
+                    <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                      {topicLabel(video.topic)}
+                    </span>
+                  </div>
                   {video.description && (
                     <p className="text-sm text-gray-500 mt-1 line-clamp-2">{video.description}</p>
                   )}
@@ -420,6 +437,29 @@ export default function AdminVideoGuidesPage() {
                   placeholder="Short description shown under the title"
                   rows={3}
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Topic *</label>
+                <select
+                  value={formData.topic}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      topic: normalizeVideoGuideTopic(e.target.value),
+                    })
+                  }
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500"
+                  required
+                >
+                  {VIDEO_GUIDE_TOPICS.map((topic) => (
+                    <option key={topic.id} value={topic.id}>
+                      {topic.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Shown as a filter tab in the help popup. &quot;Getting started&quot; is selected by default when users open it.
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Language *</label>

@@ -2,1540 +2,865 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiUrl } from '@/app/utils/api'
+import { useAppI18n } from '@/app/components/I18nProvider'
 import {
-  AdjustmentsHorizontalIcon,
+  SettingsHeader,
+  SettingsToggle,
+  SettingsButton,
+} from '@/app/components/settings/SettingsUI'
+import LeadFormRenderer from '@/app/components/leads/LeadFormRenderer'
+import {
+  FIELD_TYPES,
+  MAPPING_LABELS,
+  cornerClass,
+  defaultLeadFormConfig,
+  fieldTypeMeta,
+  genId,
+  makeField,
+  normalizeConfig,
+  type LeadField,
+  type LeadFieldMapping,
+  type LeadFieldType,
+  type LeadFormConfig,
+} from '@/app/config/leadForm'
+import {
+  ArrowTopRightOnSquareIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
-  CodeBracketIcon,
-  CubeIcon,
-  PencilSquareIcon,
+  ClipboardDocumentIcon,
   PlusIcon,
-  SquaresPlusIcon,
-  TagIcon,
-  TrashIcon
+  Square2StackIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline'
 
-type Service = { id: number; title: string; price?: number; duration_minutes?: number }
+const ACCENT_SWATCHES = ['#0F766E', '#2563EB', '#7C3AED', '#DB2777', '#DC2626', '#EA580C', '#16A34A', '#111827']
 
-type LeadWidget =
-  | { id: string; kind: 'customer_field'; field: string; label?: string; required?: boolean }
-  | { id: string; kind: 'preferred_date'; label?: string }
-  | { id: string; kind: 'preferred_time'; label?: string }
-  | { id: string; kind: 'static_text'; text: string; bold?: boolean }
-  | { id: string; kind: 'checkbox'; label?: string; required?: boolean; text: string }
-  | { id: string; kind: 'custom_input'; inputId: string }
-  | { id: string; kind: 'custom_selector'; selectorId: string }
-  | { id: string; kind: 'service_selector'; selectorId: string }
-
-type LeadFormSettings = {
-  version?: number
-  customer: {
-    fields: Record<string, boolean>
-    required?: Record<string, boolean>
-  }
-  job: {
-    includePreferredDate?: boolean
-  includePreferredTime?: boolean
-    serviceSelectors: Array<{
-      id: string
-      label: string
-      display: 'buttons' | 'dropdown'
-      columns?: 1 | 2 | 3
-      multi?: boolean
-      service_ids: number[]
-      service_options?: Array<{ id: number; title: string }>
-    }>
-  }
-  custom: {
-    selectors: Array<{
-      id: string
-      label: string
-      display: 'buttons' | 'dropdown'
-      columns?: 1 | 2 | 3
-      multi?: boolean
-      options: Array<{ value: string; label: string }>
-    }>
-    inputs: Array<{
-      id: string
-      label: string
-      type: 'text' | 'number' | 'textarea'
-      required?: boolean
-      placeholder?: string
-    }>
-  }
-  layout?: {
-    widgets: LeadWidget[]
-  }
-  buttonText?: string
-  ccEmail?: string
-  successMessage?: string
+// Which mapping targets make sense to offer for a given field type.
+const MAPPING_OPTIONS: Record<string, LeadFieldMapping[]> = {
+  short_text: ['first_name', 'last_name', 'address', 'zip_code', 'city', 'country'],
+  long_text: ['message'],
+  email: ['email'],
+  phone: ['phone'],
+  date: ['preferred_date'],
+  time: ['preferred_time'],
 }
 
-const defaultSettings: LeadFormSettings = {
-  version: 2,
-  customer: {
-    fields: {
-      first_name: true,
-      last_name: true,
-      country: false,
-      address: false,
-      zip_code: false,
-      city: false,
-      email: true,
-      phone: false
-    },
-    required: { email: true }
-  },
-  job: {
-    includePreferredDate: false,
-  includePreferredTime: false,
-    serviceSelectors: []
-  },
-  custom: { selectors: [], inputs: [] },
-  layout: { widgets: [] },
-  buttonText: 'Send',
-  ccEmail: '',
-  successMessage: 'Thanks! We received your request and will get back to you soon.'
-}
+export default function LeadFormBuilderPage() {
+  const { t } = useAppI18n()
 
-export default function LeadsFormSettingsPage() {
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [config, setConfig] = useState<LeadFormConfig>(() => defaultLeadFormConfig())
+  const [token, setToken] = useState<string | null>(null)
+  const [enabled, setEnabled] = useState(false)
+
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [hasChanges, setHasChanges] = useState(false)
-  const [initialSettings, setInitialSettings] = useState<LeadFormSettings | null>(null)
-  const [showEmbedModal, setShowEmbedModal] = useState(false)
-  const [testEmailAddress, setTestEmailAddress] = useState('')
-  const [testEmailResult, setTestEmailResult] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState(0)
+  const [activationSaving, setActivationSaving] = useState(false)
   const [error, setError] = useState('')
-  const [token, setToken] = useState<string>('')
-  const [settings, setSettings] = useState<LeadFormSettings>(defaultSettings)
-  const [services, setServices] = useState<Service[]>([])
-  const previewIframeRef = useRef<HTMLIFrameElement | null>(null)
-  const [expandedWidgetId, setExpandedWidgetId] = useState<string | null>(null)
-  const [showAddInputMenu, setShowAddInputMenu] = useState(false)
-  const [showAddOptionMenu, setShowAddOptionMenu] = useState(false)
-  const [showAddServiceMenu, setShowAddServiceMenu] = useState(false)
+
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [copied, setCopied] = useState<'url' | 'embed' | null>(null)
+
+  // Snapshot of last-saved config to detect unsaved changes.
+  const savedSnapshot = useRef<string>('')
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        setLoading(true)
+        const tk = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/lead-form'), { headers: { Authorization: `Bearer ${tk}` } })
+        const data = await res.json()
+        if (res.ok) {
+          const cfg = normalizeConfig(data?.form?.settings)
+          setConfig(cfg)
+          setToken(data?.form?.token || null)
+          setEnabled(Boolean(data?.form?.enabled))
+          // If the form was never saved (no token), leave the snapshot empty so
+          // the form counts as "dirty" and can be saved to generate a link.
+          savedSnapshot.current = data?.form?.token ? JSON.stringify(cfg) : ''
+        } else {
+          setError(data?.error || 'Failed to load form')
+        }
+      } catch {
+        setError('Network error while loading the form')
+      } finally {
+        setLoading(false)
+      }
+    }
+    run()
+  }, [])
+
+  const dirty = useMemo(() => JSON.stringify(config) !== savedSnapshot.current, [config])
 
   const formUrl = useMemo(() => {
-    if (!token) return ''
-    if (typeof window === 'undefined') return ''
+    if (!token || typeof window === 'undefined') return ''
     return `${window.location.origin}/lead-form/${token}`
   }, [token])
 
-  const iframeCode = useMemo(() => {
+  const embedSnippet = useMemo(() => {
     if (!formUrl) return ''
-    return `<iframe src="${formUrl}" style="width:100%;max-width:520px;height:720px;border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
+    return `<iframe src="${formUrl}" width="100%" height="720" frameborder="0" style="border:0;max-width:640px"></iframe>`
   }, [formUrl])
 
-  const fetchForm = async () => {
-    try {
-      setLoading(true)
-      setError('')
-      const t = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/lead-form'), { headers: { Authorization: `Bearer ${t}` } })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data?.error || 'Failed to load lead form settings')
-        return
-      }
-      setToken(data.form.token)
-      const incoming = (data.form.settings || defaultSettings) as LeadFormSettings
-      const ensured = ensureLayout(incoming)
-      setSettings(ensured)
-      setInitialSettings(JSON.parse(JSON.stringify(ensured)))
-    } catch (e) {
-      setError('Network error: Failed to load lead form settings')
-    } finally {
-      setLoading(false)
-    }
+  // ── mutators ────────────────────────────────────────────────────────────
+  const patch = (p: Partial<LeadFormConfig>) => setConfig((c) => ({ ...c, ...p }))
+  const patchTheme = (p: Partial<LeadFormConfig['theme']>) =>
+    setConfig((c) => ({ ...c, theme: { ...c.theme, ...p } }))
+
+  const updateField = (id: string, p: Partial<LeadField>) =>
+    setConfig((c) => ({ ...c, fields: c.fields.map((f) => (f.id === id ? { ...f, ...p } : f)) }))
+
+  const addField = (type: LeadFieldType) => {
+    const field = makeField(type)
+    // Auto-map obvious built-ins so conversion works out of the box.
+    if (type === 'email') field.mapping = 'email'
+    if (type === 'phone') field.mapping = 'phone'
+    setConfig((c) => ({ ...c, fields: [...c.fields, field] }))
+    setSelectedId(field.id)
+    setShowAddMenu(false)
   }
 
-  const fetchServices = async () => {
-    try {
-      const t = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/services'), { headers: { Authorization: `Bearer ${t}` } })
-      const data = await res.json()
-      if (res.ok) setServices(data.services || [])
-    } catch {}
+  const removeField = (id: string) => {
+    setConfig((c) => ({ ...c, fields: c.fields.filter((f) => f.id !== id) }))
+    if (selectedId === id) setSelectedId(null)
   }
 
-  useEffect(() => {
-    fetchForm()
-    fetchServices()
-  }, [])
-
-  // Live preview: push current (unsaved) settings into the iframe so it updates immediately.
-  useEffect(() => {
-    if (!token) return
-    const iframe = previewIframeRef.current
-    if (!iframe?.contentWindow) return
-
-    try {
-      iframe.contentWindow.postMessage(
-        {
-          type: 'vevago_lead_form_preview_settings',
-          token,
-          settings: {
-            ...settings,
-            job: {
-              ...settings.job,
-              serviceSelectors: settings.job.serviceSelectors.map((sel) => ({
-                ...sel,
-                service_options: (sel.service_ids || []).map((id) => ({
-                  id,
-                  title: services.find((s) => s.id === id)?.title || `Service #${id}`
-                }))
-              }))
-            }
-          }
-        },
-        window.location.origin
-      )
-    } catch {
-      // ignore
-    }
-  }, [token, settings, services])
-
-  // Track changes for save button state
-  useEffect(() => {
-    if (!initialSettings) return
-    const changed = JSON.stringify(settings) !== JSON.stringify(initialSettings)
-    setHasChanges(changed)
-  }, [settings, initialSettings])
-
-  const toggleCustomerField = (key: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      customer: {
-        ...prev.customer,
-        fields: { ...(prev.customer?.fields || {}), [key]: !(prev.customer?.fields || {})[key] }
+  const duplicateField = (id: string) => {
+    setConfig((c) => {
+      const idx = c.fields.findIndex((f) => f.id === id)
+      if (idx < 0) return c
+      const copy: LeadField = {
+        ...c.fields[idx],
+        id: genId(),
+        options: c.fields[idx].options?.map((o) => ({ ...o, id: genId('o') })),
+        mapping: null, // a duplicate shouldn't double-write to the same column
       }
-    }))
-  }
-
-  const CUSTOMER_FIELDS: Array<{ key: string; label: string }> = [
-    { key: 'first_name', label: 'Name' },
-    { key: 'last_name', label: 'Last name' },
-    { key: 'country', label: 'Country' },
-    { key: 'address', label: 'Address' },
-    { key: 'zip_code', label: 'Zip' },
-    { key: 'city', label: 'City' },
-    { key: 'email', label: 'Email' },
-    { key: 'phone', label: 'Phone' }
-  ]
-
-  function ensureLayout(s: LeadFormSettings): LeadFormSettings {
-    const next = { ...s }
-    if (!next.layout) next.layout = { widgets: [] }
-    if (!Array.isArray(next.layout.widgets)) next.layout.widgets = []
-
-    // If already has widgets, keep as-is.
-    if (next.layout.widgets.length > 0) return next
-
-    // Build a sensible default widget order from existing toggles.
-    const widgets: LeadWidget[] = []
-    for (const f of CUSTOMER_FIELDS) {
-      if (next.customer?.fields?.[f.key]) {
-        widgets.push({ id: `w_${f.key}`, kind: 'customer_field', field: f.key, label: f.label, required: next.customer?.required?.[f.key] })
-      }
-    }
-    if (next.job?.serviceSelectors?.length) {
-      for (const sel of next.job.serviceSelectors) {
-        widgets.push({ id: `w_service_${sel.id}`, kind: 'service_selector', selectorId: sel.id })
-      }
-    }
-    if (next.job?.includePreferredDate) {
-      widgets.push({ id: 'w_preferred_date', kind: 'preferred_date', label: 'Preferred date' })
-    }
-    if (next.job?.includePreferredTime) {
-      widgets.push({ id: 'w_preferred_time', kind: 'preferred_time', label: 'Preferred time' })
-    }
-    if (next.custom?.selectors?.length) {
-      for (const sel of next.custom.selectors) {
-        widgets.push({ id: `w_custom_${sel.id}`, kind: 'custom_selector', selectorId: sel.id })
-      }
-    }
-    if (next.custom?.inputs?.length) {
-      for (const inp of next.custom.inputs) {
-        widgets.push({ id: `w_input_${inp.id}`, kind: 'custom_input', inputId: inp.id })
-      }
-    }
-    next.layout.widgets = widgets
-    return next
-  }
-
-  const addWidget = (widget: LeadWidget) => {
-    setSettings((prev) => {
-      const next = ensureLayout(prev)
-      return {
-        ...next,
-        layout: { widgets: [...(next.layout?.widgets || []), widget] }
-      }
-    })
-    setExpandedWidgetId(widget.id)
-  }
-
-  const removeWidget = (widgetId: string) => {
-    setSettings((prev) => {
-      const next = ensureLayout(prev)
-      return { ...next, layout: { widgets: (next.layout?.widgets || []).filter((w) => w.id !== widgetId) } }
-    })
-    if (expandedWidgetId === widgetId) setExpandedWidgetId(null)
-  }
-
-  const moveWidget = (widgetId: string, dir: -1 | 1) => {
-    setSettings((prev) => {
-      const next = ensureLayout(prev)
-      const widgets = [...(next.layout?.widgets || [])]
-      const idx = widgets.findIndex((w) => w.id === widgetId)
-      if (idx < 0) return next
-      const ni = idx + dir
-      if (ni < 0 || ni >= widgets.length) return next
-      const tmp = widgets[idx]
-      widgets[idx] = widgets[ni]
-      widgets[ni] = tmp
-      return { ...next, layout: { widgets } }
+      const fields = [...c.fields]
+      fields.splice(idx + 1, 0, copy)
+      return { ...c, fields }
     })
   }
 
-  const addCustomerFieldWidget = (fieldKey: string) => {
-    const label = CUSTOMER_FIELDS.find((f) => f.key === fieldKey)?.label || fieldKey
-    // Enable field in settings
-    setSettings((prev) => ({
-      ...prev,
-      customer: {
-        ...prev.customer,
-        fields: { ...prev.customer.fields, [fieldKey]: true }
-      }
-    }))
-    addWidget({ id: `w_${fieldKey}_${Math.random().toString(16).slice(2)}`, kind: 'customer_field', field: fieldKey, label })
-  }
-
-  const addPreferredDateWidget = () => {
-    setSettings((prev) => ({ ...prev, job: { ...prev.job, includePreferredDate: true } }))
-    addWidget({ id: `w_preferred_date_${Math.random().toString(16).slice(2)}`, kind: 'preferred_date', label: 'Preferred date' })
-  }
-
-  const addPreferredTimeWidget = () => {
-    setSettings((prev) => ({ ...prev, job: { ...prev.job, includePreferredTime: true } }))
-    addWidget({ id: `w_preferred_time_${Math.random().toString(16).slice(2)}`, kind: 'preferred_time', label: 'Preferred time' })
-  }
-
-  const addCustomInputWidget = (type: 'text' | 'number' | 'textarea') => {
-    const id = `input_${Math.random().toString(16).slice(2)}`
-    const label = type === 'textarea' ? 'Message' : type === 'number' ? 'Number' : 'Text'
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        inputs: [...prev.custom.inputs, { id, label, type, required: false }]
-      }
-    }))
-    addWidget({ id: `w_input_${id}`, kind: 'custom_input', inputId: id })
-  }
-
-  const addOptionWidget = (display: 'buttons' | 'dropdown') => {
-    const id = `custom_${Math.random().toString(16).slice(2)}`
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: [
-          ...prev.custom.selectors,
-          {
-            id,
-            label: 'Choose an option',
-            display,
-            columns: 2,
-            multi: false,
-            options: [{ value: 'option-1', label: 'Option 1' }]
-          }
-        ]
-      }
-    }))
-    addWidget({ id: `w_custom_${id}`, kind: 'custom_selector', selectorId: id })
-  }
-
-  const addServiceWidget = (display: 'buttons' | 'dropdown') => {
-    const id = `services_${Math.random().toString(16).slice(2)}`
-    setSettings((prev) => ({
-      ...prev,
-      job: {
-        ...prev.job,
-        serviceSelectors: [
-          ...prev.job.serviceSelectors,
-          { id, label: 'Select service', display, columns: 2, multi: false, service_ids: [], service_options: [] }
-        ]
-      }
-    }))
-    addWidget({ id: `w_service_${id}`, kind: 'service_selector', selectorId: id })
-  }
-
-  const addStaticTextWidget = () => {
-    addWidget({
-      id: `w_text_${Math.random().toString(16).slice(2)}`,
-      kind: 'static_text',
-      text: 'New section',
-      bold: true
+  const moveField = (id: string, dir: -1 | 1) => {
+    setConfig((c) => {
+      const idx = c.fields.findIndex((f) => f.id === id)
+      const next = idx + dir
+      if (idx < 0 || next < 0 || next >= c.fields.length) return c
+      const fields = [...c.fields]
+      ;[fields[idx], fields[next]] = [fields[next], fields[idx]]
+      return { ...c, fields }
     })
   }
 
-  const addCheckboxWidget = () => {
-    addWidget({
-      id: `w_checkbox_${Math.random().toString(16).slice(2)}`,
-      kind: 'checkbox',
-      label: 'Terms & Conditions',
-      required: true,
-      text: 'I agree to the <a href="#" target="_blank">Terms & Conditions</a>'
-    })
-  }
-
-  const save = async () => {
+  // ── save / activate ─────────────────────────────────────────────────────
+  const saveForm = async () => {
     try {
       setSaving(true)
       setError('')
-      const t = localStorage.getItem('token')
+      const tk = localStorage.getItem('token')
       const res = await fetch(apiUrl('/lead-form'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
-        body: JSON.stringify({
-          settings: {
-            ...settings,
-            layout: ensureLayout(settings).layout,
-            // ensure selector labels are stored for iframe rendering
-            job: {
-              ...settings.job,
-              serviceSelectors: settings.job.serviceSelectors.map((sel) => ({
-                ...sel,
-                service_options: (sel.service_ids || []).map((id) => ({
-                  id,
-                  title: services.find((s) => s.id === id)?.title || `Service #${id}`
-                }))
-              }))
-            }
-          }
-        })
+        headers: { Authorization: `Bearer ${tk}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: config }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data?.error || 'Failed to save lead form settings')
+        setError(data?.error || 'Failed to save')
         return
       }
-      setToken(data.form.token)
-      const updated = (data.form.settings || defaultSettings) as LeadFormSettings
-      setSettings(updated)
-      setInitialSettings(JSON.parse(JSON.stringify(updated)))
-      setHasChanges(false)
-    } catch (e) {
-      setError('Network error: Failed to save lead form settings')
+      if (data?.form?.token) setToken(data.form.token)
+      savedSnapshot.current = JSON.stringify(config)
+      setSavedAt(Date.now())
+    } catch {
+      setError('Network error while saving')
     } finally {
       setSaving(false)
     }
   }
 
-  const CustomerRow = ({ id, label, help }: { id: string; label: string; help?: string }) => (
-    <label className="flex items-start gap-3 py-2">
-      <input
-        type="checkbox"
-        checked={!!settings.customer?.fields?.[id]}
-        onChange={() => toggleCustomerField(id)}
-        className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-      />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium text-gray-900">{label}</span>
-        {help && <span className="block text-xs text-gray-500">{help}</span>}
-      </span>
-    </label>
-  )
-
-  const addServiceSelector = () => {
-    const id = `services_${Math.random().toString(16).slice(2)}`
-    setSettings((prev) => ({
-      ...prev,
-      job: {
-        ...prev.job,
-        serviceSelectors: [
-          ...prev.job.serviceSelectors,
-          { id, label: 'Select service', display: 'buttons', columns: 2, multi: false, service_ids: [], service_options: [] }
-        ]
+  const toggleEnabled = async (next: boolean) => {
+    setEnabled(next)
+    setActivationSaving(true)
+    setError('')
+    try {
+      const tk = localStorage.getItem('token')
+      // Persist the current form alongside activation so turning it on never
+      // points at a stale/empty config.
+      const res = await fetch(apiUrl('/lead-form'), {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${tk}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next, settings: config }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setEnabled(!next)
+        setError(data?.error || 'Failed to update')
+        return
       }
-    }))
+      if (data?.form?.token) setToken(data.form.token)
+      savedSnapshot.current = JSON.stringify(config)
+    } catch {
+      setEnabled(!next)
+      setError('Network error')
+    } finally {
+      setActivationSaving(false)
+    }
   }
 
-  const updateServiceSelector = (selectorId: string, patch: any) => {
-    setSettings((prev) => ({
-      ...prev,
-      job: {
-        ...prev.job,
-        serviceSelectors: prev.job.serviceSelectors.map((s) => (s.id === selectorId ? { ...s, ...patch } : s))
-      }
-    }))
+  const copy = async (text: string, which: 'url' | 'embed') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(which)
+      setTimeout(() => setCopied(null), 1800)
+    } catch {
+      /* ignore */
+    }
   }
 
-  const removeServiceSelector = (selectorId: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      job: {
-        ...prev.job,
-        serviceSelectors: prev.job.serviceSelectors.filter((s) => s.id !== selectorId)
-      }
-    }))
+  if (loading) {
+    return (
+      <div className="flex justify-center py-24">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+      </div>
+    )
   }
-
-  const addCustomSelector = () => {
-    const id = `custom_${Math.random().toString(16).slice(2)}`
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: [
-          ...(prev.custom.selectors || []),
-          {
-            id,
-            label: 'Choose an option',
-            display: 'buttons',
-            columns: 2,
-            multi: false,
-            options: [{ value: 'option-1', label: 'Option 1' }]
-          }
-        ]
-      }
-    }))
-  }
-
-  const updateCustomSelector = (selectorId: string, patch: any) => {
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: (prev.custom.selectors || []).map((s) => (s.id === selectorId ? { ...s, ...patch } : s))
-      }
-    }))
-  }
-
-  const removeCustomSelector = (selectorId: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: (prev.custom.selectors || []).filter((s) => s.id !== selectorId)
-      }
-    }))
-  }
-
-  const addCustomOption = (selectorId: string) => {
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: (prev.custom.selectors || []).map((s) => {
-          if (s.id !== selectorId) return s
-          const nextIndex = (s.options?.length || 0) + 1
-          return {
-            ...s,
-            options: [...(s.options || []), { value: `option-${nextIndex}`, label: `Option ${nextIndex}` }]
-          }
-        })
-      }
-    }))
-  }
-
-  const updateCustomOption = (selectorId: string, optionIndex: number, patch: any) => {
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: (prev.custom.selectors || []).map((s) => {
-          if (s.id !== selectorId) return s
-          const opts = (s.options || []).map((o, idx) => (idx === optionIndex ? { ...o, ...patch } : o))
-          return { ...s, options: opts }
-        })
-      }
-    }))
-  }
-
-  const removeCustomOption = (selectorId: string, optionIndex: number) => {
-    setSettings((prev) => ({
-      ...prev,
-      custom: {
-        ...prev.custom,
-        selectors: (prev.custom.selectors || []).map((s) => {
-          if (s.id !== selectorId) return s
-          const opts = (s.options || []).filter((_, idx) => idx !== optionIndex)
-          return { ...s, options: opts }
-        })
-      }
-    }))
-  }
-
-  const widgets = ensureLayout(settings).layout?.widgets || []
 
   return (
-    <div className="w-full max-w-none">
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Lead form</h1>
-        <p className="text-sm text-gray-600">Embed this form on your website to collect leads.</p>
-      </div>
+    <div className="px-6 py-8 pb-28"><div className="mx-auto max-w-7xl">
+      <SettingsHeader
+        title={t('settings.leads.title', 'Lead form')}
+        description={
+          enabled
+            ? t(
+                'settings.leads.introActive',
+                'Your form is live. Build the fields below, then share the link or embed it on your website. New submissions land in your Leads area.',
+              )
+            : t(
+                'settings.leads.introInactive',
+                'Design your lead form below. When you’re happy with it, turn it on to start collecting leads from your website or a direct link.',
+              )
+        }
+        action={
+          <>
+            {activationSaving && <span className="text-[13px] text-gray-400">{t('settings.leads.saving', 'Saving…')}</span>}
+            <SettingsToggle
+              checked={enabled}
+              onChange={toggleEnabled}
+              disabled={activationSaving}
+              label={t('settings.leads.activate', 'Lead form')}
+            />
+          </>
+        }
+      />
 
       {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
           <p className="text-sm font-medium text-red-700">{error}</p>
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 p-5 xl:col-span-2">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-sm font-semibold text-gray-900">Form builder</div>
-              <div className="text-xs text-gray-500">Add widgets and arrange the order they show on the form.</div>
+      {/* Mobile preview — inline at top; desktop preview sticks in the right column */}
+      <div className="mb-8 lg:hidden">
+        <div className="mb-2 text-[13px] font-medium text-gray-500">{t('settings.leads.preview', 'Live preview')}</div>
+        <div
+          className={`overflow-hidden rounded-2xl border border-gray-200 ${
+            config.theme.background === 'white' ? 'bg-white' : 'bg-gray-50'
+          }`}
+        >
+          <div className="p-4">
+            <div className={`border border-gray-200 bg-white p-4 shadow-sm ${cornerClass(config.theme.corners === 'sharp' ? 'sharp' : 'rounded')}`}>
+              <LeadFormRenderer config={config} values={{}} onChange={() => {}} preview />
             </div>
-            <button
-              onClick={save}
-              disabled={saving || loading || !hasChanges}
-              className={`text-sm px-3 py-2 rounded-lg transition-colors ${
-                hasChanges && !saving
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              } disabled:opacity-50`}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-
-          {/* Add buttons */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddInputMenu((v) => !v)
-                  setShowAddOptionMenu(false)
-                  setShowAddServiceMenu(false)
-                }}
-                className="w-full rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-4 py-3 flex items-center gap-3 shadow-sm"
-              >
-                <PencilSquareIcon className="w-5 h-5 text-blue-600" />
-                <div className="text-left">
-                  <div className="text-sm font-semibold text-gray-900">Add field</div>
-                  <div className="text-xs text-gray-500">Customer details / custom input</div>
-                </div>
-                <div className="ml-auto text-gray-400">
-                  {showAddInputMenu ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
-                </div>
-              </button>
-
-              {showAddInputMenu && (
-                <div className="absolute z-20 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50 border-b border-gray-200">
-                    Customer details
-                  </div>
-                  <div className="max-h-56 overflow-y-auto">
-                    {CUSTOMER_FIELDS.map((f) => (
-                      <button
-                        type="button"
-                        key={f.key}
-                        onClick={() => {
-                          addCustomerFieldWidget(f.key)
-                          setShowAddInputMenu(false)
-                        }}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addPreferredDateWidget()
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-t border-gray-100"
-                    >
-                      Preferred date
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addPreferredTimeWidget()
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-t border-gray-100"
-                    >
-                      Preferred time
-                    </button>
-                  </div>
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50 border-y border-gray-200">
-                    Custom input
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addCustomInputWidget('text')
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                    >
-                      Text input
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addCustomInputWidget('number')
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                    >
-                      Number input
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addCustomInputWidget('textarea')
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                    >
-                      Textarea
-                    </button>
-                  </div>
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50 border-y border-gray-200">
-                    Static text
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addStaticTextWidget()
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                    >
-                      Static text
-                    </button>
-                  </div>
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50 border-y border-gray-200">
-                    Checkbox
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addCheckboxWidget()
-                        setShowAddInputMenu(false)
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                    >
-                      Checkbox
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddOptionMenu((v) => !v)
-                  setShowAddInputMenu(false)
-                  setShowAddServiceMenu(false)
-                }}
-                className="w-full rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-4 py-3 flex items-center gap-3 shadow-sm"
-              >
-                <TagIcon className="w-5 h-5 text-blue-600" />
-                <div className="text-left">
-                  <div className="text-sm font-semibold text-gray-900">Add option</div>
-                  <div className="text-xs text-gray-500">Dropdown / buttons</div>
-                </div>
-                <div className="ml-auto text-gray-400">
-                  {showAddOptionMenu ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
-                </div>
-              </button>
-
-              {showAddOptionMenu && (
-                <div className="absolute z-20 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-                  <div className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-50 border-y border-gray-200">
-                    Selector
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      addOptionWidget('buttons')
-                      setShowAddOptionMenu(false)
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Inline buttons
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      addOptionWidget('dropdown')
-                      setShowAddOptionMenu(false)
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Dropdown (single select)
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddServiceMenu((v) => !v)
-                  setShowAddInputMenu(false)
-                  setShowAddOptionMenu(false)
-                }}
-                className="w-full rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-4 py-3 flex items-center gap-3 shadow-sm"
-              >
-                <CubeIcon className="w-5 h-5 text-blue-600" />
-                <div className="text-left">
-                  <div className="text-sm font-semibold text-gray-900">Add service</div>
-                  <div className="text-xs text-gray-500">Dropdown / buttons</div>
-                </div>
-                <div className="ml-auto text-gray-400">
-                  {showAddServiceMenu ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
-                </div>
-              </button>
-
-              {showAddServiceMenu && (
-                <div className="absolute z-20 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      addServiceWidget('buttons')
-                      setShowAddServiceMenu(false)
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Inline buttons
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      addServiceWidget('dropdown')
-                      setShowAddServiceMenu(false)
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Dropdown (single select)
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Widgets list */}
-          <div className="rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-              <div className="text-sm font-semibold text-gray-900">Widgets</div>
-              <div className="text-xs text-gray-500">{widgets.length} item(s)</div>
-            </div>
-
-            {widgets.length === 0 ? (
-              <div className="p-6 text-sm text-gray-500">Add a widget to start building your form.</div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {widgets.map((w, idx) => {
-                  const isOpen = expandedWidgetId === w.id
-                  const title =
-                    w.kind === 'customer_field'
-                      ? (w.label || w.field)
-                      : w.kind === 'preferred_date'
-                      ? 'Preferred date'
-                      : w.kind === 'preferred_time'
-                      ? 'Preferred time'
-                      : w.kind === 'custom_input'
-                      ? (settings.custom.inputs.find((i) => i.id === (w as any).inputId)?.label || 'Input')
-                      : w.kind === 'custom_selector'
-                      ? (settings.custom.selectors.find((s) => s.id === (w as any).selectorId)?.label || 'Option')
-                      : w.kind === 'service_selector'
-                      ? (settings.job.serviceSelectors.find((s) => s.id === (w as any).selectorId)?.label || 'Service')
-                      : w.kind === 'static_text'
-                      ? 'Static text'
-                      : w.kind === 'checkbox'
-                      ? 'Checkbox'
-                      : 'Widget'
-
-                  return (
-                    <div key={w.id} className="bg-white">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedWidgetId(isOpen ? null : w.id)}
-                        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50"
-                      >
-                        <div className="text-sm font-semibold text-gray-900 truncate">{title}</div>
-                        <div className="ml-auto flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              moveWidget(w.id, -1)
-                            }}
-                            disabled={idx === 0}
-                            className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30"
-                          >
-                            <ChevronUpIcon className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              moveWidget(w.id, 1)
-                            }}
-                            disabled={idx === widgets.length - 1}
-                            className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30"
-                          >
-                            <ChevronDownIcon className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              removeWidget(w.id)
-                            }}
-                            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                            title="Remove widget"
-                          >
-                            <TrashIcon className="w-4 h-4" />
-                          </button>
-                          <div className="text-gray-400">{isOpen ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}</div>
-                        </div>
-                      </button>
-
-                      {isOpen && (
-                        <div className="px-4 pb-4">
-                          {w.kind === 'customer_field' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Displayed title</div>
-                                <input
-                                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                  value={w.label || ''}
-                                  onChange={(e) => {
-                                    const label = e.target.value
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), label } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                />
-                              </div>
-                              <div className="flex items-end">
-                                <label className="flex items-center gap-2 text-sm text-gray-700">
-                                  <input
-                                    type="checkbox"
-                                    checked={!!w.required}
-                                    onChange={() => {
-                                      const req = !w.required
-                                      setSettings((prev) => {
-                                        const next = ensureLayout(prev)
-                                        // store on widget
-                                        const widgets2 = (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), required: req } : x))
-                                        // also map known required onto settings.customer.required
-                                        const customerReq = { ...(next.customer.required || {}) }
-                                        customerReq[w.field] = req
-                                        return { ...next, layout: { widgets: widgets2 }, customer: { ...next.customer, required: customerReq } }
-                                      })
-                                    }}
-                                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                  />
-                                  Required
-                                </label>
-                              </div>
-                            </div>
-                          )}
-
-                          {w.kind === 'preferred_date' && (
-                            <div className="text-sm text-gray-600">
-                              This widget collects a preferred date from the customer.
-                            </div>
-                          )}
-
-                          {w.kind === 'preferred_time' && (
-                            <div className="text-sm text-gray-600">
-                              This widget collects a preferred time from the customer.
-                            </div>
-                          )}
-
-                          {w.kind === 'static_text' && (
-                            <div className="space-y-3">
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Text</div>
-                                <textarea
-                                  className="w-full min-h-[90px] text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                  value={w.text || ''}
-                                  onChange={(e) => {
-                                    const text = e.target.value
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), text } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                />
-                              </div>
-                              <label className="flex items-center gap-2 text-sm text-gray-700">
-                                <input
-                                  type="checkbox"
-                                  checked={!!w.bold}
-                                  onChange={() => {
-                                    const bold = !w.bold
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), bold } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                />
-                                Bold (2px larger)
-                              </label>
-                            </div>
-                          )}
-
-                          {w.kind === 'checkbox' && (
-                            <div className="space-y-3">
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Label</div>
-                                <input
-                                  type="text"
-                                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                  value={w.label || ''}
-                                  onChange={(e) => {
-                                    const label = e.target.value
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), label } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                />
-                              </div>
-                              <div>
-                                <div className="text-xs text-gray-500 mb-1">Text (supports HTML links)</div>
-                                <textarea
-                                  className="w-full min-h-[90px] text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                  value={w.text || ''}
-                                  onChange={(e) => {
-                                    const text = e.target.value
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), text } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                />
-                              </div>
-                              <label className="flex items-center gap-2 text-sm text-gray-700">
-                                <input
-                                  type="checkbox"
-                                  checked={!!w.required}
-                                  onChange={() => {
-                                    const req = !w.required
-                                    setSettings((prev) => {
-                                      const next = ensureLayout(prev)
-                                      return {
-                                        ...next,
-                                        layout: {
-                                          widgets: (next.layout?.widgets || []).map((x) => (x.id === w.id ? { ...(x as any), required: req } : x))
-                                        }
-                                      }
-                                    })
-                                  }}
-                                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                />
-                                Required
-                              </label>
-                            </div>
-                          )}
-
-                          {w.kind === 'custom_input' && (() => {
-                            const inp = settings.custom.inputs.find((i) => i.id === w.inputId)
-                            if (!inp) return null
-                            return (
-                              <div className="space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Title</div>
-                                    <input
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                      value={inp.label}
-                                      onChange={(e) => {
-                                        const label = e.target.value
-                                        setSettings((prev) => ({
-                                          ...prev,
-                                          custom: {
-                                            ...prev.custom,
-                                            inputs: prev.custom.inputs.map((x) => (x.id === inp.id ? { ...x, label } : x))
-                                          }
-                                        }))
-                                      }}
-                                    />
-                                  </div>
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Type</div>
-                                    <select
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                                      value={inp.type}
-                                      onChange={(e) => {
-                                        const type = e.target.value as any
-                                        setSettings((prev) => ({
-                                          ...prev,
-                                          custom: {
-                                            ...prev.custom,
-                                            inputs: prev.custom.inputs.map((x) => (x.id === inp.id ? { ...x, type } : x))
-                                          }
-                                        }))
-                                      }}
-                                    >
-                                      <option value="text">Text</option>
-                                      <option value="number">Number</option>
-                                      <option value="textarea">Textarea</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                <label className="flex items-center gap-2 text-sm text-gray-700">
-                                  <input
-                                    type="checkbox"
-                                    checked={!!inp.required}
-                                    onChange={() => {
-                                      setSettings((prev) => ({
-                                        ...prev,
-                                        custom: {
-                                          ...prev.custom,
-                                          inputs: prev.custom.inputs.map((x) => (x.id === inp.id ? { ...x, required: !x.required } : x))
-                                        }
-                                      }))
-                                    }}
-                                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                  />
-                                  Required
-                                </label>
-                              </div>
-                            )
-                          })()}
-
-                          {w.kind === 'custom_selector' && (() => {
-                            const sel = settings.custom.selectors.find((s) => s.id === w.selectorId)
-                            if (!sel) return null
-                            return (
-                              <div className="space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Title</div>
-                                    <input
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                      value={sel.label}
-                                      onChange={(e) => updateCustomSelector(sel.id, { label: e.target.value })}
-                                    />
-                                  </div>
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Display</div>
-                                    <select
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                                      value={sel.display}
-                                      onChange={(e) => updateCustomSelector(sel.id, { display: e.target.value })}
-                                    >
-                                      <option value="buttons">Inline buttons</option>
-                                      <option value="dropdown">Dropdown</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Columns</div>
-                                    <select
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                                      value={sel.columns || 2}
-                                      onChange={(e) => updateCustomSelector(sel.id, { columns: parseInt(e.target.value, 10) })}
-                                      disabled={sel.display !== 'buttons'}
-                                    >
-                                      <option value={1}>1</option>
-                                      <option value={2}>2</option>
-                                      <option value={3}>3</option>
-                                    </select>
-                                  </div>
-                                  <div className="flex items-end">
-                                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                                      <input
-                                        type="checkbox"
-                                        checked={!!sel.multi}
-                                        onChange={() => updateCustomSelector(sel.id, { multi: !sel.multi })}
-                                        disabled={sel.display !== 'buttons'}
-                                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                      />
-                                      Multiselect
-                                    </label>
-                                  </div>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 overflow-hidden">
-                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                                    <div className="text-xs font-semibold text-gray-700">Options</div>
-                                    <button
-                                      type="button"
-                                      onClick={() => addCustomOption(sel.id)}
-                                      className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-                                    >
-                                      + Add
-                                    </button>
-                                  </div>
-                                  <div className="p-3 space-y-2">
-                                    {(sel.options || []).map((opt, oi) => (
-                                      <div key={`${sel.id}-${oi}`} className="grid grid-cols-12 gap-2 items-center">
-                                        <input
-                                          className="col-span-5 text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                          value={opt.label}
-                                          onChange={(e) => updateCustomOption(sel.id, oi, { label: e.target.value })}
-                                        />
-                                        <input
-                                          className="col-span-5 text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"
-                                          value={opt.value}
-                                          onChange={(e) => updateCustomOption(sel.id, oi, { value: e.target.value })}
-                                        />
-                                        <button
-                                          type="button"
-                                          className="col-span-2 text-xs text-gray-500 hover:text-gray-700"
-                                          onClick={() => removeCustomOption(sel.id, oi)}
-                                        >
-                                          Remove
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })()}
-
-                          {w.kind === 'service_selector' && (() => {
-                            const sel = settings.job.serviceSelectors.find((s) => s.id === w.selectorId)
-                            if (!sel) return null
-                            return (
-                              <div className="space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Title</div>
-                                    <input
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                                      value={sel.label}
-                                      onChange={(e) => updateServiceSelector(sel.id, { label: e.target.value })}
-                                    />
-                                  </div>
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Display</div>
-                                    <select
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                                      value={sel.display}
-                                      onChange={(e) => updateServiceSelector(sel.id, { display: e.target.value })}
-                                    >
-                                      <option value="buttons">Inline buttons</option>
-                                      <option value="dropdown">Dropdown</option>
-                                    </select>
-                                  </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Columns</div>
-                                    <select
-                                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white"
-                                      value={sel.columns || 2}
-                                      onChange={(e) => updateServiceSelector(sel.id, { columns: parseInt(e.target.value, 10) })}
-                                      disabled={sel.display !== 'buttons'}
-                                    >
-                                      <option value={1}>1</option>
-                                      <option value={2}>2</option>
-                                      <option value={3}>3</option>
-                                    </select>
-                                  </div>
-                                  <div className="flex items-end">
-                                    <label className="flex items-center gap-2 text-sm text-gray-700">
-                                      <input
-                                        type="checkbox"
-                                        checked={!!sel.multi}
-                                        onChange={() => updateServiceSelector(sel.id, { multi: !sel.multi })}
-                                        disabled={sel.display !== 'buttons'}
-                                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                      />
-                                      Multiselect
-                                    </label>
-                                  </div>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 overflow-hidden">
-                                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                                    <div className="text-xs font-semibold text-gray-700">Services</div>
-                                    <div className="text-xs text-gray-500">{sel.service_ids?.length || 0} selected</div>
-                                  </div>
-                                  <div className="p-3 max-h-44 overflow-y-auto space-y-1">
-                                    {services.length === 0 ? (
-                                      <div className="text-xs text-gray-500">No services found.</div>
-                                    ) : (
-                                      services.map((svc) => {
-                                        const active = (sel.service_ids || []).includes(svc.id)
-                                        return (
-                                          <label key={svc.id} className="flex items-center gap-2 py-1">
-                                            <input
-                                              type="checkbox"
-                                              checked={active}
-                                              onChange={() => {
-                                                const next = active
-                                                  ? (sel.service_ids || []).filter((id) => id !== svc.id)
-                                                  : [...(sel.service_ids || []), svc.id]
-                                                updateServiceSelector(sel.id, { service_ids: next })
-                                              }}
-                                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                            />
-                                            <span className="text-sm text-gray-800">{svc.title}</span>
-                                          </label>
-                                        )
-                                      })
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-
-                {/* Submit button - accordion like other widgets */}
-                <div className="bg-white border-t border-gray-200">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedWidgetId(expandedWidgetId === 'submit' ? null : 'submit')}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50"
-                  >
-                    <div className="text-sm font-semibold text-gray-900">
-                      {settings.buttonText || 'Send'}
-                    </div>
-                    <div className="ml-auto flex items-center gap-2">
-                      <div className="text-xs text-gray-500 bg-gray-200 px-2 py-1 rounded">
-                        Submit button
-                      </div>
-                      <div className="text-gray-400">
-                        {expandedWidgetId === 'submit' ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
-                      </div>
-                    </div>
-                  </button>
-
-                  {expandedWidgetId === 'submit' && (
-                    <div className="px-4 pb-4">
-                      <div className="text-sm font-semibold text-gray-900 mb-3">Form settings</div>
-                      <div className="space-y-4">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Button text</div>
-                          <input
-                            type="text"
-                            value={settings.buttonText || ''}
-                            onChange={(e) => setSettings({ ...settings, buttonText: e.target.value })}
-                            placeholder="Send"
-                            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">CC email (notifications)</div>
-                          <input
-                            type="email"
-                            value={settings.ccEmail || ''}
-                            onChange={(e) => setSettings({ ...settings, ccEmail: e.target.value })}
-                            placeholder="your@email.com"
-                            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"
-                          />
-                          <div className="text-xs text-gray-500 mt-1">Email address to notify when form is submitted</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="text-sm font-semibold text-gray-900 mb-2">Preview</div>
-          <div className="text-xs text-gray-500 mb-3">See how your form looks</div>
-          {formUrl ? (
-            <iframe
-              ref={previewIframeRef}
-              src={formUrl}
-              style={{ width: '100%', height: 400, border: 0 }}
-              title="Lead form preview"
-            />
-          ) : (
-            <div className="text-xs text-gray-500">{loading ? 'Loading…' : 'No form URL'}</div>
-          )}
-
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setShowEmbedModal(true)}
-              className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <CodeBracketIcon className="w-5 h-5" />
-              Deploy to Website
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5 xl:col-span-3">
-          <div className="text-sm font-semibold text-gray-900 mb-3">Test Email</div>
-          <div className="space-y-3">
-            <div className="text-xs text-gray-500 mb-1">
-              Send a test email to verify your configuration
-            </div>
-            <div className="flex gap-2 max-w-md">
-              <input
-                type="email"
-                placeholder="your@email.com"
-                value={testEmailAddress}
-                onChange={(e) => setTestEmailAddress(e.target.value)}
-                className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2"
-              />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!testEmailAddress) return
-
-                  try {
-                    setTestEmailResult('Sending...')
-                    const url = apiUrl('/test-email')
-                    console.log('Making request to:', url)
-                    console.log('Window location:', window.location.href)
-                    console.log('NEXT_PUBLIC_API_URL env:', process.env.NEXT_PUBLIC_API_URL)
-                    const response = await fetch(url, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ to: testEmailAddress })
-                    })
-
-                    const data = await response.json()
-
-                    if (response.ok) {
-                      setTestEmailResult('✅ Test email sent successfully!')
-                    } else {
-                      setTestEmailResult(`❌ Failed: ${data.error}`)
-                    }
-                  } catch (error) {
-                    setTestEmailResult(`❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
-                  }
-                }}
-                disabled={!testEmailAddress}
-                className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Send Test
-              </button>
-            </div>
-            {testEmailResult && (
-              <div className={`text-xs p-2 rounded max-w-md ${testEmailResult.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                {testEmailResult}
-              </div>
-            )}
-          </div>
-        </div>
-
       </div>
 
-      {/* Embed Code Modal */}
-      {showEmbedModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Embed Code</h3>
-              <button
-                type="button"
-                onClick={() => setShowEmbedModal(false)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <span className="sr-only">Close</span>
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+      <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_380px]">
+        {/* ── Builder column ─────────────────────────────────────────────── */}
+        <div className="min-w-0">
+          {/* Form intro */}
+          <SectionTitle>{t('settings.leads.section.content', 'Form content')}</SectionTitle>
+          <div className="space-y-3">
+            <LabeledInput
+              label={t('settings.leads.formTitle', 'Title')}
+              value={config.title}
+              onChange={(v) => patch({ title: v })}
+              placeholder="Request a quote"
+            />
+            <LabeledTextarea
+              label={t('settings.leads.formDescription', 'Intro text')}
+              value={config.description}
+              onChange={(v) => patch({ description: v })}
+              placeholder="A short line that sets expectations…"
+            />
+          </div>
+
+          {/* Fields */}
+          <div className="mt-12 flex items-end justify-between border-b border-gray-200 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-gray-900">{t('settings.leads.section.fields', 'Fields')}</h2>
+              <p className="mt-1 text-[13px] text-gray-500">
+                {t('settings.leads.fieldsHint', 'Drag-free reordering with the arrows. Click a field to edit it.')}
+              </p>
             </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <div className="text-sm font-medium text-gray-700 mb-2">Form URL</div>
-                <div className="flex gap-2">
-                  <input
-                    readOnly
-                    value={formUrl || ''}
-                    className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (formUrl) {
-                        navigator.clipboard.writeText(formUrl)
-                      }
-                    }}
-                    className="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                  >
-                    Copy
-                  </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {config.fields.length === 0 && (
+              <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-400">
+                {t('settings.leads.noFields', 'No fields yet. Add your first field below.')}
+              </div>
+            )}
+
+            {config.fields.map((field, idx) => (
+              <FieldRow
+                key={field.id}
+                field={field}
+                index={idx}
+                count={config.fields.length}
+                expanded={selectedId === field.id}
+                onToggle={() => setSelectedId(selectedId === field.id ? null : field.id)}
+                onMove={(dir) => moveField(field.id, dir)}
+                onDuplicate={() => duplicateField(field.id)}
+                onRemove={() => removeField(field.id)}
+                onUpdate={(p) => updateField(field.id, p)}
+                t={t}
+              />
+            ))}
+          </div>
+
+          {/* Add field */}
+          <div className="relative mt-4">
+            <button
+              type="button"
+              onClick={() => setShowAddMenu((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <PlusIcon className="h-4 w-4" />
+              {t('settings.leads.addField', 'Add field')}
+            </button>
+            {showAddMenu && (
+              <div className="absolute left-0 z-10 mt-2 w-72 rounded-xl border border-gray-200 bg-white p-2 shadow-lg">
+                <div className="grid grid-cols-1 gap-0.5">
+                  {FIELD_TYPES.map((ft) => (
+                    <button
+                      key={ft.type}
+                      type="button"
+                      onClick={() => addField(ft.type)}
+                      className="flex items-start gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-gray-50"
+                    >
+                      <span className="mt-0.5 text-sm font-medium text-gray-800">{ft.label}</span>
+                      <span className="ml-auto text-[11px] text-gray-400">{ft.hint}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
+            )}
+          </div>
 
+          {/* Appearance */}
+          <SectionTitle className="mt-14">{t('settings.leads.section.appearance', 'Appearance')}</SectionTitle>
+          <div className="space-y-4">
+            <div>
+              <div className="mb-2 text-sm font-medium text-gray-800">{t('settings.leads.accent', 'Accent color')}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {ACCENT_SWATCHES.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => patchTheme({ accent: c })}
+                    className={`h-7 w-7 rounded-full ring-offset-2 transition ${
+                      config.theme.accent.toLowerCase() === c.toLowerCase() ? 'ring-2 ring-gray-900' : ''
+                    }`}
+                    style={{ backgroundColor: c }}
+                    aria-label={c}
+                  />
+                ))}
+                <label className="ml-1 inline-flex items-center gap-2 text-sm text-gray-500">
+                  <input
+                    type="color"
+                    value={config.theme.accent}
+                    onChange={(e) => patchTheme({ accent: e.target.value })}
+                    className="h-7 w-9 cursor-pointer rounded border border-gray-200 bg-white p-0.5"
+                  />
+                  {t('settings.leads.custom', 'Custom')}
+                </label>
+              </div>
+            </div>
+
+            <SegmentedControl
+              label={t('settings.leads.corners', 'Corners')}
+              value={config.theme.corners}
+              onChange={(v) => patchTheme({ corners: v as any })}
+              options={[
+                { value: 'sharp', label: t('settings.leads.corners.sharp', 'Sharp') },
+                { value: 'rounded', label: t('settings.leads.corners.rounded', 'Rounded') },
+                { value: 'pill', label: t('settings.leads.corners.pill', 'Pill') },
+              ]}
+            />
+            <SegmentedControl
+              label={t('settings.leads.background', 'Background')}
+              value={config.theme.background}
+              onChange={(v) => patchTheme({ background: v as any })}
+              options={[
+                { value: 'tint', label: t('settings.leads.background.tint', 'Soft grey') },
+                { value: 'white', label: t('settings.leads.background.white', 'White') },
+              ]}
+            />
+          </div>
+
+          {/* Submit + success */}
+          <SectionTitle className="mt-14">{t('settings.leads.section.submit', 'Submit & confirmation')}</SectionTitle>
+          <div className="space-y-3">
+            <LabeledInput
+              label={t('settings.leads.submitText', 'Button text')}
+              value={config.submitText}
+              onChange={(v) => patch({ submitText: v })}
+              placeholder="Send request"
+            />
+            <LabeledInput
+              label={t('settings.leads.successTitle', 'Success title')}
+              value={config.successTitle}
+              onChange={(v) => patch({ successTitle: v })}
+              placeholder="Thank you!"
+            />
+            <LabeledTextarea
+              label={t('settings.leads.successMessage', 'Success message')}
+              value={config.successMessage}
+              onChange={(v) => patch({ successMessage: v })}
+              placeholder="We’ve received your request and will be in touch soon."
+            />
+          </div>
+
+          {/* Notifications */}
+          <SectionTitle className="mt-14">{t('settings.leads.section.notify', 'Notifications')}</SectionTitle>
+          <div className="space-y-3">
+            <LabeledInput
+              type="email"
+              label={t('settings.leads.notifyEmail', 'Email me at')}
+              value={config.notifyEmail}
+              onChange={(v) => patch({ notifyEmail: v })}
+              placeholder="you@business.com"
+              hint={t('settings.leads.notifyHint', 'We’ll send a copy of every new lead to this address. Leave blank to skip.')}
+            />
+          </div>
+
+          {/* Share */}
+          <SectionTitle className="mt-14">{t('settings.leads.section.share', 'Share & embed')}</SectionTitle>
+          {token ? (
+            <div className="space-y-5">
               <div>
-                <div className="text-sm font-medium text-gray-700 mb-2">Iframe Code</div>
-                <div className="flex gap-2">
+                <div className="mb-1.5 text-sm font-medium text-gray-800">{t('settings.leads.directLink', 'Direct link')}</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={formUrl}
+                    className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600"
+                    onFocus={(e) => e.currentTarget.select()}
+                  />
+                  <CopyButton copied={copied === 'url'} onClick={() => copy(formUrl, 'url')} />
+                  <a
+                    href={formUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50"
+                    aria-label="Open"
+                  >
+                    <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                  </a>
+                </div>
+              </div>
+              <div>
+                <div className="mb-1.5 text-sm font-medium text-gray-800">{t('settings.leads.embed', 'Embed on your website')}</div>
+                <div className="flex items-start gap-2">
                   <textarea
                     readOnly
-                    value={iframeCode || ''}
-                    className="flex-1 min-h-[120px] text-sm border border-gray-200 rounded-lg px-3 py-2 bg-gray-50 font-mono"
+                    value={embedSnippet}
+                    rows={3}
+                    className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 font-mono text-xs text-gray-600"
+                    onFocus={(e) => e.currentTarget.select()}
                   />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (iframeCode) {
-                        navigator.clipboard.writeText(iframeCode)
-                      }
-                    }}
-                    className="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 self-start"
-                  >
-                    Copy
-                  </button>
+                  <CopyButton copied={copied === 'embed'} onClick={() => copy(embedSnippet, 'embed')} />
                 </div>
-                <div className="text-xs text-gray-500 mt-2">
-                  Copy and paste this code into your website's HTML where you want the form to appear.
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">
+              {t('settings.leads.saveForLink', 'Save the form once to generate your shareable link and embed code.')}
+            </p>
+          )}
+        </div>
+
+        {/* ── Live preview — sticks while you scroll the builder ─────────── */}
+        <div className="hidden lg:block">
+          <div className="sticky top-6 z-10">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-gray-500">{t('settings.leads.preview', 'Live preview')}</span>
+            </div>
+            <div
+              className={`overflow-hidden rounded-2xl border border-gray-200 ${
+                config.theme.background === 'white' ? 'bg-white' : 'bg-gray-50'
+              }`}
+            >
+              <div className="max-h-[calc(100vh-7rem)] overflow-y-auto p-5">
+                <div className={`border border-gray-200 bg-white p-5 shadow-sm ${cornerClass(config.theme.corners === 'sharp' ? 'sharp' : 'rounded')}`}>
+                  <LeadFormRenderer config={config} values={{}} onChange={() => {}} preview />
                 </div>
               </div>
             </div>
           </div>
+        </div>
+      </div>
+      </div>
+
+      {/* Sticky save bar */}
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/90 backdrop-blur lg:left-[200px]">
+        <div className="mx-auto flex max-w-5xl items-center justify-end gap-3 px-6 py-3">
+          {savedAt > 0 && !dirty && (
+            <span className="inline-flex items-center gap-1 text-[13px] text-gray-500">
+              <CheckIcon className="h-4 w-4 text-accent-600" />
+              {t('settings.leads.saved', 'Saved')}
+            </span>
+          )}
+          {dirty && <span className="text-[13px] text-gray-400">{t('settings.leads.unsaved', 'Unsaved changes')}</span>}
+          <SettingsButton variant="primary" onClick={saveForm} disabled={saving || !dirty}>
+            {saving ? t('settings.leads.savingShort', 'Saving…') : t('settings.leads.save', 'Save form')}
+          </SettingsButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SectionTitle({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`mb-4 border-b border-gray-200 pb-3 ${className}`}>
+      <h2 className="text-base font-bold text-gray-900">{children}</h2>
+    </div>
+  )
+}
+
+function LabeledInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  hint,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  type?: string
+  hint?: string
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-gray-400"
+      />
+      {hint && <p className="mt-1.5 text-[13px] text-gray-500">{hint}</p>}
+    </div>
+  )
+}
+
+function LabeledTextarea({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>
+      <textarea
+        rows={2}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-gray-400"
+      />
+    </div>
+  )
+}
+
+function SegmentedControl({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <div className="flex items-center justify-between gap-6">
+      <span className="text-sm font-medium text-gray-800">{label}</span>
+      <div className="inline-flex rounded-md border border-gray-200 p-0.5">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            className={`rounded px-3 py-1 text-[13px] font-medium transition-colors ${
+              value === o.value ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function CopyButton({ copied, onClick }: { copied: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50"
+      aria-label="Copy"
+    >
+      {copied ? <CheckIcon className="h-4 w-4 text-accent-600" /> : <ClipboardDocumentIcon className="h-4 w-4" />}
+    </button>
+  )
+}
+
+function FieldRow({
+  field,
+  index,
+  count,
+  expanded,
+  onToggle,
+  onMove,
+  onDuplicate,
+  onRemove,
+  onUpdate,
+  t,
+}: {
+  field: LeadField
+  index: number
+  count: number
+  expanded: boolean
+  onToggle: () => void
+  onMove: (dir: -1 | 1) => void
+  onDuplicate: () => void
+  onRemove: () => void
+  onUpdate: (p: Partial<LeadField>) => void
+  t: (k: string, d?: string) => string
+}) {
+  const meta = fieldTypeMeta(field.type)
+  const isDisplay = field.type === 'heading' || field.type === 'paragraph'
+  const hasOptions = !!meta.hasOptions
+  const mappingChoices = MAPPING_OPTIONS[field.type] || []
+
+  const addOption = () =>
+    onUpdate({ options: [...(field.options || []), { id: genId('o'), label: `Option ${(field.options?.length || 0) + 1}` }] })
+  const updateOption = (id: string, label: string) =>
+    onUpdate({ options: (field.options || []).map((o) => (o.id === id ? { ...o, label } : o)) })
+  const removeOption = (id: string) => onUpdate({ options: (field.options || []).filter((o) => o.id !== id) })
+
+  return (
+    <div className={`rounded-lg border ${expanded ? 'border-gray-300' : 'border-gray-200'} bg-white`}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <div className="flex flex-col">
+          <button
+            type="button"
+            onClick={() => onMove(-1)}
+            disabled={index === 0}
+            className="text-gray-300 hover:text-gray-600 disabled:opacity-30"
+            aria-label="Move up"
+          >
+            <ChevronUpIcon className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onMove(1)}
+            disabled={index === count - 1}
+            className="text-gray-300 hover:text-gray-600 disabled:opacity-30"
+            aria-label="Move down"
+          >
+            <ChevronDownIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <span className="truncate text-sm font-medium text-gray-800">
+            {isDisplay ? field.content || field.label : field.label || meta.label}
+          </span>
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
+            {meta.label}
+          </span>
+          {field.required && !isDisplay && <span className="text-[11px] text-red-400">{t('settings.leads.required', 'Required')}</span>}
+        </button>
+
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={onDuplicate} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label="Duplicate">
+            <Square2StackIcon className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={onRemove} className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500" aria-label="Delete">
+            <TrashIcon className="h-4 w-4" />
+          </button>
+          <button type="button" onClick={onToggle} className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label="Edit">
+            <ChevronDownIcon className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="space-y-3 border-t border-gray-100 bg-gray-50 px-4 py-4">
+          {isDisplay ? (
+            <FieldEditorInput
+              label={field.type === 'heading' ? t('settings.leads.headingText', 'Heading') : t('settings.leads.text', 'Text')}
+              value={field.content || ''}
+              onChange={(v) => onUpdate({ content: v })}
+            />
+          ) : field.type === 'consent' ? (
+            <FieldEditorInput
+              label={t('settings.leads.consentText', 'Consent text')}
+              value={field.content || ''}
+              onChange={(v) => onUpdate({ content: v })}
+            />
+          ) : (
+            <>
+              <FieldEditorInput label={t('settings.leads.label', 'Label')} value={field.label} onChange={(v) => onUpdate({ label: v })} />
+              {field.type !== 'select' && field.type !== 'radio' && field.type !== 'checkboxes' && (
+                <FieldEditorInput
+                  label={t('settings.leads.placeholder', 'Placeholder')}
+                  value={field.placeholder || ''}
+                  onChange={(v) => onUpdate({ placeholder: v })}
+                />
+              )}
+              <FieldEditorInput
+                label={t('settings.leads.help', 'Help text')}
+                value={field.help || ''}
+                onChange={(v) => onUpdate({ help: v })}
+              />
+            </>
+          )}
+
+          {hasOptions && (
+            <div>
+              <div className="mb-1.5 text-[13px] font-medium text-gray-700">{t('settings.leads.options', 'Options')}</div>
+              <div className="space-y-2">
+                {(field.options || []).map((o) => (
+                  <div key={o.id} className="flex items-center gap-2">
+                    <input
+                      value={o.label}
+                      onChange={(e) => updateOption(o.id, e.target.value)}
+                      className="w-full rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-gray-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeOption(o.id)}
+                      className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                      aria-label="Remove option"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addOption}
+                  className="inline-flex items-center gap-1 text-[13px] font-medium text-accent-700 hover:text-accent-800"
+                >
+                  <PlusIcon className="h-3.5 w-3.5" />
+                  {t('settings.leads.addOption', 'Add option')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!isDisplay && (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pt-1">
+              <label className="flex items-center gap-2 text-[13px] text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={!!field.required}
+                  onChange={(e) => onUpdate({ required: e.target.checked })}
+                  className="h-4 w-4 accent-gray-900"
+                />
+                {t('settings.leads.requiredField', 'Required')}
+              </label>
+
+              {field.type !== 'consent' && (
+                <div className="flex items-center gap-2 text-[13px] text-gray-700">
+                  <span>{t('settings.leads.width', 'Width')}</span>
+                  <select
+                    value={field.width || 'full'}
+                    onChange={(e) => onUpdate({ width: e.target.value as any })}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[13px] outline-none focus:border-gray-400"
+                  >
+                    <option value="full">{t('settings.leads.full', 'Full')}</option>
+                    <option value="half">{t('settings.leads.half', 'Half')}</option>
+                  </select>
+                </div>
+              )}
+
+              {mappingChoices.length > 0 && (
+                <div className="flex items-center gap-2 text-[13px] text-gray-700">
+                  <span>{t('settings.leads.saveTo', 'Save to')}</span>
+                  <select
+                    value={field.mapping || ''}
+                    onChange={(e) => onUpdate({ mapping: (e.target.value || null) as any })}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[13px] outline-none focus:border-gray-400"
+                  >
+                    <option value="">{t('settings.leads.saveToNote', 'Note only')}</option>
+                    {mappingChoices.map((m) => (
+                      <option key={m} value={m}>
+                        {MAPPING_LABELS[m]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-
+function FieldEditorInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[13px] font-medium text-gray-700">{label}</label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-gray-400"
+      />
+    </div>
+  )
+}

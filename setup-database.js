@@ -275,6 +275,7 @@ async function createSchema() {
       );
     `);
     await safeQuery(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS language_code VARCHAR(10) NOT NULL DEFAULT 'en'`);
+    await safeQuery(`ALTER TABLE video_guides ADD COLUMN IF NOT EXISTS topic VARCHAR(50) NOT NULL DEFAULT 'getting_started'`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS leads (
@@ -305,6 +306,15 @@ async function createSchema() {
     await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS address TEXT`);
     await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS zip_code VARCHAR(20)`);
     await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS city VARCHAR(100)`);
+    // Lead → client conversion bookkeeping.
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL`);
+    await safeQuery(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS converted_at TIMESTAMP NULL`);
+
+    // Master on/off switch for the whole leads feature (mirrors invoicing_enabled).
+    // Opt-in: defaults to FALSE so the company must activate it in settings
+    // before the leads area and public form become usable. Pure UI/route gate —
+    // never mutates existing leads or saved form settings.
+    await safeQuery(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS leads_enabled BOOLEAN NOT NULL DEFAULT FALSE`);
 
     await safeQuery(`CREATE INDEX IF NOT EXISTS idx_leads_company_created_at ON leads(company_id, created_at DESC)`);
     await safeQuery(`CREATE INDEX IF NOT EXISTS idx_leads_company_status ON leads(company_id, status)`);

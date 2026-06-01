@@ -1,71 +1,36 @@
-import { CreditCardIcon, ReceiptPercentIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline'
+import { SettingsHeader, SettingsSection, SettingsRow } from '../../components/settings/SettingsUI'
 
 export default function BillingSettingsPage() {
   return (
-    <div className="p-6">
-      <div className="max-w-3xl mx-auto">
-        <div className="mb-6">
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-            PathPilo subscription
-          </p>
-          <h1 className="text-2xl font-bold text-gray-900 mt-1">Plan &amp; billing</h1>
-          <p className="text-gray-600 mt-2 text-sm">
-            Manage the plan you pay PathPilo for, your payment method, and the receipts PathPilo
-            issues to you. This is separate from the invoices <em>you</em> send to your own clients
-            (those live under <strong>Settings → Invoice options</strong>).
-          </p>
-        </div>
+    <div className="px-6 py-8">
+      <div className="mx-auto max-w-2xl">
+        <SettingsHeader
+          title="Plan & billing"
+          description="Manage the plan you pay PathPilo for, your payment method, and the receipts PathPilo issues to you. This is separate from the invoices you send to your own clients, which live under Settings → Invoices."
+        />
 
-        <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-5 py-4 mb-6 text-sm text-blue-900">
-          <p className="font-semibold">You&apos;re currently on the free trial.</p>
-          <p className="mt-1 text-blue-800/90">
-            We&apos;ll let you know in good time before the trial ends, and nothing will be charged
-            until you pick a plan and add a payment method.
-          </p>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-3 mb-8">
-          <PlaceholderCard
-            icon={<CreditCardIcon className="w-5 h-5" />}
+        <SettingsSection title="Plan">
+          <SettingsRow
             title="Current plan"
-            body="No paid plan yet."
+            description="You're currently on the free trial. Nothing is charged until you pick a plan and add a payment method."
+            control={<span className="text-sm text-gray-600">Free trial</span>}
           />
-          <PlaceholderCard
-            icon={<ReceiptPercentIcon className="w-5 h-5" />}
+          <SettingsRow
             title="Payment method"
-            body="No card on file."
+            description="The card PathPilo charges for your subscription."
+            control={<span className="text-sm text-gray-500">No card on file</span>}
           />
-          <PlaceholderCard
-            icon={<ArrowDownTrayIcon className="w-5 h-5" />}
+          <SettingsRow
             title="Receipts"
-            body="Receipts from PathPilo will appear here."
+            description="Receipts PathPilo issues to you will appear here."
+            control={<span className="text-sm text-gray-500">None yet</span>}
           />
-        </div>
+        </SettingsSection>
 
-        <div className="rounded-2xl border border-gray-200 bg-white px-5 py-6 text-center text-gray-500 text-sm">
+        <p className="text-sm text-gray-500">
           Plan selection, payment method and receipt downloads are coming soon.
-        </div>
+        </p>
       </div>
-    </div>
-  )
-}
-
-function PlaceholderCard({
-  icon,
-  title,
-  body,
-}: {
-  icon: React.ReactNode
-  title: string
-  body: string
-}) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-white px-5 py-4">
-      <div className="flex items-center gap-2 text-gray-700">
-        <span className="text-gray-500">{icon}</span>
-        <span className="text-sm font-semibold">{title}</span>
-      </div>
-      <p className="mt-2 text-xs text-gray-500 leading-relaxed">{body}</p>
     </div>
   )
 }

@@ -1,50 +1,24 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { apiUrl } from '@/app/utils/api'
+import {
+  cornerClass,
+  normalizeConfig,
+  type LeadField,
+  type LeadFormConfig,
+} from '@/app/config/leadForm'
+import LeadFormRenderer, { type LeadFormValues } from '@/app/components/leads/LeadFormRenderer'
 
-type LeadFormSettings = {
-  version?: number
-  layout?: {
-    widgets?: Array<any>
-  }
-  customer?: {
-    fields: Record<string, boolean>
-    required?: Record<string, boolean>
-  }
-  job?: {
-    includePreferredDate?: boolean
-    includePreferredTime?: boolean
-    serviceSelectors?: Array<{
-      id: string
-      label: string
-      display: 'buttons' | 'dropdown'
-      columns?: 1 | 2 | 3
-      multi?: boolean
-      service_ids?: number[]
-      service_options?: Array<{ id: number; title: string }>
-    }>
-  }
-  custom?: {
-    selectors?: Array<{
-      id: string
-      label: string
-      display: 'buttons' | 'dropdown'
-      columns?: 1 | 2 | 3
-      multi?: boolean
-      options?: Array<{ id: string; label: string }>
-    }>
-    inputs?: Array<{
-      id: string
-      label: string
-      type: 'text' | 'number' | 'textarea'
-      placeholder?: string
-    }>
-  }
-  buttonText?: string
-  ccEmail?: string
-  successMessage?: string
+function collectsValue(field: LeadField) {
+  return field.type !== 'heading' && field.type !== 'paragraph'
+}
+
+function isEmptyValue(field: LeadField, value: any): boolean {
+  if (field.type === 'checkboxes') return !Array.isArray(value) || value.length === 0
+  if (field.type === 'consent') return value !== true
+  return value == null || String(value).trim() === ''
 }
 
 export default function PublicLeadFormPage() {
@@ -53,68 +27,34 @@ export default function PublicLeadFormPage() {
 
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [submitError, setSubmitError] = useState('')
   const [success, setSuccess] = useState(false)
-  const [settings, setSettings] = useState<LeadFormSettings | null>(null)
+  const [inactive, setInactive] = useState(false)
+  const [preview, setPreview] = useState(false)
 
-  const [form, setForm] = useState({
-    first_name: '',
-    last_name: '',
-    country: '',
-    address: '',
-    zip_code: '',
-    city: '',
-    email: '',
-    phone: '',
-    preferred_date: '',
-    preferred_time: '',
-    message: '',
-    website: '' // honeypot
-  })
-
-  const [serviceSelections, setServiceSelections] = useState<Record<string, number[]>>({})
-  const [customSelections, setCustomSelections] = useState<Record<string, string[]>>({})
-  const [customInputs, setCustomInputs] = useState<Record<string, string>>({})
-
-  const buttonText = settings?.buttonText || 'Send'
-  const successMessage = settings?.successMessage || 'Thanks! We received your request and will get back to you soon.'
-
-  const showCustomer = (key: string) => !!settings?.customer?.fields?.[key]
-  const requiredCustomer = (key: string) => !!settings?.customer?.required?.[key]
-  const showPreferredDate = !!settings?.job?.includePreferredDate
-  const showPreferredTime = !!settings?.job?.includePreferredTime
-
-  const canSubmit = useMemo(() => {
-    if (!settings) return false
-    if (requiredCustomer('email') && !form.email.trim()) return false
-
-    // Check required checkboxes
-    if (settings.layout?.widgets) {
-      for (const w of settings.layout.widgets) {
-        if (w.kind === 'checkbox' && w.required && !(form as any)[`checkbox_${w.id}`]) {
-          return false
-        }
-      }
-    }
-
-    return true
-  }, [settings, form])
+  const [config, setConfig] = useState<LeadFormConfig | null>(null)
+  const [values, setValues] = useState<LeadFormValues>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [honeypot, setHoneypot] = useState('')
 
   useEffect(() => {
     const run = async () => {
       try {
         setLoading(true)
-        setError('')
+        setLoadError('')
         const res = await fetch(apiUrl(`/public/lead-forms/${token}`))
         const data = await res.json()
         if (!res.ok) {
-          setError(data?.error || 'Form not found')
-          setSettings(null)
+          setLoadError(data?.error || 'This form could not be found.')
           return
         }
-        setSettings((data.form.settings || {}) as LeadFormSettings)
-      } catch (e) {
-        setError('Network error: failed to load form')
+        if (data.enabled === false) {
+          setInactive(true)
+        }
+        setConfig(normalizeConfig(data.settings))
+      } catch {
+        setLoadError('Something went wrong loading this form.')
       } finally {
         setLoading(false)
       }
@@ -122,372 +62,164 @@ export default function PublicLeadFormPage() {
     if (token) run()
   }, [token])
 
-  // Live preview support: Settings page can postMessage the draft settings to this iframe.
+  // Live preview: the builder posts draft config into this iframe.
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       try {
         if (event.origin !== window.location.origin) return
         const data: any = event.data
-        if (!data || data.type !== 'vevago_lead_form_preview_settings') return
-        if (data.token && String(data.token) !== String(token)) return
-        if (!data.settings || typeof data.settings !== 'object') return
-
-        setSettings(data.settings as LeadFormSettings)
-        setError('')
+        if (!data || data.type !== 'vevago_lead_form_preview') return
+        if (!data.config || typeof data.config !== 'object') return
+        setPreview(true)
+        setInactive(false)
+        setLoadError('')
         setSuccess(false)
+        setConfig(normalizeConfig(data.config))
+        setLoading(false)
       } catch {
-        // ignore
+        /* ignore */
       }
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [token])
+  }, [])
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!token) return
+  const handleChange = (fieldId: string, value: any) => {
+    setValues((prev) => ({ ...prev, [fieldId]: value }))
+    setErrors((prev) => {
+      if (!prev[fieldId]) return prev
+      const next = { ...prev }
+      delete next[fieldId]
+      return next
+    })
+  }
+
+  const validate = (cfg: LeadFormConfig): Record<string, string> => {
+    const next: Record<string, string> = {}
+    for (const field of cfg.fields) {
+      if (!collectsValue(field)) continue
+      if (field.required && isEmptyValue(field, values[field.id])) {
+        next[field.id] = field.type === 'consent' ? 'Required' : 'This field is required'
+      }
+      if (field.type === 'email' && !isEmptyValue(field, values[field.id])) {
+        const v = String(values[field.id])
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) next[field.id] = 'Enter a valid email'
+      }
+    }
+    return next
+  }
+
+  const handleSubmit = async () => {
+    if (!config || preview) return
+    const v = validate(config)
+    setErrors(v)
+    if (Object.keys(v).length > 0) return
+
     try {
       setSubmitting(true)
-      setError('')
+      setSubmitError('')
       const res = await fetch(apiUrl(`/public/lead-forms/${token}/submit`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          meta: {
-            serviceSelections,
-            customSelections,
-            customInputs
-          }
-        })
+        body: JSON.stringify({ values, website: honeypot }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data?.error || 'Failed to submit')
+        setSubmitError(data?.error || 'Failed to submit. Please try again.')
         return
       }
       setSuccess(true)
-    } catch (e) {
-      setError('Network error: failed to submit')
+    } catch {
+      setSubmitError('Network error. Please try again.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const customerLabel = (key: string) => {
-    const map: Record<string, string> = {
-      first_name: 'Name',
-      last_name: 'Last name',
-      country: 'Country',
-      address: 'Address',
-      zip_code: 'Zip',
-      city: 'City',
-      email: 'Email',
-      phone: 'Phone'
-    }
-    return map[key] || key
+  const bgClass = config?.theme.background === 'white' ? 'bg-white' : 'bg-gray-50'
+  const cardRadius = config ? cornerClass(config.theme.corners === 'sharp' ? 'sharp' : 'rounded') : 'rounded-2xl'
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
+      </div>
+    )
   }
 
-  const widgets = (settings as any)?.layout?.widgets as any[] | undefined
-  const hasWidgetLayout = Array.isArray(widgets) && widgets.length > 0
+  if (loadError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
+        <div className="max-w-sm text-center">
+          <h1 className="text-lg font-semibold text-gray-900">Form unavailable</h1>
+          <p className="mt-2 text-sm text-gray-500">{loadError}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (inactive && !preview) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
+        <div className="max-w-sm text-center">
+          <h1 className="text-lg font-semibold text-gray-900">This form isn’t active</h1>
+          <p className="mt-2 text-sm text-gray-500">
+            It’s not currently accepting submissions. Please check back later.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!config) return null
 
   return (
-    <div className="min-h-screen bg-white">
-      <div className="max-w-md mx-auto p-6">
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-3 text-sm text-gray-600">Loading…</p>
-          </div>
-        ) : error ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-700">{error}</p>
-          </div>
-        ) : success ? (
-          <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-            <h2 className="text-sm font-semibold text-green-900">Submitted</h2>
-            <p className="mt-1 text-sm text-green-800">{successMessage}</p>
+    <div className={`min-h-screen ${bgClass} px-4 py-10`}>
+      <div className="mx-auto w-full max-w-xl">
+        {success ? (
+          <div className={`border border-gray-200 bg-white p-8 text-center shadow-sm ${cardRadius}`}>
+            <div
+              className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full"
+              style={{ backgroundColor: `${config.theme.accent}1A`, color: config.theme.accent }}
+            >
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-lg font-semibold text-gray-900">{config.successTitle || 'Thank you!'}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-gray-500">{config.successMessage}</p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-gray-200 shadow-sm bg-white p-6">
-
-            {error && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-                <p className="text-sm font-medium text-red-700">{error}</p>
+          <div className={`border border-gray-200 bg-white p-6 shadow-sm sm:p-8 ${cardRadius}`}>
+            {submitError && (
+              <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                <p className="text-sm font-medium text-red-700">{submitError}</p>
               </div>
             )}
-
-            <form onSubmit={submit} className="space-y-4">
-              {/* Honeypot */}
-              <input
-                type="text"
-                value={form.website}
-                onChange={(e) => setForm({ ...form, website: e.target.value })}
-                className="hidden"
-                tabIndex={-1}
-                autoComplete="off"
-              />
-
-              {/* Widget layout renderer (preferred). Falls back to old grouped rendering if no widgets exist. */}
-              {hasWidgetLayout ? (
-                (widgets || []).map((w: any) => {
-                  if (w.kind === 'customer_field') {
-                    const key = String(w.field)
-                    if (!showCustomer(key)) return null
-                    const label = w.label || customerLabel(key)
-                    const req = typeof w.required === 'boolean' ? w.required : requiredCustomer(key)
-                    const value = (form as any)[key] ?? ''
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          {label} {req ? <span className="text-red-500">*</span> : null}
-                        </label>
-                        <input
-                          type={key === 'email' ? 'email' : 'text'}
-                          required={req}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          value={value}
-                          onChange={(e) => setForm({ ...form, [key]: e.target.value } as any)}
-                        />
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'static_text') {
-                    const text = String(w.text || '').trim()
-                    if (!text) return null
-                    const isBold = !!w.bold
-                    return (
-                      <div
-                        key={w.id}
-                        className={`${isBold ? 'font-semibold text-[16px]' : 'font-normal text-[14px]'} text-gray-900`}
-                      >
-                        {text}
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'preferred_date' && showPreferredDate) {
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          {w.label || 'Preferred date'}
-                        </label>
-                        <input
-                          type="date"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          value={form.preferred_date}
-                          onChange={(e) => setForm({ ...form, preferred_date: e.target.value })}
-                        />
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'preferred_time' && showPreferredTime) {
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          {w.label || 'Preferred time'}
-                        </label>
-                        <input
-                          type="time"
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          value={form.preferred_time}
-                          onChange={(e) => setForm({ ...form, preferred_time: e.target.value })}
-                        />
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'checkbox') {
-                    return (
-                      <div key={w.id}>
-                        <label className="flex items-start gap-2 text-sm text-gray-700">
-                          <input
-                            type="checkbox"
-                            required={!!w.required}
-                            checked={!!(form as any)[`checkbox_${w.id}`]}
-                            onChange={(e) => setForm({ ...form, [`checkbox_${w.id}`]: e.target.checked } as any)}
-                            className="mt-0.5 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                          />
-                          <span
-                            className="text-sm"
-                            dangerouslySetInnerHTML={{ __html: w.text || 'Checkbox' }}
-                          />
-                          {w.required && <span className="text-red-500 ml-1">*</span>}
-                        </label>
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'service_selector') {
-                    const selector = (settings?.job?.serviceSelectors || []).find((s: any) => s.id === w.selectorId)
-                    if (!selector) return null
-                    const selected = serviceSelections[selector.id] || []
-                    const isMulti = !!selector.multi
-                    const columns = selector.columns || 2
-                    const options = Array.isArray((selector as any).service_options) ? (selector as any).service_options as Array<{ id: number; title: string }> : []
-                    const labelFor = (sid: number) => options.find(o => o.id === sid)?.title || `Service #${sid}`
-
-                    const toggle = (id: number) => {
-                      setServiceSelections((prev) => {
-                        const curr = prev[selector.id] || []
-                        if (isMulti) {
-                          return { ...prev, [selector.id]: curr.includes(id) ? curr.filter(x => x !== id) : [...curr, id] }
-                        }
-                        return { ...prev, [selector.id]: [id] }
-                      })
-                    }
-
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">{selector.label || 'Select service'}</label>
-                        {selector.display === 'dropdown' ? (
-                          <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            value={selected[0] ?? ''}
-                            onChange={(e) => toggle(parseInt(e.target.value))}
-                          >
-                            <option value="" disabled>Select…</option>
-                            {(selector.service_ids || []).map((sid: number) => (
-                              <option key={sid} value={sid}>{labelFor(sid)}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div className={`grid gap-2 ${columns === 1 ? 'grid-cols-1' : columns === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                            {(selector.service_ids || []).map((sid: number) => {
-                              const active = selected.includes(sid)
-                              return (
-                                <button
-                                  type="button"
-                                  key={sid}
-                                  onClick={() => toggle(sid)}
-                                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                                    active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                                  }`}
-                                >
-                                  {labelFor(sid)}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'custom_selector') {
-                    const selector = (settings?.custom?.selectors || []).find((s: any) => s.id === w.selectorId)
-                    if (!selector) return null
-                    const selected = customSelections[selector.id] || []
-                    const isMulti = !!selector.multi
-                    const columns = selector.columns || 2
-
-                    const toggle = (val: string) => {
-                      setCustomSelections((prev) => {
-                        const curr = prev[selector.id] || []
-                        if (isMulti) {
-                          return { ...prev, [selector.id]: curr.includes(val) ? curr.filter(x => x !== val) : [...curr, val] }
-                        }
-                        return { ...prev, [selector.id]: [val] }
-                      })
-                    }
-
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">{selector.label || 'Choose an option'}</label>
-                        {selector.display === 'dropdown' ? (
-                          <select
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            value={selected[0] ?? ''}
-                            onChange={(e) => toggle(e.target.value)}
-                          >
-                            <option value="" disabled>Select…</option>
-                            {(selector.options || []).map((opt: any) => (
-                              <option key={opt.value} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div className={`grid gap-2 ${columns === 1 ? 'grid-cols-1' : columns === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                            {(selector.options || []).map((opt: any) => {
-                              const active = selected.includes(opt.value)
-                              return (
-                                <button
-                                  type="button"
-                                  key={opt.value}
-                                  onClick={() => toggle(opt.value)}
-                                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                                    active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                                  }`}
-                                >
-                                  {opt.label}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  }
-
-                  if (w.kind === 'custom_input') {
-                    const inp = (settings?.custom?.inputs || []).find((i: any) => i.id === w.inputId)
-                    if (!inp) return null
-                    return (
-                      <div key={w.id}>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          {inp.label}
-                        </label>
-                        {inp.type === 'textarea' ? (
-                          <textarea
-                            rows={4}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            value={customInputs[inp.id] || ''}
-                            onChange={(e) => setCustomInputs((p) => ({ ...p, [inp.id]: e.target.value }))}
-                            placeholder={inp.placeholder || ''}
-                          />
-                        ) : (
-                          <input
-                            type={inp.type === 'number' ? 'number' : 'text'}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            value={customInputs[inp.id] || ''}
-                            onChange={(e) => setCustomInputs((p) => ({ ...p, [inp.id]: e.target.value }))}
-                            placeholder={inp.placeholder || ''}
-                          />
-                        )}
-                      </div>
-                    )
-                  }
-
-                  return null
-                })
-              ) : (
-                <>
-                  {/* fallback: old grouped rendering */}
-                  {showCustomer('first_name') && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                      <input className="w-full px-3 py-2 border border-gray-300 rounded-lg" value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* end form fields */}
-
-              <button
-                type="submit"
-                disabled={submitting || !canSubmit}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? 'Sending…' : buttonText}
-              </button>
-            </form>
+            {/* Honeypot — hidden from humans, tempting to bots. */}
+            <input
+              type="text"
+              tabIndex={-1}
+              autoComplete="off"
+              aria-hidden="true"
+              value={honeypot}
+              onChange={(e) => setHoneypot(e.target.value)}
+              className="absolute left-[-9999px] h-0 w-0 opacity-0"
+            />
+            <LeadFormRenderer
+              config={config}
+              values={values}
+              onChange={handleChange}
+              onSubmit={handleSubmit}
+              submitting={submitting}
+              errors={errors}
+              preview={preview}
+            />
           </div>
         )}
+
+        <p className="mt-6 text-center text-xs text-gray-400">Powered by PathPilot</p>
       </div>
     </div>
   )
 }
-
-

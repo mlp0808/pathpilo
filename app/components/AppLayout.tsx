@@ -164,7 +164,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           - Horizontal padding scales: tight on phones, comfy on desktop.
           - The page itself stays scrollable; the top bar is sticky so the
             user can always reach the menu and settings shortcut. */}
-      <div className="flex-1 lg:ml-[200px] relative overflow-x-hidden max-w-full flex flex-col">
+      <div className={`flex-1 lg:ml-[200px] relative overflow-x-hidden max-w-full flex flex-col ${isSettingsPage ? 'bg-white' : ''}`}>
         {/* Mobile / tablet top bar (hidden on lg+). */}
         <header
           className="lg:hidden sticky top-0 z-30 bg-page/95 backdrop-blur supports-[backdrop-filter]:bg-page/80 border-b border-primary-500/10 pt-safe"
