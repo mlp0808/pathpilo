@@ -254,7 +254,9 @@ router.post('/register', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken, signupSessionId } = req.body;
+    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken, signupSessionId, plan } = req.body;
+    // 'pro' = 14-day trial then auto-demote; 'standard' = no expiry, free forever
+    const requestedPlan = (plan === 'pro') ? 'pro' : 'standard';
     const normalizedLanguageCode = String(languageCode || DEFAULT_LANGUAGE_CODE).trim().toLowerCase() || DEFAULT_LANGUAGE_CODE;
     const normalizedEmail = normalizeEmail(email);
 
@@ -391,10 +393,13 @@ router.post('/register', async (req, res) => {
         counter++
       }
 
+      // Determine final plan: trial invites always start on pro; otherwise use what was requested
+      const finalPlan = trialRecord ? 'pro' : requestedPlan;
+
       // Create company with user as owner
       const companyResult = await client.query(
-        'INSERT INTO companies (name, slug, owner_id, country_code) VALUES ($1, $2, $3, $4) RETURNING id, name, slug, country_code',
-        [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE]
+        'INSERT INTO companies (name, slug, owner_id, country_code, plan) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, slug, country_code, plan',
+        [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE, finalPlan]
       );
       const company = companyResult.rows[0];
       companyId = company.id;
@@ -406,16 +411,17 @@ router.post('/register', async (req, res) => {
         [user.id, companyId, 'owner']
       );
 
-      // Apply trial expiry for ALL normal registrations.
-      // - If trial token exists: use the token's configured trial_days
-      // - Otherwise: default to 14 days (same company expires_at mechanism)
-      const appliedTrialDays = trialRecord?.trial_days || 14;
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + appliedTrialDays);
-      await client.query(
-        'UPDATE companies SET expires_at = $1 WHERE id = $2',
-        [expiresAt, companyId]
-      );
+      // Pro plan: set 14-day trial expiry (auto-demoted to standard after expiry, not suspended)
+      // Standard plan: no expiry — free forever
+      if (finalPlan === 'pro') {
+        const appliedTrialDays = trialRecord?.trial_days || 14;
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + appliedTrialDays);
+        await client.query(
+          'UPDATE companies SET expires_at = $1 WHERE id = $2',
+          [expiresAt, companyId]
+        );
+      }
 
       // If registration came from a trial invite, mark it consumed
       if (trialRecord) {

@@ -72,6 +72,11 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href={navHref('/pricing')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Priser' : 'Pricing'}
+                </Link>
+              </li>
+              <li>
                 <Link href={navHref('/about')} className="text-gray-300 hover:text-white transition-colors">
                   {da ? 'Om os' : 'About'}
                 </Link>
@@ -100,6 +105,16 @@ export default function Footer() {
               </li>
               <li>
                 <a
+                  href="https://help.pathpilo.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gray-300 hover:text-white transition-colors"
+                >
+                  {da ? 'Hjælpecenter' : 'Help Center'}
+                </a>
+              </li>
+              <li>
+                <a
                   href={registerHref}
                   className="text-gray-300 hover:text-white transition-colors"
                   onClick={() =>
@@ -113,11 +128,6 @@ export default function Footer() {
                 >
                   {da ? 'Kom i gang gratis' : 'Get Started Free'}
                 </a>
-              </li>
-              <li>
-                <Link href="#" className="text-gray-300 hover:text-white transition-colors">
-                  {da ? 'Dokumentation' : 'Documentation'}
-                </Link>
               </li>
             </ul>
           </div>

@@ -74,6 +74,7 @@ function RegisterForm() {
   const searchParams = useSearchParams()
   const inviteToken = searchParams.get('invite')
   const trialToken  = searchParams.get('trial')
+  const planParam   = searchParams.get('plan')
   const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
 
   const [sessionMode, setSessionMode] = useState<'checking' | 'form' | 'loggedIn'>('checking')
@@ -102,6 +103,10 @@ function RegisterForm() {
     confirmPassword: '',
     acceptTerms: false
   })
+  // Plan selection — driven by ?plan= param; trial invites are always pro
+  const [selectedPlan, setSelectedPlan] = useState<'standard' | 'pro'>(
+    trialToken ? 'pro' : planParam === 'pro' ? 'pro' : 'standard'
+  )
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -229,6 +234,7 @@ function RegisterForm() {
         languageCode: requestedLang,
         verificationToken: token,
         signupSessionId: getSignupSessionId(),
+        plan: trialToken ? 'pro' : selectedPlan,
         ...(inviteToken && { invitationToken: inviteToken }),
         ...(trialToken && { trialToken }),
       }),
@@ -564,6 +570,45 @@ function RegisterForm() {
             )}
             {registrationStep === 'details' ? (
               <>
+                {/* Plan selector — only for new company registrations (not invites) */}
+                {!inviteToken && (
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-1 flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPlan('standard')}
+                      className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
+                        selectedPlan === 'standard'
+                          ? 'bg-white text-primary-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <span className="block">Solo</span>
+                      <span className={`block text-xs font-normal ${selectedPlan === 'standard' ? 'text-gray-500' : 'text-gray-400'}`}>
+                        Free forever
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => !trialToken && setSelectedPlan('pro')}
+                      className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all ${
+                        selectedPlan === 'pro'
+                          ? 'bg-accent-600 text-white shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <span className="block">Company</span>
+                      <span className={`block text-xs font-normal ${selectedPlan === 'pro' ? 'text-accent-100' : 'text-gray-400'}`}>
+                        14-day free trial
+                      </span>
+                    </button>
+                  </div>
+                )}
+                {!inviteToken && selectedPlan === 'pro' && (
+                  <div className="rounded-xl border border-accent-200 bg-accent-50 px-4 py-2.5 text-sm text-accent-800">
+                    <span className="font-semibold">14-day Company trial.</span> Full access to teams and employees. Reverts to Solo after 14 days — no charge, no card required.
+                  </div>
+                )}
+
                 {/* Name Fields */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>

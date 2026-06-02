@@ -7,6 +7,8 @@ import { apiUrl } from '../../utils/api'
 import { startOverwatchSession } from '../../utils/overwatch'
 import { ArrowRightCircleIcon } from '@heroicons/react/24/outline'
 
+type CompanyPlan = 'standard' | 'pro'
+
 interface Company {
   id: number
   name: string
@@ -17,12 +19,77 @@ interface Company {
   createdAt: string
   suspendedAt: string | null
   expiresAt: string | null
+  plan: CompanyPlan
   userCount: number
   owner: {
     firstName: string
     lastName: string
     email: string
   }
+}
+
+const PLAN_META: Record<CompanyPlan, { label: string; className: string }> = {
+  standard: {
+    label: 'Standard',
+    className: 'bg-gray-100 text-gray-700 border border-gray-200',
+  },
+  pro: {
+    label: 'Pro',
+    className: 'bg-violet-100 text-violet-700 border border-violet-200',
+  },
+}
+
+function PlanBadge({
+  plan,
+  companyId,
+  onChanged,
+}: {
+  plan: CompanyPlan
+  companyId: number
+  onChanged: (id: number, newPlan: CompanyPlan) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const meta = PLAN_META[plan] ?? PLAN_META.standard
+  const next: CompanyPlan = plan === 'standard' ? 'pro' : 'standard'
+
+  const toggle = async () => {
+    if (busy) return
+    const confirmed = window.confirm(
+      `Change this company's plan from "${plan}" to "${next}"?`
+    )
+    if (!confirmed) return
+    setBusy(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/admin/companies/${companyId}/plan`), {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ plan: next }),
+      })
+      if (res.ok) {
+        onChanged(companyId, next)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={busy}
+      title={`Click to switch to ${next}`}
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 ${meta.className}`}
+    >
+      {busy ? (
+        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : null}
+      {meta.label}
+    </button>
+  )
 }
 
 function ExpiryCell({ expiresAt, suspendedAt }: { expiresAt: string | null; suspendedAt: string | null }) {
@@ -81,6 +148,10 @@ export default function AdminCompaniesPage() {
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [enteringCompanyId, setEnteringCompanyId] = useState<number | null>(null)
+
+  const handlePlanChanged = (id: number, newPlan: CompanyPlan) => {
+    setCompanies(prev => prev.map(c => c.id === id ? { ...c, plan: newPlan } : c))
+  }
 
   useEffect(() => {
     // Check authentication first
@@ -294,6 +365,7 @@ export default function AdminCompaniesPage() {
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Owner</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Plan</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Users</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Access expires</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
@@ -320,6 +392,13 @@ export default function AdminCompaniesPage() {
                         <div className="text-sm text-gray-900">{company.owner.firstName} {company.owner.lastName}</div>
                         <div className="text-xs text-gray-500">{company.owner.email}</div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <PlanBadge
+                          plan={(company.plan as CompanyPlan) || 'standard'}
+                          companyId={company.id}
+                          onChanged={handlePlanChanged}
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{company.userCount ?? '—'}</td>
                       <td className="px-6 py-4">
                         <ExpiryCell expiresAt={company.expiresAt} suspendedAt={company.suspendedAt} />
@@ -345,7 +424,7 @@ export default function AdminCompaniesPage() {
 
         {/* Stats */}
         {companies.length > 0 && (
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
               <div className="text-2xl font-bold text-blue-600">{companies.length}</div>
               <div className="text-sm text-gray-500 mt-0.5">Total companies</div>
@@ -371,6 +450,18 @@ export default function AdminCompaniesPage() {
                 {companies.filter(c => c.suspendedAt).length}
               </div>
               <div className="text-sm text-gray-500 mt-0.5">On hold</div>
+            </div>
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
+              <div className="text-2xl font-bold text-violet-600">
+                {companies.filter(c => (c.plan || 'standard') === 'pro').length}
+              </div>
+              <div className="text-sm text-gray-500 mt-0.5">Pro plan</div>
+            </div>
+            <div className="bg-white rounded-lg p-5 shadow-sm border border-gray-200">
+              <div className="text-2xl font-bold text-gray-600">
+                {companies.filter(c => !c.plan || c.plan === 'standard').length}
+              </div>
+              <div className="text-sm text-gray-500 mt-0.5">Standard plan</div>
             </div>
           </div>
         )}

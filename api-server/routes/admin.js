@@ -58,6 +58,9 @@ async function initAdminSchema() {
   try {
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP NULL`);
     await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL`);
+    // Plan column — 'standard' (Solo, free) or 'pro' (Company, paid)
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'standard'`);
+    await pool.query(`UPDATE companies SET plan = 'standard' WHERE plan IS NULL OR plan = ''`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS trial_invites (
         id SERIAL PRIMARY KEY,
@@ -118,30 +121,48 @@ async function initAdminSchema() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    // Run auto-suspend immediately after schema is ready, then every hour
-    autoSuspendExpired();
-    setInterval(autoSuspendExpired, 60 * 60 * 1000);
+    // Run expiry handler immediately after schema is ready, then every hour
+    autoHandleExpiry();
+    setInterval(autoHandleExpiry, 60 * 60 * 1000);
   } catch (err) {
     console.error('[admin] Schema init failed:', err.message);
   }
 }
 
-// Auto-suspend companies whose expires_at has passed
-async function autoSuspendExpired() {
+// Handle expired companies:
+//   - Pro plan trial expired → demote to standard (not suspended)
+//   - Standard plan with admin-set expiry → suspend (legacy behaviour)
+async function autoHandleExpiry() {
   try {
-    const result = await pool.query(`
+    // 1. Pro trial expired: demote to standard, clear expiry
+    const demoted = await pool.query(`
       UPDATE companies
-      SET suspended_at = NOW(), updated_at = NOW()
-      WHERE expires_at IS NOT NULL
+      SET plan = 'standard', expires_at = NULL, updated_at = NOW()
+      WHERE COALESCE(plan, 'standard') = 'pro'
+        AND expires_at IS NOT NULL
         AND expires_at < NOW()
         AND suspended_at IS NULL
       RETURNING id, name
     `);
-    if (result.rows.length > 0) {
-      console.log(`[admin] Auto-suspended ${result.rows.length} expired company/companies:`, result.rows.map(r => r.name).join(', '));
+    if (demoted.rows.length > 0) {
+      console.log(`[admin] Demoted ${demoted.rows.length} expired pro trial(s) to standard:`, demoted.rows.map(r => r.name).join(', '));
+    }
+
+    // 2. Standard/legacy companies with manually-set expiry → suspend
+    const suspended = await pool.query(`
+      UPDATE companies
+      SET suspended_at = NOW(), updated_at = NOW()
+      WHERE COALESCE(plan, 'standard') = 'standard'
+        AND expires_at IS NOT NULL
+        AND expires_at < NOW()
+        AND suspended_at IS NULL
+      RETURNING id, name
+    `);
+    if (suspended.rows.length > 0) {
+      console.log(`[admin] Auto-suspended ${suspended.rows.length} expired company/companies:`, suspended.rows.map(r => r.name).join(', '));
     }
   } catch (err) {
-    console.error('[admin] Auto-suspend check failed:', err.message);
+    console.error('[admin] autoHandleExpiry failed:', err.message);
   }
 }
 
@@ -163,6 +184,7 @@ router.get('/companies', async (req, res) => {
         c.created_at,
         c.suspended_at,
         c.expires_at,
+        COALESCE(c.plan, 'standard') AS plan,
         u.first_name as owner_first_name,
         u.last_name  as owner_last_name,
         u.email      as owner_email,
@@ -187,6 +209,7 @@ router.get('/companies', async (req, res) => {
         createdAt:   c.created_at,
         suspendedAt: c.suspended_at || null,
         expiresAt:   c.expires_at || null,
+        plan:        c.plan || 'standard',
         userCount:   c.user_count,
         owner: {
           firstName: c.owner_first_name,
@@ -949,6 +972,34 @@ router.patch('/companies/:companyId/hold', async (req, res) => {
   } catch (error) {
     console.error('Error toggling company hold:', error);
     res.status(500).json({ error: 'Failed to update company status' });
+  }
+});
+
+// PATCH /api/admin/companies/:companyId/plan — set the company plan (standard | pro)
+router.patch('/companies/:companyId/plan', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { plan } = req.body;
+    const VALID_PLANS = ['standard', 'pro'];
+    if (!plan || !VALID_PLANS.includes(plan)) {
+      return res.status(400).json({ error: `plan must be one of: ${VALID_PLANS.join(', ')}` });
+    }
+
+    const result = await pool.query(
+      `UPDATE companies SET plan = $2, updated_at = NOW() WHERE id = $1
+       RETURNING id, name, plan`,
+      [companyId, plan]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
+
+    const company = result.rows[0];
+    res.json({
+      message: `Company plan updated to "${plan}"`,
+      company: { id: company.id, name: company.name, plan: company.plan },
+    });
+  } catch (error) {
+    console.error('Error updating company plan:', error);
+    res.status(500).json({ error: 'Failed to update company plan' });
   }
 });
 
