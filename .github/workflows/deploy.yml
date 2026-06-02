@@ -162,6 +162,11 @@ jobs:
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
             "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" \
+            "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" \
+            "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
+            "STRIPE_PRICE_MONTHLY=${{ vars.STRIPE_PRICE_MONTHLY }}" \
+            "STRIPE_PRICE_ANNUAL=${{ vars.STRIPE_PRICE_ANNUAL }}" \
+            "APP_URL=${{ vars.APP_URL }}" \
             "NEXT_PUBLIC_API_URL=" > .env
 
           printf '%s\n' \
@@ -177,7 +182,12 @@ jobs:
             "API_PORT=${{ vars.API_PORT }}" \
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
-            "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" > api-server/.env
+            "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" \
+            "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" \
+            "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
+            "STRIPE_PRICE_MONTHLY=${{ vars.STRIPE_PRICE_MONTHLY }}" \
+            "STRIPE_PRICE_ANNUAL=${{ vars.STRIPE_PRICE_ANNUAL }}" \
+            "APP_URL=${{ vars.APP_URL }}" > api-server/.env
 
           echo "==> Installing production dependencies..."
           npm ci --omit=dev

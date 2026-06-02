@@ -35,6 +35,9 @@ app.use(cors({
   credentials: true
 }));
 
+// Stripe webhook needs the raw Buffer before express.json() consumes the body
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -175,6 +178,8 @@ const companyDefaultsRoutes = require('./routes/company-defaults');
 const invitationRoutes = require('./routes/invitations');
 const trialRoutes = require('./routes/trial');
 const publicInvoiceRoutes = require('./routes/public-invoices');
+const stripeRoutes = require('./routes/stripe');
+const { initStripeSchema } = require('./routes/stripe');
 const { runAutomatedEmailTick } = require('./utils/automatedEmails');
 const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
 const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
@@ -213,6 +218,7 @@ app.use('/api/appointments', appointmentRoutes);
 app.use('/api/company-defaults', companyDefaultsRoutes);
 app.use('/api/invitations', invitationRoutes);
 app.use('/api/trial', trialRoutes);
+app.use('/api/stripe', stripeRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
 
 // Health check endpoint
@@ -321,6 +327,11 @@ process.on('SIGINT', () => {
     // + one-shot legacy data migration.
     ensureWorkHoursSchema(pool).catch((e) =>
       console.warn('[workHoursSchema] migration failed:', e.message || e)
+    );
+
+    // Stripe billing columns on companies table (stripe_customer_id etc.)
+    initStripeSchema(pool).catch((e) =>
+      console.warn('[stripeSchema] migration failed:', e.message || e)
     );
   });
 })();
