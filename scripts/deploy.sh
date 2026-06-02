@@ -17,6 +17,9 @@ npm run build
 echo "→ Installing API dependencies..."
 cd api-server && npm install && cd ..
 
+echo "→ Writing marketing/.env (Hotjar vars for build)..."
+grep -E '^NEXT_PUBLIC_HOTJAR_' .env > marketing/.env 2>/dev/null || true
+
 echo "→ Building marketing site..."
 cd marketing && npm install && npm run build && cd ..
 

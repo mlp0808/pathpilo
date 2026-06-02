@@ -40,6 +40,10 @@ jobs:
             "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
             "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
             "NEXT_PUBLIC_API_URL=" > .env
+          # Marketing is a separate Next.js app — it only reads env from marketing/
+          printf '%s\n' \
+            "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
+            "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" > marketing/.env
 
       - name: Build Frontend
         run: npm run build

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
+import { isTawkDismissed } from '../utils/tawk'
 
 type StoredUser = {
   id?: number | string
@@ -39,6 +40,8 @@ export function TawkIdentitySync() {
   const pathname = usePathname()
 
   useEffect(() => {
+    if (isTawkDismissed()) return
+
     let cancelled = false
 
     const trySync = () => {

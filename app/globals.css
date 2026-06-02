@@ -259,3 +259,15 @@
     @apply mx-auto;
   }
 }
+
+/* Tawk live chat — stay below app slideouts, modals, and mobile drawers (z-50+). */
+#tawk-bubble-container,
+#tawk-chat-container,
+#tawk-tooltip-container,
+.tawk-min-container,
+.tawk-max-container,
+.tawk-message-preview,
+iframe[src*='embed.tawk.to'],
+iframe[src*='tawk.to'] {
+  z-index: 30 !important;
+}
