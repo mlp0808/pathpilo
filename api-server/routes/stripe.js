@@ -35,7 +35,7 @@ async function initStripeSchema(pool) {
 }
 
 // ─── Schema migration (called from server.js on startup) ────────────────────
-module.exports.initStripeSchema = initStripeSchema;
+// Note: exported at the bottom together with the router.
 
 // ─── GET /api/stripe/subscription ───────────────────────────────────────────
 // Returns the current billing status for the authenticated company.
@@ -297,4 +297,5 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+router.initStripeSchema = initStripeSchema;
 module.exports = router;

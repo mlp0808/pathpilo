@@ -49,6 +49,46 @@ function activeCompanyRole(user: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/**
+ * Whether the active company has finished the setup wizard (server-tracked).
+ * Reads activeCompany first, then falls back to the matching entry in companies[].
+ * Defaults to `true` when unknown so we never trap existing users in the wizard.
+ */
+export function isActiveCompanyOnboarded(user: Record<string, unknown> | null): boolean {
+  if (!user) return true
+  const ac = user.activeCompany as { id?: number; onboardingCompleted?: boolean } | undefined
+  if (ac && typeof ac.onboardingCompleted === 'boolean') return ac.onboardingCompleted
+
+  const companyId = ac?.id ?? user.companyId
+  const list = user.companies as Array<{ id?: number; onboardingCompleted?: boolean }> | undefined
+  if (Array.isArray(list)) {
+    const match = list.find((c) => c?.id === companyId) ?? list[0]
+    if (match && typeof match.onboardingCompleted === 'boolean') return match.onboardingCompleted
+  }
+  return true
+}
+
+/** Flip the cached session's onboardingCompleted flag to true after the wizard
+ *  finishes, so navigation gates update instantly without a profile refetch. */
+export function markActiveCompanyOnboardedInSession(): void {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = localStorage.getItem('user')
+    if (!raw) return
+    const user = JSON.parse(raw) as Record<string, unknown>
+    const ac = user.activeCompany as { id?: number; onboardingCompleted?: boolean } | null | undefined
+    const companyId = ac?.id ?? user.companyId
+    if (ac) ac.onboardingCompleted = true
+    const list = user.companies as Array<{ id?: number; onboardingCompleted?: boolean }> | undefined
+    if (Array.isArray(list)) {
+      for (const c of list) {
+        if (c && (c.id === companyId || ac == null)) c.onboardingCompleted = true
+      }
+    }
+    localStorage.setItem('user', JSON.stringify(user))
+  } catch { /* ignore */ }
+}
+
 /** Persisted when the user finishes the wizard or reaches the company dashboard. */
 export function markSetupWizardComplete(): void {
   if (typeof window === 'undefined') return
@@ -57,6 +97,15 @@ export function markSetupWizardComplete(): void {
   } catch {
     /* ignore quota / private mode */
   }
+}
+
+/** Clear the wizard-complete flag — called after a fresh registration so the new
+ *  account always starts at step 1 even if a previous session had completed it. */
+export function resetSetupWizard(): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.removeItem(SETUP_WIZARD_COMPLETE_KEY)
+  } catch { /* ignore */ }
 }
 
 export function isSetupWizardMarkedComplete(): boolean {
@@ -71,12 +120,13 @@ export function isSetupWizardMarkedComplete(): boolean {
  */
 export function shouldRedirectAwayFromSetupWizard(user: Record<string, unknown> | null): boolean {
   if (!user) return false
-  if (isSetupWizardMarkedComplete()) return true
   if (hasPendingInvites(user)) return true
   if (!hasCompanyContext(user)) return false
+  // Non-owners (invited team members) never see the owner onboarding wizard.
   const r = activeCompanyRole(user)
   if (r && r !== 'owner') return true
-  return false
+  // Owners are kept in the wizard until their company is marked onboarded server-side.
+  return isActiveCompanyOnboarded(user)
 }
 
 /**

@@ -6,8 +6,6 @@ import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
 import { getCountryRule } from '../../config/countryRules'
-import { markSetupWizardComplete } from '../../utils/sessionClient'
-
 interface Client {
   id?: number
   client_type: 'person' | 'company'
@@ -195,20 +193,7 @@ export default function ClientsSetupPage() {
   }
 
   const handleContinue = () => {
-    markSetupWizardComplete()
-    try {
-      const userData = localStorage.getItem('user')
-      const userObj = userData ? JSON.parse(userData) : null
-      const slug = userObj?.activeCompany?.slug || userObj?.companies?.[0]?.slug
-      if (slug) {
-        router.replace(`/${slug}/dashboard`)
-      } else {
-        // Fallback: /dashboard will redirect if it can infer an active company
-        router.replace('/dashboard')
-      }
-    } catch {
-      router.replace('/dashboard')
-    }
+    router.push('/setup/plan')
   }
 
   const handleBack = () => {
@@ -662,21 +647,8 @@ export default function ClientsSetupPage() {
                       : 'bg-accent-500 hover:bg-accent-600 text-white focus:ring-accent-500/20 shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25'
                   }`}
                 >
-                  Continue to Dashboard
+                  Choose your plan →
                 </button>
-
-                <div className="mt-2 text-center">
-                  <button
-                    type="button"
-                    onClick={handleContinue}
-                    disabled={showForm}
-                    className={`text-xs font-medium transition-colors ${
-                      showForm ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Skip this step.
-                  </button>
-                </div>
               </div>
             </div>
           </div>

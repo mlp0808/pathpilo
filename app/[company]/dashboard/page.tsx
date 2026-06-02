@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useEffect, useLayoutEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
 import { useUser } from '../../hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoney } from '../../config/countryRules'
 import dynamic from 'next/dynamic'
-import { markSetupWizardComplete } from '@/app/utils/sessionClient'
+import { isActiveCompanyOnboarded } from '@/app/utils/sessionClient'
 import type { DashboardTimelineRange } from '../../components/dashboard/JobsTimelineChart'
 import DashboardTeamPerformance, {
   type EmployeeStatsRow,
@@ -61,6 +62,7 @@ function formatRangeLabel(startDate: string, endDate: string) {
 
 export default function DashboardPage() {
   const { user, loading: userLoading } = useUser()
+  const router = useRouter()
   const [timelineRange, setTimelineRange] = useState<DashboardTimelineRange | null>(null)
   const [employeeStats, setEmployeeStats] = useState<EmployeeStatsRow[]>([])
   const [teamLoading, setTeamLoading] = useState(false)
@@ -89,9 +91,15 @@ export default function DashboardPage() {
     }
   }, [])
 
+  // Enforce the (non-skippable) setup wizard: an owner whose company hasn't
+  // finished onboarding is sent back to step 1 instead of seeing the dashboard.
   useEffect(() => {
-    markSetupWizardComplete()
-  }, [])
+    if (userLoading || !user) return
+    const role = user.activeCompany?.role || user.role
+    if (role === 'owner' && !isActiveCompanyOnboarded(user as unknown as Record<string, unknown>)) {
+      router.replace('/setup/company')
+    }
+  }, [user, userLoading, router])
 
   useEffect(() => {
     const load = async () => {

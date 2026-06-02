@@ -341,6 +341,34 @@ router.patch('/slug', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/companies/onboarding/complete - Mark the active company's setup wizard
+// as finished. Called by the final step of the setup wizard (/setup/plan).
+router.post('/onboarding/complete', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    const companyId = req.user?.activeCompanyId;
+    if (!companyId) return res.status(400).json({ error: 'No active company in token' });
+
+    // Only the owner can complete onboarding for the company
+    const roleCheck = await pool.query(
+      'SELECT role FROM user_companies WHERE user_id = $1 AND company_id = $2',
+      [userId, companyId]
+    );
+    if (roleCheck.rows.length === 0 || roleCheck.rows[0].role !== 'owner') {
+      return res.status(403).json({ error: 'Only the company owner can complete setup' });
+    }
+
+    await pool.query(
+      'UPDATE companies SET onboarding_completed = true, updated_at = NOW() WHERE id = $1',
+      [companyId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error completing onboarding:', error);
+    res.status(500).json({ error: 'Failed to complete onboarding' });
+  }
+});
+
 // POST /api/companies/switch - Switch active company
 router.post('/switch', authenticateToken, async (req, res) => {
   try {

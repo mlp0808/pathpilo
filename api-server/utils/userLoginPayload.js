@@ -17,6 +17,7 @@ async function fetchUserCompanies(userId) {
         c.owner_id,
         c.country_code,
         c.suspended_at,
+        COALESCE(c.onboarding_completed, true) AS onboarding_completed,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END AS is_owner
       FROM user_companies uc
       JOIN companies c ON uc.company_id = c.id
@@ -33,6 +34,7 @@ async function fetchUserCompanies(userId) {
     role: c.user_role,
     isOwner: c.is_owner,
     suspendedAt: c.suspended_at || null,
+    onboardingCompleted: c.onboarding_completed,
   }));
 }
 

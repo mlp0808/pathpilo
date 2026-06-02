@@ -332,19 +332,6 @@ export default function ServicesSetupPage() {
                 >
                   Next step
                 </button>
-
-                <div className="mt-2 text-center">
-                  <button
-                    type="button"
-                    onClick={handleContinue}
-                    disabled={showForm}
-                    className={`text-xs font-medium transition-colors ${
-                      showForm ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Skip this step.
-                  </button>
-                </div>
               </div>
             </div>
           </div>

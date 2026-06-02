@@ -21,6 +21,12 @@ pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS language_code VARCHAR(10)
   .catch((err) => console.error('[auth] language_code column check failed:', err.message));
 pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`)
   .catch((err) => console.error('[auth] country_code column check failed:', err.message));
+pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'standard'`)
+  .catch((err) => console.error('[auth] plan column check failed:', err.message));
+// Default true so every existing company is treated as already onboarded.
+// New companies created via registration explicitly set this to false below.
+pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT true`)
+  .catch((err) => console.error('[auth] onboarding_completed column check failed:', err.message));
 
 pool.query(`
   CREATE TABLE IF NOT EXISTS registration_verification_codes (
@@ -117,6 +123,23 @@ router.post('/register/signup-progress', async (req, res) => {
   } catch (error) {
     console.error('[auth] register/signup-progress error:', error);
     return res.status(500).json({ error: 'Failed to save progress' });
+  }
+});
+
+// POST /api/auth/check-email — lightweight check used by the registration form
+// to decide whether to reveal the full form or show "already registered" state.
+router.post('/check-email', async (req, res) => {
+  const { email } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    return res.status(400).json({ error: 'A valid email is required' });
+  }
+  try {
+    const result = await pool.query('SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1', [normalizedEmail]);
+    return res.json({ exists: result.rows.length > 0 });
+  } catch (error) {
+    console.error('[auth] check-email error:', error);
+    return res.status(500).json({ error: 'Failed to check email' });
   }
 });
 
@@ -396,9 +419,10 @@ router.post('/register', async (req, res) => {
       // Determine final plan: trial invites always start on pro; otherwise use what was requested
       const finalPlan = trialRecord ? 'pro' : requestedPlan;
 
-      // Create company with user as owner
+      // Create company with user as owner. onboarding_completed = false forces
+      // the brand-new owner through the setup wizard before reaching the app.
       const companyResult = await client.query(
-        'INSERT INTO companies (name, slug, owner_id, country_code, plan) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, slug, country_code, plan',
+        'INSERT INTO companies (name, slug, owner_id, country_code, plan, onboarding_completed) VALUES ($1, $2, $3, $4, $5, false) RETURNING id, name, slug, country_code, plan',
         [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE, finalPlan]
       );
       const company = companyResult.rows[0];
@@ -478,6 +502,8 @@ router.post('/register', async (req, res) => {
       slug: company.slug,
       countryCode: company.country_code || DEFAULT_COUNTRY_CODE,
       role: userRole,
+      // Invited users join an existing (onboarded) company; brand-new owners must onboard.
+      onboardingCompleted: !!invitationToken,
     };
 
     res.status(201).json({
