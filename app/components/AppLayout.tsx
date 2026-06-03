@@ -7,6 +7,7 @@ import { useUser, SESSION_UPDATED_EVENT } from '../hooks/useUser'
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import SettingsSidebar from './SettingsSidebar'
+import MobileNavDrawer from './MobileNavDrawer'
 import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
@@ -122,33 +123,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
     <div className="min-h-screen bg-page flex overflow-x-hidden">
       {/* Desktop side column (lg+). Settings and main app share the same
           shell so anywhere the user is, the chrome is consistent. */}
+      <Sidebar user={user} />
       {isSettingsPage ? (
-        <>
-          <SettingsSidebar
-            user={user}
-            onBack={() => {
-              window.location.href = dashboardHrefMobile
-            }}
-          />
-          <SettingsSidebar
-            user={user}
-            onBack={() => {
-              window.location.href = dashboardHrefMobile
-            }}
-            isMobileOpen={isMobileNavOpen}
-            onMobileClose={() => setIsMobileNavOpen(false)}
-          />
-        </>
-      ) : (
-        <>
-          <Sidebar user={user} />
-          <Sidebar
-            user={user}
-            isMobileOpen={isMobileNavOpen}
-            onMobileClose={() => setIsMobileNavOpen(false)}
-          />
-        </>
-      )}
+        <SettingsSidebar
+          user={user}
+          onBack={() => {
+            window.location.href = dashboardHrefMobile
+          }}
+        />
+      ) : null}
+      <MobileNavDrawer
+        user={user}
+        isOpen={isMobileNavOpen}
+        onClose={() => setIsMobileNavOpen(false)}
+        isSettingsPage={isSettingsPage}
+      />
 
       {/* Main column.
           - Below lg we don't reserve the 200px sidebar gutter.

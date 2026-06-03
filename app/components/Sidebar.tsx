@@ -15,7 +15,6 @@ import {
   InboxIcon,
   RocketLaunchIcon,
   DocumentTextIcon,
-  XMarkIcon,
   QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
@@ -49,13 +48,6 @@ interface SidebarProps {
       isOwner: boolean
     } | null
   }
-  /**
-   * Mobile-drawer mode. When `isMobileOpen` is provided the sidebar renders
-   * inside an animated overlay + backdrop instead of being a fixed column.
-   * AppLayout still renders the desktop variant separately at `lg+`.
-   */
-  isMobileOpen?: boolean
-  onMobileClose?: () => void
 }
 
 function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'app.role.admin' | 'app.role.employee' {
@@ -66,11 +58,7 @@ function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'ap
   return 'app.role.employee'
 }
 
-export default function Sidebar({
-  user,
-  isMobileOpen,
-  onMobileClose,
-}: SidebarProps) {
+export default function Sidebar({ user }: SidebarProps) {
   const { t } = useAppI18n()
   const pathname = usePathname()
   const { loading: planLoading, hasProAccess } = useCompanyPlan()
@@ -80,43 +68,11 @@ export default function Sidebar({
   const [overwatchActive, setOverwatchActive] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Whether this instance is the drawer or the desktop column. The drawer
-  // is only rendered while it's open; the desktop column is always there.
-  const isDrawer = onMobileClose !== undefined
-
-  // Auto-open Get Started modal on login (desktop only — on mobile the
-  // drawer reuses this component and we don't want the guide to pop while
-  // the menu is sliding in).
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (isDrawer) return
     if (sessionStorage.getItem('pathpilo_video_guide_dismissed')) return
     setIsVideoGuideOpen(true)
-  }, [isDrawer])
-
-  // Body scroll lock + ESC-to-close while the mobile drawer is up.
-  useEffect(() => {
-    if (!isDrawer) return
-    if (!isMobileOpen) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onMobileClose?.()
-    }
-    window.addEventListener('keydown', handleKey)
-    return () => {
-      document.body.style.overflow = prev
-      window.removeEventListener('keydown', handleKey)
-    }
-  }, [isDrawer, isMobileOpen, onMobileClose])
-
-  // Auto-close the drawer when the route changes (tap a nav item → drawer
-  // collapses cleanly without us having to wire onClick on every link).
-  useEffect(() => {
-    if (!isDrawer) return
-    onMobileClose?.()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname])
+  }, [])
 
   useEffect(() => {
     setOverwatchActive(isOverwatchActive())
@@ -248,19 +204,6 @@ export default function Sidebar({
 
   const body = (
     <>
-      {isDrawer ? (
-        <div className="flex justify-end px-3 pt-3 pb-1">
-          <button
-            type="button"
-            aria-label="Close menu"
-            onClick={onMobileClose}
-            className="text-white/70 hover:text-white p-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-          >
-            <XMarkIcon className="w-5 h-5" />
-          </button>
-        </div>
-      ) : null}
-
       <SidebarAccountPanel
         companyName={displayCompany}
         userName={displayName}
@@ -268,8 +211,7 @@ export default function Sidebar({
         overwatchActive={overwatchActive}
         onLogout={handleLogout}
         onQuitOverwatch={handleQuitOverwatch}
-        placement={isDrawer ? 'drawer' : 'sidebar'}
-        onNavigate={isDrawer ? onMobileClose : undefined}
+        placement="sidebar"
       />
 
       {/* Navigation - design: inactive = green icon + white text; active = green vertical bar + white icon + white text */}
@@ -392,27 +334,6 @@ export default function Sidebar({
     </>
   )
 
-  // Mobile drawer: full-height slide-in panel with a tap-to-close backdrop.
-  // Rendered above everything via z-index; we deliberately keep the panel
-  // narrower than the screen so users can swipe past it onto the backdrop.
-  if (isDrawer) {
-    if (!isMobileOpen) return null
-    return (
-      <div className="lg:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
-        <button
-          type="button"
-          aria-label="Close menu"
-          onClick={onMobileClose}
-          className="absolute inset-0 bg-black/50 backdrop-blur-[1px] animate-backdrop-in cursor-default"
-        />
-        <div className="relative h-full w-[82vw] max-w-[300px] bg-[#1a2e2e] flex flex-col overflow-hidden shadow-2xl animate-drawer-in-left">
-          {body}
-        </div>
-      </div>
-    )
-  }
-
-  // Desktop column. Hidden below `lg` — AppLayout shows the drawer there.
   return (
     <div className="hidden lg:flex fixed inset-y-0 left-0 w-[200px] bg-[#1a2e2e] flex-col overflow-hidden z-30">
       {body}
