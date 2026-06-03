@@ -20,12 +20,22 @@ interface Company {
   suspendedAt: string | null
   expiresAt: string | null
   plan: CompanyPlan
+  billingInterval: string | null
+  hasStripeSubscription: boolean
+  smsTierKey: string | null
   userCount: number
   owner: {
     firstName: string
     lastName: string
     email: string
   }
+}
+
+function billingSource(c: Company): { label: string; cls: string } {
+  if (c.hasStripeSubscription) return { label: 'Paid', cls: 'text-green-600' }
+  if (c.plan === 'pro' && c.expiresAt) return { label: 'Trial', cls: 'text-blue-600' }
+  if (c.plan === 'pro') return { label: 'Comped', cls: 'text-teal-600' }
+  return { label: 'Free', cls: 'text-gray-400' }
 }
 
 const PLAN_META: Record<CompanyPlan, { label: string; className: string }> = {
@@ -39,56 +49,26 @@ const PLAN_META: Record<CompanyPlan, { label: string; className: string }> = {
   },
 }
 
-function PlanBadge({
-  plan,
-  companyId,
-  onChanged,
-}: {
-  plan: CompanyPlan
-  companyId: number
-  onChanged: (id: number, newPlan: CompanyPlan) => void
-}) {
-  const [busy, setBusy] = useState(false)
-  const meta = PLAN_META[plan] ?? PLAN_META.standard
-  const next: CompanyPlan = plan === 'standard' ? 'pro' : 'standard'
-
-  const toggle = async () => {
-    if (busy) return
-    const confirmed = window.confirm(
-      `Change this company's plan from "${plan}" to "${next}"?`
-    )
-    if (!confirmed) return
-    setBusy(true)
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/admin/companies/${companyId}/plan`), {
-        method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ plan: next }),
-      })
-      if (res.ok) {
-        onChanged(companyId, next)
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
+function PlanCell({ company }: { company: Company }) {
+  const meta = PLAN_META[company.plan] ?? PLAN_META.standard
+  const source = billingSource(company)
   return (
-    <button
-      onClick={toggle}
-      disabled={busy}
-      title={`Click to switch to ${next}`}
-      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50 ${meta.className}`}
-    >
-      {busy ? (
-        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-      ) : null}
-      {meta.label}
-    </button>
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${meta.className}`}>
+          {meta.label}
+        </span>
+        <span className={`text-xs font-medium ${source.cls}`}>{source.label}</span>
+        {company.billingInterval && company.hasStripeSubscription && (
+          <span className="text-xs text-gray-400">/{company.billingInterval}</span>
+        )}
+      </div>
+      {company.smsTierKey && (
+        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
+          SMS add-on
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -148,10 +128,6 @@ export default function AdminCompaniesPage() {
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [enteringCompanyId, setEnteringCompanyId] = useState<number | null>(null)
-
-  const handlePlanChanged = (id: number, newPlan: CompanyPlan) => {
-    setCompanies(prev => prev.map(c => c.id === id ? { ...c, plan: newPlan } : c))
-  }
 
   useEffect(() => {
     // Check authentication first
@@ -393,11 +369,7 @@ export default function AdminCompaniesPage() {
                         <div className="text-xs text-gray-500">{company.owner.email}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <PlanBadge
-                          plan={(company.plan as CompanyPlan) || 'standard'}
-                          companyId={company.id}
-                          onChanged={handlePlanChanged}
-                        />
+                        <PlanCell company={company} />
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{company.userCount ?? '—'}</td>
                       <td className="px-6 py-4">

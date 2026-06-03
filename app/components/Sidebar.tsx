@@ -8,7 +8,6 @@ import {
   UserGroupIcon,
   UsersIcon,
   Cog6ToothIcon,
-  ArrowRightOnRectangleIcon,
   ClipboardDocumentListIcon,
   ChevronUpIcon,
   ChevronDownIcon,
@@ -23,7 +22,10 @@ import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
 import { useAppI18n } from './I18nProvider'
 import VideoGuideModal from './VideoGuideModal'
+import SidebarAccountPanel from './SidebarAccountPanel'
 import { isOverwatchActive, stopOverwatchSession } from '../utils/overwatch'
+import { useCompanyPlan } from '../hooks/useCompanyPlan'
+import CrownIcon from './icons/CrownIcon'
 
 interface Company {
   id: number
@@ -47,7 +49,6 @@ interface SidebarProps {
       isOwner: boolean
     } | null
   }
-  onSettingsClick?: () => void
   /**
    * Mobile-drawer mode. When `isMobileOpen` is provided the sidebar renders
    * inside an animated overlay + backdrop instead of being a fixed column.
@@ -67,12 +68,12 @@ function roleLabelKey(role: string): 'app.role.owner' | 'app.role.manager' | 'ap
 
 export default function Sidebar({
   user,
-  onSettingsClick,
   isMobileOpen,
   onMobileClose,
 }: SidebarProps) {
   const { t } = useAppI18n()
   const pathname = usePathname()
+  const { loading: planLoading, hasProAccess } = useCompanyPlan()
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
   const [isVideoGuideOpen, setIsVideoGuideOpen] = useState(false)
@@ -223,74 +224,53 @@ export default function Sidebar({
   const companySlug = (activeCompany as any)?.slug || (user.companies?.[0] as any)?.slug || ''
 
   const jobsBase = companySlug ? `/${companySlug}/jobs` : '/jobs'
+  const teamHref = companySlug ? `/${companySlug}/team` : '/team'
   const navigation: Array<{
     name: string
     href: string
     icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
+    proOnly?: boolean
   }> = [
     { name: t('app.nav.dashboard', 'Dashboard'), href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
     { name: t('app.nav.jobs', 'Jobs'), href: jobsBase, icon: ClipboardDocumentListIcon },
     { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
     { name: t('app.nav.invoices', 'Invoices'), href: companySlug ? `/${companySlug}/invoices` : '/invoices', icon: DocumentTextIcon },
     { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
-    { name: t('app.nav.team', 'Team'), href: companySlug ? `/${companySlug}/team` : '/team', icon: UsersIcon },
+    { name: t('app.nav.team', 'Team'), href: teamHref, icon: UsersIcon, proOnly: true },
     { name: t('app.nav.services', 'Services'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
+  const showTeamProBadge = !planLoading && !hasProAccess
 
   // Shared body — rendered identically in both desktop column + mobile
   // drawer so any future nav change applies in both modes.
+  const displayName = `${user.firstName} ${user.lastName}`.trim()
+  const displayCompany = activeCompany?.name || user.companies?.[0]?.name || ''
+
   const body = (
     <>
-      {/* Header: PathPilo.app — with a close button on mobile only. */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <Link href={companySlug ? `/${companySlug}/dashboard` : '/dashboard'} className="block">
-          <span className="text-white font-semibold text-base">PathPilo</span>
-          <span className="text-white/70 font-normal text-sm">.app</span>
-        </Link>
-        {isDrawer ? (
+      {isDrawer ? (
+        <div className="flex justify-end px-3 pt-3 pb-1">
           <button
             type="button"
             aria-label="Close menu"
             onClick={onMobileClose}
-            className="text-white/70 hover:text-white p-1 -mr-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+            className="text-white/70 hover:text-white p-1 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
           >
             <XMarkIcon className="w-5 h-5" />
           </button>
-        ) : null}
-      </div>
-
-      {/* Top bar: Logout */}
-      <div className="flex items-center px-4 py-2 border-b border-white/10">
-        <button
-          onClick={overwatchActive ? handleQuitOverwatch : handleLogout}
-          className="flex items-center space-x-1.5 text-gray-400 hover:text-white transition-colors"
-        >
-          <ArrowRightOnRectangleIcon className="w-4 h-4" />
-          <span className="text-xs font-medium">
-            {overwatchActive ? 'Quit Overwatch' : t('app.sidebar.logout', 'Logout')}
-          </span>
-        </button>
-      </div>
-
-      {/* User */}
-      <div className="px-4 py-3 border-b border-white/10">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <p className="text-white font-semibold text-sm truncate">
-              {user.firstName} {user.lastName}
-            </p>
-            <p className="text-gray-400 text-xs truncate">
-              {user.email}
-            </p>
-          </div>
-          <button
-            onClick={onSettingsClick}
-            className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
-          >
-            <Cog6ToothIcon className="w-4 h-4" />
-          </button>
         </div>
-      </div>
+      ) : null}
+
+      <SidebarAccountPanel
+        companyName={displayCompany}
+        userName={displayName}
+        companySlug={companySlug}
+        overwatchActive={overwatchActive}
+        onLogout={handleLogout}
+        onQuitOverwatch={handleQuitOverwatch}
+        placement={isDrawer ? 'drawer' : 'sidebar'}
+        onNavigate={isDrawer ? onMobileClose : undefined}
+      />
 
       {/* Navigation - design: inactive = green icon + white text; active = green vertical bar + white icon + white text */}
       <nav className="flex-1 px-0 py-4 overflow-y-auto">
@@ -319,6 +299,15 @@ export default function Sidebar({
                   aria-hidden="true"
                 />
                 {item.name}
+                {item.proOnly && showTeamProBadge && (
+                  <span
+                    className="ml-1.5 inline-flex flex-shrink-0"
+                    title={t('app.proGate.proFeature', 'Pro feature')}
+                    aria-label={t('app.proGate.proFeature', 'Pro feature')}
+                  >
+                    <CrownIcon className="h-3.5 w-3.5 text-amber-400" />
+                  </span>
+                )}
               </span>
             </Link>
           )

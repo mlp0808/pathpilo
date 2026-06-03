@@ -63,12 +63,24 @@ pool.query(`
   ON signup_progress_drafts (updated_at DESC)
 `).catch((err) => console.error('[auth] signup_progress_drafts index check failed:', err.message));
 
+const {
+  ensureSignupFunnelSchema,
+  upsertSignupDraft,
+  upsertSignupDraftByEmail,
+} = require('../utils/signupFunnel');
+
+ensureSignupFunnelSchema().catch((err) =>
+  console.error('[auth] signup funnel schema:', err.message)
+);
+
 const SIGNUP_PROGRESS_STEPS = new Set([
   'name_entered',
   'email_entered',
   'details_ready',
   'code_sent',
   'code_verified',
+  'email_verified',
+  'account_created',
 ]);
 
 function normalizeEmail(email) {
@@ -129,13 +141,20 @@ router.post('/register/signup-progress', async (req, res) => {
 // POST /api/auth/check-email — lightweight check used by the registration form
 // to decide whether to reveal the full form or show "already registered" state.
 router.post('/check-email', async (req, res) => {
-  const { email } = req.body || {};
+  const { email, sessionId } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !normalizedEmail.includes('@')) {
     return res.status(400).json({ error: 'A valid email is required' });
   }
   try {
     const result = await pool.query('SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1', [normalizedEmail]);
+    if (result.rows.length === 0) {
+      await upsertSignupDraftByEmail({
+        email: normalizedEmail,
+        step: 'email_entered',
+        sessionId: sessionId ? String(sessionId).trim() : undefined,
+      });
+    }
     return res.json({ exists: result.rows.length > 0 });
   } catch (error) {
     console.error('[auth] check-email error:', error);
@@ -145,7 +164,7 @@ router.post('/check-email', async (req, res) => {
 
 // POST /api/auth/register/send-code
 router.post('/register/send-code', async (req, res) => {
-  const { email } = req.body || {};
+  const { email, sessionId, firstName, lastName } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !normalizedEmail.includes('@')) {
     return res.status(400).json({ error: 'A valid email is required' });
@@ -172,6 +191,14 @@ router.post('/register/send-code', async (req, res) => {
        VALUES ($1, $2, $3)`,
       [normalizedEmail, codeHash, expiresAt]
     );
+
+    await upsertSignupDraft({
+      sessionId,
+      email: normalizedEmail,
+      firstName,
+      lastName,
+      step: 'code_sent',
+    });
 
     await sendEmail({
       to: normalizedEmail,
@@ -221,7 +248,7 @@ router.post('/register/send-code', async (req, res) => {
 
 // POST /api/auth/register/verify-code
 router.post('/register/verify-code', async (req, res) => {
-  const { email, code } = req.body || {};
+  const { email, code, sessionId, firstName, lastName } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   const cleanCode = String(code || '').trim();
   if (!normalizedEmail || !cleanCode) {
@@ -259,6 +286,14 @@ router.post('/register/verify-code', async (req, res) => {
        WHERE id = $2`,
       [verifyTokenHash, row.id]
     );
+
+    await upsertSignupDraft({
+      sessionId,
+      email: normalizedEmail,
+      firstName,
+      lastName,
+      step: 'email_verified',
+    });
 
     return res.status(200).json({
       message: 'Email verified',
@@ -422,7 +457,9 @@ router.post('/register', async (req, res) => {
       // Create company with user as owner. onboarding_completed = false forces
       // the brand-new owner through the setup wizard before reaching the app.
       const companyResult = await client.query(
-        'INSERT INTO companies (name, slug, owner_id, country_code, plan, onboarding_completed) VALUES ($1, $2, $3, $4, $5, false) RETURNING id, name, slug, country_code, plan',
+        `INSERT INTO companies (name, slug, owner_id, country_code, plan, onboarding_completed, onboarding_step)
+         VALUES ($1, $2, $3, $4, $5, false, 'company')
+         RETURNING id, name, slug, country_code, plan`,
         [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE, finalPlan]
       );
       const company = companyResult.rows[0];
@@ -466,12 +503,17 @@ router.post('/register', async (req, res) => {
     );
 
     const signupSid = String(signupSessionId || '').trim();
-    await client.query(
-      `DELETE FROM signup_progress_drafts
-       WHERE ($1 <> '' AND client_session_id = $1)
-          OR LOWER(TRIM(COALESCE(email, ''))) = $2`,
-      [signupSid, normalizedEmail]
-    );
+    if (!invitationToken && companyId) {
+      await upsertSignupDraft({
+        sessionId: signupSid || `user-${user.id}`,
+        email: normalizedEmail,
+        firstName,
+        lastName,
+        step: 'account_created',
+        userId: user.id,
+        companyId,
+      });
+    }
 
     await client.query('COMMIT');
 
@@ -504,6 +546,7 @@ router.post('/register', async (req, res) => {
       role: userRole,
       // Invited users join an existing (onboarded) company; brand-new owners must onboard.
       onboardingCompleted: !!invitationToken,
+      onboardingStep: invitationToken ? 'done' : 'company',
     };
 
     res.status(201).json({

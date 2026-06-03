@@ -2,6 +2,10 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
 const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('../utils/email');
+const {
+  advanceCompanyOnboardingStep,
+  upsertSignupDraftByEmail,
+} = require('../utils/signupFunnel');
 
 const router = express.Router();
 const DEFAULT_COUNTRY_CODE = 'DK';
@@ -124,6 +128,9 @@ function buildInvitationEmail({ email, companyName, inviterName, role, inviteLin
 
 // JWT Secret - should match auth.js
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const { resolveCompanyIdForUser } = require('../utils/resolveCompanyId');
+const { getWorkspaceAccess } = require('../utils/companyPlanAccess');
+const TRIAL_DAYS = 14;
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -203,6 +210,53 @@ router.get('/', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching user companies:', error);
     res.status(500).json({ error: 'Failed to fetch companies: ' + error.message });
+  }
+});
+
+// GET /api/companies/workspace-access — plan + owner info for multi-user gating
+// Query: ?slug=company-slug  (preferred — matches URL)  or falls back to JWT active company
+router.get('/workspace-access', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const slug = typeof req.query.slug === 'string' ? req.query.slug.trim() : '';
+    let companyId = null;
+
+    if (slug) {
+      const bySlug = await pool.query(
+        `SELECT uc.company_id
+         FROM user_companies uc
+         JOIN companies c ON c.id = uc.company_id
+         WHERE uc.user_id = $1 AND c.slug = $2`,
+        [userId, slug]
+      );
+      if (bySlug.rows.length === 0) {
+        return res.status(404).json({ error: 'Company not found or access denied' });
+      }
+      companyId = bySlug.rows[0].company_id;
+    } else {
+      companyId = req.user.activeCompanyId;
+      if (!companyId) {
+        const fallback = await pool.query(
+          'SELECT company_id FROM user_companies WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
+          [userId]
+        );
+        companyId = fallback.rows[0]?.company_id;
+      }
+    }
+
+    if (!companyId) {
+      return res.status(400).json({ error: 'No active company found' });
+    }
+
+    const access = await getWorkspaceAccess(userId, companyId, {
+      allowOverwatch: true,
+      overwatch: !!req.user.overwatch,
+    });
+
+    res.json(access);
+  } catch (error) {
+    console.error('Error fetching workspace access:', error);
+    res.status(500).json({ error: 'Failed to check workspace access' });
   }
 });
 
@@ -341,28 +395,220 @@ router.patch('/slug', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/companies/onboarding/complete - Mark the active company's setup wizard
-// as finished. Called by the final step of the setup wizard (/setup/plan).
+async function assertCompanyOwner(pool, userId, companyId) {
+  const roleCheck = await pool.query(
+    'SELECT role FROM user_companies WHERE user_id = $1 AND company_id = $2',
+    [userId, companyId]
+  );
+  if (roleCheck.rows.length > 0 && roleCheck.rows[0].role === 'owner') return true;
+  const ownerRow = await pool.query(
+    'SELECT 1 FROM companies WHERE id = $1 AND owner_id = $2',
+    [companyId, userId]
+  );
+  return ownerRow.rows.length > 0;
+}
+
+// GET /api/companies/onboarding/status — owner wizard position (for resume after logout)
+router.get('/onboarding/status', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.query?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.json({ isOwner: false, onboardingCompleted: true, onboardingStep: 'done' });
+    }
+
+    const row = await pool.query(
+      `SELECT onboarding_completed, onboarding_step, plan FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    if (!row.rows.length) return res.status(404).json({ error: 'Company not found' });
+    const c = row.rows[0];
+
+    return res.json({
+      isOwner: true,
+      onboardingCompleted: !!c.onboarding_completed,
+      onboardingStep: c.onboarding_completed ? 'done' : (c.onboarding_step || 'company'),
+      plan: c.plan,
+    });
+  } catch (error) {
+    console.error('Error fetching onboarding status:', error);
+    res.status(500).json({ error: 'Failed to fetch onboarding status' });
+  }
+});
+
+// POST /api/companies/onboarding/progress — advance owner wizard (cannot skip ahead)
+router.post('/onboarding/progress', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can update setup progress' });
+    }
+
+    const target = String(req.body?.step || '').trim();
+    const allowed = new Set(['services', 'clients', 'plan', 'wizard_completed']);
+    if (!allowed.has(target)) {
+      return res.status(400).json({ error: 'Invalid onboarding step' });
+    }
+
+    const mapped = target === 'wizard_completed' ? 'plan' : target;
+    const nextStep = await advanceCompanyOnboardingStep(companyId, mapped);
+
+    const owner = await pool.query(
+      `SELECT u.email, u.first_name, u.last_name
+       FROM users u
+       INNER JOIN companies c ON c.owner_id = u.id
+       WHERE c.id = $1`,
+      [companyId]
+    );
+    const o = owner.rows[0];
+    if (o?.email) {
+      const funnelStep =
+        mapped === 'services'
+          ? 'wizard_services'
+          : mapped === 'clients'
+            ? 'wizard_clients'
+            : 'wizard_completed';
+      await upsertSignupDraftByEmail({
+        email: o.email,
+        firstName: o.first_name,
+        lastName: o.last_name,
+        step: funnelStep,
+        userId,
+        companyId,
+      });
+    }
+
+    res.json({ success: true, onboardingStep: nextStep });
+  } catch (error) {
+    console.error('Error updating onboarding progress:', error);
+    res.status(500).json({ error: 'Failed to update onboarding progress' });
+  }
+});
+
+// POST /api/companies/onboarding/select-plan — final wizard step: Solo (standard) or Company (pro + trial)
+router.post('/onboarding/select-plan', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can choose a plan' });
+    }
+
+    const rawPlan = String(req.body?.plan || '').toLowerCase();
+    const isCompanyPlan = rawPlan === 'company' || rawPlan === 'pro';
+    const interval = req.body?.interval === 'year' ? 'year' : 'month';
+
+    if (isCompanyPlan) {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + TRIAL_DAYS);
+      await pool.query(
+        `UPDATE companies
+         SET plan = 'pro',
+             expires_at = $1,
+             onboarding_completed = true,
+             onboarding_step = 'done',
+             billing_interval = $2,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [expiresAt, interval, companyId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE companies
+         SET plan = 'standard',
+             expires_at = NULL,
+             onboarding_completed = true,
+             onboarding_step = 'done',
+             billing_interval = NULL,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [companyId]
+      );
+    }
+
+    const ownerRow = await pool.query(
+      `SELECT u.email, u.first_name, u.last_name
+       FROM users u
+       INNER JOIN companies c ON c.owner_id = u.id
+       WHERE c.id = $1`,
+      [companyId]
+    );
+    const owner = ownerRow.rows[0];
+    if (owner?.email) {
+      await upsertSignupDraftByEmail({
+        email: owner.email,
+        firstName: owner.first_name,
+        lastName: owner.last_name,
+        step: isCompanyPlan ? 'plan_company' : 'plan_solo',
+        userId,
+        companyId,
+      });
+    }
+
+    const companyRow = await pool.query(
+      'SELECT id, name, slug, plan, expires_at FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const company = companyRow.rows[0];
+
+    const token = jwt.sign(
+      {
+        userId,
+        email: req.user.email,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        activeCompanyId: companyId,
+        role: 'owner',
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      success: true,
+      plan: company.plan,
+      trialEndsAt: company.expires_at,
+      onboardingCompleted: true,
+      onboardingStep: 'done',
+      company: {
+        id: company.id,
+        name: company.name,
+        slug: company.slug,
+      },
+      token,
+    });
+  } catch (error) {
+    console.error('Error selecting onboarding plan:', error);
+    res.status(500).json({ error: 'Failed to select plan' });
+  }
+});
+
+// POST /api/companies/onboarding/complete - Mark the active company's setup wizard as finished.
 router.post('/onboarding/complete', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user?.userId;
-    const companyId = req.user?.activeCompanyId;
-    if (!companyId) return res.status(400).json({ error: 'No active company in token' });
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
 
-    // Only the owner can complete onboarding for the company
-    const roleCheck = await pool.query(
-      'SELECT role FROM user_companies WHERE user_id = $1 AND company_id = $2',
-      [userId, companyId]
-    );
-    if (roleCheck.rows.length === 0 || roleCheck.rows[0].role !== 'owner') {
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
       return res.status(403).json({ error: 'Only the company owner can complete setup' });
     }
 
-    await pool.query(
-      'UPDATE companies SET onboarding_completed = true, updated_at = NOW() WHERE id = $1',
-      [companyId]
-    );
-    res.json({ success: true });
+    await advanceCompanyOnboardingStep(companyId, 'plan');
+    res.json({ success: true, onboardingCompleted: false });
   } catch (error) {
     console.error('Error completing onboarding:', error);
     res.status(500).json({ error: 'Failed to complete onboarding' });
@@ -441,7 +687,12 @@ router.post('/switch', authenticateToken, async (req, res) => {
 
     // Get company details including slug
     const companyResult = await pool.query(
-      'SELECT id, name, COALESCE(slug, LOWER(REGEXP_REPLACE(name, \'[^a-z0-9]+\', \'-\', \'g\'))) as slug, owner_id, country_code, suspended_at FROM companies WHERE id = $1',
+      `SELECT id, name,
+        COALESCE(slug, LOWER(REGEXP_REPLACE(name, '[^a-z0-9]+', '-', 'g'))) as slug,
+        owner_id, country_code, suspended_at,
+        COALESCE(onboarding_completed, true) AS onboarding_completed,
+        COALESCE(onboarding_step, 'done') AS onboarding_step
+       FROM companies WHERE id = $1`,
       [targetCompanyId]
     );
     const company = companyResult.rows[0];
@@ -469,6 +720,9 @@ router.post('/switch', authenticateToken, async (req, res) => {
         c.name,
         COALESCE(c.slug, LOWER(REGEXP_REPLACE(c.name, '[^a-z0-9]+', '-', 'g'))) as slug,
         c.country_code,
+        c.suspended_at,
+        COALESCE(c.onboarding_completed, true) AS onboarding_completed,
+        COALESCE(c.onboarding_step, 'done') AS onboarding_step,
         uc.role as user_role,
         c.owner_id,
         CASE WHEN c.owner_id = $1 THEN true ELSE false END as is_owner
@@ -484,7 +738,10 @@ router.post('/switch', authenticateToken, async (req, res) => {
       slug: c.slug,
       countryCode: c.country_code || DEFAULT_COUNTRY_CODE,
       role: c.user_role,
-      isOwner: c.is_owner
+      isOwner: c.is_owner,
+      suspendedAt: c.suspended_at || null,
+      onboardingCompleted: c.onboarding_completed,
+      onboardingStep: c.onboarding_completed ? 'done' : (c.onboarding_step || 'company'),
     }));
 
     // Get user details first
@@ -532,7 +789,12 @@ router.post('/switch', authenticateToken, async (req, res) => {
           slug: company.slug,
           countryCode: company.country_code || DEFAULT_COUNTRY_CODE,
           role: userRole,
-          isOwner: company.owner_id === userId
+          isOwner: company.owner_id === userId,
+          suspendedAt: company.suspended_at || null,
+          onboardingCompleted: company.onboarding_completed,
+          onboardingStep: company.onboarding_completed
+            ? 'done'
+            : (company.onboarding_step || 'company'),
         }
       }
     });
@@ -543,6 +805,48 @@ router.post('/switch', authenticateToken, async (req, res) => {
       error: 'Failed to switch active company',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// GET /api/companies/sms-usage — SMS allowance + usage for the active company (sidebar meter).
+router.get('/sms-usage', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    let companyId = req.user.activeCompanyId;
+    if (!companyId) {
+      const result = await pool.query(
+        'SELECT company_id FROM user_companies WHERE user_id = $1 LIMIT 1',
+        [userId]
+      );
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'No active company found' });
+      }
+      companyId = result.rows[0].company_id;
+    } else {
+      const member = await pool.query(
+        'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [userId, companyId]
+      );
+      if (member.rows.length === 0) {
+        return res.status(403).json({ error: 'Not a member of the active company' });
+      }
+    }
+
+    const { getSmsBillingSnapshot } = require('../utils/smsBilling');
+    const snapshot = await getSmsBillingSnapshot(pool, companyId);
+    const plan = snapshot.plan;
+    const usage = snapshot.usage;
+    const hasPlan = !!plan && plan.status === 'active';
+
+    res.json({
+      hasPlan,
+      used: usage.usedThisPeriod,
+      included: usage.includedPerMonth,
+      remaining: usage.remaining,
+    });
+  } catch (error) {
+    console.error('Error fetching SMS usage:', error);
+    res.status(500).json({ error: 'Failed to fetch SMS usage' });
   }
 });
 

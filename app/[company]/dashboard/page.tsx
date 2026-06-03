@@ -8,6 +8,7 @@ import { apiUrl } from '@/app/utils/api'
 import { formatMoney } from '../../config/countryRules'
 import dynamic from 'next/dynamic'
 import { isActiveCompanyOnboarded } from '@/app/utils/sessionClient'
+import { getOwnerSetupResumePath } from '@/app/utils/onboardingClient'
 import type { DashboardTimelineRange } from '../../components/dashboard/JobsTimelineChart'
 import DashboardTeamPerformance, {
   type EmployeeStatsRow,
@@ -95,9 +96,9 @@ export default function DashboardPage() {
   // finished onboarding is sent back to step 1 instead of seeing the dashboard.
   useEffect(() => {
     if (userLoading || !user) return
-    const role = user.activeCompany?.role || user.role
+    const role = user.activeCompany?.role
     if (role === 'owner' && !isActiveCompanyOnboarded(user as unknown as Record<string, unknown>)) {
-      router.replace('/setup/company')
+      router.replace(getOwnerSetupResumePath(user as unknown as Record<string, unknown>))
     }
   }, [user, userLoading, router])
 

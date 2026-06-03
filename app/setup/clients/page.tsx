@@ -2,10 +2,15 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
+import { PlusIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
 import { getCountryRule } from '../../config/countryRules'
+import SetupWizardLayout, {
+  setupFieldInputClass,
+  setupFieldLabelClass,
+} from '@/app/components/setup/SetupWizardLayout'
+import SetupWizardHint from '@/app/components/setup/SetupWizardHint'
 interface Client {
   id?: number
   client_type: 'person' | 'company'
@@ -192,7 +197,11 @@ export default function ClientsSetupPage() {
     }
   }
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    const { advanceOnboardingProgress, patchSessionOnboardingStep } =
+      await import('../../utils/onboardingClient')
+    await advanceOnboardingProgress('wizard_completed')
+    patchSessionOnboardingStep('plan')
     router.push('/setup/plan')
   }
 
@@ -227,433 +236,249 @@ export default function ClientsSetupPage() {
     setError('')
   }
 
+  const inputCls = setupFieldInputClass
+  const labelCls = setupFieldLabelClass
+  const checkboxLabelCls = "ml-2.5 text-sm text-gray-700 select-none cursor-pointer"
+  const checkboxCls = "h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500/30 focus:ring-offset-0"
+
+  const clientDisplayName = (client: Client) => {
+    const name = client.name?.trim() || ''
+    const last = client.last_name?.trim() || ''
+    if (client.client_type === 'person' && last) return `${name} ${last}`
+    return name
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50">
-      <div className="max-w-4xl mx-auto px-6 py-16">
-        <div className="grid grid-cols-5 gap-16 items-start">
-          {/* Left Column - Text (40%) */}
-          <div className="col-span-2 pt-4">
-            <div className="space-y-6">
-              <div>
-                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-accent-50 text-accent-700 border border-accent-200 mb-4">
-                  Step 3 of 3
-                </div>
-                <h1 className="text-3xl font-bold text-primary-800 mb-4 tracking-tight">
-                  Add your first client
-                </h1>
-                <p className="text-base text-gray-600 leading-relaxed">
-                  Create your first client profile. You can add more clients later from your dashboard.
-                </p>
-              </div>
-              
-              <div className="space-y-3 pt-4">
-                <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Create Company</span>
-                </div>
-                <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Setup Services</span>
-                </div>
-                <div className="flex items-center space-x-3 text-sm font-medium text-primary-700">
-                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full"></div>
-                  <span>Add Clients</span>
+    <SetupWizardLayout
+      step={3}
+      title="Add your first client"
+      description="Create your first client profile. You can add more clients anytime from your dashboard."
+      onBack={handleBack}
+    >
+      <div className="relative z-10">
+        {!showForm && (
+          <SetupWizardHint showArrow={clients.length === 0}>
+            {clients.length === 0
+              ? 'Click the button below and add your first client.'
+              : 'Add another client using the button below.'}
+          </SetupWizardHint>
+        )}
+
+        {clients.length > 0 && (
+          <div className="relative z-[1] mb-4 space-y-2">
+            {clients.map((client, index) => (
+              <div key={client.id || index} className="flex items-center bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">{clientDisplayName(client)}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {[client.email, client.phone, client.address && client.zip_code ? `${client.address}, ${client.zip_code}` : null].filter(Boolean).join(' · ')}
+                  </div>
                 </div>
               </div>
-            </div>
+            ))}
+          </div>
+        )}
+
+        {showForm ? (
+        <form onSubmit={handleSubmitClient} className="space-y-5 animate-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-900">New client</p>
+            <button type="button" onClick={handleCancel} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+              Cancel
+            </button>
           </div>
 
-          {/* Right Column - Form (60%) */}
-          <div className="col-span-3">
-            <div className="mb-3">
-              <button
-                type="button"
-                onClick={handleBack}
-                className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-primary-800 transition-colors"
-              >
-                <ArrowLeftIcon className="w-4 h-4" />
-                <span>go back</span>
-              </button>
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-red-600 text-sm">{error}</p>
             </div>
-            <div className="bg-white border border-primary-100 rounded-3xl p-8 shadow-xl shadow-primary-500/5">
-              
-              {/* Clients List */}
-              {clients.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-xs font-semibold text-primary-700 mb-3">Your Clients</h3>
-                  <div className="space-y-2">
-                    {clients.map((client, index) => (
-                      <div key={client.id || index} className="flex items-center justify-between bg-primary-50/50 rounded-xl p-3 border border-primary-100/60">
-                        <div className="flex-1">
-                          <div className="text-sm font-medium text-gray-900">
-                            {client.name}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {client.email && `${client.email} • `}
-                            {client.phone && `${client.phone} • `}
-                            {client.address && client.zip_code &&
-                              `${client.address}, ${client.zip_code}`}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+          )}
 
-              {/* Add Client Form */}
-              {showForm ? (
-                <form onSubmit={handleSubmitClient} className="space-y-5 animate-in slide-in-from-bottom-4 duration-300">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-semibold text-primary-800">Add Client</h3>
-                    <button
-                      type="button"
-                      onClick={handleCancel}
-                      className="text-primary-500 hover:text-primary-700 text-sm font-medium"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                      <p className="text-red-600 text-sm font-medium">{error}</p>
-                    </div>
-                  )}
-
-                  {/* Client Type Selector */}
-                  <div>
-                    <label className="block text-xs font-semibold text-primary-700 mb-3">
-                      Client Type
-                    </label>
-                    <div className="flex bg-primary-100/80 rounded-xl p-1 border border-primary-200/60">
-                      <button
-                        type="button"
-                        onClick={() => setCurrentClient({ ...currentClient, client_type: 'person' })}
-                        className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
-                          currentClient.client_type === 'person'
-                            ? 'bg-white text-primary-800 shadow-sm border border-primary-200/80'
-                            : 'text-primary-600 hover:text-primary-800'
-                        }`}
-                      >
-                        Private Person
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCurrentClient({ ...currentClient, client_type: 'company' })}
-                        className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition-colors duration-200 ${
-                          currentClient.client_type === 'company'
-                            ? 'bg-white text-primary-800 shadow-sm border border-primary-200/80'
-                            : 'text-primary-600 hover:text-primary-800'
-                        }`}
-                      >
-                        Company
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Company fields (only show for companies) */}
-                  {currentClient.client_type === 'company' && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="group">
-                          <label htmlFor="company_name" className="block text-xs font-semibold text-primary-700 mb-2">
-                            Company Name <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="name"
-                            name="name"
-                            value={currentClient.name}
-                            onChange={handleInputChange}
-                            required
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                            placeholder="e.g. ABC Corp"
-                          />
-                        </div>
-                        <div className="group">
-                          <label htmlFor="company_number" className="block text-xs font-semibold text-primary-700 mb-2">
-                            Company Number
-                          </label>
-                          <input
-                            type="text"
-                            id="company_number"
-                            name="company_number"
-                            value={currentClient.company_number}
-                            onChange={handleInputChange}
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                            placeholder="e.g. CVR 12345678"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Contact Person Checkbox */}
-                      <div className="flex items-center">
-                        <input
-                          id="includeContactPerson"
-                          type="checkbox"
-                          checked={includeContactPerson}
-                          onChange={(e) => setIncludeContactPerson(e.target.checked)}
-                          className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-primary-200 rounded"
-                        />
-                        <label htmlFor="includeContactPerson" className="ml-2 block text-sm text-gray-900">
-                          Add contact person?
-                        </label>
-                      </div>
-
-                      {/* Contact Person fields (only show if checkbox is checked) */}
-                      {includeContactPerson && (
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="group">
-                            <label htmlFor="contact_name" className="block text-xs font-semibold text-primary-700 mb-2">
-                              Contact Person Name
-                            </label>
-                            <input
-                              type="text"
-                              id="contact_name"
-                              name="contact_name"
-                              value={currentClient.contact_name}
-                              onChange={handleInputChange}
-                              className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                              placeholder="e.g. John Smith"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Person fields (only show for persons) */}
-                  {currentClient.client_type === 'person' && (
-                    <div>
-                      {/* Name and Last Name */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="group">
-                          <label htmlFor="first_name" className="block text-xs font-semibold text-primary-700 mb-2">
-                            First Name <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            id="name"
-                            name="name"
-                            value={currentClient.name}
-                            onChange={handleInputChange}
-                            required
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                            placeholder="e.g. John"
-                          />
-                        </div>
-                        <div className="group">
-                          <label htmlFor="last_name" className="block text-xs font-semibold text-primary-700 mb-2">
-                            Last name
-                          </label>
-                          <input
-                            type="text"
-                            id="last_name"
-                            name="last_name"
-                            value={currentClient.last_name}
-                            onChange={handleInputChange}
-                            className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                            placeholder="e.g. Smith"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Address fields (common for both) — with Maps autocomplete */}
-                  <div className="grid grid-cols-12 gap-4">
-                    <div className="col-span-12">
-                      <AddressAutocomplete
-                        label="Address"
-                        address={currentClient.address}
-                        zip_code={currentClient.zip_code}
-                        city={currentClient.city}
-                        lat={undefined}
-                        lng={undefined}
-                        countryCode={companyCountryCode}
-                        zipLabel={countryRule.postalCodeLabel}
-                        cityLabel="City"
-                        placeholder="Start typing an address…"
-                        onChange={(data: AddressData) => {
-                          setCurrentClient(prev => ({
-                            ...prev,
-                            address: data.address,
-                            zip_code: data.zip_code,
-                            city: data.city,
-                            country: countryRule.countryName,
-                          }))
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Separate Billing Address Checkbox */}
-                  <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      id="separateBillingAddress"
-                      checked={separateBillingAddress}
-                      onChange={(e) => setSeparateBillingAddress(e.target.checked)}
-                      className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-primary-200 rounded"
-                    />
-                    <label htmlFor="separateBillingAddress" className="ml-2 block text-sm text-primary-800">
-                      Separate billing address?
-                    </label>
-                  </div>
-
-                  {/* Billing Address Fields */}
-                  {separateBillingAddress && (
-                    <div className="p-4 bg-accent-50 rounded-xl border border-accent-200/60">
-                      <AddressAutocomplete
-                        label="Billing address"
-                        address={currentClient.billing_address}
-                        zip_code={currentClient.billing_zip_code}
-                        city={currentClient.billing_city}
-                        lat={undefined}
-                        lng={undefined}
-                        countryCode={companyCountryCode}
-                        zipLabel={`Billing ${countryRule.postalCodeLabel}`}
-                        cityLabel="Billing city"
-                        placeholder="Start typing a billing address…"
-                        onChange={(data: AddressData) => {
-                          setCurrentClient(prev => ({
-                            ...prev,
-                            billing_address: data.address,
-                            billing_zip_code: data.zip_code,
-                            billing_city: data.city,
-                          }))
-                        }}
-                      />
-                    </div>
-                  )}
-
-                  {/* Email and Phone */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="group">
-                      <label htmlFor="email" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        id="email"
-                        name="email"
-                        value={currentClient.email}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. john@example.com"
-                      />
-                    </div>
-                    <div className="group">
-                      <label htmlFor="phone" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Phone
-                      </label>
-                      <input
-                        type="tel"
-                        id="phone"
-                        name="phone"
-                        value={currentClient.phone}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 text-sm bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300 shadow-sm"
-                        placeholder="e.g. +45 12 34 56 78"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Separate Billing Contact Checkbox */}
-                  <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      id="separateBillingContact"
-                      checked={separateBillingContact}
-                      onChange={(e) => setSeparateBillingContact(e.target.checked)}
-                      className="h-4 w-4 text-accent-600 focus:ring-accent-500 border-primary-200 rounded"
-                    />
-                    <label htmlFor="separateBillingContact" className="ml-2 block text-sm text-primary-800">
-                      Separate billing contact info?
-                    </label>
-                  </div>
-
-                  {/* Billing Contact Fields */}
-                  {separateBillingContact && (
-                    <div className="grid grid-cols-2 gap-4 p-4 bg-accent-50/80 rounded-xl border border-accent-200/60">
-                      <div className="group">
-                        <label htmlFor="billing_email" className="block text-xs font-semibold text-primary-700 mb-2">
-                          Billing Email
-                        </label>
-                        <input
-                          type="email"
-                          id="billing_email"
-                          name="billing_email"
-                          value={currentClient.billing_email}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-3 text-sm bg-white/80 border border-accent-200/80 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                          placeholder="e.g. billing@company.com"
-                        />
-                      </div>
-                      <div className="group">
-                        <label htmlFor="billing_phone" className="block text-xs font-semibold text-primary-700 mb-2">
-                          Billing Phone
-                        </label>
-                        <input
-                          type="tel"
-                          id="billing_phone"
-                          name="billing_phone"
-                          value={currentClient.billing_phone}
-                          onChange={handleInputChange}
-                          className="w-full px-4 py-3 text-sm bg-white/80 border border-accent-200/80 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400"
-                          placeholder="e.g. +45 98 76 54 32"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
-                  >
-                    {isSubmitting ? (
-                      <span className="flex items-center justify-center space-x-2">
-                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                        <span>Adding Client...</span>
-                      </span>
-                    ) : (
-                      'Add Client'
-                    )}
-                  </button>
-                </form>
-              ) : (
-                <div className="text-center">
-                  <button
-                    onClick={handleAddClient}
-                    className="inline-flex items-center space-x-2 bg-white/80 border border-primary-200/80 rounded-xl px-6 py-4 text-sm font-medium text-primary-800 hover:bg-white hover:border-primary-300 focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 shadow-sm hover:shadow-md"
-                  >
-                    <PlusIcon className="w-5 h-5" />
-                    <span>Add client</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="mt-8 pt-6 border-t border-primary-100">
+          {/* Client type toggle */}
+          <div>
+            <label className={labelCls}>Client type</label>
+            <div className="flex bg-gray-100 border border-gray-200 rounded-xl p-1 gap-1">
+              {(['person', 'company'] as const).map(type => (
                 <button
+                  key={type}
                   type="button"
-                  onClick={handleContinue}
-                  disabled={clients.length === 0 || showForm}
-                  className={`w-full py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-offset-2 transition-all duration-200 shadow-lg ${
-                    clients.length === 0 || showForm
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-                      : 'bg-accent-500 hover:bg-accent-600 text-white focus:ring-accent-500/20 shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25'
+                  onClick={() => setCurrentClient({ ...currentClient, client_type: type })}
+                  className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all ${
+                    currentClient.client_type === type
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-800'
                   }`}
                 >
-                  Choose your plan →
+                  {type === 'person' ? 'Private person' : 'Company'}
                 </button>
-              </div>
+              ))}
             </div>
           </div>
-        </div>
+
+          {/* Company fields */}
+          {currentClient.client_type === 'company' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="name" className={labelCls}>Company name <span className="text-red-500">*</span></label>
+                  <input type="text" id="name" name="name" value={currentClient.name} onChange={handleInputChange} required className={inputCls} placeholder="e.g. ABC Corp" />
+                </div>
+                <div>
+                  <label htmlFor="company_number" className={labelCls}>Company number</label>
+                  <input type="text" id="company_number" name="company_number" value={currentClient.company_number} onChange={handleInputChange} className={inputCls} placeholder="e.g. 12345678" />
+                </div>
+              </div>
+              <label className="flex items-center cursor-pointer">
+                <input type="checkbox" id="includeContactPerson" checked={includeContactPerson} onChange={e => setIncludeContactPerson(e.target.checked)} className={checkboxCls} />
+                <span className={checkboxLabelCls}>Add contact person?</span>
+              </label>
+              {includeContactPerson && (
+                <div>
+                  <label htmlFor="contact_name" className={labelCls}>Contact person</label>
+                  <input type="text" id="contact_name" name="contact_name" value={currentClient.contact_name} onChange={handleInputChange} className={inputCls} placeholder="e.g. John Smith" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Person fields */}
+          {currentClient.client_type === 'person' && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="name" className={labelCls}>First name <span className="text-red-500">*</span></label>
+                <input type="text" id="name" name="name" value={currentClient.name} onChange={handleInputChange} required className={inputCls} placeholder="e.g. John" />
+              </div>
+              <div>
+                <label htmlFor="last_name" className={labelCls}>Last name</label>
+                <input type="text" id="last_name" name="last_name" value={currentClient.last_name} onChange={handleInputChange} className={inputCls} placeholder="e.g. Smith" />
+              </div>
+            </div>
+          )}
+
+          {/* Address */}
+          <AddressAutocomplete
+            label="Address"
+            address={currentClient.address}
+            zip_code={currentClient.zip_code}
+            city={currentClient.city}
+            lat={undefined}
+            lng={undefined}
+            countryCode={companyCountryCode}
+            zipLabel={countryRule.postalCodeLabel}
+            cityLabel="City"
+            placeholder="Start typing an address…"
+            onChange={(data: AddressData) => {
+              setCurrentClient(prev => ({
+                ...prev,
+                address: data.address,
+                zip_code: data.zip_code,
+                city: data.city,
+                country: countryRule.countryName,
+              }))
+            }}
+          />
+
+          {/* Billing address toggle */}
+          <label className="flex items-center cursor-pointer">
+            <input type="checkbox" id="separateBillingAddress" checked={separateBillingAddress} onChange={e => setSeparateBillingAddress(e.target.checked)} className={checkboxCls} />
+            <span className={checkboxLabelCls}>Different billing address?</span>
+          </label>
+          {separateBillingAddress && (
+            <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
+              <AddressAutocomplete
+                label="Billing address"
+                address={currentClient.billing_address}
+                zip_code={currentClient.billing_zip_code}
+                city={currentClient.billing_city}
+                lat={undefined}
+                lng={undefined}
+                countryCode={companyCountryCode}
+                zipLabel={`Billing ${countryRule.postalCodeLabel}`}
+                cityLabel="Billing city"
+                placeholder="Start typing a billing address…"
+                onChange={(data: AddressData) => {
+                  setCurrentClient(prev => ({
+                    ...prev,
+                    billing_address: data.address,
+                    billing_zip_code: data.zip_code,
+                    billing_city: data.city,
+                  }))
+                }}
+              />
+            </div>
+          )}
+
+          {/* Email + Phone */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="email" className={labelCls}>Email</label>
+              <input type="email" id="email" name="email" value={currentClient.email} onChange={handleInputChange} className={inputCls} placeholder="john@example.com" />
+            </div>
+            <div>
+              <label htmlFor="phone" className={labelCls}>Phone</label>
+              <input type="tel" id="phone" name="phone" value={currentClient.phone} onChange={handleInputChange} className={inputCls} placeholder="+45 12 34 56 78" />
+            </div>
+          </div>
+
+          {/* Billing contact toggle */}
+          <label className="flex items-center cursor-pointer">
+            <input type="checkbox" id="separateBillingContact" checked={separateBillingContact} onChange={e => setSeparateBillingContact(e.target.checked)} className={checkboxCls} />
+            <span className={checkboxLabelCls}>Different billing contact?</span>
+          </label>
+          {separateBillingContact && (
+            <div className="grid grid-cols-2 gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
+              <div>
+                <label htmlFor="billing_email" className={labelCls}>Billing email</label>
+                <input type="email" id="billing_email" name="billing_email" value={currentClient.billing_email} onChange={handleInputChange} className={inputCls} placeholder="billing@company.com" />
+              </div>
+              <div>
+                <label htmlFor="billing_phone" className={labelCls}>Billing phone</label>
+                <input type="tel" id="billing_phone" name="billing_phone" value={currentClient.billing_phone} onChange={handleInputChange} className={inputCls} placeholder="+45 98 76 54 32" />
+              </div>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full bg-accent-500 hover:bg-accent-400 text-white py-3.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 shadow-lg shadow-accent-500/25"
+          >
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Adding…
+              </span>
+            ) : 'Save client'}
+          </button>
+        </form>
+        ) : (
+          <button
+            type="button"
+            onClick={handleAddClient}
+            className="relative z-20 flex w-full items-center justify-center gap-2.5 bg-gray-50 border border-dashed border-gray-200 rounded-xl px-6 py-5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:border-gray-300 hover:bg-white transition-all"
+          >
+            <PlusIcon className="w-4 h-4" />
+            Add a client
+          </button>
+        )}
+
+        {!showForm && (
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={handleContinue}
+              disabled={clients.length === 0}
+              className={`w-full py-3.5 px-6 rounded-xl text-sm font-semibold transition-all ${
+                clients.length === 0
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : 'bg-accent-500 hover:bg-accent-600 text-white shadow-lg shadow-accent-500/20'
+              }`}
+            >
+              {clients.length === 0 ? 'Add at least one client to continue' : 'Choose your plan →'}
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </SetupWizardLayout>
   )
 }

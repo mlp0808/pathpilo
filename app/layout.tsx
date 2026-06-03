@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import './globals.css'
 import { ClientI18nProvider } from './components/I18nProvider'
-import { TawkChat } from './components/TawkChat'
+import { CrispChat } from './components/CrispChat'
 
 export const metadata: Metadata = {
   title: 'PathPilo - Client Management for Service Companies',
@@ -90,7 +90,7 @@ fbq('track', 'PageView');`,
             }}
           />
         )}
-        <TawkChat />
+        <CrispChat />
         <ClientI18nProvider>
           {children}
         </ClientI18nProvider>

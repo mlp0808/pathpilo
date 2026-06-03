@@ -1,3 +1,5 @@
+'use client'
+
 import AppLayout from '../components/AppLayout'
 
 export default function SettingsLayout({
@@ -5,13 +7,5 @@ export default function SettingsLayout({
 }: {
   children: React.ReactNode
 }) {
-  return (
-    <AppLayout>
-      {children}
-    </AppLayout>
-  )
+  return <AppLayout>{children}</AppLayout>
 }
-
-
-
-

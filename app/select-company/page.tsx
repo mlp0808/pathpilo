@@ -41,6 +41,7 @@ export default function SelectCompanyPage() {
   const [userName, setUserName] = useState('')
   const [actionToken, setActionToken] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
+  const [selectingCompanyId, setSelectingCompanyId] = useState<number | null>(null)
 
   const applySession = useCallback(
     (user: Record<string, unknown>) => {
@@ -86,7 +87,7 @@ export default function SelectCompanyPage() {
         lastName: p.lastName ?? prev.lastName,
         email: p.email ?? prev.email,
         languageCode: p.languageCode ?? prev.languageCode,
-        role: p.role ?? prev.role,
+        role: p.activeCompany?.role ?? p.role ?? prev.role,
         companies: p.companies ?? prev.companies,
         pendingInvites: p.pendingInvites ?? prev.pendingInvites ?? [],
         activeCompany: p.activeCompany !== undefined ? p.activeCompany : prev.activeCompany,
@@ -197,21 +198,36 @@ export default function SelectCompanyPage() {
     }
   }
 
-  const handleSelect = (company: Company) => {
-    const raw = localStorage.getItem('user')
-    if (raw) {
-      try {
-        const user = JSON.parse(raw) as Record<string, unknown>
-        user.companyId = company.id
-        user.companyName = company.name
-        user.activeCompany = company
-        user.role = company.role
-        localStorage.setItem('user', JSON.stringify(user))
-      } catch {
-        /* ignore */
+  const handleSelect = async (company: Company) => {
+    setActionError('')
+    setSelectingCompanyId(company.id)
+    try {
+      const token = localStorage.getItem('token')
+      if (!token) {
+        router.replace('/login')
+        return
       }
+      const res = await fetch(apiUrl('/companies/switch'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ company_id: company.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setActionError(data.error || 'Could not open this company')
+        return
+      }
+      persistAuthUser(data.token, data.user as Record<string, unknown>)
+      const slug = (data.user as { activeCompany?: { slug?: string } })?.activeCompany?.slug || company.slug
+      router.push(`/${slug}/dashboard`)
+    } catch {
+      setActionError('Network error. Try again.')
+    } finally {
+      setSelectingCompanyId(null)
     }
-    router.push(`/${company.slug}/dashboard`)
   }
 
   const handleLogout = () => {
@@ -372,12 +388,15 @@ export default function SelectCompanyPage() {
                   Your companies
                 </h2>
                 <ul className="space-y-2">
-                  {companies.map((company) => (
+                  {companies.map((company) => {
+                    const busy = selectingCompanyId === company.id
+                    return (
                     <li key={company.id}>
                       <button
                         type="button"
-                        onClick={() => handleSelect(company)}
-                        className="w-full flex items-center gap-4 rounded-2xl border border-slate-100 bg-slate-50/50 px-4 py-4 text-left hover:border-primary-200 hover:bg-primary-50/30 transition-all group"
+                        disabled={selectingCompanyId != null}
+                        onClick={() => void handleSelect(company)}
+                        className="w-full flex items-center gap-4 rounded-2xl border border-slate-100 bg-slate-50/50 px-4 py-4 text-left hover:border-primary-200 hover:bg-primary-50/30 transition-all group disabled:opacity-60"
                       >
                         <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-primary-500/20">
                           <span className="text-lg font-bold text-white">
@@ -388,17 +407,21 @@ export default function SelectCompanyPage() {
                           <p className="text-sm font-semibold text-slate-900 truncate">{company.name}</p>
                           <p className="text-xs text-slate-500 mt-0.5">{roleLabel(company.role)}</p>
                         </div>
-                        <svg
-                          className="w-5 h-5 text-slate-300 group-hover:text-primary-500 transition-colors flex-shrink-0"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
+                        {busy ? (
+                          <span className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                        ) : (
+                          <svg
+                            className="w-5 h-5 text-slate-300 group-hover:text-primary-500 transition-colors flex-shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        )}
                       </button>
                     </li>
-                  ))}
+                  )})}
                 </ul>
               </div>
             ) : null}

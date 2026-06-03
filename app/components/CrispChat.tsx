@@ -4,63 +4,57 @@ import { useCallback, useEffect, useState } from 'react'
 import Script from 'next/script'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { useAppI18n } from './I18nProvider'
-import { TawkIdentitySync } from './TawkIdentitySync'
+import { CrispIdentitySync } from './CrispIdentitySync'
 import {
-  dismissTawkPermanently,
+  CRISP_READY_EVENT,
+  CRISP_WEBSITE_ID,
+  dismissCrispPermanently,
   HELP_CENTER_URL,
-  isTawkDismissed,
-} from '../utils/tawk'
+  isCrispDismissed,
+  isCrispEnabled,
+} from '../utils/crisp'
 
-const TAWK_EMBED_SRC = 'https://embed.tawk.to/69dd54b75b2ee31c3842497a/1jm495rg8'
-
-const TAWK_READY_EVENT = 'pathpilo-tawk-ready'
-
-export function TawkChat() {
+/** Live chat via Crisp. Disabled when NEXT_PUBLIC_CRISP_WEBSITE_ID is unset. */
+export function CrispChat() {
   const { t } = useAppI18n()
   const [dismissed, setDismissed] = useState<boolean | null>(null)
   const [widgetReady, setWidgetReady] = useState(false)
   const [confirmDismiss, setConfirmDismiss] = useState(false)
 
   useEffect(() => {
-    const off = isTawkDismissed()
+    const off = isCrispDismissed()
     setDismissed(off)
     if (off) return
 
     const onReady = () => setWidgetReady(true)
-    window.addEventListener(TAWK_READY_EVENT, onReady)
-    return () => window.removeEventListener(TAWK_READY_EVENT, onReady)
+    window.addEventListener(CRISP_READY_EVENT, onReady)
+    return () => window.removeEventListener(CRISP_READY_EVENT, onReady)
   }, [])
 
   const handleConfirmDismiss = useCallback(() => {
-    dismissTawkPermanently()
+    dismissCrispPermanently()
     setDismissed(true)
     setWidgetReady(false)
     setConfirmDismiss(false)
   }, [])
 
-  if (dismissed !== false) {
+  if (!isCrispEnabled() || dismissed !== false) {
     return null
   }
 
   return (
     <>
       <Script
-        id="tawk-to-bootstrap"
+        id="crisp-chat"
         strategy="afterInteractive"
         dangerouslySetInnerHTML={{
-          __html: `window.Tawk_API=window.Tawk_API||{};
-window.Tawk_LoadStart=new Date();
-window.Tawk_API.customStyle={zIndex:30};
-window.Tawk_API.onLoad=function(){window.dispatchEvent(new Event("${TAWK_READY_EVENT}"));};`,
+          __html: `window.$crisp=window.$crisp||[];
+window.CRISP_WEBSITE_ID="${CRISP_WEBSITE_ID}";
+window.CRISP_READY_TRIGGER=function(){window.dispatchEvent(new Event("${CRISP_READY_EVENT}"));};
+(function(){var d=document,s=d.createElement("script");s.src="https://client.crisp.chat/l.js";s.async=1;d.getElementsByTagName("head")[0].appendChild(s);})();`,
         }}
       />
-      <Script
-        id="tawk-to-embed"
-        src={TAWK_EMBED_SRC}
-        strategy="afterInteractive"
-        crossOrigin="anonymous"
-      />
-      <TawkIdentitySync />
+      <CrispIdentitySync />
 
       {widgetReady && (
         <div
@@ -74,14 +68,14 @@ window.Tawk_API.onLoad=function(){window.dispatchEvent(new Event("${TAWK_READY_E
             <div
               className="pointer-events-auto w-[min(100vw-1.5rem,18rem)] rounded-xl border border-gray-200 bg-white p-3 shadow-lg text-left"
               role="dialog"
-              aria-labelledby="tawk-dismiss-title"
+              aria-labelledby="crisp-dismiss-title"
             >
-              <p id="tawk-dismiss-title" className="text-sm font-medium text-gray-900">
-                {t('app.tawk.dismissTitle', 'Hide live chat?')}
+              <p id="crisp-dismiss-title" className="text-sm font-medium text-gray-900">
+                {t('app.crisp.dismissTitle', 'Hide live chat?')}
               </p>
               <p className="mt-1 text-xs text-gray-500 leading-relaxed">
                 {t(
-                  'app.tawk.dismissBody',
+                  'app.crisp.dismissBody',
                   'The chat bubble will not come back on this device. You can always use our Help Center for guides and answers.',
                 )}
               </p>
@@ -91,7 +85,7 @@ window.Tawk_API.onLoad=function(){window.dispatchEvent(new Event("${TAWK_READY_E
                 rel="noopener noreferrer"
                 className="mt-2 inline-block text-xs font-medium text-accent-600 hover:text-accent-700"
               >
-                {t('app.tawk.helpCenter', 'Open Help Center')} →
+                {t('app.crisp.helpCenter', 'Open Help Center')} →
               </a>
               <div className="mt-3 flex gap-2">
                 <button
@@ -99,14 +93,14 @@ window.Tawk_API.onLoad=function(){window.dispatchEvent(new Event("${TAWK_READY_E
                   onClick={() => setConfirmDismiss(false)}
                   className="flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                 >
-                  {t('app.tawk.cancel', 'Cancel')}
+                  {t('app.crisp.cancel', 'Cancel')}
                 </button>
                 <button
                   type="button"
                   onClick={handleConfirmDismiss}
                   className="flex-1 rounded-lg bg-gray-900 px-2 py-1.5 text-xs font-medium text-white hover:bg-black"
                 >
-                  {t('app.tawk.confirmHide', 'Hide permanently')}
+                  {t('app.crisp.confirmHide', 'Hide permanently')}
                 </button>
               </div>
             </div>
@@ -117,7 +111,7 @@ window.Tawk_API.onLoad=function(){window.dispatchEvent(new Event("${TAWK_READY_E
               className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white/95 px-2.5 py-1 text-[11px] font-medium text-gray-600 shadow-md backdrop-blur hover:bg-white hover:text-gray-900"
             >
               <XMarkIcon className="h-3.5 w-3.5" aria-hidden />
-              {t('app.tawk.hideChat', 'Hide chat')}
+              {t('app.crisp.hideChat', 'Hide chat')}
             </button>
           )}
         </div>

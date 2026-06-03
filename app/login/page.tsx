@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon, CheckCircleIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
+import DarkAuthShell from '../components/DarkAuthShell'
 import {
   applySingleCompanyAutoSelect,
   getDashboardHref,
@@ -207,46 +208,42 @@ function LoginForm() {
 
   if (!authChecked) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/60 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 pt-safe pb-safe">
-        <div className="max-w-md mx-auto w-full text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500" />
-          <p className="mt-2 text-gray-600 text-sm">Loading…</p>
+      <DarkAuthShell>
+        <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10 pt-safe pb-safe">
+          <div className="text-center">
+            <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-accent-400" />
+            <p className="mt-2 text-sm text-gray-400">Loading…</p>
+          </div>
         </div>
-      </div>
+      </DarkAuthShell>
     )
   }
 
   const showDemo = process.env.NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS === 'true'
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-gradient-to-b from-white via-white to-primary-50/60 pt-safe pb-safe">
-      {/* soft accent blobs */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-32 -right-32 h-80 w-80 rounded-full bg-accent-200/40 blur-3xl" />
-        <div className="absolute bottom-0 -left-20 h-72 w-72 rounded-full bg-primary-200/40 blur-3xl" />
-      </div>
-
-      <div className="flex min-h-screen flex-col justify-center px-4 sm:px-6 py-10 sm:py-14">
-        <div className="mx-auto w-full max-w-md">
+    <DarkAuthShell>
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10 pt-safe pb-safe">
+        <div className="w-full max-w-sm">
           {/* Brand */}
-          <div className="mb-8 flex flex-col items-center text-center">
-            <Link href="/" className="inline-flex items-center mb-4">
+          <div className="mb-8 text-center">
+            <Link href="/" className="inline-flex items-center justify-center">
               <Image
-                src="/images/brand/logo.png"
+                src="/images/brand/logo-header-white.png"
                 alt="PathPilo"
-                width={180}
-                height={56}
+                width={160}
+                height={50}
                 priority
-                className="h-12 w-auto"
+                className="mx-auto mb-8 h-10 w-auto"
               />
             </Link>
 
             {view === 'login' && (
               <>
-                <h1 className="text-3xl font-bold text-primary-800 tracking-tight">
+                <h1 className="text-2xl font-bold tracking-tight text-white">
                   {inviteToken ? 'Sign in to accept your invite' : 'Welcome back'}
                 </h1>
-                <p className="mt-2 text-sm text-gray-600 leading-relaxed">
+                <p className="mt-1.5 text-sm leading-relaxed text-gray-300">
                   {inviteToken
                     ? inviteForExistingAccount
                       ? "Enter your password below — we'll connect you to the company from your invite."
@@ -257,21 +254,21 @@ function LoginForm() {
             )}
             {view === 'forgot' && (
               <>
-                <h1 className="text-3xl font-bold text-primary-800 tracking-tight">Forgot password?</h1>
-                <p className="mt-2 text-sm text-gray-600">No worries — we&apos;ll email you a reset link.</p>
+                <h1 className="text-2xl font-bold tracking-tight text-white">Forgot password?</h1>
+                <p className="mt-1.5 text-sm text-gray-300">No worries — we&apos;ll email you a reset link.</p>
               </>
             )}
             {view === 'forgot-sent' && (
               <>
-                <h1 className="text-3xl font-bold text-primary-800 tracking-tight">Check your inbox</h1>
-                <p className="mt-2 text-sm text-gray-600">A reset link is on its way.</p>
+                <h1 className="text-2xl font-bold tracking-tight text-white">Check your inbox</h1>
+                <p className="mt-1.5 text-sm text-gray-300">A reset link is on its way.</p>
               </>
             )}
           </div>
 
           {/* ── FORGOT PASSWORD – success ──────────────────────────── */}
           {view === 'forgot-sent' && (
-            <div className="bg-white rounded-3xl shadow-xl shadow-primary-500/5 border border-gray-100 p-8 text-center">
+            <div className="rounded-3xl bg-white p-8 text-center shadow-2xl shadow-black/40 ring-1 ring-white/10">
               <div className="w-14 h-14 bg-accent-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                 <CheckCircleIcon className="w-8 h-8 text-accent-500" />
               </div>
@@ -289,7 +286,7 @@ function LoginForm() {
 
           {/* ── FORGOT PASSWORD – request form ────────────────────── */}
           {view === 'forgot' && (
-            <div className="bg-white rounded-3xl shadow-xl shadow-primary-500/5 border border-gray-100 p-8">
+            <div className="rounded-3xl bg-white p-8 shadow-2xl shadow-black/40 ring-1 ring-white/10">
               {forgotError && (
                 <div className="mb-5 p-4 bg-red-50 border border-red-200 rounded-xl">
                   <p className="text-red-800 text-sm">{forgotError}</p>
@@ -297,7 +294,7 @@ function LoginForm() {
               )}
               <form onSubmit={handleForgotSubmit} className="space-y-5">
                 <div>
-                  <label htmlFor="forgot-email" className="block text-sm font-semibold text-primary-800 mb-2">Email address</label>
+                  <label htmlFor="forgot-email" className="mb-1.5 block text-xs font-semibold text-gray-700">Email address</label>
                   <input
                     type="email"
                     id="forgot-email"
@@ -329,7 +326,7 @@ function LoginForm() {
               <div className="mt-6 text-center">
                 <button
                   onClick={() => { setView('login'); setForgotError('') }}
-                  className="text-sm text-gray-500 hover:text-primary-700 font-medium"
+                  className="text-sm font-semibold text-accent-700 hover:text-accent-800"
                 >
                   ← Back to sign in
                 </button>
@@ -340,7 +337,7 @@ function LoginForm() {
           {/* ── LOGIN FORM ────────────────────────────────────────── */}
           {view === 'login' && (
             <>
-              <div className="bg-white rounded-3xl shadow-xl shadow-primary-500/5 border border-gray-100 p-8">
+              <div className="rounded-3xl bg-white p-8 shadow-2xl shadow-black/40 ring-1 ring-white/10">
                 {error && (
                   <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
                     <div className="flex items-center gap-2">
@@ -354,7 +351,7 @@ function LoginForm() {
 
                 <form onSubmit={handleSubmit} className="space-y-5">
                   <div>
-                    <label htmlFor="email" className="block text-sm font-semibold text-primary-800 mb-2">Email</label>
+                    <label htmlFor="email" className="mb-1.5 block text-xs font-semibold text-gray-700">Email</label>
                     <input
                       type="email"
                       id="email"
@@ -370,7 +367,7 @@ function LoginForm() {
 
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label htmlFor="password" className="block text-sm font-semibold text-primary-800">Password</label>
+                      <label htmlFor="password" className="text-xs font-semibold text-gray-700">Password</label>
                       <button
                         type="button"
                         onClick={() => { setView('forgot'); setForgotEmail(formData.email); setForgotError('') }}
@@ -427,7 +424,7 @@ function LoginForm() {
                           ? `/register?invite=${inviteToken}&lang=${requestedLang}`
                           : `/register?lang=${requestedLang}`
                       }
-                      className="block w-full py-3 px-4 rounded-xl border-2 border-primary-700 text-primary-800 hover:bg-primary-50 font-semibold text-center transition-colors"
+                      className="block w-full rounded-xl border-2 border-gray-200 py-3 px-4 text-center text-sm font-semibold text-gray-800 transition-colors hover:border-gray-300 hover:bg-gray-50"
                     >
                       Create your free account
                     </Link>
@@ -436,29 +433,16 @@ function LoginForm() {
               </div>
 
               {/* Trust strip */}
-              <div className="mt-6 flex items-center justify-center gap-4 text-xs text-gray-500">
-                <div className="flex items-center gap-1.5">
-                  <CheckCircleIcon className="h-4 w-4 text-accent-500" />
-                  <span>Free trial</span>
-                </div>
-                <span className="text-gray-300">•</span>
-                <div className="flex items-center gap-1.5">
-                  <CheckCircleIcon className="h-4 w-4 text-accent-500" />
-                  <span>No credit card</span>
-                </div>
-                <span className="text-gray-300">•</span>
-                <div className="flex items-center gap-1.5">
-                  <CheckCircleIcon className="h-4 w-4 text-accent-500" />
-                  <span>Cancel anytime</span>
-                </div>
-              </div>
+              <p className="mt-6 text-center text-xs text-gray-400">
+                Free trial · No credit card · Cancel anytime
+              </p>
 
               {showDemo && (
-                <div className="mt-6 bg-white rounded-2xl border border-gray-200 p-4">
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Demo accounts</p>
-                  <div className="space-y-1 text-xs text-gray-500">
-                    <p><span className="font-medium text-gray-700">Owner:</span> admin@glasklart.dk / demo1234</p>
-                    <p><span className="font-medium text-gray-700">Employee:</span> mikkel@glasklart.dk / demo1234</p>
+                <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Demo accounts</p>
+                  <div className="space-y-1 text-xs text-gray-400">
+                    <p><span className="font-medium text-gray-300">Owner:</span> admin@glasklart.dk / demo1234</p>
+                    <p><span className="font-medium text-gray-300">Employee:</span> mikkel@glasklart.dk / demo1234</p>
                   </div>
                 </div>
               )}
@@ -466,23 +450,20 @@ function LoginForm() {
           )}
 
           {/* Footer */}
-          <p className="mt-8 text-center text-xs text-gray-500">
-            © {new Date().getFullYear()} PathPilo. All rights reserved.
+          <p className="mt-5 text-center text-xs text-gray-500">
+            © {new Date().getFullYear()} PathPilo
           </p>
         </div>
       </div>
-    </div>
+    </DarkAuthShell>
   )
 }
 
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-gradient-to-b from-white to-primary-50/60 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500"></div>
-          <p className="mt-2 text-gray-600">Loading...</p>
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-[#0a1414]">
+        <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-accent-400" />
       </div>
     }>
       <LoginForm />

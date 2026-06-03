@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter, useParams } from 'next/navigation'
 import { apiUrl } from '../../../utils/api'
+import BillingPanel from './BillingPanel'
 
 interface User {
   id: number
@@ -43,12 +44,6 @@ export default function CompanyDetailPage() {
   // Hold state
   const [holdLoading, setHoldLoading] = useState(false)
   const [holdError, setHoldError] = useState('')
-
-  // Expiry state
-  const [expiryInput, setExpiryInput] = useState('')
-  const [expirySaving, setExpirySaving] = useState(false)
-  const [expiryError, setExpiryError] = useState('')
-  const [expirySuccess, setExpirySuccess] = useState('')
 
   // Delete state
   const [showDeleteModal, setShowDeleteModal] = useState(false)
@@ -92,10 +87,6 @@ export default function CompanyDetailPage() {
       if (companyRes.ok) {
         const c = companyData.company || companyData
         setCompany(c)
-        // Pre-fill expiry input with existing value (YYYY-MM-DD for date input)
-        if (c.expiresAt) {
-          setExpiryInput(new Date(c.expiresAt).toISOString().split('T')[0])
-        }
       } else {
         setError(companyData.error || 'Failed to fetch company')
       }
@@ -104,30 +95,6 @@ export default function CompanyDetailPage() {
       setError('Network error: ' + (err as Error).message)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const handleSaveExpiry = async (dateStr: string | null) => {
-    setExpirySaving(true); setExpiryError(''); setExpirySuccess('')
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/admin/companies/${companyId}/expiry`), {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expiresAt: dateStr ? new Date(dateStr).toISOString() : null }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setCompany(prev => prev ? { ...prev, expiresAt: data.company.expiresAt } : prev)
-        setExpirySuccess(data.message)
-        setTimeout(() => setExpirySuccess(''), 3000)
-      } else {
-        setExpiryError(data.error || 'Failed to save')
-      }
-    } catch {
-      setExpiryError('Network error. Please try again.')
-    } finally {
-      setExpirySaving(false)
     }
   }
 
@@ -181,16 +148,6 @@ export default function CompanyDetailPage() {
   const fmt = (d: string) => new Date(d).toLocaleDateString('en-GB', {
     year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
-
-  const expiryStatus = () => {
-    if (!company?.expiresAt) return null
-    const now = Date.now()
-    const exp = new Date(company.expiresAt).getTime()
-    const days = Math.ceil((exp - now) / 86400000)
-    if (days < 0)  return { label: 'Expired', cls: 'bg-red-100 text-red-700 border-red-200' }
-    if (days <= 7) return { label: `Expires in ${days} day${days === 1 ? '' : 's'}`, cls: 'bg-orange-100 text-orange-700 border-orange-200' }
-    return { label: `Expires ${new Date(company.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`, cls: 'bg-green-100 text-green-700 border-green-200' }
-  }
 
   const roleBadge = (role: string) => ({
     owner: 'bg-purple-100 text-purple-800 border-purple-200',
@@ -320,107 +277,23 @@ export default function CompanyDetailPage() {
               </div>
             </div>
 
-            {/* Access expiry */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">Access &amp; expiry</h2>
-                  <p className="text-sm text-gray-500 mt-0.5">Set a date when access should expire. Leave blank for permanent access.</p>
-                </div>
-                {expiryStatus() && (
-                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${expiryStatus()!.cls}`}>
-                    {expiryStatus()!.label}
-                  </span>
-                )}
-                {!company?.expiresAt && (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border bg-gray-100 text-gray-500 border-gray-200">
-                    No expiry set — permanent
-                  </span>
-                )}
-              </div>
-
-              {/* Mismatch banner: company is suspended but expiry is in the future (or cleared) */}
-              {isSuspended && (!company?.expiresAt || new Date(company.expiresAt) > new Date()) && (
-                <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                  <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                  </svg>
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-amber-900">This company is still on hold</p>
-                    <p className="text-xs text-amber-800 mt-0.5">
-                      Access is valid {company?.expiresAt ? `until ${new Date(company.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'permanently'}, but the company is suspended (likely auto-suspended when the previous trial expired). Click <strong>Reactivate now</strong> to lift the hold so the owner can log in.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleToggleHold}
-                    disabled={holdLoading}
-                    className="px-3 py-1.5 rounded-md text-xs font-semibold border border-green-400 bg-green-100 text-green-800 hover:bg-green-200 disabled:opacity-50 flex-shrink-0"
-                  >
-                    {holdLoading ? 'Reactivating…' : 'Reactivate now'}
-                  </button>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-end gap-3">
-                {/* Date input */}
-                <div className="flex-1 min-w-[180px]">
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Expiry date</label>
-                  <input
-                    type="date"
-                    value={expiryInput}
-                    onChange={e => { setExpiryInput(e.target.value); setExpiryError(''); setExpirySuccess('') }}
-                    min={new Date().toISOString().split('T')[0]}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  />
-                </div>
-
-                {/* Quick presets */}
-                <div className="flex gap-2 flex-wrap">
-                  {[
-                    { label: '14-day trial', days: 14 },
-                    { label: '1 month',      days: 30 },
-                    { label: '6 months',     days: 183 },
-                    { label: '1 year',       days: 365 },
-                  ].map(p => {
-                    const d = new Date(); d.setDate(d.getDate() + p.days)
-                    const iso = d.toISOString().split('T')[0]
-                    return (
-                      <button
-                        key={p.label}
-                        type="button"
-                        onClick={() => { setExpiryInput(iso); setExpiryError(''); setExpirySuccess('') }}
-                        className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-700 transition-colors"
-                      >
-                        {p.label}
-                      </button>
-                    )
-                  })}
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleSaveExpiry(expiryInput || null)}
-                    disabled={expirySaving}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
-                  >
-                    {expirySaving ? 'Saving…' : 'Save'}
-                  </button>
-                  {company?.expiresAt && (
-                    <button
-                      onClick={() => { setExpiryInput(''); handleSaveExpiry(null) }}
-                      disabled={expirySaving}
-                      className="px-4 py-2 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 text-sm font-medium rounded-lg transition-colors"
-                    >
-                      Clear (permanent)
-                    </button>
-                  )}
+            {/* Reactivate banner when on hold */}
+            {isSuspended && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-amber-900">This company is on hold</p>
+                  <p className="text-xs text-amber-800 mt-0.5">
+                    All users are locked out until you reactivate it. Use <strong>Reactivate company</strong> in the header above.
+                  </p>
                 </div>
               </div>
+            )}
 
-              {expiryError   && <p className="mt-3 text-sm text-red-600">{expiryError}</p>}
-              {expirySuccess && <p className="mt-3 text-sm text-green-600">{expirySuccess}</p>}
-            </div>
+            {/* Plan, billing, invoices & SMS */}
+            <BillingPanel companyId={companyId} onPlanChanged={fetchCompanyData} />
 
             {/* Users table */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200">

@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'next/navigation'
 import {
   CheckCircleIcon,
   ArrowPathIcon,
@@ -15,6 +16,13 @@ import {
   SettingsSection,
   SettingsRow,
 } from '../../components/settings/SettingsUI'
+import {
+  MONTHLY_PRICE,
+  ANNUAL_PRICE,
+  ANNUAL_SAVING,
+  ANNUAL_SAVE_PERCENT,
+} from '@/app/config/planPricing'
+import { getStoredUser, isCompanyOwner, isOwnerOfSlug } from '@/app/utils/sessionClient'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -30,11 +38,6 @@ interface SubscriptionStatus {
   hasStripeCustomer: boolean
 }
 
-const MONTHLY_PRICE = 39
-const ANNUAL_PRICE  = Math.round(MONTHLY_PRICE * 12 * 0.65) // 35% off
-const ANNUAL_PER_MO = Math.round(ANNUAL_PRICE / 12)
-const ANNUAL_SAVING = Math.round(MONTHLY_PRICE * 12 - ANNUAL_PRICE)
-
 const SOLO_FEATURES    = ['Unlimited jobs & scheduling', 'Unlimited clients', 'Invoicing & payments']
 const COMPANY_FEATURES = ['Everything in Solo', 'Unlimited employees', 'Employee scheduling & roles']
 
@@ -44,7 +47,27 @@ function formatDate(iso: string) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+function resolveBillingContext(companySlug: string | undefined) {
+  const user = getStoredUser()
+  if (!user) return { companyId: undefined as number | undefined, canManage: false }
+
+  const companies = user.companies as Array<{ id?: number; slug?: string }> | undefined
+  const match = companySlug
+    ? companies?.find((c) => c.slug === companySlug)
+    : undefined
+
+  const active = user.activeCompany as { id?: number; slug?: string } | undefined
+  const companyId = match?.id ?? active?.id ?? (user.companyId as number | undefined)
+  const canManage = companySlug ? isOwnerOfSlug(user, companySlug) : isCompanyOwner(user)
+
+  return { companyId, companySlug, canManage }
+}
+
 export default function BillingSettingsPage() {
+  const params = useParams()
+  const companySlug = typeof params?.company === 'string' ? params.company : undefined
+  const billingContext = useMemo(() => resolveBillingContext(companySlug), [companySlug])
+
   const [status, setStatus]             = useState<SubscriptionStatus | null>(null)
   const [loading, setLoading]           = useState(true)
   const [error, setError]               = useState<string | null>(null)
@@ -60,11 +83,21 @@ export default function BillingSettingsPage() {
     window.history.replaceState({}, '', window.location.pathname)
   }, [])
 
+  const billingBody = useMemo(() => {
+    const body: { companyId?: number; companySlug?: string } = {}
+    if (billingContext.companyId) body.companyId = billingContext.companyId
+    if (companySlug) body.companySlug = companySlug
+    return body
+  }, [billingContext.companyId, companySlug])
+
   const fetchStatus = useCallback(async () => {
     setLoading(true); setError(null)
     try {
       const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/stripe/subscription'), { headers: { Authorization: `Bearer ${token}` } })
+      const query = billingContext.companyId ? `?companyId=${billingContext.companyId}` : ''
+      const res = await fetch(apiUrl(`/stripe/subscription${query}`), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
       if (!res.ok) throw new Error('Could not load billing status')
       setStatus(await res.json())
     } catch (e: unknown) {
@@ -72,7 +105,7 @@ export default function BillingSettingsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [billingContext.companyId])
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
 
@@ -83,7 +116,7 @@ export default function BillingSettingsPage() {
       const res = await fetch(apiUrl('/stripe/checkout'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ interval }),
+        body: JSON.stringify({ interval, ...billingBody }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Checkout failed')
@@ -98,7 +131,11 @@ export default function BillingSettingsPage() {
     setOpeningPortal(true)
     try {
       const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/stripe/portal'), { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      const res = await fetch(apiUrl('/stripe/portal'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(billingBody),
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not open billing portal')
       window.location.href = data.url
@@ -218,14 +255,25 @@ export default function BillingSettingsPage() {
                 <h3 className="text-base font-bold text-gray-900">Company</h3>
               </div>
 
-              {/* Price reflects the active sub interval, or the selected interval when upgrading */}
               <div className="mb-4">
-                <span className="text-2xl font-bold text-gray-900">
-                  £{hasActiveSub
-                    ? (status!.subscription!.interval === 'year' ? ANNUAL_PER_MO : MONTHLY_PRICE)
-                    : (interval === 'year' ? ANNUAL_PER_MO : MONTHLY_PRICE)}
-                </span>
-                <span className="ml-1 text-sm text-gray-500">/month</span>
+                {(hasActiveSub ? status!.subscription!.interval === 'year' : interval === 'year') ? (
+                  <>
+                    <div className="flex flex-wrap items-baseline gap-x-1">
+                      <span className="text-2xl font-bold text-gray-900">£{ANNUAL_PRICE}</span>
+                      <span className="text-sm text-gray-500">/year</span>
+                    </div>
+                    {!hasActiveSub && (
+                      <p className="mt-2 inline-flex rounded-lg border border-accent-200 bg-accent-50 px-2.5 py-1 text-sm font-bold text-accent-700">
+                        Save £{ANNUAL_SAVING}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-wrap items-baseline gap-x-1">
+                    <span className="text-2xl font-bold text-gray-900">£{MONTHLY_PRICE}</span>
+                    <span className="text-sm text-gray-500">/month</span>
+                  </div>
+                )}
               </div>
 
               <ul className="mb-4 flex-1 space-y-2">
@@ -237,7 +285,12 @@ export default function BillingSettingsPage() {
               </ul>
 
               {/* Upgrade controls (only when not already paying) */}
-              {!hasActiveSub && (
+              {!hasActiveSub && !billingContext.canManage && (
+                <p className="text-sm text-gray-500">
+                  Only the company owner can upgrade the plan. Ask your admin to subscribe in Plan &amp; billing.
+                </p>
+              )}
+              {!hasActiveSub && billingContext.canManage && (
                 <div className="space-y-3">
                   <div>
                     <label htmlFor="billing-interval" className="mb-1.5 block text-xs font-medium text-gray-500">
@@ -250,7 +303,7 @@ export default function BillingSettingsPage() {
                       className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm transition focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
                     >
                       <option value="month">Monthly — £{MONTHLY_PRICE}/mo</option>
-                      <option value="year">Annual — £{ANNUAL_PER_MO}/mo (save £{ANNUAL_SAVING}/yr)</option>
+                      <option value="year">Annual — £{ANNUAL_PRICE}/yr (save {ANNUAL_SAVE_PERCENT}%)</option>
                     </select>
                   </div>
 
@@ -265,7 +318,7 @@ export default function BillingSettingsPage() {
                   </button>
 
                   {interval === 'year' && (
-                    <p className="text-center text-xs text-gray-500">£{ANNUAL_PRICE} billed annually · cancel anytime</p>
+                    <p className="text-center text-xs text-gray-500">Save £{ANNUAL_SAVING} · cancel anytime</p>
                   )}
                 </div>
               )}

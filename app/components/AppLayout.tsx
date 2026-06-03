@@ -2,14 +2,15 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import { Bars3Icon, Cog6ToothIcon } from '@heroicons/react/24/outline'
-import { useUser } from '../hooks/useUser'
+import { Bars3Icon } from '@heroicons/react/24/outline'
+import { useUser, SESSION_UPDATED_EVENT } from '../hooks/useUser'
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import SettingsSidebar from './SettingsSidebar'
 import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
+import WorkspaceAccessGuard from './WorkspaceAccessGuard'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -49,7 +50,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
     // Same workspace as the URL slug — no server round-trip (avoids loops when
     // `useUser` merges profile and replaces the `user` object reference).
-    if (activeCompanyId != null && activeCompanyId === targetCompanyId) return
+    if (
+      activeCompanyId != null &&
+      targetCompanyId != null &&
+      Number(activeCompanyId) === Number(targetCompanyId)
+    ) {
+      return
+    }
 
     const backoffKey = `${urlSlug}:${targetCompanyId}`
     if (switchBackoffKey.current === backoffKey) return
@@ -80,8 +87,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
             companies: data.user.companies || [],
             activeCompany: data.user.activeCompany || null,
           }))
-          // Reload to pick up the new token throughout the app
-          window.location.reload()
+          window.dispatchEvent(new Event(SESSION_UPDATED_EVENT))
         } else {
           switchBackoffKey.current = backoffKey
         }
@@ -110,16 +116,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // Derive the correct slug for back-navigation from the active company
   const activeSlug = (user.activeCompany as any)?.slug || ''
 
-  // Resolve href for the cog icon in the mobile top bar so it always lands
-  // on the company-scoped settings page when possible.
-  const settingsHrefMobile = (() => {
-    const slug = getActiveCompanySlugFromSession(user as Record<string, unknown>)
-    return slug ? `/${slug}/settings/user` : '/settings/user'
-  })()
-
   const dashboardHrefMobile = getDashboardHref(user as Record<string, unknown>)
 
-  return (
+  const shell = (
     <div className="min-h-screen bg-page flex overflow-x-hidden">
       {/* Desktop side column (lg+). Settings and main app share the same
           shell so anywhere the user is, the chrome is consistent. */}
@@ -142,17 +141,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
         </>
       ) : (
         <>
+          <Sidebar user={user} />
           <Sidebar
             user={user}
-            onSettingsClick={() => {
-              window.location.href = settingsHrefMobile
-            }}
-          />
-          <Sidebar
-            user={user}
-            onSettingsClick={() => {
-              window.location.href = settingsHrefMobile
-            }}
             isMobileOpen={isMobileNavOpen}
             onMobileClose={() => setIsMobileNavOpen(false)}
           />
@@ -185,13 +176,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
               <span className="text-base">PathPilo</span>
               <span className="text-sm text-primary-500/60 font-normal">.app</span>
             </Link>
-            <Link
-              href={settingsHrefMobile}
-              className="-mr-2 p-2 rounded-lg text-primary-500 hover:bg-primary-500/5 active:bg-primary-500/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-              aria-label={t('app.layout.openSettings', 'Settings')}
-            >
-              <Cog6ToothIcon className="w-5 h-5" />
-            </Link>
+            <div className="w-10 h-10 flex-shrink-0" aria-hidden />
           </div>
         </header>
 
@@ -201,4 +186,12 @@ export default function AppLayout({ children }: AppLayoutProps) {
       </div>
     </div>
   )
+
+  // Legacy /settings/* routes are not under [company]/layout — guard them here.
+  if (pathname.startsWith('/settings')) {
+    const slug = getActiveCompanySlugFromSession(user as Record<string, unknown>)
+    return <WorkspaceAccessGuard companySlug={slug || undefined}>{shell}</WorkspaceAccessGuard>
+  }
+
+  return shell
 }

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '@/app/utils/api'
-import { hasAppWorkspace } from '@/app/utils/sessionClient'
+import { getDashboardHref, hasAppWorkspace } from '@/app/utils/sessionClient'
 
 interface User {
   id: number
@@ -39,13 +39,37 @@ interface User {
     suspendedAt?: string | null
     role: string
     isOwner: boolean
+    onboardingCompleted?: boolean
+    onboardingStep?: string
   } | null
+}
+
+export const SESSION_UPDATED_EVENT = 'vevago:session-updated'
+
+function readStoredUser(): User | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem('user')
+    if (!raw) return null
+    return JSON.parse(raw) as User
+  } catch {
+    return null
+  }
 }
 
 export function useUser() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+
+  useEffect(() => {
+    const onSessionUpdated = () => {
+      const stored = readStoredUser()
+      if (stored) setUser(stored)
+    }
+    window.addEventListener(SESSION_UPDATED_EVENT, onSessionUpdated)
+    return () => window.removeEventListener(SESSION_UPDATED_EVENT, onSessionUpdated)
+  }, [])
 
   useEffect(() => {
     // Check if user is logged in
@@ -73,18 +97,35 @@ export function useUser() {
         .then((data) => {
           const p = data?.user
           if (!p) return
+          const storedActive = user.activeCompany
+          const companies = Array.isArray(p.companies) ? p.companies : user.companies
+          let activeCompany = p.activeCompany !== undefined ? p.activeCompany : user.activeCompany
+          // Keep the user's chosen workspace when profile sync runs before JWT catches up.
+          if (storedActive?.id && Array.isArray(companies)) {
+            const match = companies.find((c: { id?: number }) => c.id === storedActive.id)
+            if (match) {
+              activeCompany = {
+                ...storedActive,
+                ...match,
+                id: match.id,
+                onboardingCompleted: match.onboardingCompleted,
+                onboardingStep: match.onboardingStep,
+              }
+            }
+          }
+          const membershipRole = activeCompany?.role
           const merged = {
             ...user,
             firstName: p.firstName ?? user.firstName,
             lastName: p.lastName ?? user.lastName,
             email: p.email ?? user.email,
             languageCode: p.languageCode ?? user.languageCode,
-            role: p.role ?? user.role,
-            ...(Array.isArray(p.companies) ? { companies: p.companies } : {}),
+            role: membershipRole ?? p.role ?? user.role,
+            ...(Array.isArray(companies) ? { companies } : {}),
             ...(p.pendingInvites !== undefined ? { pendingInvites: p.pendingInvites } : {}),
-            ...(p.activeCompany !== undefined ? { activeCompany: p.activeCompany } : {}),
-            ...(p.companyId !== undefined ? { companyId: p.companyId } : {}),
-            ...(p.companyName !== undefined ? { companyName: p.companyName } : {}),
+            activeCompany: activeCompany ?? null,
+            companyId: activeCompany?.id ?? p.companyId ?? user.companyId,
+            companyName: activeCompany?.name ?? p.companyName ?? user.companyName,
           }
           localStorage.setItem('user', JSON.stringify(merged))
           setUser(merged)
@@ -93,9 +134,19 @@ export function useUser() {
           // Keep existing local session payload if sync fails.
         })
       
-      // Check if user has workspace (membership and/or pending invitations)
+      // Owners must finish setup wizard (through plan selection); employees skip it.
       if (!hasAppWorkspace(user as Record<string, unknown>)) {
         router.push('/setup/company')
+        return
+      }
+
+      const href = getDashboardHref(user as Record<string, unknown>)
+      if (
+        href.startsWith('/setup/') &&
+        typeof window !== 'undefined' &&
+        !window.location.pathname.startsWith('/setup')
+      ) {
+        router.push(href)
         return
       }
 

@@ -22,7 +22,7 @@ interface User {
 }
 
 interface StartedSignup {
-  kind?: 'verification' | 'draft'
+  kind?: 'verification' | 'draft' | 'owner_wizard'
   email: string | null
   firstName?: string | null
   lastName?: string | null
@@ -32,19 +32,39 @@ interface StartedSignup {
   startedAt: string
   expiresAt?: string | null
   updatedAt?: string
+  companyName?: string | null
+  userId?: number | null
 }
 
 function startedSignupLabel(row: StartedSignup): string {
-  if (row.kind === 'verification' || !row.kind) {
-    if (row.codeVerified) return 'Email verified — account not created'
-    return 'Verification code sent'
+  if (row.kind === 'verification' || (!row.kind && row.codeVerified !== undefined)) {
+    if (row.codeVerified) return '2 · Verified email (no account yet)'
+    return '1 · Entered email (code sent)'
+  }
+  if (row.kind === 'owner_wizard') {
+    const map: Record<string, string> = {
+      wizard_company: '3 · Setup — company',
+      wizard_services: '3 · Setup — services',
+      wizard_clients: '3 · Setup — clients',
+      wizard_completed: '4 · Choose plan',
+    }
+    const base = map[row.step || ''] || '3 · Setup wizard'
+    return row.companyName ? `${base} (${row.companyName})` : base
   }
   const map: Record<string, string> = {
-    name_entered: 'Entered name',
-    email_entered: 'Entered email',
-    details_ready: 'Form complete (before code)',
-    code_sent: 'Verification code sent',
-    code_verified: 'Email verified — account not created',
+    name_entered: 'Started — name',
+    email_entered: '1 · Entered email',
+    email_verified: '2 · Verified email',
+    details_ready: 'Form ready (before code)',
+    code_sent: '1 · Entered email (code sent)',
+    code_verified: '2 · Verified email (no account yet)',
+    account_created: '3 · Account created — setup',
+    wizard_company: '3 · Setup — company',
+    wizard_services: '3 · Setup — services',
+    wizard_clients: '3 · Setup — clients',
+    wizard_completed: '4 · Choose plan',
+    plan_solo: '5 · Solo plan',
+    plan_company: '5 · Company plan',
   }
   return map[row.step || ''] || (row.step || 'In progress')
 }
@@ -317,7 +337,7 @@ export default function AdminUsersPage() {
           <div className="px-6 py-4 border-b border-gray-200 bg-amber-50/60">
             <h2 className="text-lg font-semibold text-amber-900">Started (incomplete)</h2>
             <p className="text-sm text-amber-700">
-              Includes early progress (name/email before code) and rows waiting on verification or final account creation.
+              Funnel: entered email → verified email → setup wizard → Solo or Company plan. Owners who log out mid-wizard appear here until they pick a plan.
             </p>
           </div>
           {pendingActionError ? (

@@ -2,10 +2,15 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { PlusIcon, ArrowLeftIcon } from '@heroicons/react/24/outline'
+import { PlusIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import { formatMoney, getCountryRule } from '../../config/countryRules'
 import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
+import SetupWizardLayout, {
+  setupFieldInputClass,
+  setupFieldLabelClass,
+} from '@/app/components/setup/SetupWizardLayout'
+import SetupWizardHint from '@/app/components/setup/SetupWizardHint'
 
 interface Service {
   id?: number
@@ -95,7 +100,11 @@ export default function ServicesSetupPage() {
     }
   }
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    const { advanceOnboardingProgress, patchSessionOnboardingStep } =
+      await import('../../utils/onboardingClient')
+    await advanceOnboardingProgress('clients')
+    patchSessionOnboardingStep('clients')
     router.push('/setup/clients')
   }
 
@@ -114,229 +123,129 @@ export default function ServicesSetupPage() {
     setError('')
   }
 
+  const inputCls = setupFieldInputClass
+  const labelCls = setupFieldLabelClass
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-white via-primary-50/30 to-primary-50/50">
-      <div className="max-w-4xl mx-auto px-6 py-16">
-        <div className="grid grid-cols-5 gap-16 items-start">
-          {/* Left Column - Text (40%) */}
-          <div className="col-span-2 pt-4">
-            <div className="space-y-6">
-              <div>
-                <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-accent-50 text-accent-700 border border-accent-200 mb-4">
-                  Step 2 of 3
-                </div>
-                <h1 className="text-3xl font-bold text-primary-800 mb-4 tracking-tight">
-                  Add your services
-                </h1>
-                <p className="text-base text-gray-600 leading-relaxed">
-                  Create templates for your services. These are standard values that can be customized for each client later.
-                </p>
-              </div>
-              
-              <div className="space-y-3 pt-4">
-                <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Create Company</span>
-                </div>
-                <div className="flex items-center space-x-3 text-sm font-medium text-primary-700">
-                  <div className="w-1.5 h-1.5 bg-accent-500 rounded-full"></div>
-                  <span>Setup Services</span>
-                </div>
-                <div className="flex items-center space-x-3 text-sm text-gray-400">
-                  <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                  <span>Add Clients</span>
-                </div>
-              </div>
-            </div>
-          </div>
+    <SetupWizardLayout
+      step={2}
+      title="Add your services"
+      description="Create templates for your services. You can customise pricing and duration per client later."
+      onBack={handleBack}
+    >
+      <div className="relative z-10">
+        {/* Instruction — always at top when not in form, or when form with no services yet */}
+        {!showForm && (
+          <SetupWizardHint showArrow={services.length === 0}>
+            {services.length === 0
+              ? 'Click the button below and add your service information.'
+              : 'Add another service using the button below.'}
+          </SetupWizardHint>
+        )}
 
-          {/* Right Column - Form (60%) */}
-          <div className="col-span-3">
-            <div className="mb-3">
-              <button
-                type="button"
-                onClick={handleBack}
-                className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-primary-800 transition-colors"
-              >
-                <ArrowLeftIcon className="w-4 h-4" />
-                <span>go back</span>
-              </button>
-            </div>
-            <div className="bg-white border border-gray-100 rounded-3xl p-8 shadow-xl shadow-primary-500/5">
-              
-              {/* Services List */}
-              {services.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-xs font-semibold text-primary-700 mb-3">Your Services</h3>
-                  <div className="space-y-2">
-                    {services.map((service, index) => {
-                      // Convert minutes back to hours and minutes for display
-                      const totalMinutes = parseInt(service.duration_minutes) || 0
-                      const hours = Math.floor(totalMinutes / 60)
-                      const minutes = totalMinutes % 60
-                      const durationText = hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`
-                      
-                      return (
-                        <div key={service.id || index} className="flex items-center justify-between bg-gray-50/80 rounded-lg p-3">
-                          <div className="flex-1">
-                            <div className="text-sm font-medium text-gray-900">{service.title}</div>
-                            <div className="text-xs text-gray-500">
-                              {formatMoney(Number(service.price) || 0, companyCountryCode)} • {durationText}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Add Service Form */}
-              {showForm ? (
-                <form onSubmit={handleSubmitService} className="space-y-5 animate-in slide-in-from-bottom-4 duration-300">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-gray-900">Add Service</h3>
-                    <button
-                      type="button"
-                      onClick={handleCancel}
-                      className="text-gray-400 hover:text-gray-600 text-sm"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  {error && (
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                      <p className="text-red-600 text-sm font-medium">{error}</p>
-                    </div>
-                  )}
-
-                  {/* Service Title */}
-                  <div className="group">
-                    <label htmlFor="title" className="block text-xs font-semibold text-primary-700 mb-2">
-                      Service title <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      id="title"
-                      name="title"
-                      value={currentService.title}
-                      onChange={handleInputChange}
-                      required
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
-                      placeholder="e.g. Window Cleaning"
-                    />
-                  </div>
-
-                  {/* Price */}
-                  <div className="group">
-                    <label htmlFor="price" className="block text-sm font-medium text-gray-900 mb-2">
-                      Price ({priceCurrency}) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      id="price"
-                      name="price"
-                      value={currentService.price}
-                      onChange={handleInputChange}
-                      required
-                      min="0"
-                      step="0.01"
-                      className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
-                      placeholder="e.g. 150"
-                    />
-                  </div>
-
-                  {/* Duration - Hours and Minutes */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="group">
-                      <label htmlFor="duration_hours" className="block text-xs font-semibold text-primary-700 mb-2">
-                        Hours <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        id="duration_hours"
-                        name="duration_hours"
-                        value={currentService.duration_hours}
-                        onChange={handleInputChange}
-                        required
-                        min="0"
-                        className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
-                        placeholder="e.g. 1"
-                      />
-                    </div>
-                    <div className="group">
-                      <label htmlFor="duration_minutes" className="block text-sm font-medium text-gray-900 mb-2">
-                        Minutes <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        id="duration_minutes"
-                        name="duration_minutes"
-                        value={currentService.duration_minutes}
-                        onChange={handleInputChange}
-                        required
-                        min="0"
-                        max="59"
-                        className="w-full px-4 py-3 text-sm bg-white/80 border border-gray-200/80 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-300"
-                        placeholder="e.g. 30"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Note about customization */}
-                  <div className="bg-accent-50 border border-accent-200/60 rounded-xl p-4">
-                    <p className="text-accent-700 text-xs">
-                      <span className="font-medium">Note:</span> These are standard values that can be customized for each client later.
-                    </p>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full bg-accent-500 hover:bg-accent-600 text-white py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-accent-500/20 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25"
-                  >
-                      {isSubmitting ? (
-                        <span className="flex items-center justify-center space-x-2">
-                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                          <span>Adding Service...</span>
-                        </span>
-                      ) : (
-                        'Add Service'
-                      )}
-                  </button>
-                </form>
-              ) : (
-                <div className="text-center">
-                  <button
-                    onClick={handleAddService}
-                    className="inline-flex items-center space-x-2 bg-white/80 border border-gray-200/80 rounded-xl px-6 py-4 text-sm font-medium text-gray-900 hover:bg-white hover:border-gray-300 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 transition-all duration-200 shadow-sm hover:shadow-md"
-                  >
-                    <PlusIcon className="w-5 h-5" />
-                    <span>Add a service</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="mt-8 pt-6 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={handleContinue}
-                  disabled={services.length === 0 || showForm}
-                  className={`w-full py-3 px-6 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-offset-2 transition-all duration-200 shadow-lg ${
-                    services.length === 0 || showForm
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-                      : 'bg-accent-500 hover:bg-accent-600 text-white focus:ring-accent-500/20 shadow-lg shadow-accent-500/20 hover:shadow-xl hover:shadow-accent-500/25'
-                  }`}
+        {/* Saved services — directly under the instruction */}
+        {services.length > 0 && (
+          <div className="relative z-[1] mb-4 space-y-2">
+            {services.map((service, index) => {
+              const hours = parseInt(service.duration_hours) || 0
+              const mins = parseInt(service.duration_minutes) || 0
+              const durationText = hours > 0 ? `${hours}h ${mins}min` : `${mins}min`
+              return (
+                <div
+                  key={service.id || index}
+                  className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-xl px-4 py-3"
                 >
-                  Next step
-                </button>
-              </div>
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">{service.title}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {formatMoney(Number(service.price) || 0, companyCountryCode)} · {durationText}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Add-service form or add button — below services */}
+        {showForm ? (
+        <form onSubmit={handleSubmitService} className="space-y-5 animate-in slide-in-from-bottom-2 duration-200">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-900">New service</p>
+            <button type="button" onClick={handleCancel} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+              Cancel
+            </button>
+          </div>
+
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-red-600 text-sm">{error}</p>
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="title" className={labelCls}>Service title <span className="text-red-500">*</span></label>
+            <input type="text" id="title" name="title" value={currentService.title} onChange={handleInputChange} required className={inputCls} placeholder="e.g. Window Cleaning" />
+          </div>
+
+          <div>
+            <label htmlFor="price" className={labelCls}>Price ({priceCurrency}) <span className="text-red-500">*</span></label>
+            <input type="number" id="price" name="price" value={currentService.price} onChange={handleInputChange} required min="0" step="0.01" className={inputCls} placeholder="e.g. 150" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="duration_hours" className={labelCls}>Hours <span className="text-red-500">*</span></label>
+              <input type="number" id="duration_hours" name="duration_hours" value={currentService.duration_hours} onChange={handleInputChange} required min="0" className={inputCls} placeholder="0" />
+            </div>
+            <div>
+              <label htmlFor="duration_minutes" className={labelCls}>Minutes <span className="text-red-500">*</span></label>
+              <input type="number" id="duration_minutes" name="duration_minutes" value={currentService.duration_minutes} onChange={handleInputChange} required min="0" max="59" className={inputCls} placeholder="30" />
             </div>
           </div>
+
+          <div className="rounded-xl border border-accent-200/80 bg-accent-50 px-4 py-3">
+            <p className="text-accent-800 text-xs">Pricing and duration can be customised per client later.</p>
+          </div>
+
+          <button type="submit" disabled={isSubmitting} className="w-full bg-accent-500 hover:bg-accent-400 text-white py-3.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 shadow-lg shadow-accent-500/25">
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Adding…
+              </span>
+            ) : 'Save service'}
+          </button>
+        </form>
+        ) : (
+          <button
+            type="button"
+            onClick={handleAddService}
+            className="relative z-20 flex w-full items-center justify-center gap-2.5 bg-gray-50 border border-dashed border-gray-200 rounded-xl px-6 py-5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:border-gray-300 hover:bg-white transition-all"
+          >
+            <PlusIcon className="w-4 h-4" />
+            Add a service
+          </button>
+        )}
+
+        {/* Continue */}
+        {!showForm && (
+        <div className="mt-8 pt-6 border-t border-gray-100">
+          <button
+            type="button"
+            onClick={handleContinue}
+            disabled={services.length === 0}
+            className={`w-full py-3.5 px-6 rounded-xl text-sm font-semibold transition-all ${
+              services.length === 0
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-accent-500 hover:bg-accent-600 text-white shadow-lg shadow-accent-500/20'
+            }`}
+          >
+            {services.length === 0 ? 'Add at least one service to continue' : 'Continue →'}
+          </button>
         </div>
+        )}
       </div>
-    </div>
+    </SetupWizardLayout>
   )
 }

@@ -2,6 +2,7 @@ const express = require('express');
 const Stripe = require('stripe');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
+const { resolveCompanyIdForUser } = require('../utils/resolveCompanyId');
 
 const router = express.Router();
 
@@ -11,6 +12,90 @@ function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
   return new Stripe(key, { apiVersion: '2024-06-20' });
+}
+
+function getAppBaseUrl() {
+  const raw =
+    process.env.FRONTEND_URL ||
+    process.env.APP_URL ||
+    'https://app.pathpilo.com';
+  const trimmed = String(raw).trim().replace(/\/$/, '');
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function stripeErrorMessage(err) {
+  if (!err) return 'Failed to create checkout session';
+  if (err.message === 'STRIPE_SECRET_KEY is not configured') {
+    return 'Billing is not configured on the server. Contact support.';
+  }
+  return err.message || 'Failed to create checkout session';
+}
+
+async function resolveOwnerEmail(pool, companyId) {
+  const fromMembership = await pool.query(
+    `SELECT u.email
+     FROM users u
+     INNER JOIN user_companies uc ON uc.user_id = u.id AND uc.company_id = $1
+     WHERE uc.role = 'owner'
+     LIMIT 1`,
+    [companyId]
+  );
+  if (fromMembership.rows[0]?.email) return fromMembership.rows[0].email;
+
+  const fromOwnerId = await pool.query(
+    `SELECT u.email
+     FROM companies c
+     INNER JOIN users u ON u.id = c.owner_id
+     WHERE c.id = $1
+     LIMIT 1`,
+    [companyId]
+  );
+  return fromOwnerId.rows[0]?.email || undefined;
+}
+
+async function assertCompanyOwner(pool, userId, companyId) {
+  const membership = await pool.query(
+    `SELECT role FROM user_companies WHERE user_id = $1 AND company_id = $2`,
+    [userId, companyId]
+  );
+  if (membership.rows[0]?.role === 'owner') return;
+
+  const owned = await pool.query(
+    'SELECT 1 FROM companies WHERE id = $1 AND owner_id = $2',
+    [companyId, userId]
+  );
+  if (owned.rows.length > 0) return;
+
+  const err = new Error('Only the company owner can manage billing');
+  err.status = 403;
+  throw err;
+}
+
+async function ensureStripeCustomer(stripe, pool, company, customerEmail) {
+  let customerId = company.stripe_customer_id;
+
+  if (customerId) {
+    try {
+      await stripe.customers.retrieve(customerId);
+      return customerId;
+    } catch (err) {
+      if (err?.code !== 'resource_missing') throw err;
+      console.warn(`[stripe/checkout] stale customer ${customerId} for company ${company.id}, recreating`);
+      customerId = null;
+    }
+  }
+
+  const customer = await stripe.customers.create({
+    email: customerEmail,
+    name: company.name,
+    metadata: { companyId: String(company.id) },
+  });
+  await pool.query(
+    'UPDATE companies SET stripe_customer_id = $1 WHERE id = $2',
+    [customer.id, company.id]
+  );
+  return customer.id;
 }
 
 function authenticateToken(req, res, next) {
@@ -41,10 +126,18 @@ async function initStripeSchema(pool) {
 // Returns the current billing status for the authenticated company.
 router.get('/subscription', authenticateToken, async (req, res) => {
   try {
+    const queryCompanyId = req.query?.companyId != null ? Number(req.query.companyId) : null;
+    const companyId = await resolveCompanyIdForUser(
+      pool,
+      req.user,
+      queryCompanyId || req.body?.companyId
+    );
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
     const result = await pool.query(
       `SELECT plan, expires_at, stripe_customer_id, stripe_subscription_id, billing_interval
        FROM companies WHERE id = $1`,
-      [req.user.companyId]
+      [companyId]
     );
 
     if (!result.rows.length) return res.status(404).json({ error: 'Company not found' });
@@ -52,7 +145,6 @@ router.get('/subscription', authenticateToken, async (req, res) => {
     const company = result.rows[0];
     let subscription = null;
 
-    // If there's an active Stripe subscription, fetch live status
     if (company.stripe_subscription_id) {
       try {
         const stripe = getStripe();
@@ -93,7 +185,13 @@ router.get('/subscription', authenticateToken, async (req, res) => {
 router.post('/checkout', authenticateToken, async (req, res) => {
   try {
     const stripe = getStripe();
-    const { interval = 'month' } = req.body;
+    const { interval = 'month', companySlug } = req.body;
+    const userId = req.user?.userId ?? req.user?.id;
+
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    await assertCompanyOwner(pool, userId, companyId);
 
     const priceId = interval === 'year'
       ? process.env.STRIPE_PRICE_ANNUAL
@@ -103,56 +201,49 @@ router.post('/checkout', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: `STRIPE_PRICE_${interval === 'year' ? 'ANNUAL' : 'MONTHLY'} is not configured` });
     }
 
-    // Fetch company to get/create stripe customer
     const result = await pool.query(
-      'SELECT id, name, stripe_customer_id FROM companies WHERE id = $1',
-      [req.user.companyId]
+      `SELECT id, name, slug, plan, expires_at, stripe_customer_id, stripe_subscription_id
+       FROM companies WHERE id = $1`,
+      [companyId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Company not found' });
 
     const company = result.rows[0];
+    const customerEmail = await resolveOwnerEmail(pool, companyId);
+    const customerId = await ensureStripeCustomer(stripe, pool, company, customerEmail);
 
-    // Resolve customer email from owner user
-    const ownerResult = await pool.query(
-      `SELECT email FROM users WHERE company_id = $1 AND role = 'owner' LIMIT 1`,
-      [req.user.companyId]
-    );
-    const customerEmail = ownerResult.rows[0]?.email;
+    const slug = companySlug || company.slug;
+    const billingPath = slug ? `/${slug}/settings/billing` : '/settings/billing';
+    const appBase = getAppBaseUrl();
 
-    // Re-use existing Stripe customer or create a new one
-    let customerId = company.stripe_customer_id;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: customerEmail,
-        name: company.name,
-        metadata: { companyId: String(company.id) },
-      });
-      customerId = customer.id;
-      await pool.query(
-        'UPDATE companies SET stripe_customer_id = $1 WHERE id = $2',
-        [customerId, company.id]
-      );
-    }
+    // In-app Pro trial: charge starts when they subscribe — no second Stripe trial.
+    const includeStripeTrial =
+      company.plan !== 'pro' && !company.stripe_subscription_id;
 
-    const appBase = process.env.APP_URL || 'https://app.pathpilo.com';
-
-    const session = await stripe.checkout.sessions.create({
+    const sessionParams = {
       mode: 'subscription',
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appBase}/settings/billing?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appBase}/settings/billing?cancelled=true`,
+      success_url: `${appBase}${billingPath}?success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appBase}${billingPath}?cancelled=true`,
       metadata: { companyId: String(company.id), interval },
       subscription_data: {
         metadata: { companyId: String(company.id) },
       },
       allow_promotion_codes: true,
-    });
+    };
+
+    if (includeStripeTrial) {
+      sessionParams.subscription_data.trial_period_days = 14;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     res.json({ url: session.url });
   } catch (err) {
     console.error('[stripe/checkout]', err);
-    res.status(500).json({ error: 'Failed to create checkout session' });
+    const status = err.status || 500;
+    res.status(status).json({ error: stripeErrorMessage(err) });
   }
 });
 
@@ -162,10 +253,16 @@ router.post('/checkout', authenticateToken, async (req, res) => {
 router.post('/portal', authenticateToken, async (req, res) => {
   try {
     const stripe = getStripe();
+    const userId = req.user?.userId ?? req.user?.id;
+
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    await assertCompanyOwner(pool, userId, companyId);
 
     const result = await pool.query(
       'SELECT stripe_customer_id FROM companies WHERE id = $1',
-      [req.user.companyId]
+      [companyId]
     );
     const customerId = result.rows[0]?.stripe_customer_id;
 
@@ -173,11 +270,15 @@ router.post('/portal', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'No billing account found. Please subscribe first.' });
     }
 
-    const appBase = process.env.APP_URL || 'https://app.pathpilo.com';
+    const { companySlug } = req.body;
+    const companyRow = await pool.query('SELECT slug FROM companies WHERE id = $1', [companyId]);
+    const slug = companySlug || companyRow.rows[0]?.slug;
+    const billingPath = slug ? `/${slug}/settings/billing` : '/settings/billing';
+    const appBase = getAppBaseUrl();
 
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${appBase}/settings/billing`,
+      return_url: `${appBase}${billingPath}`,
     });
 
     res.json({ url: session.url });

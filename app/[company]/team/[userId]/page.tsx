@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../../components/AppLayout'
+import ProFeatureGate from '../../../components/ProFeatureGate'
 import { apiUrl } from '../../../utils/api'
 import AddressSearchInput from '../../../components/AddressSearchInput'
 import { useAppI18n } from '../../../components/I18nProvider'
@@ -338,6 +339,7 @@ export default function EmployeeSettingsPage() {
 
   return (
     <AppLayout>
+      <ProFeatureGate>
       <div className="max-w-3xl">
 
         {/* Back */}
@@ -656,6 +658,7 @@ export default function EmployeeSettingsPage() {
           )}
         </SectionCard>
       </div>
+      </ProFeatureGate>
     </AppLayout>
   )
 }

@@ -1,11 +1,13 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { useParams, useRouter, usePathname } from 'next/navigation'
-import { useUser } from '@/app/hooks/useUser'
+import { useParams, useRouter } from 'next/navigation'
+import { useUser, SESSION_UPDATED_EVENT } from '@/app/hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 import { clearClientLocaleStorage } from '@/app/i18n'
 import { isOverwatchActive, stopOverwatchSession } from '@/app/utils/overwatch'
+import WorkspaceAccessGuard from '@/app/components/WorkspaceAccessGuard'
+import { getOwnerSetupResumePath, isOwnerUser, ownerMustCompleteSetup } from '@/app/utils/onboardingClient'
 
 function SuspendedWall({ companyName }: { companyName: string }) {
   const handleLogout = () => {
@@ -33,10 +35,7 @@ function SuspendedWall({ companyName }: { companyName: string }) {
           </p>
         </div>
         <div className="flex items-center justify-center gap-3">
-          <a
-            href="https://pathpilo.com/contact"
-            className="btn-primary"
-          >
+          <a href="https://pathpilo.com/contact" className="btn-primary">
             Go to support
           </a>
           <button
@@ -53,16 +52,29 @@ function SuspendedWall({ companyName }: { companyName: string }) {
 
 export default function CompanyLayout({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <p className="mt-2 text-gray-600">Loading...</p>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+            <p className="mt-2 text-gray-600">Loading...</p>
+          </div>
         </div>
-      </div>
-    }>
-      <CompanyLayoutContent>{children}</CompanyLayoutContent>
+      }
+    >
+      <CompanyLayoutWithGuard>{children}</CompanyLayoutWithGuard>
     </Suspense>
+  )
+}
+
+function CompanyLayoutWithGuard({ children }: { children: React.ReactNode }) {
+  const params = useParams()
+  const companySlug = params?.company as string
+
+  return (
+    <WorkspaceAccessGuard companySlug={companySlug}>
+      <CompanyLayoutContent>{children}</CompanyLayoutContent>
+    </WorkspaceAccessGuard>
   )
 }
 
@@ -81,7 +93,6 @@ function pickFallbackCompany(
 function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const params = useParams()
   const router = useRouter()
-  const pathname = usePathname()
   const { user, loading: userLoading } = useUser()
   const [isResolving, setIsResolving] = useState(true)
   const [lastResolvedSlug, setLastResolvedSlug] = useState<string | null>(null)
@@ -115,7 +126,6 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // If we already resolved this slug, don't do it again
     if (lastResolvedSlug === companySlug) {
       setIsResolving(false)
       return
@@ -125,123 +135,86 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
       try {
         setIsResolving(true)
         const token = localStorage.getItem('token')
-        
-        // Resolve slug to company
-        const resolveResponse = await fetch(apiUrl(`/companies/slug/${companySlug}`), {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
-        
-        if (!resolveResponse.ok) {
-          // User doesn't have access or company doesn't exist
-          console.log(`Company ${companySlug} not found or no access, trying to find valid company...`)
 
-          // Try to find a valid company for this user
+        const resolveResponse = await fetch(apiUrl(`/companies/slug/${companySlug}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+
+        if (!resolveResponse.ok) {
           const userStr = localStorage.getItem('user')
           if (userStr) {
             try {
               const userData = JSON.parse(userStr)
               const validCompany = pickFallbackCompany(userData, companySlug)
               if (validCompany) {
-                console.log(`Redirecting to valid company: ${validCompany.slug}`)
                 router.replace(`/${validCompany.slug}/dashboard`)
                 return
               }
-            } catch (e) {
-              console.error('Error parsing user data:', e)
+            } catch {
+              /* ignore */
             }
           }
-
-          // If no valid company found, redirect to plain dashboard (will handle company selection there)
           router.replace('/select-company')
           return
         }
-        
+
         const resolveData = await resolveResponse.json()
         const companyId = resolveData.company.id
 
-        // Company suspended — show wall immediately, no further processing
         if (resolveData.company.suspendedAt) {
           setSuspendedCompanyName(resolveData.company.name)
           setIsResolving(false)
           return
         }
-        
-        // Check if user's active company matches
+
         const userStr2 = localStorage.getItem('user')
         if (userStr2) {
           try {
             const userData = JSON.parse(userStr2)
-            if (userData.activeCompany?.id === companyId) {
-              // Already on this company, just render
+            if (Number(userData.activeCompany?.id) === Number(companyId)) {
               setLastResolvedSlug(companySlug)
               setIsResolving(false)
               return
             }
-          } catch (e) {
-            console.error('Error parsing user data in layout:', e)
+          } catch {
+            /* ignore */
           }
         }
-        
-        // Switch to this company
+
         const switchResponse = await fetch(apiUrl('/companies/switch'), {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ company_slug: companySlug })
+          body: JSON.stringify({ company_slug: companySlug }),
         })
-        
+
         if (switchResponse.ok) {
           const switchData = await switchResponse.json()
-          // Update token and user data
           localStorage.setItem('token', switchData.token)
           localStorage.setItem('user', JSON.stringify(switchData.user))
-          // Mark this slug as resolved and continue
+          window.dispatchEvent(new Event(SESSION_UPDATED_EVENT))
           setLastResolvedSlug(companySlug)
           setIsResolving(false)
           return
-        } else {
-          // Failed to switch, try to find a valid company
-          console.log('Failed to switch company, trying to find valid company...')
-
-          const userStr = localStorage.getItem('user')
-          if (userStr) {
-            try {
-              const userData = JSON.parse(userStr)
-              const validCompany = pickFallbackCompany(userData, companySlug)
-              if (validCompany) {
-                console.log(`Redirecting to valid company: ${validCompany.slug}`)
-                router.replace(`/${validCompany.slug}/dashboard`)
-                return
-              }
-            } catch (e) {
-              console.error('Error parsing user data:', e)
-            }
-          }
-
-          // If no valid company found, redirect to company selection
-          router.replace('/select-company')
         }
-      } catch (error) {
-        console.error('Error resolving company slug:', error)
 
-        // Try to find a valid company for this user
         const userStr = localStorage.getItem('user')
         if (userStr) {
           try {
             const userData = JSON.parse(userStr)
             const validCompany = pickFallbackCompany(userData, companySlug)
             if (validCompany) {
-              console.log(`Redirecting to valid company: ${validCompany.slug}`)
               router.replace(`/${validCompany.slug}/dashboard`)
               return
             }
-          } catch (e) {
-            console.error('Error parsing user data:', e)
+          } catch {
+            /* ignore */
           }
         }
-
+        router.replace('/select-company')
+      } catch {
         router.replace('/select-company')
       } finally {
         setIsResolving(false)
@@ -249,15 +222,35 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     }
 
     resolveAndSwitchCompany()
-  }, [companySlug, userLoading, router, lastResolvedSlug]) // Track last resolved slug to prevent loops
+  }, [companySlug, userLoading, router, lastResolvedSlug])
+
+  useEffect(() => {
+    if (userLoading || isResolving || !user) return
+    const u = user as unknown as Record<string, unknown>
+    if (isOwnerUser(u) && ownerMustCompleteSetup(u)) {
+      router.replace(getOwnerSetupResumePath(u))
+    }
+  }, [user, userLoading, isResolving, router])
 
   if (userLoading || isResolving) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
           <p className="mt-2 text-gray-600">Loading...</p>
         </div>
+      </div>
+    )
+  }
+
+  if (
+    user &&
+    isOwnerUser(user as unknown as Record<string, unknown>) &&
+    ownerMustCompleteSetup(user as unknown as Record<string, unknown>)
+  ) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
       </div>
     )
   }
@@ -288,5 +281,3 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     </>
   )
 }
-
-

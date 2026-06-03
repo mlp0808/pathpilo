@@ -41,6 +41,9 @@ app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+const { multiUserWorkspaceGate } = require('./middleware/multiUserWorkspaceGate');
+app.use(multiUserWorkspaceGate);
+
 // Static serving for user-uploaded company assets (logos). Stored on local
 // disk under api-server/uploads/ — easy to migrate to S3 later by swapping
 // this and the multer storage in routes/companies.js.

@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense, useCallback } from 'react'
+import { useState, useEffect, Suspense, useCallback } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage, normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../i18n'
+import DarkAuthShell from '../components/DarkAuthShell'
 import {
   applySingleCompanyAutoSelect,
   getDashboardHref,
@@ -59,11 +60,13 @@ async function postSignupProgress(
 }
 
 // ─── Flow stages ─────────────────────────────────────────────────────────────
-// email      → user is typing their email
-// expanding  → email checked OK, animation playing
-// form       → full form visible
-// verify     → code sent, waiting for code entry
-type Stage = 'email' | 'expanding' | 'form' | 'verify'
+// email  → email-only step
+// form   → full form visible (detailsOpen drives the expand animation)
+// verify → code sent, waiting for code entry
+type Stage = 'email' | 'form' | 'verify'
+
+const EXPAND_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
+const EXPAND_MS = 420
 
 // ─── Main form ────────────────────────────────────────────────────────────────
 
@@ -98,9 +101,7 @@ function RegisterForm() {
   const [codeError, setCodeError]       = useState('')
   const [codeSentMsg, setCodeSentMsg]   = useState('')
   const [isLoading, setIsLoading]       = useState(false)
-
-  // Expanded-section animation ref
-  const expandRef = useRef<HTMLDivElement>(null)
+  const [detailsOpen, setDetailsOpen]   = useState(false)
 
   // Invitation / trial prefill
   const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
@@ -161,22 +162,17 @@ function RegisterForm() {
       const res  = await fetch(apiUrl('/auth/check-email'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trimmed }),
+        body: JSON.stringify({ email: trimmed, sessionId: getSignupSessionId() }),
       })
       const data = await res.json()
       if (data.exists) {
         setEmailError('An account with this email already exists.')
         return
       }
-      // Trigger expansion animation
-      setStage('expanding')
-      // After a micro-tick allow the element to mount, then transition to full height
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (expandRef.current) expandRef.current.style.maxHeight = `${expandRef.current.scrollHeight}px`
-          setStage('form')
-        })
-      })
+      void postSignupProgress(apiUrl, { step: 'email_entered', email: trimmed })
+      // Grid 0fr→1fr animates the white card taller; fields fade/slide in shortly after
+      setDetailsOpen(true)
+      setStage('form')
     } catch {
       setEmailError('Unable to check email. Please try again.')
     } finally {
@@ -193,16 +189,20 @@ function RegisterForm() {
       const res  = await fetch(apiUrl('/auth/register/send-code'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({
+          email: email.trim(),
+          sessionId: getSignupSessionId(),
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
         const msg = data?.message || data?.error || 'Failed to send code'
         if (String(msg).toLowerCase().includes('email') || String(msg).toLowerCase().includes('already')) {
           setEmailError(msg)
-          // Collapse back to email stage
+          setDetailsOpen(false)
           setStage('email')
-          if (expandRef.current) expandRef.current.style.maxHeight = '0'
         } else {
           setFormError(msg)
         }
@@ -231,7 +231,13 @@ function RegisterForm() {
       const verifyRes  = await fetch(apiUrl('/auth/register/verify-code'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), code: verificationCode }),
+        body: JSON.stringify({
+          email: email.trim(),
+          code: verificationCode,
+          sessionId: getSignupSessionId(),
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+        }),
       })
       const verifyData = await verifyRes.json()
       if (!verifyRes.ok) { setCodeError(verifyData?.message || verifyData?.error || 'Invalid code'); return }
@@ -264,6 +270,12 @@ function RegisterForm() {
       }
 
       window.hj?.('event', 'signup_code_verified')
+      void postSignupProgress(apiUrl, {
+        step: 'email_verified',
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        email: email.trim(),
+      })
       pushDataLayer({ event: 'email_verification_completed' })
 
       // Persist session
@@ -282,6 +294,10 @@ function RegisterForm() {
           pendingInvites: regData.user.pendingInvites || [],
         }
         const session = applySingleCompanyAutoSelect(userData as Record<string, unknown>)
+        if (!inviteToken && session.activeCompany) {
+          (session.activeCompany as Record<string, unknown>).onboardingCompleted = false
+          ;(session.activeCompany as Record<string, unknown>).onboardingStep = 'company'
+        }
         localStorage.setItem('user', JSON.stringify(session))
         if (inviteToken) { router.push(getDashboardHref(session)); return }
       }
@@ -297,8 +313,8 @@ function RegisterForm() {
 
   if (sessionMode === 'checking') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-primary-50/50">
-        <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500" />
+      <div className="min-h-screen flex items-center justify-center bg-[#0a1414]">
+        <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-white/20 border-t-accent-400" />
       </div>
     )
   }
@@ -315,13 +331,14 @@ function RegisterForm() {
     for (const c of companies) { if (c.slug && !seen.has(c.id)) { merged.push({ id: c.id, name: c.name || 'Company', slug: c.slug }); seen.add(c.id) } }
 
     return (
-      <div className="min-h-screen flex flex-col justify-center items-center px-4 bg-gradient-to-b from-white to-primary-50/50">
+      <DarkAuthShell>
+        <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10 pt-safe pb-safe">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <Link href="/"><Image src="/images/brand/logo.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-6" /></Link>
-            <p className="text-gray-600">Signed in as <span className="font-semibold">{displayName}</span></p>
+            <Link href="/"><Image src="/images/brand/logo-header-white.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-6" /></Link>
+            <p className="text-gray-300">Signed in as <span className="font-semibold text-white">{displayName}</span></p>
           </div>
-          <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8 space-y-3">
+          <div className="bg-white rounded-3xl shadow-2xl shadow-black/40 ring-1 ring-white/10 p-8 space-y-3">
             {hasAppWorkspace(user) && merged.map(c => (
               <a key={c.id} href={`/${c.slug}/dashboard`} className="flex w-full items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-primary-800 hover:border-accent-300 hover:bg-accent-50 transition">
                 <span>{c.name}</span><span className="text-accent-600">→</span>
@@ -335,6 +352,7 @@ function RegisterForm() {
           </div>
         </div>
       </div>
+      </DarkAuthShell>
     )
   }
 
@@ -343,19 +361,16 @@ function RegisterForm() {
   if (stage === 'verify') {
     const isValid = verificationCode.trim().length === 6
     return (
-      <div className="min-h-screen flex flex-col justify-center items-center px-4 bg-gradient-to-b from-white via-white to-primary-50/60 pt-safe pb-safe">
-        <div className="pointer-events-none fixed inset-0 -z-10">
-          <div className="absolute -top-32 -right-32 h-96 w-96 rounded-full bg-accent-200/30 blur-3xl" />
-          <div className="absolute bottom-0 -left-20 h-72 w-72 rounded-full bg-primary-200/30 blur-3xl" />
-        </div>
+      <DarkAuthShell>
+        <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10 pt-safe pb-safe">
         <div className="w-full max-w-sm">
           <div className="text-center mb-8">
-            <Link href="/"><Image src="/images/brand/logo.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-8" /></Link>
-            <h1 className="text-2xl font-bold text-primary-800 tracking-tight">Check your email</h1>
-            <p className="mt-2 text-gray-500 text-sm">{codeSentMsg || `We sent a code to ${email}`}</p>
+            <Link href="/"><Image src="/images/brand/logo-header-white.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-8" /></Link>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Check your email</h1>
+            <p className="mt-2 text-gray-300 text-sm">{codeSentMsg || `We sent a code to ${email}`}</p>
           </div>
 
-          <form onSubmit={handleVerifySubmit} className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8 space-y-5">
+          <form onSubmit={handleVerifySubmit} className="bg-white rounded-3xl shadow-2xl shadow-black/40 ring-1 ring-white/10 p-8 space-y-5">
             {codeError && (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{codeError}</div>
             )}
@@ -394,6 +409,7 @@ function RegisterForm() {
           </form>
         </div>
       </div>
+      </DarkAuthShell>
     )
   }
 
@@ -406,39 +422,38 @@ function RegisterForm() {
   const isInviteOrTrial = !!(inviteToken || trialToken)
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center px-4 py-10 bg-gradient-to-b from-white via-white to-primary-50/60 pt-safe pb-safe">
-      <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-32 -right-32 h-96 w-96 rounded-full bg-accent-200/30 blur-3xl" />
-        <div className="absolute bottom-0 -left-20 h-72 w-72 rounded-full bg-primary-200/30 blur-3xl" />
-      </div>
-
+    <DarkAuthShell>
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10 pt-safe pb-safe">
       <div className="w-full max-w-sm">
         {/* Logo + headline */}
         <div className="text-center mb-8">
-          <Link href="/"><Image src="/images/brand/logo.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-8" /></Link>
-          <h1 className="text-2xl font-bold text-primary-800 tracking-tight">
-            {stage === 'email'
+          <Link href="/"><Image src="/images/brand/logo-header-white.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-8" /></Link>
+          <h1 className="text-2xl font-bold text-white tracking-tight transition-all duration-300">
+            {!detailsOpen
               ? (inviteToken ? 'Accept your invitation' : trialToken && trialDays ? 'Get started with PathPilo' : 'Create your account')
               : `Welcome, ${formData.firstName || 'there'}`}
           </h1>
-          <p className="mt-1.5 text-sm text-gray-500">
-            {stage === 'email' ? 'Free to get started. No credit card required.' : 'Just a few more details and you\'re in.'}
+          <p className="mt-1.5 text-sm text-gray-300 transition-all duration-300">
+            {!detailsOpen ? 'Free to get started. No credit card required.' : 'Just a few more details and you\'re in.'}
           </p>
         </div>
 
-        <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-8">
+        <div
+          className="bg-white rounded-3xl shadow-2xl shadow-black/40 ring-1 ring-white/10 p-8"
+          style={{ transition: `box-shadow ${EXPAND_MS}ms ${EXPAND_EASE}` }}
+        >
           {/* General form errors */}
           {formError && (
             <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{formError}</div>
           )}
 
           {/* ── Step 1: Email field (always visible) ── */}
-          <form onSubmit={stage === 'email' ? handleEmailContinue : handleFormSubmit}>
+          <form onSubmit={!detailsOpen ? handleEmailContinue : handleFormSubmit}>
 
             <div className="space-y-4">
               {/* Email */}
               <div>
-                {stage !== 'email' && (
+                {detailsOpen && (
                   <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">Email</label>
                 )}
                 {emailError && (
@@ -449,43 +464,60 @@ function RegisterForm() {
                     )}
                   </div>
                 )}
-                <div className={`relative transition-all duration-300 ${stage !== 'email' ? 'opacity-70' : ''}`}>
+                <div className={`relative transition-opacity duration-300 ${detailsOpen ? 'opacity-80' : ''}`}>
                   <input
                     type="email" value={email}
                     onChange={e => { setEmail(e.target.value); if (emailError) setEmailError('') }}
-                    readOnly={stage !== 'email' || isInviteOrTrial}
-                    className={`input-field ${stage !== 'email' ? 'bg-gray-50 text-gray-600 cursor-default' : ''} ${isInviteOrTrial ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                    placeholder="your@email.com" required autoFocus={stage === 'email'}
+                    readOnly={detailsOpen || isInviteOrTrial}
+                    className={`input-field ${detailsOpen ? 'bg-gray-50 text-gray-600 cursor-default pr-16' : ''} ${isInviteOrTrial ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                    placeholder="your@email.com" required autoFocus={!detailsOpen}
                   />
-                  {stage !== 'email' && (
-                    <button type="button" onClick={() => { setStage('email'); if (expandRef.current) expandRef.current.style.maxHeight = '0' }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-accent-700 hover:text-accent-800">
+                  {detailsOpen && (
+                    <button
+                      type="button"
+                      onClick={() => { setDetailsOpen(false); setStage('email') }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-accent-700 hover:text-accent-800"
+                    >
                       Change
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* ── Expandable section (name + password + terms) ── */}
+              {/* ── Expandable section — grid 0fr→1fr for smooth height ── */}
               <div
-                ref={expandRef}
-                style={{ maxHeight: stage === 'email' ? '0' : undefined, overflow: 'hidden', transition: 'max-height 0.45s cubic-bezier(0.4,0,0.2,1), opacity 0.35s ease' }}
-                className={stage === 'email' ? 'opacity-0' : 'opacity-100'}
+                className="grid transition-[grid-template-rows] motion-reduce:transition-none"
+                style={{
+                  gridTemplateRows: detailsOpen ? '1fr' : '0fr',
+                  transitionDuration: `${EXPAND_MS}ms`,
+                  transitionTimingFunction: EXPAND_EASE,
+                }}
               >
-                <div className="space-y-4 pt-1">
+                <div className="min-h-0 overflow-hidden">
+                <div
+                  className="space-y-4 pt-1 motion-reduce:transition-none"
+                  style={{
+                    opacity: detailsOpen ? 1 : 0,
+                    transform: detailsOpen ? 'translateY(0)' : 'translateY(-10px)',
+                    transitionProperty: 'opacity, transform',
+                    transitionDuration: `${EXPAND_MS - 80}ms`,
+                    transitionTimingFunction: EXPAND_EASE,
+                    transitionDelay: detailsOpen ? '70ms' : '0ms',
+                  }}
+                >
                   {/* Name row */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label htmlFor="firstName" className="block text-xs font-semibold text-gray-700 mb-1.5">First name</label>
                       <input id="firstName" type="text" value={formData.firstName}
                         onChange={e => setFormData(p => ({ ...p, firstName: e.target.value }))}
-                        className="input-field" placeholder="John" required={stage === 'form'} autoFocus={stage === 'form'} />
+                        className="input-field" placeholder="John" required={detailsOpen} autoFocus={detailsOpen} />
                     </div>
                     <div>
                       <label htmlFor="lastName" className="block text-xs font-semibold text-gray-700 mb-1.5">Last name</label>
                       <input id="lastName" type="text" value={formData.lastName}
                         onChange={e => setFormData(p => ({ ...p, lastName: e.target.value }))}
-                        className="input-field" placeholder="Doe" required={stage === 'form'} />
+                        className="input-field" placeholder="Doe" required={detailsOpen} />
                     </div>
                   </div>
 
@@ -495,7 +527,7 @@ function RegisterForm() {
                     <div className="relative">
                       <input id="password" type={showPassword ? 'text' : 'password'} value={formData.password}
                         onChange={e => setFormData(p => ({ ...p, password: e.target.value }))}
-                        className="input-field pr-10" placeholder="8+ characters" required={stage === 'form'} />
+                        className="input-field pr-10" placeholder="8+ characters" required={detailsOpen} />
                       <button type="button" tabIndex={-1} onClick={() => setShowPassword(v => !v)}
                         className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
                         {showPassword ? <EyeSlashIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
@@ -510,7 +542,7 @@ function RegisterForm() {
                       <input id="confirmPassword" type={showConfirm ? 'text' : 'password'} value={formData.confirmPassword}
                         onChange={e => setFormData(p => ({ ...p, confirmPassword: e.target.value }))}
                         className={`input-field pr-10 ${formData.password && formData.confirmPassword && formData.password !== formData.confirmPassword ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''}`}
-                        placeholder="Repeat password" required={stage === 'form'} />
+                        placeholder="Repeat password" required={detailsOpen} />
                       <button type="button" tabIndex={-1} onClick={() => setShowConfirm(v => !v)}
                         className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
                         {showConfirm ? <EyeSlashIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
@@ -525,7 +557,7 @@ function RegisterForm() {
                   <label className="flex items-start gap-3 cursor-pointer">
                     <input type="checkbox" checked={formData.acceptTerms}
                       onChange={e => setFormData(p => ({ ...p, acceptTerms: e.target.checked }))}
-                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-accent-500 focus:ring-accent-500" required={stage === 'form'} />
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-accent-500 focus:ring-accent-500" required={detailsOpen} />
                     <span className="text-xs text-gray-600 leading-relaxed">
                       I agree to the{' '}
                       <a href={`https://pathpilo.com/${requestedLang}/terms`} target="_blank" rel="noreferrer" className="font-semibold text-accent-700 hover:text-accent-800">Terms of Service</a>{' '}
@@ -534,26 +566,33 @@ function RegisterForm() {
                     </span>
                   </label>
                 </div>
+                </div>
               </div>
             </div>
 
-            {/* Submit button */}
-            <div className="mt-6">
-              {stage === 'email' ? (
+            {/* Submit — crossfade between email step and full form */}
+            <div className="relative mt-6 h-[50px]">
+              <div
+                className={`absolute inset-0 transition-opacity duration-200 motion-reduce:transition-none ${!detailsOpen ? 'z-10 opacity-100' : 'pointer-events-none opacity-0'}`}
+              >
                 <button type="submit" disabled={isLoading || !email.trim()}
-                  className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all ${!isLoading && email.trim() ? 'bg-primary-800 hover:bg-primary-900 text-white shadow-lg' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}>
+                  className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-colors ${!isLoading && email.trim() ? 'bg-primary-800 hover:bg-primary-900 text-white shadow-lg' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}>
                   {isLoading
                     ? <span className="flex items-center justify-center gap-2"><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Checking…</span>
                     : 'Continue with email →'}
                 </button>
-              ) : (
+              </div>
+              <div
+                className={`absolute inset-0 transition-opacity motion-reduce:transition-none ${detailsOpen ? 'z-10 opacity-100' : 'pointer-events-none opacity-0'}`}
+                style={{ transitionDuration: `${EXPAND_MS - 120}ms`, transitionDelay: detailsOpen ? '90ms' : '0ms' }}
+              >
                 <button type="submit" disabled={!formIsValid || isLoading}
-                  className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all ${formIsValid && !isLoading ? 'bg-accent-500 hover:bg-accent-600 text-white shadow-lg shadow-accent-500/20' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}>
+                  className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-colors ${formIsValid && !isLoading ? 'bg-accent-500 hover:bg-accent-600 text-white shadow-lg shadow-accent-500/20' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}>
                   {isLoading
                     ? <span className="flex items-center justify-center gap-2"><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Sending code…</span>
                     : 'Create account →'}
                 </button>
-              )}
+              </div>
             </div>
           </form>
 
@@ -565,17 +604,18 @@ function RegisterForm() {
         </div>
 
         {/* Trust strip */}
-        {stage === 'email' && (
+        {!detailsOpen && (
           <p className="mt-6 text-center text-xs text-gray-400">
             Free forever · No credit card · Cancel anytime
           </p>
         )}
 
-        <p className="mt-5 text-center text-xs text-gray-400">
+        <p className="mt-5 text-center text-xs text-gray-500">
           © {new Date().getFullYear()} PathPilo
         </p>
       </div>
     </div>
+      </DarkAuthShell>
   )
 }
 
@@ -584,8 +624,8 @@ function RegisterForm() {
 export default function RegisterPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-primary-50/50">
-        <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-accent-200 border-t-accent-500" />
+      <div className="min-h-screen flex items-center justify-center bg-[#0a1414]">
+        <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-white/20 border-t-accent-400" />
       </div>
     }>
       <RegisterForm />

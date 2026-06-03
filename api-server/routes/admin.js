@@ -9,6 +9,40 @@ const {
   DEFAULT_VIDEO_GUIDE_TOPIC,
   normalizeVideoGuideTopic,
 } = require('../utils/videoGuideTopics');
+const { getStripeBillingSnapshot } = require('../utils/stripeBilling');
+const {
+  initSmsSchema,
+  setSmsPlan,
+  recordSmsUsage,
+  getSmsBillingSnapshot,
+} = require('../utils/smsBilling');
+const { SMS_PLAN_TIERS } = require('../config/smsPlans');
+
+const TRIAL_DAYS = 14;
+
+/** Days from now → ISO timestamp (used for trial / comped access). */
+function daysFromNowIso(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + Number(days));
+  return d.toISOString();
+}
+
+/** Classify how a company currently gets access, for the admin UI. */
+function deriveBillingSource(company, stripe) {
+  if (stripe?.subscription && ['active', 'past_due'].includes(stripe.subscription.status)) {
+    return 'paid';
+  }
+  if (stripe?.subscription && stripe.subscription.status === 'trialing') {
+    return 'stripe-trial';
+  }
+  if ((company.plan || 'standard') === 'pro' && company.expires_at) {
+    return 'trial';
+  }
+  if ((company.plan || 'standard') === 'pro') {
+    return 'comp';
+  }
+  return 'free';
+}
 
 const router = express.Router();
 const SUPPORTED_VIDEO_LANGUAGES = new Set(['en', 'da', 'de', 'sv', 'no']);
@@ -121,6 +155,10 @@ async function initAdminSchema() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // SMS add-on billing tables (plan + usage metering)
+    await initSmsSchema(pool).catch((e) =>
+      console.warn('[admin] SMS schema init failed:', e.message)
+    );
     // Run expiry handler immediately after schema is ready, then every hour
     autoHandleExpiry();
     setInterval(autoHandleExpiry, 60 * 60 * 1000);
@@ -129,37 +167,39 @@ async function initAdminSchema() {
   }
 }
 
-// Handle expired companies:
-//   - Pro plan trial expired → demote to standard (not suspended)
-//   - Standard plan with admin-set expiry → suspend (legacy behaviour)
+// Handle expired companies. Trials/expiry are a PRO-only concept now:
+//   - Pro plan trial expired → demote to standard (free, not suspended)
+//   - Standard plan is free forever → it never expires; clear any stale expiry
+//     left over from the old "trial on a free plan" behaviour.
 async function autoHandleExpiry() {
   try {
     // 1. Pro trial expired: demote to standard, clear expiry
     const demoted = await pool.query(`
       UPDATE companies
-      SET plan = 'standard', expires_at = NULL, updated_at = NOW()
+      SET plan = 'standard', expires_at = NULL, billing_interval = NULL, updated_at = NOW()
       WHERE COALESCE(plan, 'standard') = 'pro'
         AND expires_at IS NOT NULL
         AND expires_at < NOW()
         AND suspended_at IS NULL
+        AND (stripe_subscription_id IS NULL OR stripe_subscription_id = '')
       RETURNING id, name
     `);
     if (demoted.rows.length > 0) {
       console.log(`[admin] Demoted ${demoted.rows.length} expired pro trial(s) to standard:`, demoted.rows.map(r => r.name).join(', '));
     }
 
-    // 2. Standard/legacy companies with manually-set expiry → suspend
-    const suspended = await pool.query(`
+    // 2. Standard plan is free forever — drop any leftover trial/expiry date so
+    //    it is never auto-suspended. (Previously standard companies with an
+    //    admin-set expiry were suspended; that behaviour is intentionally gone.)
+    const cleared = await pool.query(`
       UPDATE companies
-      SET suspended_at = NOW(), updated_at = NOW()
+      SET expires_at = NULL, updated_at = NOW()
       WHERE COALESCE(plan, 'standard') = 'standard'
         AND expires_at IS NOT NULL
-        AND expires_at < NOW()
-        AND suspended_at IS NULL
       RETURNING id, name
     `);
-    if (suspended.rows.length > 0) {
-      console.log(`[admin] Auto-suspended ${suspended.rows.length} expired company/companies:`, suspended.rows.map(r => r.name).join(', '));
+    if (cleared.rows.length > 0) {
+      console.log(`[admin] Cleared stale expiry on ${cleared.rows.length} standard company/companies (standard is free forever).`);
     }
   } catch (err) {
     console.error('[admin] autoHandleExpiry failed:', err.message);
@@ -185,6 +225,10 @@ router.get('/companies', async (req, res) => {
         c.suspended_at,
         c.expires_at,
         COALESCE(c.plan, 'standard') AS plan,
+        c.billing_interval,
+        c.stripe_subscription_id,
+        sp.tier_key      AS sms_tier_key,
+        sp.status        AS sms_status,
         u.first_name as owner_first_name,
         u.last_name  as owner_last_name,
         u.email      as owner_email,
@@ -192,7 +236,8 @@ router.get('/companies', async (req, res) => {
       FROM companies c
       LEFT JOIN users u  ON c.owner_id  = u.id
       LEFT JOIN user_companies uc ON uc.company_id = c.id
-      GROUP BY c.id, u.id
+      LEFT JOIN company_sms_plans sp ON sp.company_id = c.id
+      GROUP BY c.id, u.id, sp.tier_key, sp.status
       ORDER BY c.created_at DESC
     `);
 
@@ -210,6 +255,9 @@ router.get('/companies', async (req, res) => {
         suspendedAt: c.suspended_at || null,
         expiresAt:   c.expires_at || null,
         plan:        c.plan || 'standard',
+        billingInterval: c.billing_interval || null,
+        hasStripeSubscription: !!c.stripe_subscription_id,
+        smsTierKey:  c.sms_status === 'active' ? c.sms_tier_key : null,
         userCount:   c.user_count,
         owner: {
           firstName: c.owner_first_name,
@@ -433,7 +481,45 @@ router.get('/users', async (req, res) => {
       updatedAt: d.updated_at,
     }));
 
-    const startedSignups = [...verificationRows, ...draftRows].sort((a, b) => {
+    const ownerWizardRes = await pool.query(`
+      SELECT
+        u.id AS user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        c.id AS company_id,
+        c.name AS company_name,
+        COALESCE(c.onboarding_step, 'company') AS onboarding_step,
+        COALESCE(c.plan, 'standard') AS plan,
+        c.updated_at
+      FROM companies c
+      INNER JOIN users u ON u.id = c.owner_id
+      WHERE COALESCE(c.onboarding_completed, false) = false
+      ORDER BY c.updated_at DESC
+    `);
+
+    const ownerWizardRows = ownerWizardRes.rows.map((r) => {
+      let step = 'wizard_company';
+      if (r.onboarding_step === 'services') step = 'wizard_services';
+      else if (r.onboarding_step === 'clients') step = 'wizard_clients';
+      else if (r.onboarding_step === 'plan') step = 'wizard_completed';
+      return {
+        kind: 'owner_wizard',
+        email: r.email,
+        firstName: r.first_name,
+        lastName: r.last_name,
+        sessionId: null,
+        step,
+        codeVerified: true,
+        startedAt: r.updated_at,
+        updatedAt: r.updated_at,
+        expiresAt: null,
+        companyName: r.company_name,
+        userId: r.user_id,
+      };
+    });
+
+    const startedSignups = [...verificationRows, ...draftRows, ...ownerWizardRows].sort((a, b) => {
       const ta = new Date(b.updatedAt || b.startedAt).getTime();
       const tb = new Date(a.updatedAt || a.startedAt).getTime();
       return ta - tb;
@@ -620,6 +706,10 @@ router.get('/companies/:companyId', async (req, res) => {
         c.updated_at,
         c.suspended_at,
         c.expires_at,
+        COALESCE(c.plan, 'standard') AS plan,
+        c.billing_interval,
+        c.stripe_customer_id,
+        c.stripe_subscription_id,
         u.first_name as owner_first_name,
         u.last_name as owner_last_name,
         u.email as owner_email
@@ -647,6 +737,10 @@ router.get('/companies/:companyId', async (req, res) => {
         updatedAt: company.updated_at,
         suspendedAt: company.suspended_at || null,
         expiresAt: company.expires_at || null,
+        plan: company.plan || 'standard',
+        billingInterval: company.billing_interval || null,
+        hasStripeCustomer: !!company.stripe_customer_id,
+        hasStripeSubscription: !!company.stripe_subscription_id,
         owner: {
           firstName: company.owner_first_name,
           lastName: company.owner_last_name,
@@ -975,31 +1069,187 @@ router.patch('/companies/:companyId/hold', async (req, res) => {
   }
 });
 
-// PATCH /api/admin/companies/:companyId/plan — set the company plan (standard | pro)
+// PATCH /api/admin/companies/:companyId/plan — set the company plan.
+// Body: { plan: 'standard' | 'pro', accessMode?, trialDays?, expiresAt?, billingInterval? }
+//   - standard: free forever; clears any expiry/trial and billing interval.
+//   - pro + accessMode 'trial': sets expires_at = now + trialDays (default 14).
+//   - pro + accessMode 'permanent' (comp): pro with no expiry.
+//   - pro + explicit expiresAt: sets that date.
+// This is a MANUAL grant — it never touches Stripe. Real paying customers are
+// governed by their Stripe subscription + webhooks.
 router.patch('/companies/:companyId/plan', async (req, res) => {
   try {
     const { companyId } = req.params;
-    const { plan } = req.body;
+    const { plan, accessMode, trialDays, expiresAt, billingInterval } = req.body;
     const VALID_PLANS = ['standard', 'pro'];
     if (!plan || !VALID_PLANS.includes(plan)) {
       return res.status(400).json({ error: `plan must be one of: ${VALID_PLANS.join(', ')}` });
     }
 
+    const exists = await pool.query('SELECT stripe_subscription_id FROM companies WHERE id = $1', [companyId]);
+    if (exists.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
+
+    let nextExpiry = null; // null => permanent / cleared
+    let nextInterval = null;
+    let summary;
+
+    if (plan === 'standard') {
+      // Standard is free forever — no trial/expiry, no billing interval.
+      nextExpiry = null;
+      nextInterval = null;
+      summary = 'Downgraded to Standard (free, no expiry)';
+    } else {
+      // pro
+      const mode = accessMode || (expiresAt ? 'date' : (trialDays != null ? 'trial' : 'permanent'));
+      if (mode === 'permanent') {
+        nextExpiry = null;
+        summary = 'Set to Pro (comped — permanent, no expiry)';
+      } else if (mode === 'date') {
+        nextExpiry = expiresAt ? new Date(expiresAt).toISOString() : null;
+        summary = nextExpiry ? `Set to Pro until ${nextExpiry.split('T')[0]}` : 'Set to Pro (permanent)';
+      } else {
+        const days = Number.isFinite(Number(trialDays)) && Number(trialDays) > 0 ? Number(trialDays) : TRIAL_DAYS;
+        nextExpiry = daysFromNowIso(days);
+        summary = `Set to Pro trial (${days} days)`;
+      }
+      nextInterval = billingInterval === 'year' ? 'year' : billingInterval === 'month' ? 'month' : null;
+    }
+
     const result = await pool.query(
-      `UPDATE companies SET plan = $2, updated_at = NOW() WHERE id = $1
-       RETURNING id, name, plan`,
-      [companyId, plan]
+      `UPDATE companies SET
+         plan = $2,
+         expires_at = $3::timestamptz,
+         billing_interval = $4,
+         suspended_at = CASE
+           WHEN $3::timestamptz IS NULL THEN NULL
+           WHEN $3::timestamptz > NOW() THEN NULL
+           ELSE COALESCE(suspended_at, NOW())
+         END,
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, name, plan, expires_at, billing_interval, suspended_at`,
+      [companyId, plan, nextExpiry, nextInterval]
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
 
     const company = result.rows[0];
     res.json({
-      message: `Company plan updated to "${plan}"`,
-      company: { id: company.id, name: company.name, plan: company.plan },
+      message: summary,
+      company: {
+        id: company.id,
+        name: company.name,
+        plan: company.plan,
+        expiresAt: company.expires_at || null,
+        billingInterval: company.billing_interval || null,
+        suspendedAt: company.suspended_at || null,
+      },
     });
   } catch (error) {
     console.error('Error updating company plan:', error);
     res.status(500).json({ error: 'Failed to update company plan' });
+  }
+});
+
+// GET /api/admin/billing/config — plan + SMS tier reference for the UI
+router.get('/billing/config', async (req, res) => {
+  res.json({
+    smsTiers: SMS_PLAN_TIERS,
+    trialDaysDefault: TRIAL_DAYS,
+  });
+});
+
+// GET /api/admin/companies/:companyId/billing — full billing snapshot
+// (plan, trial, live Stripe subscription/invoices, and SMS add-on).
+router.get('/companies/:companyId/billing', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const result = await pool.query(
+      `SELECT id, name, COALESCE(plan, 'standard') AS plan, expires_at, suspended_at,
+              created_at, billing_interval, stripe_customer_id, stripe_subscription_id
+       FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
+    const company = result.rows[0];
+
+    const stripe = await getStripeBillingSnapshot(company);
+
+    // Trial / access info (pro-only concept now)
+    let trial = null;
+    if (company.plan === 'pro' && company.expires_at) {
+      const msLeft = new Date(company.expires_at).getTime() - Date.now();
+      trial = {
+        expiresAt: company.expires_at,
+        daysLeft: Math.max(0, Math.ceil(msLeft / 86400000)),
+        expired: msLeft <= 0,
+      };
+    }
+
+    const sms = await getSmsBillingSnapshot(pool, companyId);
+
+    res.json({
+      companyId: company.id,
+      plan: company.plan,
+      billingInterval: company.billing_interval || null,
+      expiresAt: company.expires_at || null,
+      suspendedAt: company.suspended_at || null,
+      createdAt: company.created_at,
+      billingSource: deriveBillingSource(company, stripe),
+      trial,
+      stripe,
+      sms,
+    });
+  } catch (error) {
+    console.error('Error building billing snapshot:', error);
+    res.status(500).json({ error: 'Failed to load billing details' });
+  }
+});
+
+// PUT /api/admin/companies/:companyId/sms-plan — assign / change / cancel SMS add-on.
+// Body: { tierKey: string | null, resetPeriod?: boolean }
+router.put('/companies/:companyId/sms-plan', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { tierKey, resetPeriod } = req.body || {};
+
+    const check = await pool.query('SELECT id FROM companies WHERE id = $1', [companyId]);
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
+
+    await setSmsPlan(pool, companyId, tierKey || null, { resetPeriod: !!resetPeriod });
+    const sms = await getSmsBillingSnapshot(pool, companyId);
+    res.json({
+      message: tierKey ? 'SMS plan updated' : 'SMS plan cancelled',
+      sms,
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    console.error('Error updating SMS plan:', error);
+    res.status(status).json({ error: error.message || 'Failed to update SMS plan' });
+  }
+});
+
+// POST /api/admin/companies/:companyId/sms-usage/adjust — manual usage correction.
+// Body: { segments: number (may be negative), note?: string }
+router.post('/companies/:companyId/sms-usage/adjust', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { segments, note } = req.body || {};
+    const seg = Math.trunc(Number(segments));
+    if (!Number.isFinite(seg) || seg === 0) {
+      return res.status(400).json({ error: 'segments must be a non-zero integer' });
+    }
+
+    const check = await pool.query('SELECT id FROM companies WHERE id = $1', [companyId]);
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Company not found' });
+
+    await recordSmsUsage(pool, companyId, seg, {
+      source: 'manual-adjust',
+      note: note ? String(note).slice(0, 500) : `Manual adjustment by admin (${req.user?.email || 'admin'})`,
+    });
+    const sms = await getSmsBillingSnapshot(pool, companyId);
+    res.json({ message: 'Usage adjusted', sms });
+  } catch (error) {
+    console.error('Error adjusting SMS usage:', error);
+    res.status(500).json({ error: 'Failed to adjust SMS usage' });
   }
 });
 

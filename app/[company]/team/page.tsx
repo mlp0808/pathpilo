@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
+import ProFeatureGate from '../../components/ProFeatureGate'
 import { useUser } from '../../hooks/useUser'
 import { apiUrl } from '../../utils/api'
 import { UserPlusIcon, EllipsisVerticalIcon, Cog6ToothIcon } from '@heroicons/react/24/outline'
@@ -203,6 +204,7 @@ export default function TeamPage() {
 
   return (
     <AppLayout>
+      <ProFeatureGate>
       <div>
         {/* Header */}
         <div className="mb-6">
@@ -531,6 +533,7 @@ export default function TeamPage() {
           </div>
         )}
       </div>
+      </ProFeatureGate>
     </AppLayout>
   )
 }

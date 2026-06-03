@@ -5,20 +5,15 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   ArrowLeftIcon,
-  UserIcon,
-  BuildingOfficeIcon,
-  CreditCardIcon,
   ArrowRightOnRectangleIcon,
-  BellIcon,
-  InboxIcon,
-  PuzzlePieceIcon,
-  DocumentTextIcon,
-  ClockIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline'
-import type { ComponentType, SVGProps } from 'react'
 import { useAppI18n } from './I18nProvider'
 import { clearClientLocaleStorage } from '../i18n'
+import {
+  buildSettingsNavSections,
+  isSettingsNavItemActive,
+} from '../config/settingsNav'
 
 interface SettingsSidebarProps {
   user: {
@@ -30,20 +25,6 @@ interface SettingsSidebarProps {
   /** Renders the sidebar as a mobile drawer when these props are passed. */
   isMobileOpen?: boolean
   onMobileClose?: () => void
-}
-
-type NavItem = {
-  name: string
-  href: string
-  icon: ComponentType<SVGProps<SVGSVGElement>>
-  /** Extra paths that should also light this item up (e.g. legacy redirects). */
-  matchExtra?: string[]
-}
-
-type NavSection = {
-  /** Short uppercase label rendered above the items. Use empty string for an unlabelled top section. */
-  label: string
-  items: NavItem[]
 }
 
 export default function SettingsSidebar({
@@ -81,7 +62,7 @@ export default function SettingsSidebar({
   // Falls back to empty string for legacy /settings/... routes
   const pathParts = pathname.split('/').filter(Boolean)
   const companySlug = pathParts[0] !== 'settings' ? pathParts[0] : ''
-  const base = companySlug ? `/${companySlug}/settings` : '/settings'
+  const sections = buildSettingsNavSections(t, companySlug)
 
   const handleLogout = () => {
     clearClientLocaleStorage()
@@ -89,62 +70,6 @@ export default function SettingsSidebar({
     localStorage.removeItem('user')
     sessionStorage.removeItem('pathpilo_video_guide_dismissed')
     window.location.href = '/'
-  }
-
-  // Three top-level groups keep things simple while leaving room to grow:
-  //   Account  → things about you personally
-  //   Company  → everything about running this company in PathPilo
-  //   Add-ons  → optional integrations bolted on top
-  // The "Plan & billing" page itself owns the wording that distinguishes
-  // "PathPilo billing you" from "you billing your clients" — see its eyebrow.
-  const sections: NavSection[] = [
-    {
-      label: t('settings.sidebar.groupAccount', 'Account'),
-      items: [
-        { name: t('settings.sidebar.user', 'User'), href: `${base}/user`, icon: UserIcon },
-      ],
-    },
-    {
-      label: t('settings.sidebar.groupCompany', 'Company'),
-      items: [
-        { name: t('settings.sidebar.business', 'Business'), href: `${base}/business`, icon: BuildingOfficeIcon },
-        { name: t('settings.sidebar.workHours', 'Work hours'), href: `${base}/work-hours`, icon: ClockIcon },
-        { name: t('settings.sidebar.leadForm', 'Lead form'), href: `${base}/leads-form`, icon: InboxIcon },
-        {
-          name: t('settings.sidebar.invoices', 'Invoices'),
-          href: `${base}/invoice-options`,
-          icon: DocumentTextIcon,
-          // Old routes kept as redirects — keep this item highlighted while they run.
-          matchExtra: [
-            `${base}/client-terms`,
-            `${base}/clients`,
-            `${base}/invoice-terms`,
-            `${base}/invoices`,
-          ],
-        },
-        {
-          name: t('settings.sidebar.notifications', 'Notifications'),
-          href: `${base}/notifications`,
-          icon: BellIcon,
-        },
-        {
-          name: t('settings.sidebar.planAndBilling', 'Plan & billing'),
-          href: `${base}/billing`,
-          icon: CreditCardIcon,
-        },
-      ],
-    },
-    {
-      label: t('settings.sidebar.groupAddOns', 'Add-ons'),
-      items: [
-        { name: t('settings.sidebar.extensions', 'Extensions'), href: `${base}/extensions`, icon: PuzzlePieceIcon },
-      ],
-    },
-  ]
-
-  const isActiveItem = (item: NavItem) => {
-    const candidates = [item.href, ...(item.matchExtra ?? [])]
-    return candidates.some((href) => pathname === href || pathname.startsWith(href + '/'))
   }
 
   const body = (
@@ -203,7 +128,7 @@ export default function SettingsSidebar({
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 const Icon = item.icon
-                const isActive = isActiveItem(item)
+                const isActive = isSettingsNavItemActive(pathname, item)
                 return (
                   <Link
                     key={item.href}

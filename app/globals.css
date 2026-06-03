@@ -260,14 +260,9 @@
   }
 }
 
-/* Tawk live chat — stay below app slideouts, modals, and mobile drawers (z-50+). */
-#tawk-bubble-container,
-#tawk-chat-container,
-#tawk-tooltip-container,
-.tawk-min-container,
-.tawk-max-container,
-.tawk-message-preview,
-iframe[src*='embed.tawk.to'],
-iframe[src*='tawk.to'] {
+/* Crisp live chat — stay below app slideouts, modals, and mobile drawers (z-50+). */
+#crisp-chatbox,
+.crisp-client,
+iframe[src*='crisp.chat'] {
   z-index: 30 !important;
 }

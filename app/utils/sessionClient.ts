@@ -1,3 +1,5 @@
+import { getOwnerSetupResumePath, ownerMustCompleteSetup } from './onboardingClient'
+
 /**
  * Client-only session helpers (localStorage). Used for auth redirects and setup wizard gating.
  */
@@ -49,6 +51,31 @@ function activeCompanyRole(user: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/** True when the user is the owner of their active company workspace. */
+export function isCompanyOwner(user: Record<string, unknown> | null): boolean {
+  if (!user) return false
+  const ac = user.activeCompany as { role?: string; isOwner?: boolean } | undefined
+  if (!ac) return false
+  if (ac.isOwner) return true
+  const r = String(ac.role || '').toLowerCase()
+  return r === 'owner' || r === 'company-owner'
+}
+
+/** Owner of a specific company slug (uses companies[] — not the global users.role). */
+export function isOwnerOfSlug(user: Record<string, unknown>, slug: string): boolean {
+  if (!slug) return false
+  const companies = user.companies as Array<{ slug?: string; role?: string; isOwner?: boolean }> | undefined
+  const match = companies?.find((c) => c.slug === slug)
+  if (match) {
+    if (match.isOwner) return true
+    const r = String(match.role || '').toLowerCase()
+    return r === 'owner' || r === 'company-owner'
+  }
+  const ac = user.activeCompany as { slug?: string; role?: string; isOwner?: boolean } | undefined
+  if (ac?.slug === slug) return isCompanyOwner(user)
+  return false
+}
+
 /**
  * Whether the active company has finished the setup wizard (server-tracked).
  * Reads activeCompany first, then falls back to the matching entry in companies[].
@@ -78,11 +105,17 @@ export function markActiveCompanyOnboardedInSession(): void {
     const user = JSON.parse(raw) as Record<string, unknown>
     const ac = user.activeCompany as { id?: number; onboardingCompleted?: boolean } | null | undefined
     const companyId = ac?.id ?? user.companyId
-    if (ac) ac.onboardingCompleted = true
-    const list = user.companies as Array<{ id?: number; onboardingCompleted?: boolean }> | undefined
+    if (ac) {
+      ac.onboardingCompleted = true
+      ac.onboardingStep = 'done'
+    }
+    const list = user.companies as Array<{ id?: number; onboardingCompleted?: boolean; onboardingStep?: string }> | undefined
     if (Array.isArray(list)) {
       for (const c of list) {
-        if (c && (c.id === companyId || ac == null)) c.onboardingCompleted = true
+        if (c && (c.id === companyId || ac == null)) {
+          c.onboardingCompleted = true
+          c.onboardingStep = 'done'
+        }
       }
     }
     localStorage.setItem('user', JSON.stringify(user))
@@ -151,10 +184,10 @@ export function applySingleCompanyAutoSelect<T extends Record<string, unknown>>(
   if (!only?.slug) return user
 
   const role =
-    typeof user.role === 'string' && user.role
-      ? user.role
-      : typeof only.role === 'string'
-        ? only.role
+    typeof only.role === 'string' && only.role
+      ? only.role
+      : typeof user.role === 'string' && user.role
+        ? user.role
         : 'employee'
 
   return {
@@ -168,6 +201,10 @@ export function applySingleCompanyAutoSelect<T extends Record<string, unknown>>(
 
 /** Primary dashboard URL for the stored session (company slug in path). */
 export function getDashboardHref(user: Record<string, unknown>): string {
+  if (ownerMustCompleteSetup(user)) {
+    return getOwnerSetupResumePath(user)
+  }
+
   const pending = user.pendingInvites as unknown[] | undefined
   if (Array.isArray(pending) && pending.length > 0) {
     return '/select-company'

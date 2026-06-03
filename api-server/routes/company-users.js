@@ -46,15 +46,26 @@ router.get('/profile', async (req, res) => {
     const user = result.rows[0];
     const companies = await fetchUserCompanies(userId);
     const pendingInvites = await fetchPendingInvitesForEmail(user.email);
-    const activeCompany =
-      companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
+
+    // Respect JWT active company — never auto-pick the first owned company for multi-company users.
+    const jwtCompanyId = req.user.activeCompanyId;
+    let activeCompany = null;
+    if (jwtCompanyId) {
+      activeCompany = companies.find((c) => c.id === jwtCompanyId) || null;
+    }
+    if (!activeCompany) {
+      activeCompany =
+        companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
+    }
+
+    const membershipRole = activeCompany?.role;
 
     const payload = {
       id: user.id,
       firstName: user.first_name,
       lastName: user.last_name,
       email: user.email,
-      role: user.role,
+      role: membershipRole || user.role,
       languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
       companies,
       pendingInvites,
