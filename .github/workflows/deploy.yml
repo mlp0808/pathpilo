@@ -46,6 +46,9 @@ jobs:
             "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
             "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
             "NEXT_PUBLIC_CRISP_WEBSITE_ID=${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" > marketing/.env
+          if [ -z "${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" ]; then
+            echo "::warning::NEXT_PUBLIC_CRISP_WEBSITE_ID is empty in GitHub Actions Variables — Crisp will NOT be in the production build. Add it under Settings → Secrets and variables → Actions → Variables (Production environment)."
+          fi
 
       - name: Build Frontend
         run: npm run build
@@ -123,23 +126,60 @@ jobs:
           cd $APP
 
           echo "==> Writing .env..."
-          # Every deploy rewrites .env from GitHub secrets. Preserve the existing
-          # server key when the GitHub secret is missing so manual fixes survive.
-          PRESERVED_SECURE_NOTES_KEY=""
-          if [ -f api-server/.env ]; then
-            PRESERVED_SECURE_NOTES_KEY="$(grep -E '^SECURE_NOTES_MASTER_KEY=' api-server/.env | tail -1 | cut -d= -f2- || true)"
-          fi
-          if [ -z "$PRESERVED_SECURE_NOTES_KEY" ] && [ -f .env ]; then
-            PRESERVED_SECURE_NOTES_KEY="$(grep -E '^SECURE_NOTES_MASTER_KEY=' .env | tail -1 | cut -d= -f2- || true)"
-          fi
-          DEPLOY_SECURE_NOTES_KEY='${{ secrets.SECURE_NOTES_MASTER_KEY }}'
-          if [ -z "$DEPLOY_SECURE_NOTES_KEY" ]; then
-            DEPLOY_SECURE_NOTES_KEY="$PRESERVED_SECURE_NOTES_KEY"
-            if [ -n "$PRESERVED_SECURE_NOTES_KEY" ]; then
-              echo "==> SECURE_NOTES_MASTER_KEY: kept existing server value (GitHub secret not set)"
-            else
-              echo "==> WARNING: SECURE_NOTES_MASTER_KEY is empty — encrypted notes will fail until you add the GitHub secret"
+          # Every deploy REPLACES .env from GitHub — FTP edits are overwritten.
+          # Configure repo/environment secrets & variables in GitHub (see .env.example).
+          # When a GitHub value is missing, we keep the previous server value if present.
+
+          read_env_key() {
+            local file="$1" key="$2"
+            [ -f "$file" ] || return 0
+            grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- || true
+          }
+
+          use_deploy_or_preserved() {
+            local deploy_val="$1" preserved_val="$2" label="$3"
+            if [ -n "$deploy_val" ]; then
+              printf '%s' "$deploy_val"
+            elif [ -n "$preserved_val" ]; then
+              echo "==> ${label}: kept existing server value (GitHub not set)" >&2
+              printf '%s' "$preserved_val"
             fi
+          }
+
+          PRESERVED_SECURE_NOTES_KEY=""
+          PRESERVED_CRISP=""
+          PRESERVED_STRIPE_SECRET=""
+          PRESERVED_STRIPE_WEBHOOK=""
+          PRESERVED_STRIPE_MONTHLY=""
+          PRESERVED_STRIPE_ANNUAL=""
+          if [ -f api-server/.env ]; then
+            PRESERVED_SECURE_NOTES_KEY="$(read_env_key api-server/.env SECURE_NOTES_MASTER_KEY)"
+            PRESERVED_STRIPE_SECRET="$(read_env_key api-server/.env STRIPE_SECRET_KEY)"
+            PRESERVED_STRIPE_WEBHOOK="$(read_env_key api-server/.env STRIPE_WEBHOOK_SECRET)"
+            PRESERVED_STRIPE_MONTHLY="$(read_env_key api-server/.env STRIPE_PRICE_MONTHLY)"
+            PRESERVED_STRIPE_ANNUAL="$(read_env_key api-server/.env STRIPE_PRICE_ANNUAL)"
+          fi
+          if [ -f .env ]; then
+            [ -z "$PRESERVED_SECURE_NOTES_KEY" ] && PRESERVED_SECURE_NOTES_KEY="$(read_env_key .env SECURE_NOTES_MASTER_KEY)"
+            PRESERVED_CRISP="$(read_env_key .env NEXT_PUBLIC_CRISP_WEBSITE_ID)"
+          fi
+
+          DEPLOY_SECURE_NOTES_KEY="$(use_deploy_or_preserved '${{ secrets.SECURE_NOTES_MASTER_KEY }}' "$PRESERVED_SECURE_NOTES_KEY" 'SECURE_NOTES_MASTER_KEY')"
+          if [ -z "$DEPLOY_SECURE_NOTES_KEY" ]; then
+            echo "==> WARNING: SECURE_NOTES_MASTER_KEY is empty — add GitHub secret SECURE_NOTES_MASTER_KEY"
+          fi
+
+          DEPLOY_CRISP="$(use_deploy_or_preserved '${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}' "$PRESERVED_CRISP" 'NEXT_PUBLIC_CRISP_WEBSITE_ID')"
+          if [ -z '${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}' ] && [ -z "$DEPLOY_CRISP" ]; then
+            echo "==> WARNING: NEXT_PUBLIC_CRISP_WEBSITE_ID is empty — Crisp disabled (set GitHub Variable + redeploy)"
+          fi
+
+          DEPLOY_STRIPE_SECRET="$(use_deploy_or_preserved '${{ secrets.STRIPE_SECRET_KEY }}' "$PRESERVED_STRIPE_SECRET" 'STRIPE_SECRET_KEY')"
+          DEPLOY_STRIPE_WEBHOOK="$(use_deploy_or_preserved '${{ secrets.STRIPE_WEBHOOK_SECRET }}' "$PRESERVED_STRIPE_WEBHOOK" 'STRIPE_WEBHOOK_SECRET')"
+          DEPLOY_STRIPE_MONTHLY="$(use_deploy_or_preserved '${{ vars.STRIPE_PRICE_MONTHLY }}' "$PRESERVED_STRIPE_MONTHLY" 'STRIPE_PRICE_MONTHLY')"
+          DEPLOY_STRIPE_ANNUAL="$(use_deploy_or_preserved '${{ vars.STRIPE_PRICE_ANNUAL }}' "$PRESERVED_STRIPE_ANNUAL" 'STRIPE_PRICE_ANNUAL')"
+          if [ -z "$DEPLOY_STRIPE_SECRET" ]; then
+            echo "==> WARNING: STRIPE_SECRET_KEY is empty — billing will fail (add GitHub secret STRIPE_SECRET_KEY)"
           fi
 
           printf '%s\n' \
@@ -156,7 +196,7 @@ jobs:
             "NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}" \
             "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
             "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
-            "NEXT_PUBLIC_CRISP_WEBSITE_ID=${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" \
+            "NEXT_PUBLIC_CRISP_WEBSITE_ID=$DEPLOY_CRISP" \
             "FROM_EMAIL=${{ vars.FROM_EMAIL }}" \
             "FROM_NAME=${{ vars.FROM_NAME }}" \
             "FRONTEND_URL=${{ vars.FRONTEND_URL }}" \
@@ -165,10 +205,10 @@ jobs:
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
             "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" \
-            "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" \
-            "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
-            "STRIPE_PRICE_MONTHLY=${{ vars.STRIPE_PRICE_MONTHLY }}" \
-            "STRIPE_PRICE_ANNUAL=${{ vars.STRIPE_PRICE_ANNUAL }}" \
+            "STRIPE_SECRET_KEY=$DEPLOY_STRIPE_SECRET" \
+            "STRIPE_WEBHOOK_SECRET=$DEPLOY_STRIPE_WEBHOOK" \
+            "STRIPE_PRICE_MONTHLY=$DEPLOY_STRIPE_MONTHLY" \
+            "STRIPE_PRICE_ANNUAL=$DEPLOY_STRIPE_ANNUAL" \
             "APP_URL=${{ vars.APP_URL }}" \
             "NEXT_PUBLIC_API_URL=" > .env
 
@@ -186,10 +226,10 @@ jobs:
             "NODE_ENV=production" \
             "ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
             "SECURE_NOTES_MASTER_KEY=$DEPLOY_SECURE_NOTES_KEY" \
-            "STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}" \
-            "STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}" \
-            "STRIPE_PRICE_MONTHLY=${{ vars.STRIPE_PRICE_MONTHLY }}" \
-            "STRIPE_PRICE_ANNUAL=${{ vars.STRIPE_PRICE_ANNUAL }}" \
+            "STRIPE_SECRET_KEY=$DEPLOY_STRIPE_SECRET" \
+            "STRIPE_WEBHOOK_SECRET=$DEPLOY_STRIPE_WEBHOOK" \
+            "STRIPE_PRICE_MONTHLY=$DEPLOY_STRIPE_MONTHLY" \
+            "STRIPE_PRICE_ANNUAL=$DEPLOY_STRIPE_ANNUAL" \
             "APP_URL=${{ vars.APP_URL }}" > api-server/.env
 
           echo "==> Installing production dependencies..."
