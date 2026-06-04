@@ -502,6 +502,10 @@ router.post('/register', async (req, res) => {
       [verifyRes.rows[0].id]
     );
 
+    await client.query('COMMIT');
+
+    // Update funnel AFTER commit — upsertSignupDraft uses the pool (separate connection)
+    // and the user row must already be committed before the FK reference is written.
     const signupSid = String(signupSessionId || '').trim();
     if (!invitationToken && companyId) {
       await upsertSignupDraft({
@@ -512,10 +516,8 @@ router.post('/register', async (req, res) => {
         step: 'account_created',
         userId: user.id,
         companyId,
-      });
+      }).catch((err) => console.error('[auth] upsertSignupDraft post-register failed (non-fatal):', err.message));
     }
-
-    await client.query('COMMIT');
 
     // Generate JWT token with active company
     const token = jwt.sign(
