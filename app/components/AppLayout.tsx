@@ -11,7 +11,7 @@ import MobileNavDrawer from './MobileNavDrawer'
 import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
-import WorkspaceAccessGuard from './WorkspaceAccessGuard'
+import PendingAutomationToasts from './PendingAutomationToasts'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -172,6 +172,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
         <main className="px-4 sm:px-6 lg:px-[40px] pt-3 sm:pt-4 lg:pt-[15px] pb-4 sm:pb-6 lg:pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
           {children}
         </main>
+        <PendingAutomationToasts />
       </div>
     </div>
   )

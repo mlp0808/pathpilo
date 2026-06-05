@@ -17,6 +17,11 @@ const {
   getSmsBillingSnapshot,
 } = require('../utils/smsBilling');
 const { SMS_PLAN_TIERS } = require('../config/smsPlans');
+const {
+  listPromotionCodes,
+  createPromotionCode,
+  deactivatePromotionCode,
+} = require('../utils/stripeCoupons');
 
 const TRIAL_DAYS = 14;
 
@@ -1576,6 +1581,62 @@ router.post('/trial-invites/:id/send-email', async (req, res) => {
   } catch (err) {
     console.error('[admin] trial send-email error:', err);
     return res.status(500).json({ error: 'Failed to send trial email' });
+  }
+});
+
+// ─── Discount coupons (Stripe Promotion Codes) ───────────────────────────────
+
+// GET /api/admin/coupons
+router.get('/coupons', async (req, res) => {
+  try {
+    const coupons = await listPromotionCodes();
+    res.json({ coupons });
+  } catch (err) {
+    console.error('[admin] list coupons error:', err);
+    const status = err.message?.includes('STRIPE_SECRET_KEY') ? 503 : 500;
+    res.status(status).json({ error: err.message || 'Failed to list coupons' });
+  }
+});
+
+// POST /api/admin/coupons
+// Body: { code, percentOff?, amountOff?, durationMonths, appliesTo, maxRedemptions?, name? }
+router.post('/coupons', async (req, res) => {
+  try {
+    const {
+      code,
+      percentOff,
+      amountOff,
+      durationMonths,
+      appliesTo = 'month',
+      maxRedemptions,
+      name,
+    } = req.body || {};
+
+    const coupon = await createPromotionCode({
+      code,
+      percentOff,
+      amountOff,
+      durationMonths,
+      appliesTo,
+      maxRedemptions,
+      name,
+    });
+    res.status(201).json({ coupon });
+  } catch (err) {
+    console.error('[admin] create coupon error:', err);
+    const status = err.status || (err.message?.includes('STRIPE') ? 502 : 500);
+    res.status(status).json({ error: err.message || 'Failed to create coupon' });
+  }
+});
+
+// POST /api/admin/coupons/:promotionCodeId/deactivate
+router.post('/coupons/:promotionCodeId/deactivate', async (req, res) => {
+  try {
+    const coupon = await deactivatePromotionCode(req.params.promotionCodeId);
+    res.json({ coupon });
+  } catch (err) {
+    console.error('[admin] deactivate coupon error:', err);
+    res.status(500).json({ error: err.message || 'Failed to deactivate coupon' });
   }
 });
 

@@ -2,7 +2,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon, SparklesIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon, SparklesIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline'
+import {
+  automationChannelFromKey,
+  formatAutomationEta,
+} from '../utils/automationEta'
 import { apiUrl } from '../utils/api'
 import { formatMoney } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
@@ -330,6 +334,7 @@ function AutomationBadgePopover({
   sendAtLabel,
   cancelLabel,
   cancellingLabel,
+  channel = 'email',
   onCancelled,
 }: {
   label: string
@@ -341,6 +346,7 @@ function AutomationBadgePopover({
   sendAtLabel: string
   cancelLabel: string
   cancellingLabel: string
+  channel?: 'email' | 'sms'
   onCancelled: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -382,10 +388,22 @@ function AutomationBadgePopover({
     }
   }
 
+  const isSms = channel === 'sms'
+
   return (
     <div className="relative" onMouseEnter={handleEnter} onMouseLeave={scheduleClose}>
-      <span className="inline-flex items-center gap-0.5 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 cursor-default select-none">
-        <EnvelopeIcon className="h-3 w-3 shrink-0" aria-hidden />
+      <span
+        className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-medium cursor-default select-none ${
+          isSms
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'border-violet-200 bg-violet-50 text-violet-800'
+        }`}
+      >
+        {isSms ? (
+          <ChatBubbleLeftRightIcon className="h-3 w-3 shrink-0" aria-hidden />
+        ) : (
+          <EnvelopeIcon className="h-3 w-3 shrink-0" aria-hidden />
+        )}
         <ArrowRightIcon className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
         <span>{label}</span>
       </span>
@@ -398,7 +416,11 @@ function AutomationBadgePopover({
           <p className="text-xs font-semibold text-gray-900 mb-1">{title}</p>
           <p className="text-xs text-gray-500 mb-2 leading-relaxed">{desc}</p>
           {sendAtFormatted && (
-            <p className="text-[11px] text-violet-700 font-medium mb-3">
+            <p
+              className={`text-[11px] font-medium mb-3 ${
+                isSms ? 'text-emerald-700' : 'text-violet-700'
+              }`}
+            >
               {sendAtLabel}: {sendAtFormatted}
             </p>
           )}
@@ -413,21 +435,6 @@ function AutomationBadgePopover({
       )}
     </div>
   )
-}
-
-function formatAutomationEta(ms: number, soonLabel: string): string {
-  if (ms <= 0) return soonLabel
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return sec === 0 && ms > 0 ? '1s' : `${sec}s`
-  const min = Math.floor(sec / 60)
-  if (min < 60) {
-    const remSec = sec % 60
-    return remSec === 0 ? `${min} min` : `${min}m ${remSec}s`
-  }
-  const h = Math.floor(min / 60)
-  if (h < 48) return `${h}h ${min % 60}m`
-  const d = Math.floor(h / 24)
-  return `${d}d ${h % 24}h`
 }
 
 interface JobLog {
@@ -2705,14 +2712,27 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         !Number.isFinite(sendAtMs) || !Number.isFinite(ms) || ms <= 0
                           ? soon
                           : formatAutomationEta(ms, soon)
+                      const channel = automationChannelFromKey(b.key)
                       const title =
                         b.key === 'email_job_created'
                           ? t('app.jobView.automationBookingTitle')
-                          : t('app.jobView.automationReminderTitle')
+                          : b.key === 'email_job_reminder'
+                            ? t('app.jobView.automationReminderTitle')
+                            : b.key === 'sms_on_the_way'
+                              ? t('app.automation.smsOnTheWay', 'On the way SMS')
+                              : b.key === 'sms_day_before'
+                                ? t('app.automation.smsDayBefore', 'Day-before SMS')
+                                : t('app.jobView.automationReminderTitle')
                       const desc =
                         b.key === 'email_job_created'
                           ? t('app.jobView.automationBookingDesc')
-                          : t('app.jobView.automationReminderDesc')
+                          : b.key === 'email_job_reminder'
+                            ? t('app.jobView.automationReminderDesc')
+                            : b.key === 'sms_on_the_way'
+                              ? t('app.automation.smsOnTheWayDesc', 'Automated SMS when the technician is on the way.')
+                              : b.key === 'sms_day_before'
+                                ? t('app.automation.smsDayBeforeDesc', 'Automated SMS reminder before the visit.')
+                                : t('app.jobView.automationReminderDesc')
                       const sendAtFormatted = Number.isFinite(sendAtMs)
                         ? new Date(sendAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
                           ' · ' +
@@ -2727,6 +2747,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                           sendAtFormatted={sendAtFormatted}
                           automationKey={b.key}
                           jobId={jobId}
+                          channel={channel}
                           sendAtLabel={t('app.jobView.automationSendingAt')}
                           cancelLabel={t('app.jobView.automationCancelSend')}
                           cancellingLabel={t('app.jobView.automationCancelling')}

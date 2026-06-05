@@ -185,6 +185,7 @@ export default function CompanyDetailPage() {
             <Link href="/admin/users" className="text-gray-600 hover:text-gray-900">Users</Link>
             <Link href="/admin/companies" className="text-blue-600 font-medium">Companies</Link>
             <Link href="/admin/trials" className="text-gray-600 hover:text-gray-900">Trials</Link>
+            <Link href="/admin/coupons" className="text-gray-600 hover:text-gray-900">Coupons</Link>
             <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/admin') }} className="text-gray-600 hover:text-gray-900">Logout</button>
           </div>
         </div>

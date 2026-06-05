@@ -339,6 +339,14 @@ router.put('/', authenticateToken, async (req, res) => {
           [companyId, automationKey, enabled, leadValue, leadUnit, eligibleSince]
         );
       }
+      if (
+        hasAutomations &&
+        (automationSettings.sms_day_before?.enabled ||
+          automationSettings.email_job_reminder?.enabled)
+      ) {
+        const { backfillDayBeforeRemindersForCompany } = require('../utils/automatedEmails');
+        await backfillDayBeforeRemindersForCompany(pool, companyId);
+      }
     }
 
     res.json({ success: true });

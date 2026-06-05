@@ -156,7 +156,7 @@ export default function ProFeatureGate({ children }: ProFeatureGateProps) {
               </p>
             )}
             <p className="mt-2 text-xs text-gray-500">
-              {t('app.proGate.trialNote', '14-day free trial · cancel anytime')}
+              {t('app.proGate.trialNote', '14-day free trial · card required · cancel anytime')}
             </p>
           </div>
 

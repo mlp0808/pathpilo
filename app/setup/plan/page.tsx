@@ -115,7 +115,38 @@ export default function SetupPlanPage() {
     setError(null)
     try {
       const data = await selectPlan('company')
-      applyPlanResponse(data)
+      // Onboarding is now complete; store the refreshed token before leaving.
+      if (data.token) localStorage.setItem('token', data.token)
+      markActiveCompanyOnboardedInSession()
+      const { patchSessionOnboardingStep } = await import('@/app/utils/onboardingClient')
+      patchSessionOnboardingStep('done', true)
+      try {
+        const userData = localStorage.getItem('user')
+        if (userData && data.company?.slug) {
+          const userObj = JSON.parse(userData)
+          userObj.activeCompany = { ...userObj.activeCompany, slug: data.company.slug }
+          localStorage.setItem('user', JSON.stringify(userObj))
+        }
+      } catch { /* ignore */ }
+
+      // Card-before-trial: send the owner to Stripe Checkout to add a card and
+      // start the 14-day free trial. Pro is granted when checkout completes.
+      const token = localStorage.getItem('token')
+      const companyId = getCompanyIdFromSession()
+      const res = await fetch(apiUrl('/stripe/checkout'), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          interval,
+          companyId,
+          companySlug: data.company?.slug || undefined,
+        }),
+      })
+      const checkout = await res.json()
+      if (!res.ok || !checkout.url) {
+        throw new Error(checkout.error || 'Could not start checkout')
+      }
+      window.location.href = checkout.url
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Something went wrong')
       setLoading(null)
@@ -265,13 +296,14 @@ export default function SetupPlanPage() {
                 : 'Start free trial'}
             </button>
             <p className="mt-2 text-center text-[10px] text-white/45">
-              No charge for {TRIAL_DAYS} days · Cancel anytime
+              Card required · No charge for {TRIAL_DAYS} days · Cancel anytime
             </p>
           </div>
         </div>
 
         <p className="mt-6 text-xs text-gray-400 text-center sm:text-left">
-          Company plan includes a {TRIAL_DAYS}-day free trial · Add payment later in Settings → Plan &amp; billing
+          Company plan starts with a {TRIAL_DAYS}-day free trial. We&apos;ll ask for a card so your
+          plan continues automatically after the trial — cancel anytime before then and you won&apos;t be charged.
         </p>
     </SetupWizardLayout>
   )

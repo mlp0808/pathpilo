@@ -54,6 +54,52 @@ function mapInvoice(inv) {
   };
 }
 
+/** Map a Stripe PaymentMethod (card) to a small UI-safe object. */
+function mapCard(pm) {
+  if (!pm || !pm.card) return null;
+  return {
+    id: pm.id,
+    brand: pm.card.brand || null, // visa | mastercard | amex ...
+    last4: pm.card.last4 || null,
+    expMonth: pm.card.exp_month || null,
+    expYear: pm.card.exp_year || null,
+    wallet: pm.card.wallet?.type || null,
+  };
+}
+
+/** Resolve the customer's default card: subscription PM → customer default → first card on file. */
+async function resolveDefaultCard(stripe, customerId, subscription) {
+  // 1. Subscription default payment method
+  const subPm = subscription?.default_payment_method;
+  if (subPm && typeof subPm === 'object' && subPm.card) {
+    return mapCard(subPm);
+  }
+  if (typeof subPm === 'string') {
+    try {
+      return mapCard(await stripe.paymentMethods.retrieve(subPm));
+    } catch (_) { /* fall through */ }
+  }
+
+  // 2. Customer invoice_settings.default_payment_method
+  try {
+    const customer = await stripe.customers.retrieve(customerId, {
+      expand: ['invoice_settings.default_payment_method'],
+    });
+    const defPm = customer?.invoice_settings?.default_payment_method;
+    if (defPm && typeof defPm === 'object' && defPm.card) {
+      return mapCard(defPm);
+    }
+  } catch (_) { /* fall through */ }
+
+  // 3. First card attached to the customer
+  try {
+    const list = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
+    if (list.data?.[0]) return mapCard(list.data[0]);
+  } catch (_) { /* ignore */ }
+
+  return null;
+}
+
 /**
  * Build a billing snapshot for a company from Stripe.
  * @param {object} company - row with stripe_customer_id, stripe_subscription_id, billing_interval
@@ -66,6 +112,8 @@ async function getStripeBillingSnapshot(company) {
     customerId: company.stripe_customer_id || null,
     subscription: null,
     nextInvoice: null,
+    upcomingInvoice: null,
+    card: null,
     invoices: [],
     error: null,
   };
@@ -76,11 +124,15 @@ async function getStripeBillingSnapshot(company) {
 
   try {
     const stripe = getStripe();
+    let subscription = null;
 
     // Subscription (live status, current period, amount)
     if (company.stripe_subscription_id) {
       try {
-        const sub = await stripe.subscriptions.retrieve(company.stripe_subscription_id);
+        const sub = await stripe.subscriptions.retrieve(company.stripe_subscription_id, {
+          expand: ['default_payment_method', 'discount'],
+        });
+        subscription = sub;
         const item = sub.items?.data?.[0];
         const price = item?.price;
         const quantity = item?.quantity || 1;
@@ -98,19 +150,41 @@ async function getStripeBillingSnapshot(company) {
           trialEnd: toIso(sub.trial_end),
           amount: money(unitAmount, sub.currency),
         };
-
-        // Derive the next invoice from the subscription unless it's ending.
-        if (!sub.cancel_at_period_end && ['active', 'trialing', 'past_due'].includes(sub.status)) {
-          snapshot.nextInvoice = {
-            date: toIso(sub.current_period_end),
-            amount: money(unitAmount, sub.currency),
-            periodStart: toIso(sub.current_period_end),
-            periodEnd: toIso(sub.current_period_end ? sub.current_period_end + secondsInInterval(snapshot.subscription.interval) : null),
-          };
-        }
       } catch (subErr) {
         // Subscription may have been deleted in Stripe — leave subscription null.
         snapshot.subscriptionError = subErr.message;
+      }
+    }
+
+    // Default card on file
+    snapshot.card = await resolveDefaultCard(stripe, company.stripe_customer_id, subscription);
+
+    // Upcoming invoice (real Stripe preview — reflects discounts, proration, trial → first charge)
+    try {
+      // Stripe SDK v18+ renamed invoices.retrieveUpcoming → invoices.createPreview.
+      const previewFn = stripe.invoices.createPreview
+        ? (params) => stripe.invoices.createPreview(params)
+        : (params) => stripe.invoices.retrieveUpcoming(params);
+      const upcoming = await previewFn({ customer: company.stripe_customer_id });
+      snapshot.upcomingInvoice = {
+        amountDue: money(upcoming.amount_due, upcoming.currency),
+        total: money(upcoming.total, upcoming.currency),
+        periodStart: toIso(upcoming.period_start),
+        periodEnd: toIso(upcoming.period_end),
+        nextPaymentAttempt: toIso(upcoming.next_payment_attempt),
+        date: toIso(upcoming.next_payment_attempt || upcoming.period_end),
+      };
+      snapshot.nextInvoice = snapshot.upcomingInvoice;
+    } catch (_) {
+      // No upcoming invoice (e.g. cancelled / no subscription) — fall back to subscription period.
+      const sub = snapshot.subscription;
+      if (sub && !sub.cancelAtPeriodEnd && ['active', 'trialing', 'past_due'].includes(sub.status)) {
+        snapshot.nextInvoice = {
+          date: sub.trialEnd || sub.currentPeriodEnd,
+          amount: sub.amount,
+          periodStart: sub.currentPeriodEnd,
+          periodEnd: null,
+        };
       }
     }
 
@@ -125,13 +199,6 @@ async function getStripeBillingSnapshot(company) {
   }
 
   return snapshot;
-}
-
-function secondsInInterval(interval) {
-  if (interval === 'year') return 365 * 24 * 60 * 60;
-  if (interval === 'week') return 7 * 24 * 60 * 60;
-  if (interval === 'day') return 24 * 60 * 60;
-  return 30 * 24 * 60 * 60; // month (approx — display only)
 }
 
 module.exports = {

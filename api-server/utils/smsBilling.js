@@ -1,6 +1,6 @@
 // SMS add-on billing: schema, usage metering, and per-company snapshots.
 //
-// Sending SMS is not wired up yet (no Twilio). This module provides the data
+// SMS delivery uses Twilio (see utils/twilioSms.js). This module provides the data
 // model and helpers so that:
 //   - admins can assign / change / cancel a company's SMS plan,
 //   - usage is metered against the plan's monthly allowance,

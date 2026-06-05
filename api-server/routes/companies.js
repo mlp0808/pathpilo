@@ -511,18 +511,19 @@ router.post('/onboarding/select-plan', authenticateToken, async (req, res) => {
     const interval = req.body?.interval === 'year' ? 'year' : 'month';
 
     if (isCompanyPlan) {
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + TRIAL_DAYS);
+      // Card-before-trial: choosing Company finishes onboarding but does NOT grant
+      // Pro yet. The frontend sends the owner to Stripe Checkout to add a card and
+      // start the 14-day trial; Pro is granted when checkout completes.
       await pool.query(
         `UPDATE companies
-         SET plan = 'pro',
-             expires_at = $1,
+         SET plan = 'standard',
+             expires_at = NULL,
              onboarding_completed = true,
              onboarding_step = 'done',
-             billing_interval = $2,
+             billing_interval = $1,
              updated_at = NOW()
-         WHERE id = $3`,
-        [expiresAt, interval, companyId]
+         WHERE id = $2`,
+        [interval, companyId]
       );
     } else {
       await pool.query(
@@ -580,6 +581,8 @@ router.post('/onboarding/select-plan', authenticateToken, async (req, res) => {
       success: true,
       plan: company.plan,
       trialEndsAt: company.expires_at,
+      requiresCheckout: isCompanyPlan,
+      interval,
       onboardingCompleted: true,
       onboardingStep: 'done',
       company: {
@@ -805,6 +808,39 @@ router.post('/switch', authenticateToken, async (req, res) => {
       error: 'Failed to switch active company',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// GET /api/companies/pending-automations — company-wide pending email/SMS countdowns (app shell).
+router.get('/pending-automations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    let companyId = req.user.activeCompanyId;
+    if (!companyId) {
+      const result = await pool.query(
+        'SELECT company_id FROM user_companies WHERE user_id = $1 LIMIT 1',
+        [userId]
+      );
+      if (result.rows.length === 0) {
+        return res.status(400).json({ error: 'No active company found' });
+      }
+      companyId = result.rows[0].company_id;
+    } else {
+      const member = await pool.query(
+        'SELECT 1 FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [userId, companyId]
+      );
+      if (member.rows.length === 0) {
+        return res.status(403).json({ error: 'Not a member of the active company' });
+      }
+    }
+
+    const { getPendingAutomationsForCompany } = require('../utils/pendingAutomations');
+    const result = await getPendingAutomationsForCompany(pool, companyId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching pending automations:', error);
+    res.status(500).json({ error: 'Failed to fetch pending automations' });
   }
 });
 
