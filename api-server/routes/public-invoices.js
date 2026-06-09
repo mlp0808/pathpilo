@@ -249,7 +249,13 @@ router.get('/:token/pdf', async (req, res) => {
     const invoice = await getInvoiceWithItems(invoiceId, companyId);
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
-    const pdfBuffer = await buildInvoicePdf(invoice);
+    const integ = await pool.query(
+      `SELECT provider, enabled, config FROM company_integrations
+       WHERE company_id = $1 AND provider = 'bank_transfer'`,
+      [companyId],
+    );
+    const bankRow = integ.rows[0] || null;
+    const pdfBuffer = await buildInvoicePdf(invoice, bankRow);
     const filename = `invoice-${invoice.invoice_number_display || invoice.invoice_number || invoiceId}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     // `inline` so the browser previews it; the frontend's Download button uses

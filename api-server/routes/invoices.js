@@ -11,7 +11,7 @@ const {
   applySendInvoicePlaceholders,
 } = require('../utils/invoiceSendTemplate');
 const { resolveClientInvoiceContact } = require('../utils/invoiceClientDisplay');
-const { buildPublicInvoicePayload } = require('../utils/eInvoicePayload');
+const { buildPublicInvoicePayload, buildPaymentOptions } = require('../utils/eInvoicePayload');
 const {
   scheduleInvoiceDueReminder,
   cancelScheduledInvoiceReminder,
@@ -333,7 +333,7 @@ function replacePaymentTermsPlaceholders(template, invoice) {
 // same Bill to block, same totals, same payment terms, same payment options.
 // This is required for accounting consistency — the customer must never see
 // conflicting data between the digital and printed surfaces.
-function buildInvoicePdf(invoice) {
+function buildInvoicePdf(invoice, bankRow = null) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -710,6 +710,62 @@ function buildInvoicePdf(invoice) {
       }
 
       // ════════════════════════════════════════════════════════════════════════
+      // HOW TO PAY (bank transfer — mirrors DigitalInvoiceView)
+      // ════════════════════════════════════════════════════════════════════════
+      const balanceDue =
+        invoice.balance != null ? Number(invoice.balance) : Number(invoice.total) || 0;
+      const paymentMethods = buildPaymentOptions(invoice.company_id, invoice, bankRow);
+      const bankMethod = paymentMethods.find((m) => m.type === 'bank_transfer');
+      if (bankMethod?.bank && balanceDue > 0) {
+        const bank = bankMethod.bank;
+        const isUk = String(invoice.company_country_code || '').toUpperCase() === 'GB';
+
+        doc.y += 4;
+        doc.moveTo(margin, doc.y).lineTo(rightEdge, doc.y).strokeColor(gray200).stroke();
+        doc.y += 14;
+        drawSmallLabel(tr('invoice.howToPay', 'HOW TO PAY'), margin, doc.y);
+        doc.y += 14;
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(brand);
+        doc.text(bankMethod.title, margin, doc.y, { width: contentWidth });
+        doc.y += 4;
+        doc.font('Helvetica').fontSize(9).fillColor(gray600);
+        doc.text(bankMethod.description, margin, doc.y, { width: contentWidth, lineGap: 2 });
+        doc.y += 10;
+
+        const drawBankLine = (label, value) => {
+          if (!value) return;
+          doc.font('Helvetica-Bold').fontSize(8).fillColor(gray500);
+          doc.text(label.toUpperCase(), margin, doc.y, { width: contentWidth, characterSpacing: 0.8 });
+          doc.y += 11;
+          doc.font('Helvetica').fontSize(10).fillColor(gray900);
+          doc.text(String(value), margin, doc.y, { width: contentWidth });
+          doc.y += 14;
+        };
+
+        drawBankLine(tr('invoice.accountHolder', 'Account holder'), bank.accountHolder);
+        if (isUk) {
+          drawBankLine(tr('invoice.sortCode', 'Sort code'), bank.registrationNumber);
+          drawBankLine(tr('invoice.accountNo', 'Account no.'), bank.accountNumber);
+          drawBankLine(tr('invoice.iban', 'IBAN'), bank.iban);
+        } else {
+          drawBankLine(tr('invoice.iban', 'IBAN'), bank.iban);
+          drawBankLine(tr('invoice.regNo', 'Reg. no.'), bank.registrationNumber);
+          drawBankLine(tr('invoice.accountNo', 'Account no.'), bank.accountNumber);
+        }
+        if (bank.paymentReference) {
+          doc.font('Helvetica-Bold').fontSize(8).fillColor(gray500);
+          doc.text(tr('invoice.paymentReference', 'Payment reference').toUpperCase(), margin, doc.y, {
+            width: contentWidth,
+            characterSpacing: 0.8,
+          });
+          doc.y += 11;
+          doc.font('Courier-Bold').fontSize(10).fillColor(gray900);
+          doc.text(String(bank.paymentReference), margin, doc.y, { width: contentWidth });
+          doc.y += 14;
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
       // FOOTER
       // ════════════════════════════════════════════════════════════════════════
       const footerY = Math.min(800, Math.max(770, doc.y + 30));
@@ -755,7 +811,13 @@ router.get('/:invoiceId/pdf', authenticateToken, async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
-    const pdfBuffer = await buildInvoicePdf(invoice);
+    const integ = await pool.query(
+      `SELECT provider, enabled, config FROM company_integrations
+       WHERE company_id = $1 AND provider = 'bank_transfer'`,
+      [companyAccess.companyId],
+    );
+    const bankRow = integ.rows[0] || null;
+    const pdfBuffer = await buildInvoicePdf(invoice, bankRow);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
