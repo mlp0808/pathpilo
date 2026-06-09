@@ -3,6 +3,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAppI18n } from '../../components/I18nProvider'
 import { apiUrl } from '../../utils/api'
+import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
+import {
+  isBankTransferConfigComplete,
+  usesUkBankFields,
+  validateBankTransferForEnable,
+  type BankTransferConfig,
+} from '../../utils/bankTransfer'
 import { BuildingLibraryIcon, CreditCardIcon, ChevronDownIcon } from '@heroicons/react/24/outline'
 import {
   InvoiceSendEmailCard,
@@ -34,11 +41,7 @@ type InvoiceDefaults = {
   invoicingEnabled: boolean
 }
 
-interface PaymentConfig {
-  accountHolder?: string
-  iban?: string
-  accountNumber?: string
-  registrationNumber?: string
+type PaymentConfig = BankTransferConfig & {
   [key: string]: unknown
 }
 
@@ -77,12 +80,12 @@ function isPositiveInt(value: number | ''): value is number {
 function validateActivationRequirements(
   form: Pick<InvoiceDefaults, 'invoiceNextNumber' | 'invoiceDefaultDueDays'>,
   paymentDrafts: Record<string, PaymentDraft>,
+  countryCode: string,
 ): ActivationFieldErrors {
   const bank = paymentDrafts.bank_transfer
   const bankOk =
     Boolean(bank?.enabled) &&
-    Boolean(String(bank?.config?.accountHolder || '').trim()) &&
-    Boolean(String(bank?.config?.iban || '').trim())
+    isBankTransferConfigComplete(bank?.config || {}, countryCode)
 
   return {
     nextNumber: !isPositiveInt(form.invoiceNextNumber),
@@ -97,6 +100,7 @@ function hasActivationErrors(errors: ActivationFieldErrors) {
 
 export default function InvoiceOptionsPage() {
   const { t } = useAppI18n()
+  const countryCode = useCompanyCountryCode()
 
   const [defaultsLoading, setDefaultsLoading] = useState(true)
   const [defaultsSaving, setDefaultsSaving] = useState(false)
@@ -269,7 +273,7 @@ export default function InvoiceOptionsPage() {
       return
     }
 
-    const errors = validateActivationRequirements(form, paymentDrafts)
+    const errors = validateActivationRequirements(form, paymentDrafts, countryCode)
     if (hasActivationErrors(errors)) {
       setActivationFieldErrors(errors)
       if (errors.bankTransfer) setExpandBankTransfer(true)
@@ -378,15 +382,22 @@ export default function InvoiceOptionsPage() {
           JSON.stringify(draft.config || {}) !== JSON.stringify(opt.config || {})
         if (!isDirty) continue
 
-        if (
-          opt.provider === 'bank_transfer' &&
-          draft.enabled &&
-          (!String(draft.config.accountHolder || '').trim() || !String(draft.config.iban || '').trim())
-        ) {
-          setPaymentError(
-            t('settings.invoices.payment.fillToActivateError', 'Fill account holder and IBAN before activating.'),
-          )
-          return false
+        if (opt.provider === 'bank_transfer' && draft.enabled) {
+          const bankErr = validateBankTransferForEnable(draft.config || {}, countryCode)
+          if (bankErr) {
+            setPaymentError(
+              usesUkBankFields(countryCode)
+                ? t(
+                    'settings.invoices.payment.fillToActivateErrorUk',
+                    'Fill account holder, sort code, and account number before activating.',
+                  )
+                : t(
+                    'settings.invoices.payment.fillToActivateError',
+                    'Fill account holder and IBAN before activating.',
+                  ),
+            )
+            return false
+          }
         }
 
         const res = await fetch(apiUrl(`/integrations/${opt.provider}/config`), {
@@ -659,6 +670,7 @@ export default function InvoiceOptionsPage() {
                   onDraftChange={(patch) => updatePaymentDraft(opt.provider, patch)}
                   invalid={opt.provider === 'bank_transfer' && activationFieldErrors.bankTransfer}
                   expandRequested={opt.provider === 'bank_transfer' && expandBankTransfer}
+                  countryCode={countryCode}
                   t={t}
                 />
               ))}
@@ -714,6 +726,7 @@ function PaymentOptionRow({
   onDraftChange,
   invalid = false,
   expandRequested = false,
+  countryCode,
   t,
 }: {
   option: PaymentOption
@@ -721,9 +734,11 @@ function PaymentOptionRow({
   onDraftChange: (patch: Partial<PaymentDraft>) => void
   invalid?: boolean
   expandRequested?: boolean
+  countryCode: string
   t: (key: string, fallback: string) => string
 }) {
   const [expanded, setExpanded] = useState(false)
+  const isUkBank = usesUkBankFields(countryCode)
 
   useEffect(() => {
     if (expandRequested) setExpanded(true)
@@ -733,10 +748,8 @@ function PaymentOptionRow({
 
   const canEnable = useMemo(() => {
     if (!isBankTransfer) return true
-    return Boolean(
-      String(draft.config.accountHolder || '').trim() && String(draft.config.iban || '').trim(),
-    )
-  }, [isBankTransfer, draft.config])
+    return isBankTransferConfigComplete(draft.config || {}, countryCode)
+  }, [isBankTransfer, draft.config, countryCode])
 
   const ProviderIcon = providerIconFor(option.provider)
 
@@ -782,35 +795,82 @@ function PaymentOptionRow({
       {expanded && (
         <div className="-mx-3 mb-3 space-y-4 rounded-md bg-gray-50 px-4 py-4">
           {isBankTransfer && (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field
-                label={t('settings.invoices.payment.accountHolder', 'Account holder')}
-                required
-                value={String(draft.config.accountHolder || '')}
-                onChange={(v) => onDraftChange({ config: { accountHolder: v } })}
-              />
-              <Field
-                label={t('settings.invoices.payment.iban', 'IBAN')}
-                required
-                value={String(draft.config.iban || '')}
-                onChange={(v) => onDraftChange({ config: { iban: v } })}
-              />
-              <Field
-                label={t('settings.invoices.payment.regNumber', 'Registration number')}
-                value={String(draft.config.registrationNumber || '')}
-                onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
-              />
-              <Field
-                label={t('settings.invoices.payment.accountNumber', 'Account number')}
-                value={String(draft.config.accountNumber || '')}
-                onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
-              />
-            </div>
+            <>
+              <SettingsHint>
+                {isUkBank
+                  ? t(
+                      'settings.invoices.payment.ukHelp',
+                      'UK bank transfers use sort code and account number. IBAN is optional.',
+                    )
+                  : t(
+                      'settings.invoices.payment.euHelp',
+                      'Clients will see these details on your invoices when they pay by bank transfer.',
+                    )}
+              </SettingsHint>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field
+                  label={t('settings.invoices.payment.accountHolder', 'Account holder')}
+                  required
+                  value={String(draft.config.accountHolder || '')}
+                  onChange={(v) => onDraftChange({ config: { accountHolder: v } })}
+                />
+                {isUkBank ? (
+                  <>
+                    <Field
+                      label={t('settings.invoices.payment.sortCode', 'Sort code')}
+                      required
+                      placeholder="12-34-56"
+                      value={String(draft.config.registrationNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                      required
+                      placeholder="12345678"
+                      value={String(draft.config.accountNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.ibanOptional', 'IBAN (optional)')}
+                      value={String(draft.config.iban || '')}
+                      onChange={(v) => onDraftChange({ config: { iban: v } })}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Field
+                      label={t('settings.invoices.payment.iban', 'IBAN')}
+                      required
+                      value={String(draft.config.iban || '')}
+                      onChange={(v) => onDraftChange({ config: { iban: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.regNumber', 'Registration number')}
+                      value={String(draft.config.registrationNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                      value={String(draft.config.accountNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
+                    />
+                  </>
+                )}
+              </div>
+            </>
           )}
 
           {draft.enabled && !canEnable && (
             <SettingsHint>
-              {t('settings.invoices.payment.fillToActivate', 'Fill account holder and IBAN to activate.')}
+              {isUkBank
+                ? t(
+                    'settings.invoices.payment.fillToActivateUk',
+                    'Fill account holder, sort code, and account number to activate.',
+                  )
+                : t(
+                    'settings.invoices.payment.fillToActivate',
+                    'Fill account holder and IBAN to activate.',
+                  )}
             </SettingsHint>
           )}
         </div>
@@ -824,11 +884,13 @@ function Field({
   value,
   onChange,
   required,
+  placeholder,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   required?: boolean
+  placeholder?: string
 }) {
   return (
     <label className="block">
@@ -836,7 +898,11 @@ function Field({
         {label}
         {required && <span className="ml-0.5 text-gray-400">*</span>}
       </span>
-      <SettingsInput value={value} onChange={(e) => onChange(e.target.value)} />
+      <SettingsInput
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
     </label>
   )
 }

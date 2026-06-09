@@ -4,6 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
 
+/**
+ * Frosted glass chrome for route planner controls floating over the map.
+ * Matches the desktop week picker: milky white + blur + soft border.
+ */
+export const ROUTE_MAP_GLASS_PILL =
+  'bg-white/96 backdrop-blur-md backdrop-saturate-150 border border-white/60 shadow-xl shadow-black/[0.12]'
+export const ROUTE_MAP_GLASS_PANEL =
+  'bg-white/96 backdrop-blur-md backdrop-saturate-150 border border-white/60 shadow-xl shadow-black/[0.12]'
+
+/** Inline fallback — mobile Safari needs explicit webkit backdrop-filter. */
+export const ROUTE_MAP_GLASS_STYLE = {
+  WebkitBackdropFilter: 'blur(12px) saturate(1.5)',
+  backdropFilter: 'blur(12px) saturate(1.5)',
+} as const
+
 export interface RouteSearchClient {
   id: number
   client_type?: 'person' | 'company'
@@ -68,6 +83,8 @@ export default function RouteAddSearch({
   countryCode,
   accentColor = '#3DD57A',
   placeholder = 'Add a job — search client or address',
+  appearance = 'solid',
+  onFocus,
   onPickClient,
   onPickLocation,
 }: {
@@ -75,6 +92,9 @@ export default function RouteAddSearch({
   countryCode?: string
   accentColor?: string
   placeholder?: string
+  /** `glass` — frosted overlay for mobile map header */
+  appearance?: 'solid' | 'glass'
+  onFocus?: () => void
   onPickClient: (clientId: number) => void
   onPickLocation: (data: RouteLocationPick) => void
 }) {
@@ -189,17 +209,24 @@ export default function RouteAddSearch({
 
   const showPanel = open && q.length > 0
   const hasResults = clientMatches.length > 0 || locations.length > 0
+  const isGlass = appearance === 'glass'
 
   return (
     <div ref={wrapRef} className="relative w-full">
       {/* Search field */}
       <div
-        className="flex items-center gap-2.5 rounded-full bg-white px-4 h-12 transition-shadow"
-        style={{
-          boxShadow: showPanel
-            ? '0 8px 30px rgba(15,30,22,0.18)'
-            : '0 4px 18px rgba(15,30,22,0.12)',
-        }}
+        className={`flex items-center gap-2.5 rounded-full px-4 h-12 transition-all duration-200 ${
+          isGlass ? ROUTE_MAP_GLASS_PILL : 'bg-white'
+        } ${isGlass && showPanel ? 'ring-1 ring-white/70' : ''}`}
+        style={
+          isGlass
+            ? ROUTE_MAP_GLASS_STYLE
+            : {
+                boxShadow: showPanel
+                  ? '0 8px 30px rgba(15,30,22,0.18)'
+                  : '0 4px 18px rgba(15,30,22,0.12)',
+              }
+        }
       >
         <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
@@ -208,9 +235,14 @@ export default function RouteAddSearch({
           ref={inputRef}
           value={query}
           onChange={e => handleChange(e.target.value)}
-          onFocus={() => query.length > 0 && setOpen(true)}
+          onFocus={() => {
+            onFocus?.()
+            if (query.length > 0) setOpen(true)
+          }}
           placeholder={placeholder}
-          className="flex-1 min-w-0 bg-transparent text-[15px] text-gray-900 placeholder-gray-400 outline-none"
+          className={`flex-1 min-w-0 bg-transparent text-[15px] outline-none ${
+            isGlass ? 'text-gray-900 placeholder:text-gray-500/90' : 'text-gray-900 placeholder-gray-400'
+          }`}
         />
         {query.length > 0 ? (
           <button
@@ -238,8 +270,10 @@ export default function RouteAddSearch({
       {/* Suggestions */}
       {showPanel && (
         <div
-          className="absolute left-0 right-0 mt-2 rounded-2xl bg-white overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150"
-          style={{ boxShadow: '0 12px 40px rgba(15,30,22,0.22)' }}
+          className={`absolute left-0 right-0 mt-2 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150 ${
+            isGlass ? ROUTE_MAP_GLASS_PANEL : 'bg-white'
+          }`}
+          style={isGlass ? ROUTE_MAP_GLASS_STYLE : { boxShadow: '0 12px 40px rgba(15,30,22,0.22)' }}
         >
           <div className="max-h-[50vh] overflow-y-auto py-1.5">
             {/* Saved clients */}
@@ -251,7 +285,9 @@ export default function RouteAddSearch({
                   key={`client-${c.id}`}
                   type="button"
                   onClick={() => pickClient(c.id)}
-                  className="w-full flex items-center gap-3 px-3.5 py-2.5 text-left hover:bg-gray-50 transition-colors"
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors ${
+                    isGlass ? 'hover:bg-white/55 active:bg-white/70' : 'hover:bg-gray-50'
+                  }`}
                 >
                   <div
                     className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-white text-[12px] font-bold"
@@ -294,7 +330,9 @@ export default function RouteAddSearch({
                 key={`loc-${i}`}
                 type="button"
                 onClick={() => pickLocation(loc)}
-                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-left hover:bg-gray-50 transition-colors"
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors ${
+                  isGlass ? 'hover:bg-white/55 active:bg-white/70' : 'hover:bg-gray-50'
+                }`}
               >
                 <div className="flex-shrink-0 w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
                   <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">

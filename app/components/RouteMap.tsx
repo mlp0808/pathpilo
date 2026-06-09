@@ -55,6 +55,16 @@ interface RouteMapProps {
   drawOrder?: (number | string)[]
   /** Called when an un-numbered draw-mode pin is clicked. */
   onDrawAssign?: (jobId: number | string) => void
+  /** Inset the camera fit so pins sit in the visible map (e.g. above a mobile bottom sheet). */
+  fitInsets?: {
+    top?: number
+    /** Fraction of map container height covered by bottom UI (0–1). */
+    bottomRatio?: number
+    side?: number
+  }
+  /** Mapbox +/- zoom buttons. Off on mobile route planner (pinch zoom); on by default. */
+  showZoomControl?: boolean
+  zoomControlPosition?: 'top-right' | 'bottom-right'
 }
 
 function fmtMin(minutes: number) {
@@ -155,20 +165,42 @@ function collectCoordsForRoutes(routes: UserRoute[], focusUserId: number | null)
   return coords
 }
 
+function resolveFitPadding(
+  map: mapboxgl.Map,
+  fitInsets?: RouteMapProps['fitInsets'],
+): mapboxgl.PaddingOptions {
+  const side = fitInsets?.side ?? 80
+  const top = fitInsets?.top ?? 80
+  const h = map.getContainer().clientHeight || 0
+  const bottom =
+    fitInsets?.bottomRatio != null && h > 0
+      ? Math.round(h * fitInsets.bottomRatio)
+      : 80
+  return { top, bottom, left: side, right: side }
+}
+
 function fitMapToRouteCoords(
   map: mapboxgl.Map,
   coords: [number, number][],
-  opts?: { animated?: boolean },
+  opts?: { animated?: boolean; fitInsets?: RouteMapProps['fitInsets'] },
 ) {
   if (coords.length === 0) return
   const animated = opts?.animated !== false
   const camera = { pitch: 0 as const, bearing: 0 as const }
+  const padding = resolveFitPadding(map, opts?.fitInsets)
   try {
     if (coords.length === 1) {
+      // fitBounds with padding keeps a lone pin centred in the unobscured map area.
+      const [lng, lat] = coords[0]
+      const pad = 0.002
+      const bounds = new mapboxgl.LngLatBounds(
+        [lng - pad, lat - pad],
+        [lng + pad, lat + pad],
+      )
       if (animated) {
-        map.easeTo({ center: coords[0], zoom: 13, duration: 600, ...camera })
+        map.fitBounds(bounds, { padding, duration: 600, maxZoom: 14, ...camera })
       } else {
-        map.jumpTo({ center: coords[0], zoom: 13, ...camera })
+        map.fitBounds(bounds, { padding, maxZoom: 14, duration: 0, ...camera })
       }
     } else {
       const bounds = coords.reduce(
@@ -176,9 +208,9 @@ function fitMapToRouteCoords(
         new mapboxgl.LngLatBounds(coords[0], coords[0]),
       )
       if (animated) {
-        map.fitBounds(bounds, { padding: 80, duration: 600, maxZoom: 14, ...camera })
+        map.fitBounds(bounds, { padding, duration: 600, maxZoom: 14, ...camera })
       } else {
-        map.fitBounds(bounds, { padding: 80, maxZoom: 14, duration: 0, ...camera })
+        map.fitBounds(bounds, { padding, maxZoom: 14, duration: 0, ...camera })
       }
     }
   } catch (e) {
@@ -238,9 +270,13 @@ export default function RouteMap({
   drawMode,
   drawOrder,
   onDrawAssign,
+  fitInsets,
+  showZoomControl = true,
+  zoomControlPosition = 'top-right',
 }: RouteMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
+  const navControlRef = useRef<mapboxgl.NavigationControl | null>(null)
   const hoverPopupRef = useRef<mapboxgl.Popup | null>(null)  // shown on hover
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null)  // shown on click (stays until next click)
   const addedSourcesRef = useRef<{ id: string; layers: string[] }[]>([])
@@ -288,7 +324,6 @@ export default function RouteMap({
       // v3 defaults can use globe at low zoom; mercator stays flat for route planning
       projection: { name: 'mercator' },
     })
-    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
     // Belt-and-suspenders: block any gesture that could reintroduce tilt or spin
     map.dragRotate.disable()
     map.touchPitch.disable()
@@ -311,6 +346,22 @@ export default function RouteMap({
       mapRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    if (navControlRef.current) {
+      try { map.removeControl(navControlRef.current) } catch { /* ignore */ }
+      navControlRef.current = null
+    }
+
+    if (showZoomControl) {
+      const ctrl = new mapboxgl.NavigationControl({ showCompass: false })
+      map.addControl(ctrl, zoomControlPosition)
+      navControlRef.current = ctrl
+    }
+  }, [showZoomControl, zoomControlPosition])
 
   // Fit camera when coords appear (geocode, load day routes) — separate from layer draw().
   useEffect(() => {
@@ -336,18 +387,27 @@ export default function RouteMap({
       const coords = collectCoordsForRoutes(routes, focusUserId)
       if (coords.length === 0) return
       const animated = hasFittedCameraRef.current
-      fitMapToRouteCoords(map, coords, { animated })
+      fitMapToRouteCoords(map, coords, { animated, fitInsets })
       hasFittedCameraRef.current = true
       enforceFlatRoadView(map)
       scheduleEnforceAfterMove()
     }
 
-    if (map.isStyleLoaded()) runFit()
-    else {
-      map.once('load', runFit)
-      return () => { try { map.off('load', runFit) } catch { /* ignore */ } }
+    const scheduleFit = () => {
+      const h = map.getContainer().clientHeight
+      if (fitInsets?.bottomRatio != null && h < 100) {
+        requestAnimationFrame(() => requestAnimationFrame(runFit))
+        return
+      }
+      runFit()
     }
-  }, [routesFitKey, routes, focusUserId])
+
+    if (map.isStyleLoaded()) scheduleFit()
+    else {
+      map.once('load', scheduleFit)
+      return () => { try { map.off('load', scheduleFit) } catch { /* ignore */ } }
+    }
+  }, [routesFitKey, routes, focusUserId, fitInsets])
 
   // Pin data refresh on hover / pick order (layer swap handled in draw() + useLayoutEffect).
   useEffect(() => {

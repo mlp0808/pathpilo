@@ -26,6 +26,8 @@ import {
 } from '../utils/subscriptionHelpers'
 import { useAppI18n } from './I18nProvider'
 import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
+import DashedPickerTrigger from './DashedPickerTrigger'
+import JobFormAttachmentBar from './JobFormAttachmentBar'
 
 interface Service {
   id: number
@@ -120,6 +122,8 @@ export default function CreateSubscription({
   const clientDropdownTriggerRef = useRef<HTMLDivElement>(null)
   const serviceDropdownTriggerRef = useRef<HTMLDivElement>(null)
   const userDropdownTriggerRef = useRef<HTMLDivElement>(null)
+  const clientSearchInputRef = useRef<HTMLInputElement>(null)
+  const serviceSearchInputRef = useRef<HTMLInputElement>(null)
   const timeFromPickerTriggerRef = useRef<HTMLDivElement>(null)
   const timeToPickerTriggerRef = useRef<HTMLDivElement>(null)
   const [clientDropdownRect, setClientDropdownRect] = useState<DOMRect | null>(null)
@@ -326,12 +330,20 @@ export default function CreateSubscription({
   }, [showServiceDropdown])
 
   useLayoutEffect(() => {
-    if (!showUserDropdown || selectedUserId || !userDropdownTriggerRef.current) { setUserDropdownRect(null); return }
+    if (!showUserDropdown || !userDropdownTriggerRef.current) { setUserDropdownRect(null); return }
     const el = userDropdownTriggerRef.current
     const update = () => setUserDropdownRect(el.getBoundingClientRect())
-    update(); window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [showUserDropdown, selectedUserId])
+    update()
+    window.addEventListener('resize', update)
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', update)
+    vv?.addEventListener('scroll', update)
+    return () => {
+      window.removeEventListener('resize', update)
+      vv?.removeEventListener('resize', update)
+      vv?.removeEventListener('scroll', update)
+    }
+  }, [showUserDropdown])
 
   useLayoutEffect(() => {
     if (!showTimeFromPicker || !timeFromPickerTriggerRef.current) { setTimeFromPickerRect(null); return }
@@ -402,6 +414,16 @@ export default function CreateSubscription({
   const addCustomService = () => {
     setShowServiceDropdown(false)
     setShowServiceCreateSheet(true)
+  }
+
+  const openClientPicker = () => {
+    setShowClientDropdown(true)
+    requestAnimationFrame(() => clientSearchInputRef.current?.focus())
+  }
+
+  const openServicePicker = () => {
+    setShowServiceDropdown(true)
+    requestAnimationFrame(() => serviceSearchInputRef.current?.focus())
   }
 
   const handleInlineServiceCreated = (result: InlineServiceCreateResult) => {
@@ -631,7 +653,6 @@ export default function CreateSubscription({
                 {/* Client picker */}
                 {!lockClient && (
                   <div>
-                    <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.clientRequired', 'Client *')}</label>
                     {selectedClient ? (
                       <div className="bg-gradient-to-r from-accent-50/50 to-white rounded-xl border border-accent-200/40 px-4 py-3 flex items-center justify-between shadow-sm">
                         <div>
@@ -663,14 +684,21 @@ export default function CreateSubscription({
                       />
                     ) : (
                       <div className="relative dropdown-container" ref={clientDropdownTriggerRef}>
-                        <input
-                          type="text"
-                          value={clientSearch}
-                          onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }}
-                          onFocus={() => setShowClientDropdown(true)}
-                          placeholder={t('app.createJob.searchClient', 'Search for a client...')}
-                          className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
-                        />
+                        {showClientDropdown || clientSearch ? (
+                          <input
+                            ref={clientSearchInputRef}
+                            type="text"
+                            value={clientSearch}
+                            onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }}
+                            onFocus={() => setShowClientDropdown(true)}
+                            placeholder={t('app.createJob.searchClient', 'Search for a client...')}
+                            className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
+                          />
+                        ) : (
+                          <DashedPickerTrigger onClick={openClientPicker}>
+                            {t('app.createJob.selectAClient', 'Select a Client')}
+                          </DashedPickerTrigger>
+                        )}
                       </div>
                     )}
                   </div>
@@ -678,19 +706,7 @@ export default function CreateSubscription({
 
                 {/* Services */}
                 {(selectedClient || isAddingNewClient || lockClient) && (
-                  <div className="space-y-2">
-                    <label className="block text-xs font-semibold text-primary-700">{t('app.subscription.servicesLabel', 'Services')}</label>
-                    <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
-                      <input
-                        type="text"
-                        value={serviceSearch}
-                        onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
-                        onFocus={() => setShowServiceDropdown(true)}
-                        placeholder={t('app.subscription.searchServicesPlaceholder', 'Search services to add…')}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
-                      />
-                    </div>
-
+                  <div className="space-y-3">
                     {selectedServices.map(service => (
                       <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm hover:shadow-md transition-all group">
                         <div className="flex-1 min-w-0">
@@ -757,81 +773,24 @@ export default function CreateSubscription({
                       </div>
                     ))}
 
-                    {/* Chips: employee / time / note */}
-                    {selectedServices.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        {/* Employee */}
-                        <div className="relative dropdown-container" ref={userDropdownTriggerRef}>
-                          <button
-                            type="button"
-                            onClick={() => !selectedUserId && setShowUserDropdown(v => !v)}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all hover:scale-[1.02]"
-                          >
-                            {selectedUser ? (
-                              <>
-                                <span className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 text-white text-xs font-bold flex items-center justify-center">
-                                  {(selectedUser.first_name[0] || '') + (selectedUser.last_name[0] || '')}
-                                </span>
-                                <span>{selectedUser.first_name} {selectedUser.last_name}</span>
-                                {users.length > 1 && (
-                                  <XMarkIcon className="w-3 h-3 text-gray-400" onClick={e => { e.stopPropagation(); setSelectedUserId(null) }} />
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                <UserIcon className="w-4 h-4 text-gray-400" />
-                                <span>{t('app.subscription.assignEmployee', 'Assign employee')}</span>
-                                <PlusIcon className="w-3 h-3 text-gray-400" />
-                              </>
-                            )}
-                          </button>
-                        </div>
+                    <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
+                      {showServiceDropdown || serviceSearch ? (
+                        <input
+                          ref={serviceSearchInputRef}
+                          type="text"
+                          value={serviceSearch}
+                          onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
+                          onFocus={() => setShowServiceDropdown(true)}
+                          placeholder={t('app.subscription.searchServicesPlaceholder', 'Search services to add…')}
+                          className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all text-sm bg-white shadow-sm hover:shadow-md hover:border-gray-300"
+                        />
+                      ) : (
+                        <DashedPickerTrigger onClick={openServicePicker} size={selectedServices.length > 0 ? 'md' : 'lg'}>
+                          {t('app.createJob.addServices', 'Add services')}
+                        </DashedPickerTrigger>
+                      )}
+                    </div>
 
-                        {/* Time */}
-                        {jobTimeFrom ? (
-                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm group">
-                            <ClockIcon className="w-4 h-4 text-accent-600" />
-                            <span className="text-sm font-semibold text-primary-800">
-                              {jobTimeFrom}{jobTimeTo ? ` – ${jobTimeTo}` : ''}
-                            </span>
-                            <button onClick={() => { setJobTimeFrom(''); setJobTimeTo('') }} className="p-0.5 rounded-full hover:bg-white/80">
-                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => { setPendingTimeFrom(jobTimeFrom); setPendingTimeTo(jobTimeTo); setIsTimeRangeMode(!!jobTimeTo); setShowTimeModal(true) }}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all hover:scale-[1.02]"
-                          >
-                            <ClockIcon className="w-4 h-4 text-gray-400" />
-                            <span>{t('app.subscription.addTime', 'Add time')}</span>
-                            <PlusIcon className="w-3 h-3 text-gray-400" />
-                          </button>
-                        )}
-
-                        {/* Note */}
-                        {jobNote.trim() ? (
-                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm max-w-xs group">
-                            <DocumentTextIcon className="w-4 h-4 text-accent-600 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-primary-800 truncate">{jobNote.length > 20 ? `${jobNote.slice(0, 20)}…` : jobNote}</span>
-                            <button onClick={() => { setJobNote(''); setShowNoteInput(false) }} className="p-0.5 rounded-full hover:bg-white/80 flex-shrink-0">
-                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setShowNoteInput(true)}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all hover:scale-[1.02]"
-                          >
-                            <DocumentTextIcon className="w-4 h-4 text-gray-400" />
-                            <span>{t('app.subscription.addNote', 'Add note')}</span>
-                            <PlusIcon className="w-3 h-3 text-gray-400" />
-                          </button>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -890,14 +849,40 @@ export default function CreateSubscription({
           </div>
 
           {/* ── Footer ─────────────────────────────────────────── */}
-          <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 flex items-center justify-between gap-3">
-            <div className="text-xs text-gray-500">
+          <div className="border-t border-gray-100 px-5 py-3 bg-gray-50/50 flex flex-wrap items-center gap-3">
+            {activeTab === 'details' && (
+              <JobFormAttachmentBar
+                users={users}
+                selectedUserId={selectedUserId}
+                onEmployeeClick={() => {
+                  if (!selectedUserId || users.length > 1) setShowUserDropdown((v) => !v)
+                }}
+                onClearEmployee={() => setSelectedUserId(null)}
+                userTriggerRef={userDropdownTriggerRef}
+                jobTimeFrom={jobTimeFrom}
+                jobTimeTo={jobTimeTo}
+                onTimeClick={() => {
+                  setPendingTimeFrom(jobTimeFrom)
+                  setPendingTimeTo(jobTimeTo)
+                  setIsTimeRangeMode(!!jobTimeTo)
+                  setShowTimeModal(true)
+                }}
+                onClearTime={() => { setJobTimeFrom(''); setJobTimeTo('') }}
+                jobNote={jobNote}
+                onNoteClick={() => setShowNoteInput(true)}
+                onClearNote={() => { setJobNote(''); setShowNoteInput(false) }}
+                assignEmployeeLabel={t('app.subscription.assignEmployee', 'Assign employee')}
+                addTimeLabel={t('app.subscription.addTime', 'Add time')}
+                addNoteLabel={t('app.subscription.addNote', 'Add note')}
+              />
+            )}
+            <div className="flex-1 min-w-0 text-xs text-gray-500 truncate hidden sm:block">
               {pricePerVisit > 0 && (startAsap ? !!firstVisitYmd : !!customStartingDate)
                 ? `${fmtMoney(pricePerVisit, companyCountryCode)} ${t('app.subscription.perVisit', 'per visit')} · ${fmtMoney(revenuePerYear, companyCountryCode)} ${t('app.subscription.perYear', '/ year')}`
                 : ''
               }
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
               <button onClick={onClose} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
                 {t('app.subscription.cancel', 'Cancel')}
               </button>
@@ -968,8 +953,16 @@ export default function CreateSubscription({
         document.body
       )}
 
-      {typeof document !== 'undefined' && showUserDropdown && !selectedUserId && userDropdownRect && createPortal(
-        <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl min-w-[220px] max-h-60 overflow-y-auto" style={{ position: 'fixed', top: userDropdownRect.bottom + 8, left: userDropdownRect.left, zIndex: 9999 }}>
+      {typeof document !== 'undefined' && showUserDropdown && userDropdownRect && createPortal(
+        <div
+          className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl min-w-[220px] max-h-60 overflow-y-auto"
+          style={{
+            position: 'fixed',
+            left: userDropdownRect.left,
+            bottom: window.innerHeight - userDropdownRect.top + 6,
+            zIndex: 9999,
+          }}
+        >
           {users.map(u => (
             <button key={u.id} onClick={() => { setSelectedUserId(u.id); setShowUserDropdown(false) }}
               className="w-full px-4 py-3 text-left hover:bg-accent-50/50 flex items-center gap-3 transition-all border-b border-gray-100 last:border-b-0">

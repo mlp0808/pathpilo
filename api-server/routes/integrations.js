@@ -1,6 +1,10 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
+const {
+  normalizeBankTransferConfig,
+  validateBankTransferConfig,
+} = require('../utils/bankTransfer');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -89,23 +93,12 @@ async function getActiveCompanyId(req) {
   return { companyId };
 }
 
-function normalizeBankTransferConfig(input) {
-  const body = input || {};
-  return {
-    accountHolder: String(body.accountHolder || '').trim(),
-    iban: String(body.iban || '').trim().replace(/\s+/g, ''),
-    accountNumber: String(body.accountNumber || '').trim(),
-    registrationNumber: String(body.registrationNumber || '').trim(),
-  };
-}
-
-function validateBankTransferConfig(config, enabled) {
-  if (!enabled) return null;
-
-  if (!config.accountHolder) return 'Account holder is required before enabling.';
-  if (!config.iban) return 'IBAN is required before enabling.';
-
-  return null;
+async function getCompanyCountryCode(companyId) {
+  const result = await pool.query(
+    'SELECT country_code FROM companies WHERE id = $1',
+    [companyId],
+  );
+  return String(result.rows[0]?.country_code || 'DK').trim().toUpperCase();
 }
 
 router.get('/', authenticateToken, async (req, res) => {
@@ -168,7 +161,8 @@ router.put('/:provider/config', authenticateToken, async (req, res) => {
 
     if (provider === 'bank_transfer') {
       config = normalizeBankTransferConfig(config);
-      const validationError = validateBankTransferConfig(config, enabled);
+      const countryCode = await getCompanyCountryCode(companyAccess.companyId);
+      const validationError = validateBankTransferConfig(config, enabled, countryCode);
       if (validationError) {
         return res.status(400).json({ error: validationError });
       }

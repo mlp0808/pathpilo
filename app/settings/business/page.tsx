@@ -10,6 +10,12 @@ import {
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
+import {
+  LOGO_ACCEPT_ATTR,
+  validateLogoFile,
+  mapLogoServerError,
+  type LogoUploadError,
+} from '../../utils/logoUpload'
 import { countryRules, getCountryRule } from '../../config/countryRules'
 import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
 import {
@@ -258,14 +264,15 @@ export default function BusinessSettingsPage() {
   // server-side validation.
   const logoInputRef = useRef<HTMLInputElement | null>(null)
   const [logoUploading, setLogoUploading] = useState(false)
-  const [logoError, setLogoError] = useState('')
+  const [logoError, setLogoError] = useState<LogoUploadError | null>(null)
 
   const handleLogoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setLogoError('')
-    if (file.size > 4 * 1024 * 1024) {
-      setLogoError(t('settings.business.logo.tooLarge', 'Logo must be 4 MB or smaller.'))
+    setLogoError(null)
+    const clientErr = validateLogoFile(file, t)
+    if (clientErr) {
+      setLogoError(clientErr)
       e.target.value = ''
       return
     }
@@ -283,7 +290,12 @@ export default function BusinessSettingsPage() {
       if (!res.ok) throw new Error(data.error || 'Upload failed')
       setFormData((prev) => ({ ...prev, logoUrl: data.logoUrl || '' }))
     } catch (err) {
-      setLogoError(err instanceof Error ? err.message : 'Failed to upload logo')
+      setLogoError(
+        mapLogoServerError(
+          err instanceof Error ? err.message : 'Upload failed',
+          t,
+        ),
+      )
     } finally {
       setLogoUploading(false)
       if (e.target) e.target.value = ''
@@ -292,7 +304,7 @@ export default function BusinessSettingsPage() {
 
   const handleLogoDelete = async () => {
     if (!formData.logoUrl) return
-    setLogoError('')
+    setLogoError(null)
     setLogoUploading(true)
     try {
       const token = localStorage.getItem('token')
@@ -306,7 +318,12 @@ export default function BusinessSettingsPage() {
       }
       setFormData((prev) => ({ ...prev, logoUrl: '' }))
     } catch (err) {
-      setLogoError(err instanceof Error ? err.message : 'Failed to delete logo')
+      setLogoError(
+        mapLogoServerError(
+          err instanceof Error ? err.message : 'Failed to delete logo',
+          t,
+        ),
+      )
     } finally {
       setLogoUploading(false)
     }
@@ -525,16 +542,28 @@ export default function BusinessSettingsPage() {
               <input
                 ref={logoInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                accept={LOGO_ACCEPT_ATTR}
                 onChange={handleLogoSelect}
                 className="hidden"
               />
             </div>
-            {logoError && <SettingsErrorNote>{logoError}</SettingsErrorNote>}
+            {logoError && (
+              <div
+                className="rounded-lg border border-red-200 bg-red-50 px-4 py-3"
+                role="alert"
+              >
+                <p className="text-sm font-semibold text-red-900">{logoError.title}</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
+                  {logoError.details.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <SettingsHint>
               {t(
-                'settings.business.logo.tip',
-                'Tip: a wide rectangular logo (around 400 \u00d7 100 px) works best on invoices. Tall square logos still work but appear smaller.',
+                'settings.business.logo.formatsHint',
+                'PNG, JPG, or WEBP — max 4 MB. Wide rectangular logos (around 400 × 100 px) work best on invoices.',
               )}
             </SettingsHint>
           </div>

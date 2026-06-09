@@ -525,7 +525,41 @@ export function DigitalInvoiceView({
                   >
                     <p className="font-semibold text-[#193434]">{m.title}</p>
                     <p className="mt-1 text-sm text-slate-600">{m.description}</p>
-                    {m.type === 'bank_transfer' && m.bank && (
+                    {m.type === 'bank_transfer' && m.bank && (() => {
+                      const isUk = inv.company.countryCode?.toUpperCase() === 'GB'
+                      const regSortBlock = (m.bank.registrationNumber || m.bank.accountNumber) ? (
+                        <div className="flex flex-wrap gap-6">
+                          {m.bank.registrationNumber && (
+                            <div>
+                              <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                                {isUk
+                                  ? tr('invoice.sortCode', 'Sort code')
+                                  : tr('invoice.regNo', 'Reg. no.')}
+                              </dt>
+                              <dd className="mt-0.5 font-mono font-medium">{m.bank.registrationNumber}</dd>
+                            </div>
+                          )}
+                          {m.bank.accountNumber && (
+                            <div>
+                              <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                                {tr('invoice.accountNo', 'Account no.')}
+                              </dt>
+                              <dd className="mt-0.5 font-mono font-medium">{m.bank.accountNumber}</dd>
+                            </div>
+                          )}
+                        </div>
+                      ) : null
+                      const ibanBlock = m.bank.iban ? (
+                        <div>
+                          <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                            {tr('invoice.iban', 'IBAN')}
+                          </dt>
+                          <dd className="mt-0.5 break-all font-mono text-sm font-medium tracking-tight text-slate-900">
+                            {m.bank.iban.replace(/(.{4})/g, '$1 ').trim()}
+                          </dd>
+                        </div>
+                      ) : null
+                      return (
                       <dl className="mt-4 space-y-3 text-sm">
                         {m.bank.accountHolder && (
                           <div>
@@ -535,35 +569,16 @@ export function DigitalInvoiceView({
                             <dd className="mt-0.5 font-medium text-slate-900">{m.bank.accountHolder}</dd>
                           </div>
                         )}
-                        {m.bank.iban && (
-                          <div>
-                            <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                              {tr('invoice.iban', 'IBAN')}
-                            </dt>
-                            <dd className="mt-0.5 break-all font-mono text-sm font-medium tracking-tight text-slate-900">
-                              {m.bank.iban.replace(/(.{4})/g, '$1 ').trim()}
-                            </dd>
-                          </div>
-                        )}
-                        {(m.bank.registrationNumber || m.bank.accountNumber) && (
-                          <div className="flex flex-wrap gap-6">
-                            {m.bank.registrationNumber && (
-                              <div>
-                                <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                                  {tr('invoice.regNo', 'Reg. no.')}
-                                </dt>
-                                <dd className="mt-0.5 font-mono font-medium">{m.bank.registrationNumber}</dd>
-                              </div>
-                            )}
-                            {m.bank.accountNumber && (
-                              <div>
-                                <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                                  {tr('invoice.accountNo', 'Account no.')}
-                                </dt>
-                                <dd className="mt-0.5 font-mono font-medium">{m.bank.accountNumber}</dd>
-                              </div>
-                            )}
-                          </div>
+                        {isUk ? (
+                          <>
+                            {regSortBlock}
+                            {ibanBlock}
+                          </>
+                        ) : (
+                          <>
+                            {ibanBlock}
+                            {regSortBlock}
+                          </>
                         )}
                         {m.bank.paymentReference && (
                           <div className="rounded-xl bg-white/80 p-3 ring-1 ring-slate-200/80">
@@ -574,7 +589,7 @@ export function DigitalInvoiceView({
                               <span className="font-mono text-sm font-semibold text-slate-900">{m.bank.paymentReference}</span>
                               <button
                                 type="button"
-                                onClick={() => copyReference(m.bank.paymentReference)}
+                                onClick={() => copyReference(m.bank!.paymentReference)}
                                 className="inline-flex items-center gap-1 rounded-lg bg-[#193434] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#142828]"
                               >
                                 <ClipboardDocumentIcon className="h-3.5 w-3.5" aria-hidden />
@@ -592,7 +607,8 @@ export function DigitalInvoiceView({
                           </div>
                         )}
                       </dl>
-                    )}
+                      )
+                    })()}
                   </div>
                 ))}
               </div>

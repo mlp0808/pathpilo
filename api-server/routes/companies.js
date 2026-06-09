@@ -1881,9 +1881,9 @@ const logoUpload = multer({
   }),
   limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB hard cap — logos are tiny
   fileFilter: (_req, file, cb) => {
-    const ok = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+    const ok = ['image/png', 'image/jpeg', 'image/webp'];
     if (!ok.includes(file.mimetype)) {
-      return cb(new Error('Only PNG, JPG, WEBP or SVG logos are accepted'));
+      return cb(new Error('Only PNG, JPG, or WEBP logos are accepted'));
     }
     cb(null, true);
   },

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
@@ -15,6 +15,106 @@ import {
   type ClientStandardNoteRow,
 } from './ClientStandardNotesPicker'
 import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
+import DashedPickerTrigger from './DashedPickerTrigger'
+import JobFormAttachmentBar from './JobFormAttachmentBar'
+
+const MOBILE_CREATE_JOB_MQ = '(max-width: 1023px)'
+const CREATE_JOB_DROPDOWN_MAX_HEIGHT = 240
+const CREATE_JOB_DROPDOWN_GAP = 8
+
+function isMobileCreateJobViewport() {
+  return typeof window !== 'undefined' && window.matchMedia(MOBILE_CREATE_JOB_MQ).matches
+}
+
+function getVisualViewportTop() {
+  return window.visualViewport?.offsetTop ?? 0
+}
+
+function getVisualViewportBottom() {
+  const vv = window.visualViewport
+  if (!vv) return window.innerHeight
+  return vv.offsetTop + vv.height
+}
+
+function scrollCreateJobSheetForKeyboard(
+  scrollEl: HTMLDivElement | null,
+  triggerEl: HTMLElement,
+  dropdownMaxHeight = CREATE_JOB_DROPDOWN_MAX_HEIGHT,
+) {
+  if (!scrollEl || !isMobileCreateJobViewport()) return
+
+  const adjust = () => {
+    const visibleBottom = getVisualViewportBottom()
+    const rect = triggerEl.getBoundingClientRect()
+    const neededBottom = rect.bottom + CREATE_JOB_DROPDOWN_GAP + dropdownMaxHeight
+    if (neededBottom > visibleBottom) {
+      scrollEl.scrollTop += neededBottom - visibleBottom
+    }
+  }
+
+  adjust()
+  requestAnimationFrame(adjust)
+  window.setTimeout(adjust, 100)
+  window.setTimeout(adjust, 350)
+}
+
+function getFixedDropdownPlacement(rect: DOMRect, maxHeight = CREATE_JOB_DROPDOWN_MAX_HEIGHT) {
+  const gap = CREATE_JOB_DROPDOWN_GAP
+  const visibleTop = getVisualViewportTop()
+  const visibleBottom = getVisualViewportBottom()
+  const spaceBelow = visibleBottom - rect.bottom - gap
+  const spaceAbove = rect.top - visibleTop - gap
+
+  if (spaceBelow >= 120 || spaceBelow >= spaceAbove) {
+    return {
+      top: rect.bottom + gap,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: Math.max(120, Math.min(maxHeight, spaceBelow)),
+    }
+  }
+
+  const height = Math.max(120, Math.min(maxHeight, spaceAbove))
+  return {
+    top: Math.max(visibleTop + gap, rect.top - gap - height),
+    left: rect.left,
+    width: rect.width,
+    maxHeight: height,
+  }
+}
+
+function formatJobDateLines(dateStr: string, locale: 'en' | 'da') {
+  const raw = dateStr.split('T')[0]
+  const [y, m, d] = raw.split('-').map(Number)
+  if (!y || !m || !d) return { primary: raw, secondary: '' }
+  const date = new Date(y, m - 1, d)
+  const loc = locale === 'da' ? 'da-DK' : 'en-US'
+  const today = new Date()
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  return {
+    primary: date.toLocaleDateString(loc, { weekday: 'long', day: 'numeric', month: 'long' }),
+    secondary: isToday
+      ? (locale === 'da' ? 'I dag' : 'Today')
+      : date.toLocaleDateString(loc, { year: 'numeric' }),
+  }
+}
+
+function bindDropdownRectTracking(el: HTMLElement, onRect: (rect: DOMRect) => void) {
+  const update = () => onRect(el.getBoundingClientRect())
+  update()
+  window.addEventListener('resize', update)
+  const vv = window.visualViewport
+  vv?.addEventListener('resize', update)
+  vv?.addEventListener('scroll', update)
+  return () => {
+    window.removeEventListener('resize', update)
+    vv?.removeEventListener('resize', update)
+    vv?.removeEventListener('scroll', update)
+  }
+}
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -405,9 +505,13 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [createdJobId, setCreatedJobId] = useState<number | null>(null)
 
   // Refs and portal positions for job-only dropdowns (so they escape overflow-hidden)
+  const createJobScrollRef = useRef<HTMLDivElement>(null)
   const clientDropdownTriggerRef = useRef<HTMLDivElement>(null)
   const serviceDropdownTriggerRef = useRef<HTMLDivElement>(null)
   const userDropdownTriggerRef = useRef<HTMLDivElement>(null)
+  const clientSearchInputRef = useRef<HTMLInputElement>(null)
+  const serviceSearchInputRef = useRef<HTMLInputElement>(null)
+  const jobDateInputRef = useRef<HTMLInputElement>(null)
   const [clientDropdownRect, setClientDropdownRect] = useState<DOMRect | null>(null)
   const [serviceDropdownRect, setServiceDropdownRect] = useState<DOMRect | null>(null)
   const [userDropdownRect, setUserDropdownRect] = useState<DOMRect | null>(null)
@@ -605,10 +709,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       return
     }
     const el = clientDropdownTriggerRef.current
-    const update = () => setClientDropdownRect(el.getBoundingClientRect())
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+    return bindDropdownRectTracking(el, setClientDropdownRect)
   }, [showClientDropdown])
   useLayoutEffect(() => {
     if (!showServiceDropdown || !serviceDropdownTriggerRef.current) {
@@ -616,13 +717,34 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       return
     }
     const el = serviceDropdownTriggerRef.current
-    const update = () => setServiceDropdownRect(el.getBoundingClientRect())
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+    return bindDropdownRectTracking(el, setServiceDropdownRect)
+  }, [showServiceDropdown])
+  useEffect(() => {
+    if (!showClientDropdown || !clientDropdownTriggerRef.current) return
+    const scroll = () => {
+      if (clientDropdownTriggerRef.current) {
+        scrollCreateJobSheetForKeyboard(createJobScrollRef.current, clientDropdownTriggerRef.current)
+      }
+    }
+    scroll()
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', scroll)
+    return () => vv?.removeEventListener('resize', scroll)
+  }, [showClientDropdown])
+  useEffect(() => {
+    if (!showServiceDropdown || !serviceDropdownTriggerRef.current) return
+    const scroll = () => {
+      if (serviceDropdownTriggerRef.current) {
+        scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+      }
+    }
+    scroll()
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', scroll)
+    return () => vv?.removeEventListener('resize', scroll)
   }, [showServiceDropdown])
   useLayoutEffect(() => {
-    if (!showUserDropdown || selectedUserId || !userDropdownTriggerRef.current) {
+    if (!showUserDropdown || !userDropdownTriggerRef.current) {
       setUserDropdownRect(null)
       return
     }
@@ -630,8 +752,15 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     const update = () => setUserDropdownRect(el.getBoundingClientRect())
     update()
     window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [showUserDropdown, selectedUserId])
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', update)
+    vv?.addEventListener('scroll', update)
+    return () => {
+      window.removeEventListener('resize', update)
+      vv?.removeEventListener('resize', update)
+      vv?.removeEventListener('scroll', update)
+    }
+  }, [showUserDropdown])
 
   const fetchServices = async () => {
     try {
@@ -751,6 +880,34 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     setShowServiceDropdown(false)
     setShowServiceCreateSheet(true)
   }
+
+  const openClientPicker = () => {
+    setShowClientDropdown(true)
+    requestAnimationFrame(() => clientSearchInputRef.current?.focus())
+  }
+
+  const openServicePicker = () => {
+    setShowServiceDropdown(true)
+    requestAnimationFrame(() => {
+      serviceSearchInputRef.current?.focus()
+      if (serviceDropdownTriggerRef.current) {
+        scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+      }
+    })
+  }
+
+  const openDatePicker = () => {
+    const input = jobDateInputRef.current
+    if (!input) return
+    try {
+      input.showPicker?.()
+    } catch {
+      input.click()
+    }
+  }
+
+  const jobDateOnly = jobDate ? String(jobDate).split('T')[0] : ''
+  const jobDateDisplay = jobDateOnly ? formatJobDateLines(jobDateOnly, locale) : null
 
   const removeService = (serviceId: number) => {
     setSelectedServices(selectedServices.filter(s => s.id !== serviceId))
@@ -962,25 +1119,26 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gradient-to-b from-white to-gray-50/50">
+            <div className="flex-1 min-h-0 flex flex-col bg-gradient-to-b from-white to-gray-50/50">
+              <div ref={createJobScrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-4">
               {/* Client */}
-              <div className="space-y-4">
-                <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.clientRequired', 'Client *')}</label>
+              <div className="space-y-4 pb-2">
                 {selectedClient ? (
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="text-sm font-medium text-gray-900">
-                          {selectedClient.client_type === 'company' ? selectedClient.name : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim()}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {selectedClient.address && selectedClient.city ? `${selectedClient.address}, ${selectedClient.city}` : 'No address'}
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => { setSelectedClient(null); setClientSearch('') }} className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100">
-                        <XMarkIcon className="w-4 h-4" />
-                      </button>
+                  <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm">
+                    <div className="w-10 h-10 rounded-xl bg-primary-50 border border-primary-100 flex items-center justify-center flex-shrink-0">
+                      <UserIcon className="w-5 h-5 text-primary-700" />
                     </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-gray-900 truncate">
+                        {selectedClient.client_type === 'company' ? selectedClient.name : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim()}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">
+                        {selectedClient.address && selectedClient.city ? `${selectedClient.address}, ${selectedClient.city}` : 'No address'}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => { setSelectedClient(null); setClientSearch('') }} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 flex-shrink-0">
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
                   </div>
                 ) : isAddingNewClient ? (
                   <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
@@ -1007,10 +1165,32 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 ) : (
                   <>
                     <div className="relative dropdown-container" ref={clientDropdownTriggerRef}>
-                      <input type="text" value={clientSearch} onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }} onFocus={() => setShowClientDropdown(true)} placeholder="Choose a client" className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                      {showClientDropdown || clientSearch ? (
+                        <input
+                          ref={clientSearchInputRef}
+                          type="text"
+                          value={clientSearch}
+                          onChange={e => { setClientSearch(e.target.value); setShowClientDropdown(true) }}
+                          onFocus={() => {
+                            setShowClientDropdown(true)
+                            if (clientDropdownTriggerRef.current) {
+                              scrollCreateJobSheetForKeyboard(createJobScrollRef.current, clientDropdownTriggerRef.current)
+                            }
+                          }}
+                          placeholder={t('app.createJob.searchClient', 'Search for a client...')}
+                          className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
+                        />
+                      ) : (
+                        <DashedPickerTrigger onClick={openClientPicker}>
+                          {t('app.createJob.selectAClient', 'Select a Client')}
+                        </DashedPickerTrigger>
+                      )}
                     </div>
                     {typeof document !== 'undefined' && showClientDropdown && clientDropdownRect && createPortal(
-                      <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-60 overflow-y-auto" style={{ position: 'fixed', top: clientDropdownRect.bottom + 8, left: clientDropdownRect.left, width: clientDropdownRect.width, zIndex: 9999 }}>
+                      <div
+                        className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-y-auto"
+                        style={{ position: 'fixed', zIndex: 9999, ...getFixedDropdownPlacement(clientDropdownRect) }}
+                      >
                         {filteredClients.length > 0 ? filteredClients.map((client) => (
                           <button key={client.id} type="button" onClick={() => { setSelectedClient(client); setClientSearch(''); setShowClientDropdown(false) }} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
                             <div className="text-sm font-medium text-gray-900">{client.client_type === 'company' ? client.name : `${client.name}${client.last_name ? ` ${client.last_name}` : ''}`.trim()}</div>
@@ -1026,16 +1206,54 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                   </>
                 )}
               </div>
+
               {/* Services */}
-              <div className="space-y-4">
-                {!selectedClient && !isAddingNewClient ? <div className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg">{t('app.createJob.selectClientFirst', 'Select a client first')}</div> : (
-                  <>
-                    <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.servicesRequired', 'Services *')}</label>
+              <div className="space-y-4 pt-3 border-t border-gray-100/60">
+                    {selectedServices.length > 0 && (
+                      <div className="space-y-2">
+                        {selectedServices.map((service) => (
+                          <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
+                            <div className="text-sm font-semibold text-primary-800">
+                              {service.isCustom ? (service.customTitle?.trim() || service.title) : service.title}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
+                              <span className="text-xs text-gray-500 tabular-nums">{companyCurrency}</span>
+                              <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
+                              <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
+                              <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
-                      <input type="text" value={serviceSearch} onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }} onFocus={() => setShowServiceDropdown(true)} placeholder={t('app.createJob.searchServices', 'Search for services...')} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
+                      {showServiceDropdown || serviceSearch ? (
+                        <input
+                          ref={serviceSearchInputRef}
+                          type="text"
+                          value={serviceSearch}
+                          onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
+                          onFocus={() => {
+                            setShowServiceDropdown(true)
+                            if (serviceDropdownTriggerRef.current) {
+                              scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+                            }
+                          }}
+                          placeholder={t('app.createJob.searchServices', 'Search for services...')}
+                          className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
+                        />
+                      ) : (
+                        <DashedPickerTrigger onClick={openServicePicker} size={selectedServices.length > 0 ? 'md' : 'lg'}>
+                          {t('app.createJob.addServices', 'Add services')}
+                        </DashedPickerTrigger>
+                      )}
                     </div>
                     {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
-                      <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl max-h-60 overflow-y-auto" style={{ position: 'fixed', top: serviceDropdownRect.bottom + 8, left: serviceDropdownRect.left, width: serviceDropdownRect.width, zIndex: 9999 }}>
+                      <div
+                        className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-y-auto"
+                        style={{ position: 'fixed', zIndex: 9999, ...getFixedDropdownPlacement(serviceDropdownRect) }}
+                      >
                         {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
                           <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
                             <div className="text-sm font-semibold text-primary-800">{service.title}</div>
@@ -1055,140 +1273,108 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       </div>,
                       document.body
                     )}
-                    {selectedServices.length > 0 && (
-                      <div className="space-y-2">
-                        {selectedServices.map((service) => (
-                          <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
-                            <div className="text-sm font-semibold text-primary-800">
-                              {service.isCustom ? (service.customTitle?.trim() || service.title) : service.title}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500 tabular-nums">{companyCurrency}</span>
-                              <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
-                              <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+              </div>
+              </div>
 
-                  {/* Assign to User, Time, and Note - same place and time as subscription (flex wrap right after services) */}
-                  {selectedServices.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 pt-2">
-                      <div className="relative dropdown-container" ref={userDropdownTriggerRef}>
-                        {selectedUserId ? (
-                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 group">
-                            <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm ring-2 ring-white/50">
-                                {users.find(u => u.id === selectedUserId)?.first_name?.[0]}{users.find(u => u.id === selectedUserId)?.last_name?.[0]}
-                              </div>
-                              <span className="text-sm font-semibold text-primary-800">
-                                {users.find(u => u.id === selectedUserId)?.first_name} {users.find(u => u.id === selectedUserId)?.last_name}
-                              </span>
-                            </div>
-                            {users.length > 1 && (
-                              <button type="button" onClick={() => setSelectedUserId(null)} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
-                                <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setShowUserDropdown(!showUserDropdown)}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
-                          >
-                            <UserIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>{t('app.createJob.assignEmployee', 'Assign employee')}</span>
-                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
-                          </button>
-                        )}
-                        {typeof document !== 'undefined' && showUserDropdown && !selectedUserId && userDropdownRect && createPortal(
-                          <div className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl min-w-[220px] max-h-60 overflow-y-auto animate-slideDown backdrop-blur-sm" style={{ position: 'fixed', top: userDropdownRect.bottom + 8, left: userDropdownRect.left, zIndex: 9999 }}>
-                            {users.map((u) => (
-                              <button key={u.id} type="button" onClick={() => { setSelectedUserId(u.id); setShowUserDropdown(false) }} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 transition-all duration-150 ease-out flex items-center gap-3 group first:rounded-t-2xl last:rounded-b-2xl hover:pl-5">
-                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm group-hover:shadow-md group-hover:scale-110 transition-all ring-2 ring-white/50">
-                                  {u.first_name?.[0]}{u.last_name?.[0]}
-                                </div>
-                                <div className="text-sm font-semibold text-primary-800 group-hover:text-accent-600 transition-colors">{u.first_name} {u.last_name}</div>
-                              </button>
-                            ))}
-                          </div>,
-                          document.body
-                        )}
-                      </div>
-                      <div className="relative">
-                        {jobTimeFrom || jobTimeTo ? (
-                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 group">
-                            <div className="flex items-center gap-2">
-                              <ClockIcon className="w-4 h-4 text-accent-600" />
-                              <span className="text-sm font-semibold text-primary-800">
-                                {jobTimeFrom && jobTimeTo ? `${jobTimeFrom} - ${jobTimeTo}` : jobTimeFrom ? jobTimeFrom : jobTimeTo ? jobTimeTo : ''}
-                              </span>
-                            </div>
-                            <button type="button" onClick={() => { setJobTimeFrom(''); setJobTimeTo('') }} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60">
-                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => { setPendingTimeFrom(jobTimeFrom); setPendingTimeTo(jobTimeTo); setIsTimeRangeMode(!!jobTimeTo); setShowTimeModal(true) }}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
-                          >
-                            <ClockIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>{t('app.createJob.addTime', 'Add time')}</span>
-                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        {jobNote.trim() ? (
-                          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all duration-200 max-w-xs group">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <DocumentTextIcon className="w-4 h-4 text-accent-600 flex-shrink-0" />
-                              <span className="text-sm font-semibold text-primary-800 truncate">{jobNote.length > 20 ? `${jobNote.substring(0, 20)}...` : jobNote}</span>
-                            </div>
-                            <button type="button" onClick={() => { setJobNote(''); setShowNoteInput(false) }} className="ml-1 p-0.5 rounded-full hover:bg-white/80 transition-all duration-150 group-hover:bg-white/60 flex-shrink-0">
-                              <XMarkIcon className="w-3.5 h-3.5 text-gray-500 hover:text-gray-700 transition-colors" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setShowNoteInput(true)}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all duration-200 ease-out hover:scale-[1.02] active:scale-[0.98]"
-                          >
-                            <DocumentTextIcon className="w-4 h-4 text-gray-400 group-hover:text-accent-500" />
-                            <span>{t('app.createJob.addNote', 'Add note')}</span>
-                            <PlusIcon className="w-3 h-3 text-gray-400 group-hover:text-accent-500" />
-                          </button>
-                        )}
-                      </div>
+              {/* Date — pinned to bottom of the form body */}
+              <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200/80 bg-gray-50/40">
+                <input
+                  ref={jobDateInputRef}
+                  type="date"
+                  value={jobDateOnly}
+                  onChange={(e) => setJobDate(e.target.value)}
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden
+                />
+                {jobDateOnly && jobDateDisplay ? (
+                  <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm">
+                    <div className="w-10 h-10 rounded-xl bg-accent-50 border border-accent-100 flex items-center justify-center flex-shrink-0">
+                      <CalendarDaysIcon className="w-5 h-5 text-accent-600" />
                     </div>
-                  )}
-                  </>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-gray-900">{jobDateDisplay.primary}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{jobDateDisplay.secondary}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJobDate('')
+                        requestAnimationFrame(openDatePicker)
+                      }}
+                      className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 flex-shrink-0"
+                      aria-label={t('app.createJob.changeDate', 'Change date')}
+                    >
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <DashedPickerTrigger onClick={openDatePicker}>
+                    {t('app.createJob.selectDate', 'Select date')}
+                  </DashedPickerTrigger>
                 )}
               </div>
+            </div>
 
-              {/* Date selector - only difference from subscription: last step right after employee/time/note buttons; only when service picked */}
-              {selectedServices.length > 0 && (
-                <div className="space-y-2 pt-4">
-                  <label className="block text-xs font-semibold text-primary-700 mb-2">{t('app.createJob.dateRequired', 'Date *')}</label>
-                  <input type="date" value={jobDate ? String(jobDate).split('T')[0] : ''} onChange={e => setJobDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300" />
-                </div>
-              )}
-
-              <div className="flex justify-end pt-6 border-t border-gray-100">
-                <button type="button" onClick={() => handleSubmitJob()} disabled={(!selectedClient && !isAddingNewClient) || selectedServices.length === 0 || !selectedUserId || !jobDate || isSubmitting} className="px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20">
-                  {isSubmitting ? t('app.jobs.create.creating') : t('app.jobs.create.createJob')}
-                </button>
-              </div>
+            <div className="flex-shrink-0 border-t border-gray-100 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+              <JobFormAttachmentBar
+                users={users}
+                selectedUserId={selectedUserId}
+                onEmployeeClick={() => {
+                  if (!selectedUserId || users.length > 1) setShowUserDropdown((v) => !v)
+                }}
+                onClearEmployee={() => setSelectedUserId(null)}
+                userTriggerRef={userDropdownTriggerRef}
+                jobTimeFrom={jobTimeFrom}
+                jobTimeTo={jobTimeTo}
+                onTimeClick={() => {
+                  setPendingTimeFrom(jobTimeFrom)
+                  setPendingTimeTo(jobTimeTo)
+                  setIsTimeRangeMode(!!jobTimeTo)
+                  setShowTimeModal(true)
+                }}
+                onClearTime={() => { setJobTimeFrom(''); setJobTimeTo('') }}
+                jobNote={jobNote}
+                onNoteClick={() => setShowNoteInput(true)}
+                onClearNote={() => { setJobNote(''); setShowNoteInput(false) }}
+                assignEmployeeLabel={t('app.createJob.assignEmployee', 'Assign employee')}
+                addTimeLabel={t('app.createJob.addTime', 'Add time')}
+                addNoteLabel={t('app.createJob.addNote', 'Add note')}
+              />
+              <button type="button" onClick={() => handleSubmitJob()} disabled={(!selectedClient && !isAddingNewClient) || selectedServices.length === 0 || !selectedUserId || !jobDate || isSubmitting} className="flex-shrink-0 px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20">
+                {isSubmitting ? t('app.jobs.create.creating') : t('app.jobs.create.createJob')}
+              </button>
+            </div>
             </div>
           </div>
         </div>
+        {typeof document !== 'undefined' && showUserDropdown && userDropdownRect && createPortal(
+          <div
+            className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl min-w-[220px] max-h-60 overflow-y-auto"
+            style={{
+              position: 'fixed',
+              left: userDropdownRect.left,
+              bottom: window.innerHeight - userDropdownRect.top + 6,
+              zIndex: 9999,
+            }}
+          >
+            {users.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => { setSelectedUserId(u.id); setShowUserDropdown(false) }}
+                className="w-full px-4 py-3 text-left hover:bg-accent-50/50 transition-colors flex items-center gap-3 border-b border-gray-100 last:border-b-0"
+              >
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold">
+                  {u.first_name?.[0]}{u.last_name?.[0]}
+                </div>
+                <div className="text-sm font-semibold text-primary-800">{u.first_name} {u.last_name}</div>
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
         {/* Time modal — portal so it escapes the backdrop's onClick and the card's CSS transform stacking context */}
         {typeof document !== 'undefined' && createPortal(
           <ConfirmModal isOpen={showTimeModal} onClose={() => setShowTimeModal(false)} onConfirm={() => { setJobTimeFrom(pendingTimeFrom); setJobTimeTo(isTimeRangeMode ? pendingTimeTo : ''); setShowTimeModal(false) }} title={t('app.createJob.setTime', 'Set Time')} description={t('app.createJob.setTimeDesc', 'Set the scheduled time for this job')} confirmLabel={t('app.createJob.saveTime', 'Save Time')}>

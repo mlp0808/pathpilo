@@ -431,18 +431,24 @@ export function MobileBusinessSettingsScreen(props: any) {
       const token = await AsyncStorage.getItem('authToken');
       const uri = asset.uri;
       const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
+      const allowed = new Set(['png', 'jpg', 'jpeg', 'webp']);
+      if (!allowed.has(ext)) {
+        Alert.alert(
+          'Logo',
+          'Please choose a PNG, JPG, or WEBP image (max 4 MB). SVG and HEIC are not supported.',
+        );
+        return;
+      }
       const mime =
         ext === 'png'
           ? 'image/png'
           : ext === 'webp'
             ? 'image/webp'
-            : ext === 'svg'
-              ? 'image/svg+xml'
-              : 'image/jpeg';
+            : 'image/jpeg';
       const body = new FormData();
       body.append('logo', {
         uri,
-        name: `logo.${ext === 'svg' ? 'svg' : ext === 'webp' ? 'webp' : ext === 'png' ? 'png' : 'jpg'}`,
+        name: `logo.${ext === 'webp' ? 'webp' : ext === 'png' ? 'png' : 'jpg'}`,
         type: mime,
       } as any);
 

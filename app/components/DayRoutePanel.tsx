@@ -1142,6 +1142,10 @@ interface DayRoutePanelProps {
   onAddJob?: () => void
   /** Compact layout for the mobile bottom sheet (datepicker lives in sheet header) */
   mobileSheet?: boolean
+  /** Mobile: lift save bar into the sheet toolbar so it stays visible above the day picker */
+  wrapMobileSheet?: (parts: { body: React.ReactNode; toolbar: React.ReactNode }) => React.ReactNode
+  /** Route order or assignees differ from last save — controls save bar visibility */
+  hasUnsavedChanges?: boolean
 }
 
 export default function DayRoutePanel({
@@ -1171,6 +1175,8 @@ export default function DayRoutePanel({
   onDrawExit,
   onAddJob,
   mobileSheet = false,
+  wrapMobileSheet,
+  hasUnsavedChanges = false,
 }: DayRoutePanelProps) {
   const { t, locale } = useAppI18n()
   // Solo company: only one user has routes today → skip the "all employees" picker entirely
@@ -1184,6 +1190,7 @@ export default function DayRoutePanel({
       : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const saveBarVisible = hasUnsavedChanges || saving || saved
 
   const handleSave = async () => {
     setSaving(true)
@@ -1191,7 +1198,185 @@ export default function DayRoutePanel({
     await onSave()
     setSaving(false)
     setSaved(true)
-    setTimeout(() => setSaved(false), 2500)
+    setTimeout(() => setSaved(false), 1600)
+  }
+
+  const saveToolbarInner = (
+    <div
+      className={`flex-shrink-0 ${mobileSheet ? 'px-4 pt-2 pb-2' : 'px-5 pt-3 pb-5 border-t border-gray-200'}`}
+      style={{ opacity: !mobileSheet && drawMode ? 0.32 : 1 }}
+    >
+      {focusedRoute && !mobileSheet && (
+        <RouteStatsLine
+          route={focusedRoute}
+          baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
+          availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
+          className="mb-3"
+        />
+      )}
+      {geocodingCount > 0 && (
+        <p className="text-[11px] text-amber-500 mb-2 flex items-center gap-1.5 justify-center">
+          <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          {t('app.routePlanner.locatingAddresses', 'Locating {{count}} address{{suffix}}...')
+            .replace('{{count}}', String(geocodingCount))
+            .replace('{{suffix}}', geocodingCount !== 1 ? (locale === 'da' ? 'r' : 'es') : '')}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving || drawMode}
+        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
+        title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
+        style={{
+          background: saved ? '#10b981' : '#3DD57A',
+          color: '#fff',
+          boxShadow: saved
+            ? '0 0 20px rgba(16,185,129,0.3)'
+            : '0 4px 20px rgba(61,213,122,0.28)',
+          transform: saving ? 'scale(0.98)' : 'scale(1)',
+        }}
+      >
+        {saving ? (
+          <>
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            {t('app.routePlanner.saving', 'Saving...')}
+          </>
+        ) : saved ? (
+          <>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+            </svg>
+            {t('app.routePlanner.routeSaved', 'Route saved!')}
+          </>
+        ) : (
+          <>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+            </svg>
+            {t('app.routePlanner.saveApply', 'Save & apply route')}
+          </>
+        )}
+      </button>
+    </div>
+  )
+
+  const saveToolbar = mobileSheet ? (
+    <div
+      className={`grid transition-[grid-template-rows,opacity] duration-350 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        saveBarVisible ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+      }`}
+      aria-hidden={!saveBarVisible}
+    >
+      <div className="overflow-hidden min-h-0">
+        {saveToolbarInner}
+      </div>
+    </div>
+  ) : (
+    <div
+      className={`grid transition-[grid-template-rows,opacity] duration-350 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        saveBarVisible ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 pointer-events-none'
+      }`}
+      aria-hidden={!saveBarVisible}
+    >
+      <div className="overflow-hidden min-h-0">
+        {saveToolbarInner}
+      </div>
+    </div>
+  )
+
+  const panelBody = (
+    <>
+      {focusedRoute &&
+        !mobileSheet &&
+        drawRouteComparison != null &&
+        Math.abs(drawRouteComparison.diffMinutes) >= 0.5 && (
+          <div
+            className={`mx-5 mb-3 rounded-xl px-3 py-2.5 text-[12px] leading-snug border ${
+              drawRouteComparison.diffMinutes > 0
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-amber-50 border-amber-200 text-amber-950'
+            }`}
+          >
+            {drawRouteComparison.diffMinutes > 0 ? (
+              <>
+                <span className="font-bold">
+                  {t('app.routePlanner.drawSavedHeadline', 'Time saved')}
+                </span>
+                <span className="font-medium">
+                  {' '}
+                  —{' '}
+                  {t(
+                    'app.routePlanner.drawSavedVsPreviousBanner',
+                    'About {{time}} less driving than before you reordered.',
+                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="font-bold">
+                  {t('app.routePlanner.drawAddedHeadline', 'Longer drive')}
+                </span>
+                <span className="font-medium">
+                  {' '}
+                  —{' '}
+                  {t(
+                    'app.routePlanner.drawAddedVsPreviousBanner',
+                    'About {{time}} more driving than your previous order.',
+                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+      {focusedRoute ? (
+        <UserRoutePanel
+          companySlug={companySlug}
+          route={focusedRoute}
+          onReorder={onReorder}
+          onJobOpen={id => onJobOpen(id as number)}
+          onOptimize={onOptimize}
+          optimizing={optimizing}
+          highlightedJobId={highlightedJobId}
+          onJobCardHover={onJobCardHover}
+          baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
+          availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
+          drawMode={drawMode}
+          drawOrder={drawOrder}
+          drawRouteComparison={drawRouteComparison}
+          onDrawStart={onDrawStart}
+          onDrawAssign={onDrawAssign}
+          onDrawReset={onDrawReset}
+          onDrawExit={onDrawExit}
+          onAddJob={onAddJob}
+          jobsFirst={mobileSheet}
+        />
+      ) : (
+        <AllUsersPanel
+          routes={routes}
+          onSelectUser={onSelectUser}
+          baselineMinutesByUser={baselineMinutesByUser}
+        />
+      )}
+    </>
+  )
+
+  if (mobileSheet && wrapMobileSheet) {
+    return wrapMobileSheet({
+      body: (
+        <div className={`bg-[#F8F9FB] ${mobileSheet ? 'px-4 pt-1 pb-3' : 'px-5 pb-4'}`}>
+          {panelBody}
+        </div>
+      ),
+      toolbar: saveToolbar,
+    })
   }
 
   return (
@@ -1248,149 +1433,15 @@ export default function DayRoutePanel({
       </>
       )}
 
-      {focusedRoute &&
-        !mobileSheet &&
-        drawRouteComparison != null &&
-        Math.abs(drawRouteComparison.diffMinutes) >= 0.5 && (
-          <div
-            className={`mx-5 mb-3 rounded-xl px-3 py-2.5 text-[12px] leading-snug border ${
-              drawRouteComparison.diffMinutes > 0
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-amber-50 border-amber-200 text-amber-950'
-            }`}
-          >
-            {drawRouteComparison.diffMinutes > 0 ? (
-              <>
-                <span className="font-bold">
-                  {t('app.routePlanner.drawSavedHeadline', 'Time saved')}
-                </span>
-                <span className="font-medium">
-                  {' '}
-                  —{' '}
-                  {t(
-                    'app.routePlanner.drawSavedVsPreviousBanner',
-                    'About {{time}} less driving than before you reordered.',
-                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="font-bold">
-                  {t('app.routePlanner.drawAddedHeadline', 'Longer drive')}
-                </span>
-                <span className="font-medium">
-                  {' '}
-                  —{' '}
-                  {t(
-                    'app.routePlanner.drawAddedVsPreviousBanner',
-                    'About {{time}} more driving than your previous order.',
-                  ).replace('{{time}}', fmtDeltaMin(drawRouteComparison.diffMinutes))}
-                </span>
-              </>
-            )}
-          </div>
-        )}
-
       {/* ── Scrollable body ─────────────────────────────────────── */}
       <div
         className={`flex-1 overflow-y-auto min-h-0 ${mobileSheet ? 'px-4 pt-1 pb-3' : 'px-5 pb-4'}`}
         style={{ scrollbarWidth: 'none' } as React.CSSProperties}
       >
-        {focusedRoute ? (
-          <UserRoutePanel
-            companySlug={companySlug}
-            route={focusedRoute}
-            onReorder={onReorder}
-            onJobOpen={id => onJobOpen(id as number)}
-            onOptimize={onOptimize}
-            optimizing={optimizing}
-            highlightedJobId={highlightedJobId}
-            onJobCardHover={onJobCardHover}
-            baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
-            availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
-            drawMode={drawMode}
-            drawOrder={drawOrder}
-            drawRouteComparison={drawRouteComparison}
-            onDrawStart={onDrawStart}
-            onDrawAssign={onDrawAssign}
-            onDrawReset={onDrawReset}
-            onDrawExit={onDrawExit}
-            onAddJob={onAddJob}
-            jobsFirst={mobileSheet}
-          />
-        ) : (
-          <AllUsersPanel
-            routes={routes}
-            onSelectUser={onSelectUser}
-            baselineMinutesByUser={baselineMinutesByUser}
-          />
-        )}
+        {panelBody}
       </div>
 
-      {/* ── Sticky footer: stats + save button ──────────────────── */}
-      <div
-        className={`flex-shrink-0 border-t border-gray-200 transition-opacity duration-200 ${mobileSheet ? 'px-4 pt-2.5 pb-4' : 'px-5 pt-3 pb-5'}`}
-        style={{ opacity: drawMode ? 0.32 : 1 }}
-      >
-        {focusedRoute && !mobileSheet && (
-          <RouteStatsLine
-            route={focusedRoute}
-            baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
-            availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
-            className="mb-3"
-          />
-        )}
-        {geocodingCount > 0 && (
-          <p className="text-[11px] text-amber-500 mb-2 flex items-center gap-1.5 justify-center">
-            <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            {t('app.routePlanner.locatingAddresses', 'Locating {{count}} address{{suffix}}...')
-              .replace('{{count}}', String(geocodingCount))
-              .replace('{{suffix}}', geocodingCount !== 1 ? (locale === 'da' ? 'r' : 'es') : '')}
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving || drawMode}
-          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
-          title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
-          style={{
-            background: saved ? '#10b981' : '#3DD57A',
-            color: '#fff',
-            boxShadow: saved
-              ? '0 0 20px rgba(16,185,129,0.3)'
-              : '0 4px 20px rgba(61,213,122,0.28)',
-            transform: saving ? 'scale(0.98)' : 'scale(1)',
-          }}
-        >
-          {saving ? (
-            <>
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {t('app.routePlanner.saving', 'Saving...')}
-            </>
-          ) : saved ? (
-            <>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-              </svg>
-              {t('app.routePlanner.routeSaved', 'Route saved!')}
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-              </svg>
-              {t('app.routePlanner.saveApply', 'Save & apply route')}
-            </>
-          )}
-        </button>
-      </div>
+      {saveToolbar}
     </div>
   )
 }

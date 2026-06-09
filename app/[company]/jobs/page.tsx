@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense, useRef, useCallback } from 'react'
+import { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useUser } from '@/app/hooks/useUser'
 import AppLayout from '@/app/components/AppLayout'
@@ -11,7 +11,13 @@ import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
 import DayRoutePanel from '@/app/components/DayRoutePanel'
 import MobileRouteSheet from '@/app/components/MobileRouteSheet'
-import RouteAddSearch, { type RouteSearchClient, type RouteLocationPick } from '@/app/components/RouteAddSearch'
+import RouteAddSearch, {
+  ROUTE_MAP_GLASS_PANEL,
+  ROUTE_MAP_GLASS_PILL,
+  ROUTE_MAP_GLASS_STYLE,
+  type RouteSearchClient,
+  type RouteLocationPick,
+} from '@/app/components/RouteAddSearch'
 import { SetupWizardFloatingCallout, type WizardHintTarget } from '@/app/components/setup/SetupWizardHint'
 import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
 import {
@@ -38,6 +44,15 @@ const USER_COLORS = [
   '#F4A261', '#A8DADC', '#E76F51', '#7B2D8B',
   '#2196F3', '#FF9800',
 ]
+
+/** Mobile route planner bottom sheet — keep in sync with RouteMap fitInsets. */
+const MOBILE_ROUTE_SHEET_SNAPS = [0.3, 0.58, 0.85] as const
+const MOBILE_ROUTE_SHEET_INITIAL_SNAP = 1
+const MOBILE_ROUTE_MAP_FIT_INSETS = {
+  top: 72,
+  bottomRatio: MOBILE_ROUTE_SHEET_SNAPS[MOBILE_ROUTE_SHEET_INITIAL_SNAP],
+  side: 48,
+}
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
@@ -211,6 +226,8 @@ function JobsPageContent() {
   const [createJobLockClient, setCreateJobLockClient] = useState(false)
   const [createJobNewClient, setCreateJobNewClient] = useState<{ name?: string; address?: string; zip_code?: string; city?: string } | null>(null)
   const [routeClients, setRouteClients] = useState<RouteSearchClient[]>([])
+  const [mobileRouteDayPickerOpen, setMobileRouteDayPickerOpen] = useState(false)
+  const mobileRouteHeaderRef = useRef<HTMLDivElement>(null)
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
@@ -255,6 +272,19 @@ function JobsPageContent() {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [])
+  useEffect(() => {
+    if (viewMode !== 'day') setMobileRouteDayPickerOpen(false)
+  }, [viewMode])
+  useEffect(() => {
+    if (!mobileRouteDayPickerOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (mobileRouteHeaderRef.current && !mobileRouteHeaderRef.current.contains(e.target as Node)) {
+        setMobileRouteDayPickerOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [mobileRouteDayPickerOpen])
   // Saved clients for the route planner "add a job" search
   useEffect(() => {
     const load = async () => {
@@ -294,6 +324,48 @@ function JobsPageContent() {
 
   // Date strings (YYYY-MM-DD) where a route has been explicitly saved via Save & Apply
   const [plannedDays, setPlannedDays] = useState<Set<string>>(new Set())
+
+  const buildRouteFingerprint = useCallback(
+    (routes: UserRoute[], assignees: Record<number, number>) =>
+      JSON.stringify({
+        order: routes.map(r => ({
+          userId: r.userId,
+          jobIds: r.jobs.filter(j => !j.is_home).map(j => j.id),
+        })),
+        assignees,
+      }),
+    [],
+  )
+
+  /** Fingerprint of route order + pending assignees — compared to last saved state. */
+  const routeFingerprint = useMemo(
+    () => buildRouteFingerprint(dayRoutes, pendingAssigneeChanges),
+    [dayRoutes, pendingAssigneeChanges, buildRouteFingerprint],
+  )
+  const [savedRouteFingerprint, setSavedRouteFingerprint] = useState<string | null>(null)
+  const syncSavedFingerprintAfterApplyRef = useRef(false)
+
+  useEffect(() => {
+    if (viewMode !== 'day') {
+      setSavedRouteFingerprint(null)
+      return
+    }
+    setSavedRouteFingerprint(null)
+  }, [viewMode, toLocalDateString(currentWeek)])
+
+  useEffect(() => {
+    if (viewMode !== 'day' || dayRoutes.length === 0) return
+    setSavedRouteFingerprint(prev => prev ?? routeFingerprint)
+  }, [viewMode, dayRoutes.length, routeFingerprint])
+
+  useEffect(() => {
+    if (!syncSavedFingerprintAfterApplyRef.current) return
+    syncSavedFingerprintAfterApplyRef.current = false
+    setSavedRouteFingerprint(routeFingerprint)
+  }, [routeFingerprint])
+
+  const hasUnsavedRouteChanges =
+    savedRouteFingerprint != null && routeFingerprint !== savedRouteFingerprint
 
   useEffect(() => {
     try {
@@ -1005,26 +1077,37 @@ function JobsPageContent() {
         }
     }, [currentWeek, selectedUserId, user, userLoading, viewMode])
 
-    // Reset scroll position when week changes.
-    // If today's date is inside the visible week and it falls on a weekend
-    // (Sat/Sun → indices 5/6 in our Monday-first layout), scroll the row all
-    // the way to the right so the weekend columns are actually visible.
-    // Otherwise scroll back to the start (Monday).
+    // Mobile week row: align today as the leftmost visible column.
+    // Sunday is the exception — scroll as far right as possible.
     useEffect(() => {
         if (viewMode !== 'week') return
 
         const scrollWeekRow = () => {
             const node = weekScrollContainerRef.current
             if (!node) return
+            const isMobile = window.matchMedia('(max-width: 1023px)').matches
+            if (!isMobile) return
+
             const todayIndex = weekDays.findIndex((d) => isToday(d))
-            if (todayIndex === -1) return
-            const overflow = Math.max(0, node.scrollWidth - node.clientWidth)
-            if (todayIndex >= 5 && overflow > 0) {
-                node.scrollLeft = overflow
-                setWeekScrollPosition(overflow)
-            } else if (todayIndex < 5) {
+            if (todayIndex === -1) {
                 node.scrollLeft = 0
                 setWeekScrollPosition(0)
+                return
+            }
+
+            const overflow = Math.max(0, node.scrollWidth - node.clientWidth)
+
+            if (todayIndex === 6) {
+                node.scrollLeft = overflow
+                setWeekScrollPosition(overflow)
+                return
+            }
+
+            const todayCol = node.querySelector(`[data-day-index="${todayIndex}"]`) as HTMLElement | null
+            if (todayCol) {
+                const target = Math.min(Math.max(0, todayCol.offsetLeft), overflow)
+                node.scrollLeft = target
+                setWeekScrollPosition(target)
             }
         }
 
@@ -1032,10 +1115,12 @@ function JobsPageContent() {
         const t1 = window.setTimeout(scrollWeekRow, 80)
         const t2 = window.setTimeout(scrollWeekRow, 300)
         const t3 = window.setTimeout(scrollWeekRow, 800)
+        window.addEventListener('resize', scrollWeekRow)
         return () => {
             window.clearTimeout(t1)
             window.clearTimeout(t2)
             window.clearTimeout(t3)
+            window.removeEventListener('resize', scrollWeekRow)
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentWeek, viewMode, loading, jobs.length])
@@ -2356,9 +2441,22 @@ function JobsPageContent() {
       console.error('[route-order] Save failed:', res.status, await res.text())
       return
     }
-    // Reset baseline so the next directions run after save becomes the new reference
-    setDayBaselineMinutes({})
-    setDayBaselineDate(null)
+    if (drawRouteComparisonTimerRef.current) {
+      clearTimeout(drawRouteComparisonTimerRef.current)
+      drawRouteComparisonTimerRef.current = null
+    }
+    setDrawRouteComparison(null)
+    drawCompareBaselineRef.current = null
+
+    // Baseline becomes the saved route — deltas only count from the next edit
+    const dateStrForBaseline = toLocalDateString(currentWeek)
+    const newBaseline: Record<number, number> = {}
+    dayRoutes.forEach(route => {
+      const tm = route.totalMinutes
+      if (tm != null && Number.isFinite(tm)) newBaseline[route.userId] = tm
+    })
+    setDayBaselineMinutes(newBaseline)
+    setDayBaselineDate(dateStrForBaseline)
     // Do NOT call setJobs here. Updating jobs.route_order would trigger the build-routes
     // useEffect (jobs is in its dependency array), which calls setDayRoutes(freshRoutes) and
     // immediately overwrites the user's reordered dayRoutes. The DB already has the correct
@@ -2387,7 +2485,8 @@ function JobsPageContent() {
 
     // Persist pending assignee changes (from route planner) so jobs are actually moved on the server
     const pending = { ...pendingAssigneeChanges }
-    if (Object.keys(pending).length > 0) {
+    const hadAssigneePending = Object.keys(pending).length > 0
+    if (hadAssigneePending) {
       setPendingAssigneeChanges({})
       await Promise.all(
         Object.entries(pending).map(([jobIdStr, newUserId]) =>
@@ -2475,8 +2574,14 @@ function JobsPageContent() {
         setTravelMinutes(prev => ({ ...prev, [`${dateStr}:${route.userId}`]: totalDriveMins }))
       } catch { /* best-effort */ }
     }))
+
+    if (hadAssigneePending) {
+      syncSavedFingerprintAfterApplyRef.current = true
+    } else {
+      setSavedRouteFingerprint(buildRouteFingerprint(dayRoutes, {}))
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayRoutes, currentWeek, fetchDirections, pendingAssigneeChanges])
+  }, [dayRoutes, currentWeek, fetchDirections, pendingAssigneeChanges, buildRouteFingerprint])
 
   // Auto-optimize using OSRM /trip (free, no API key)
   const handleDayOptimize = useCallback(async (userId: number) => {
@@ -2670,28 +2775,48 @@ function JobsPageContent() {
                     else handleBackToWeek()
                   }
 
-                  const dayWeekPicker = (mobile: boolean) => (
+                  const weekDayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
+                  const selectRouteDay = (day: Date) => {
+                    setCurrentWeek(new Date(day))
+                    setMobileRouteDayPickerOpen(false)
+                  }
+                  const dayBubbleWeekday = currentWeek
+                    .toLocaleDateString(dateLocale, { weekday: 'short' })
+                    .replace(/\./g, '')
+                    .slice(0, 3)
+
+                  const dayWeekPicker = (variant: 'desktop' | 'mobile-expanded') => {
+                    const isMobileExpanded = variant === 'mobile-expanded'
+                    return (
                     <>
                       <div
-                        className={
-                          mobile
-                            ? 'flex items-center gap-1 bg-gray-50 rounded-2xl px-1.5 py-1.5'
-                            : 'bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-2 sm:px-3.5 py-2 sm:py-3 flex items-center gap-1 sm:gap-2 justify-between sm:justify-start'
-                        }
+                        className={`flex items-center rounded-2xl w-full ${ROUTE_MAP_GLASS_PANEL} ${
+                          isMobileExpanded
+                            ? 'gap-0.5 px-1 py-2'
+                            : 'gap-1 px-1.5 py-1.5 sm:px-3.5 sm:py-3 sm:gap-2'
+                        }`}
+                        style={ROUTE_MAP_GLASS_STYLE}
                       >
                         <button
                           type="button"
                           onClick={goToPreviousWeek}
-                          className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                          className={`flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-white/50 transition-all flex-shrink-0 ${
+                            isMobileExpanded ? 'w-9 h-9' : 'w-8 h-8'
+                          }`}
                           title={t('app.jobsPage.prevWeek')}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <div className="flex items-center gap-0.5 flex-1 justify-between min-w-0">
+                        <div
+                          className={`flex items-center flex-1 min-w-0 ${
+                            isMobileExpanded
+                              ? 'justify-center gap-0.5'
+                              : 'justify-between gap-0.5 sm:gap-1'
+                          }`}
+                        >
                           {weekDays.map((day, i) => {
-                            const letters = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
                             const isSelected = toLocalDateString(day) === toLocalDateString(currentWeek)
                             const isTodayDay = isToday(day)
                             const isWeekend = i >= 5
@@ -2699,21 +2824,31 @@ function JobsPageContent() {
                               <button
                                 key={i}
                                 type="button"
-                                onClick={() => setCurrentWeek(new Date(day))}
-                                className={`flex flex-col items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-full transition-all duration-150 flex-shrink-0 ${
+                                onClick={() => (
+                                  isMobileExpanded
+                                    ? selectRouteDay(day)
+                                    : setCurrentWeek(new Date(day))
+                                )}
+                                className={`flex flex-col items-center justify-center rounded-full transition-all duration-150 flex-shrink-0 ${
+                                  isMobileExpanded ? 'w-11 h-11' : 'w-8 h-8 sm:w-10 sm:h-10'
+                                } ${
                                   isSelected
                                     ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 scale-105'
                                     : isTodayDay
-                                    ? 'bg-accent-50 text-accent-700 ring-2 ring-accent-400/50'
+                                    ? 'bg-accent-50/90 text-accent-700 ring-2 ring-accent-400/50'
                                     : isWeekend
-                                    ? 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    ? 'bg-white/50 text-gray-400 hover:bg-white/70'
+                                    : 'bg-white/55 text-gray-600 hover:bg-white/75'
                                 }`}
                               >
-                                <span className={`text-[8px] sm:text-[9px] font-bold leading-none uppercase tracking-wide ${isSelected ? 'text-white/70' : 'text-current opacity-60'}`}>
-                                  {letters[i]}
+                                <span className={`font-bold leading-none uppercase tracking-wide ${
+                                  isMobileExpanded ? 'text-[9px]' : 'text-[8px] sm:text-[9px]'
+                                } ${isSelected ? 'text-white/70' : 'text-current opacity-60'}`}>
+                                  {weekDayLetters[i]}
                                 </span>
-                                <span className="text-[12px] sm:text-[13px] font-bold leading-none mt-[2px]">{day.getDate()}</span>
+                                <span className={`font-bold leading-none mt-0.5 ${
+                                  isMobileExpanded ? 'text-[14px]' : 'text-[12px] sm:text-[13px]'
+                                }`}>{day.getDate()}</span>
                               </button>
                             )
                           })}
@@ -2721,7 +2856,9 @@ function JobsPageContent() {
                         <button
                           type="button"
                           onClick={goToNextWeek}
-                          className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                          className={`flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-white/50 transition-all flex-shrink-0 ${
+                            isMobileExpanded ? 'w-9 h-9' : 'w-8 h-8'
+                          }`}
                           title={t('app.jobsPage.nextWeek')}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2729,13 +2866,13 @@ function JobsPageContent() {
                           </svg>
                         </button>
                       </div>
-                      {!mobile && (
+                      {variant === 'desktop' && (
                         <p className="text-[11px] font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)] mt-1.5 text-center tracking-wide">
                           {weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })}
                         </p>
                       )}
                     </>
-                  )
+                  )}
 
                   const routePanel = (
                       <DayRoutePanel
@@ -2775,6 +2912,20 @@ function JobsPageContent() {
                         drawRouteComparison={drawRouteComparison}
                         onAddJob={() => openCreateJobForDate(toLocalDateString(currentWeek))}
                         mobileSheet={!isDesktopRoute}
+                        hasUnsavedChanges={hasUnsavedRouteChanges}
+                        wrapMobileSheet={
+                          !isDesktopRoute
+                            ? ({ body, toolbar }) => (
+                                <MobileRouteSheet
+                                  snapPoints={[...MOBILE_ROUTE_SHEET_SNAPS]}
+                                  initialSnap={MOBILE_ROUTE_SHEET_INITIAL_SNAP}
+                                  toolbar={toolbar}
+                                >
+                                  {body}
+                                </MobileRouteSheet>
+                              )
+                            : undefined
+                        }
                       />
                   )
                   return (
@@ -2801,61 +2952,87 @@ function JobsPageContent() {
                         drawMode={drawMode}
                         drawOrder={drawOrder}
                         onDrawAssign={handleDrawAssign}
+                        fitInsets={!isDesktopRoute ? MOBILE_ROUTE_MAP_FIT_INSETS : undefined}
+                        showZoomControl={isDesktopRoute}
                       />
 
                       {/* Desktop: calendar floats on the map */}
                       {isDesktopRoute && (
                       <div className="absolute top-3 left-3 right-3 sm:right-auto z-20 pointer-events-auto select-none">
-                        {dayWeekPicker(false)}
+                        {dayWeekPicker('desktop')}
                       </div>
                       )}
 
-                      {/* Mobile: floating back button + quick "add a job" search */}
+                      {/* Mobile: back + create job search + day bubble */}
                       {!isDesktopRoute && (
                       <div
-                        className="absolute left-3 right-3 z-40 flex items-center gap-2 pointer-events-auto select-none"
+                        ref={mobileRouteHeaderRef}
+                        className="absolute left-3 right-3 z-40 pointer-events-auto select-none"
                         style={{ top: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}
                       >
-                        <button
-                          type="button"
-                          onClick={handleMobileSheetBack}
-                          className="flex-shrink-0 w-12 h-12 flex items-center justify-center rounded-full bg-white text-gray-700 active:scale-95 transition-transform"
-                          style={{ boxShadow: '0 4px 18px rgba(15,30,22,0.18)' }}
-                          title={
-                            dayFocusUserId != null && dayRoutes.length > 1
-                              ? t('app.routePlanner.allEmployees', 'All employees')
-                              : t('app.routePlanner.backToWeek', 'Back to week view')
-                          }
-                          aria-label={t('app.routePlanner.backToWeek', 'Back to week view')}
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-                          </svg>
-                        </button>
-                        <div className="flex-1 min-w-0">
-                          <RouteAddSearch
-                            clients={routeClients}
-                            countryCode={companyCountryCode}
-                            onPickClient={openCreateJobForClient}
-                            onPickLocation={openCreateJobForLocation}
-                          />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleMobileSheetBack}
+                            className={`flex-shrink-0 w-12 h-12 flex items-center justify-center rounded-full text-gray-800 active:scale-95 transition-all duration-200 ${ROUTE_MAP_GLASS_PILL}`}
+                            style={ROUTE_MAP_GLASS_STYLE}
+                            title={
+                              dayFocusUserId != null && dayRoutes.length > 1
+                                ? t('app.routePlanner.allEmployees', 'All employees')
+                                : t('app.routePlanner.backToWeek', 'Back to week view')
+                            }
+                            aria-label={t('app.routePlanner.backToWeek', 'Back to week view')}
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+                            </svg>
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <RouteAddSearch
+                              clients={routeClients}
+                              countryCode={companyCountryCode}
+                              appearance="glass"
+                              placeholder={t('app.routePlanner.createJob', 'Create a job')}
+                              onFocus={() => setMobileRouteDayPickerOpen(false)}
+                              onPickClient={openCreateJobForClient}
+                              onPickLocation={openCreateJobForLocation}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setMobileRouteDayPickerOpen(open => !open)}
+                            className={`flex-shrink-0 h-12 min-w-[3.25rem] px-2 flex flex-col items-center justify-center rounded-full active:scale-95 transition-all duration-200 ${
+                              mobileRouteDayPickerOpen
+                                ? 'bg-accent-500/95 backdrop-blur-md backdrop-saturate-150 border border-white/60 text-white shadow-xl shadow-accent-500/25'
+                                : `${ROUTE_MAP_GLASS_PILL} text-gray-800`
+                            }`}
+                            style={
+                              mobileRouteDayPickerOpen
+                                ? {
+                                    WebkitBackdropFilter: 'blur(12px) saturate(1.5)',
+                                    backdropFilter: 'blur(12px) saturate(1.5)',
+                                  }
+                                : ROUTE_MAP_GLASS_STYLE
+                            }
+                            aria-label={t('app.jobsPage.pickDay', 'Pick a day')}
+                            aria-expanded={mobileRouteDayPickerOpen}
+                          >
+                            <span className={`text-[10px] font-bold leading-none uppercase tracking-wide ${mobileRouteDayPickerOpen ? 'text-white/85' : 'text-gray-500'}`}>
+                              {dayBubbleWeekday}
+                            </span>
+                            <span className="text-[15px] font-bold leading-none mt-0.5 tabular-nums">{currentWeek.getDate()}</span>
+                          </button>
                         </div>
+                        {mobileRouteDayPickerOpen && (
+                          <div className="mt-2.5 w-full animate-in fade-in slide-in-from-top-1 duration-200">
+                            {dayWeekPicker('mobile-expanded')}
+                          </div>
+                        )}
                       </div>
                       )}
 
-                      {/* Mobile: draggable bottom sheet — date picker then jobs */}
-                      {!isDesktopRoute && (
-                        <MobileRouteSheet
-                          snapPoints={[0.3, 0.58, 0.85]}
-                          footer={
-                            <div className="px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-                              {dayWeekPicker(true)}
-                            </div>
-                          }
-                        >
-                          {routePanel}
-                        </MobileRouteSheet>
-                      )}
+                      {/* Mobile: bottom sheet (save bar pinned above day picker) */}
+                      {!isDesktopRoute && routePanel}
                     </div>
                   </div>
                   )
