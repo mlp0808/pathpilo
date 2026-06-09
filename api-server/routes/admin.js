@@ -22,6 +22,7 @@ const {
   createPromotionCode,
   deactivatePromotionCode,
 } = require('../utils/stripeCoupons');
+const { initActivitySchema } = require('../utils/activityLog');
 
 const TRIAL_DAYS = 14;
 
@@ -163,6 +164,9 @@ async function initAdminSchema() {
     // SMS add-on billing tables (plan + usage metering)
     await initSmsSchema(pool).catch((e) =>
       console.warn('[admin] SMS schema init failed:', e.message)
+    );
+    await initActivitySchema(pool).catch((e) =>
+      console.warn('[admin] activity schema init failed:', e.message)
     );
     // Run expiry handler immediately after schema is ready, then every hour
     autoHandleExpiry();
@@ -391,6 +395,99 @@ router.post('/companies/:companyId/overwatch/start', async (req, res) => {
   } catch (error) {
     console.error('Error starting overwatch session:', error);
     res.status(500).json({ error: 'Failed to start overwatch session' });
+  }
+});
+
+// ─── Activity (login sessions + daily active companies) ───────────────────────
+
+// GET /api/admin/activity/logins — recent session starts (last login log)
+router.get('/activity/logins', async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, parseInt(String(req.query.days || '30'), 10) || 30));
+    const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '200'), 10) || 200));
+
+    const result = await pool.query(
+      `SELECT
+         e.id,
+         e.created_at,
+         e.ip,
+         e.user_agent,
+         u.id AS user_id,
+         u.email AS user_email,
+         u.first_name,
+         u.last_name,
+         c.id AS company_id,
+         c.name AS company_name,
+         c.slug AS company_slug
+       FROM user_login_events e
+       LEFT JOIN users u ON u.id = e.user_id
+       LEFT JOIN companies c ON c.id = e.company_id
+       WHERE e.created_at >= NOW() - ($1::int * INTERVAL '1 day')
+       ORDER BY e.created_at DESC
+       LIMIT $2`,
+      [days, limit]
+    );
+
+    res.json({
+      logins: result.rows.map((r) => ({
+        id: r.id,
+        createdAt: r.created_at,
+        ip: r.ip,
+        userAgent: r.user_agent,
+        user: r.user_id
+          ? {
+              id: r.user_id,
+              email: r.user_email,
+              firstName: r.first_name,
+              lastName: r.last_name,
+            }
+          : null,
+        company: r.company_id
+          ? { id: r.company_id, name: r.company_name, slug: r.company_slug }
+          : null,
+      })),
+    });
+  } catch (error) {
+    console.error('[admin/activity/logins]', error);
+    res.status(500).json({ error: 'Failed to load login activity' });
+  }
+});
+
+// GET /api/admin/activity/daily-companies — one company counts once per day
+router.get('/activity/daily-companies', async (req, res) => {
+  try {
+    const days = Math.min(365, Math.max(7, parseInt(String(req.query.days || '90'), 10) || 90));
+
+    const result = await pool.query(
+      `SELECT
+         (created_at AT TIME ZONE 'UTC')::date AS day,
+         COUNT(DISTINCT company_id)::int AS active_companies
+       FROM user_login_events
+       WHERE company_id IS NOT NULL
+         AND created_at >= (CURRENT_DATE AT TIME ZONE 'UTC') - ($1::int - 1) * INTERVAL '1 day'
+       GROUP BY 1
+       ORDER BY 1`,
+      [days]
+    );
+
+    // Fill missing days with zero so the chart is continuous
+    const byDay = new Map(
+      result.rows.map((r) => [String(r.day).slice(0, 10), r.active_companies])
+    );
+    const series = [];
+    const end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const d = new Date(end);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      series.push({ day: key, activeCompanies: byDay.get(key) ?? 0 });
+    }
+
+    res.json({ days, series });
+  } catch (error) {
+    console.error('[admin/activity/daily-companies]', error);
+    res.status(500).json({ error: 'Failed to load daily activity' });
   }
 });
 

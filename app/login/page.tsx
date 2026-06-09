@@ -14,6 +14,7 @@ import {
   hasAppWorkspace,
   isClientLoggedIn,
 } from '../utils/sessionClient'
+import { getOwnerSetupResumePath } from '../utils/onboardingClient'
 import { normalizeLocale, UI_LOCALE_STORAGE_KEY } from '../i18n'
 
 function LoginForm() {
@@ -46,7 +47,7 @@ function LoginForm() {
       return
     }
     if (u && !hasAppWorkspace(u)) {
-      router.replace('/setup/company')
+      router.replace(getOwnerSetupResumePath(u))
       return
     }
     setAuthChecked(true)

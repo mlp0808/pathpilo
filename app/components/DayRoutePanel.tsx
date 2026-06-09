@@ -76,23 +76,38 @@ function RouteEmployeeAvatar({
   )
 }
 
-/** Drive-time pill aligned with the timeline column */
-function TimelineDrivePill({ minutes }: { minutes: number }) {
+// Shared timeline rail width
+const RAIL_W = 30
+
+/** Compact drive label for the narrow timeline rail, e.g. "34m" or "1h20". */
+function fmtMinRail(minutes: number) {
+  if (!minutes || minutes < 1) return ''
+  if (minutes < 60) return `${Math.round(minutes)}m`
+  const h = Math.floor(minutes / 60)
+  const m = Math.round(minutes % 60)
+  return m > 0 ? `${h}h${m}` : `${h}h`
+}
+
+/** Drive-time segment living inside the timeline rail between two stops. */
+function RailDriveConnector({ minutes }: { minutes: number }) {
+  const label = fmtMinRail(minutes)
+  if (!label) {
+    return <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[22px]" />
+  }
+
   return (
-    <div className="flex gap-3">
-      <div className="flex flex-col items-center flex-shrink-0" style={{ width: 28 }}>
-        <div className="w-px flex-1 bg-gray-200" style={{ minHeight: 8 }} />
-      </div>
-      <div className="flex-1 flex items-center gap-2 py-1.5 min-w-0">
-        <div className="flex-1 h-px bg-gray-100" />
-        <span className="text-[10px] font-medium text-gray-400 flex items-center gap-1 flex-shrink-0">
-          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-          {fmtMin(minutes)}
-        </span>
-        <div className="flex-1 h-px bg-gray-100" />
-      </div>
+    <div
+      className="flex flex-col items-center flex-1 mt-1 w-full min-h-[28px]"
+      title={fmtMin(minutes)}
+    >
+      <div className="w-px flex-1 bg-gray-200 min-h-[6px]" />
+      <span
+        className="inline-flex items-center justify-center rounded-md bg-gray-100 border border-gray-200/70 px-[3px] py-1.5 text-[9px] font-semibold text-gray-500 tabular-nums leading-none select-none shrink-0"
+        style={{ writingMode: 'vertical-lr' }}
+      >
+        {label}
+      </span>
+      <div className="w-px flex-1 bg-gray-200 min-h-[6px]" />
     </div>
   )
 }
@@ -102,6 +117,156 @@ function sumWorkMinutes(jobs: RouteJob[]) {
     if (j.is_cancelled || j.is_home) return sum
     return sum + (j.estimated_duration_minutes ?? 0)
   }, 0)
+}
+
+/** Text-only route summary line (drive, distance, delta). */
+function RouteStatsLine({
+  route,
+  baselineMinutes,
+  availableMinutes,
+  className = '',
+}: {
+  route: UserRoute
+  baselineMinutes?: number
+  availableMinutes?: number
+  className?: string
+}) {
+  const { t } = useAppI18n()
+  const activeJobs = route.jobs.filter(j => !j.is_cancelled)
+  const driveMinutes = route.totalMinutes ?? 0
+  const workMinutes = sumWorkMinutes(activeJobs)
+  const fullMinutes = driveMinutes + workMinutes
+  const overMinutes =
+    availableMinutes != null && availableMinutes > 0 ? fullMinutes - availableMinutes : null
+  const driveVsBaselineDiff = (() => {
+    const total = route.totalMinutes
+    const baseline = baselineMinutes
+    if (baseline == null || baseline <= 0 || total == null || !Number.isFinite(total)) return null
+    const diff = total - baseline
+    if (Math.abs(diff) < 0.5) return null
+    return diff
+  })()
+
+  if (route.totalMinutes == null && route.totalKm == null && fullMinutes <= 0) {
+    return (
+      <p className={`text-[12px] text-gray-400 ${className}`}>
+        {t('app.routePlanner.noRouteYet', 'No route yet')}
+      </p>
+    )
+  }
+
+  return (
+    <div className={`flex items-center gap-1.5 text-[12px] min-w-0 flex-wrap leading-tight ${className}`}>
+      {route.totalMinutes != null && (
+        <span className="font-semibold text-gray-600 tabular-nums">
+          {fmtMin(route.totalMinutes)} {t('app.routePlanner.driveLower', 'drive')}
+        </span>
+      )}
+      {route.totalKm != null && (
+        <span className="text-gray-400 tabular-nums">· {route.totalKm.toFixed(1)} km</span>
+      )}
+      {driveVsBaselineDiff != null && (
+        <span className={`font-semibold ${driveVsBaselineDiff < 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+          · {driveVsBaselineDiff < 0
+            ? t('app.routePlanner.driveDeltaSavedShort', '{{amount}} saved').replace('{{amount}}', fmtDeltaMin(driveVsBaselineDiff))
+            : t('app.routePlanner.driveDeltaExtraShort', '{{amount}} extra').replace('{{amount}}', fmtDeltaMin(driveVsBaselineDiff))}
+        </span>
+      )}
+      {overMinutes != null && overMinutes > 0 && (
+        <span className="font-semibold text-amber-600">
+          · {t('app.routePlanner.overByShort', '+{{amount}}').replace('{{amount}}', fmtMin(overMinutes))}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Dropdown menu for draw / auto-draw route tools. */
+function RoutePlanMenu({
+  label,
+  actionsOpen,
+  onToggle,
+  onClose,
+  canDraw,
+  optimizing,
+  hasCoords,
+  onDrawStart,
+  onOptimize,
+  userId,
+}: {
+  label: string
+  actionsOpen: boolean
+  onToggle: () => void
+  onClose: () => void
+  canDraw: boolean
+  optimizing: boolean
+  hasCoords: boolean
+  onDrawStart?: () => void
+  onOptimize: (userId: number) => void
+  userId: number
+}) {
+  const { t } = useAppI18n()
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-center gap-2 h-11 rounded-xl bg-gray-100 text-gray-800 text-[14px] font-semibold hover:bg-gray-200/80 active:scale-[0.99] transition-all"
+      >
+        {label}
+        <svg className={`w-4 h-4 text-gray-500 transition-transform ${actionsOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {actionsOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
+          <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.18)] border border-gray-100 p-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+            <button
+              type="button"
+              onClick={() => { onClose(); onDrawStart?.() }}
+              disabled={!canDraw || optimizing || !onDrawStart}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center flex-shrink-0">
+                <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6.586-6.586a2 2 0 112.828 2.828L11.828 13.828A2 2 0 0110 14H8v-2a2 2 0 01.586-1.414L9 11zM3 21l4-1 9-9-3-3-9 9-1 4z" />
+                </svg>
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[14px] font-bold text-gray-900 leading-tight">{t('app.routePlanner.drawRoute', 'Draw route')}</span>
+                <span className="block text-[11.5px] text-gray-500 leading-tight mt-0.5">{t('app.routePlanner.drawRouteSub', 'Tap stops in your own order')}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { onClose(); onOptimize(userId) }}
+              disabled={optimizing || !hasCoords}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="w-9 h-9 rounded-xl bg-accent-50 text-accent-600 flex items-center justify-center flex-shrink-0">
+                {optimizing ? (
+                  <svg className="w-[18px] h-[18px] animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[14px] font-bold text-gray-900 leading-tight">{t('app.routePlanner.autoDrawFull', 'Auto-draw route')}</span>
+                <span className="block text-[11.5px] text-gray-500 leading-tight mt-0.5">{t('app.routePlanner.autoDrawSub', 'Let us find the fastest order')}</span>
+              </span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ── Timeline-style sortable job card ─────────────────────────────────────────
@@ -127,7 +292,7 @@ function SortableJobCard({
   onMouseEnter?: () => void
   onMouseLeave?: () => void
 }) {
-  const { t, locale } = useAppI18n()
+  const { t } = useAppI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: job.id })
 
@@ -138,114 +303,105 @@ function SortableJobCard({
     zIndex: isDragging ? 50 : 'auto' as const,
   }
 
+  const hasDuration = job.estimated_duration_minutes != null && job.estimated_duration_minutes > 0
+
   return (
     <div ref={setNodeRef} style={style}>
       <div className="flex gap-3">
-        {/* Timeline spine */}
-        <div className="flex flex-col items-center flex-shrink-0" style={{ width: 28 }}>
-          {/* Numbered stop badge — also the drag handle */}
+        {/* ── Rail: numbered node + connector ── */}
+        <div className="flex flex-col items-center flex-shrink-0 pt-1" style={{ width: RAIL_W }}>
           <div
-            {...attributes}
-            {...listeners}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 transition-all duration-200 cursor-grab active:cursor-grabbing select-none"
+            className="flex items-center justify-center rounded-full text-white font-bold flex-shrink-0 transition-all duration-150"
             style={{
-              background: isHighlighted ? color : '#f0f0f0',
-              color: isHighlighted ? '#fff' : '#6b7280',
-              boxShadow: isHighlighted
-                ? `0 0 0 2px ${color}35, 0 2px 8px ${color}30`
-                : '0 1px 2px rgba(0,0,0,0.06)',
-              transform: isHighlighted ? 'scale(1.08)' : 'scale(1)',
+              width: 26,
+              height: 26,
+              fontSize: 12,
+              background: color,
+              boxShadow: isHighlighted ? `0 0 0 4px ${color}33, 0 2px 6px ${color}55` : `0 2px 5px ${color}45`,
+              transform: isHighlighted ? 'scale(1.12)' : 'scale(1)',
             }}
-            title={t('app.routePlanner.dragReorder', 'Drag to reorder')}
           >
             {index + 1}
           </div>
-          {/* Connecting line */}
           {!isLast && (
-            <div className="w-px flex-1 mt-1 bg-gray-200" style={{ minHeight: 12 }} />
+            nextLegMinutes != null && nextLegMinutes > 0 ? (
+              <RailDriveConnector minutes={nextLegMinutes} />
+            ) : (
+              <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[18px]" />
+            )
           )}
         </div>
 
-        {/* Card + drive pill column */}
-        <div className="flex-1 min-w-0">
-          {/* Job card */}
+        {/* ── Card ── */}
+        <div className="flex-1 min-w-0 pb-2.5">
           <div
+            onClick={() => onOpen(job.id)}
             onMouseEnter={onMouseEnter}
             onMouseLeave={onMouseLeave}
-            className="rounded-2xl px-4 py-3 flex items-start gap-2 group cursor-default transition-all duration-150"
+            className="rounded-2xl pl-4 pr-2 py-3 flex items-center gap-2 cursor-pointer transition-all duration-150 active:scale-[0.99]"
             style={{
-              background: isHighlighted ? '#f0fdf4' : isDragging ? '#f9fafb' : '#ffffff',
-              border: isHighlighted ? '1px solid #bbf7d0' : '1px solid #f0f0f0',
+              background: isHighlighted ? '#f0fdf4' : '#fff',
+              border: `1.5px solid ${isHighlighted ? color : '#eef0ee'}`,
               boxShadow: isDragging
-                ? '0 8px 30px rgba(0,0,0,0.12)'
+                ? '0 12px 30px rgba(0,0,0,0.14)'
                 : isHighlighted
-                ? '0 2px 12px rgba(61,213,122,0.12)'
+                ? `0 4px 16px ${color}22`
                 : '0 1px 4px rgba(0,0,0,0.05)',
             }}
           >
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-900 truncate leading-snug">
+              <p className="text-[15px] font-bold text-gray-900 truncate leading-tight">
                 {job.label}
               </p>
               {job.address && (
-                <p className="text-[11px] text-gray-400 truncate mt-0.5 leading-tight">
-                  {job.address}
+                <p className="flex items-center gap-1 text-[12px] text-gray-400 truncate mt-1 leading-tight">
+                  <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a2 2 0 01-2.828 0l-4.243-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span className="truncate">{job.address}</span>
                 </p>
               )}
-              <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
-                {job.time && (
-                  <span className="text-[11px] text-gray-400 flex items-center gap-1">
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    {job.time}
-                  </span>
-                )}
-                {job.estimated_duration_minutes != null && job.estimated_duration_minutes > 0 && (
-                  <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                    <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    {fmtMin(job.estimated_duration_minutes)}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Actions (appear on hover) */}
-            <div className="flex-shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                type="button"
-                onClick={() => onOpen(job.id)}
-                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-                title={t('app.routePlanner.openJob', 'Open job')}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Drive time between stops */}
-          {!isLast && (
-            <div className="flex items-center gap-2 py-1.5 px-1">
-              {nextLegMinutes != null && nextLegMinutes > 0 ? (
-                <>
-                  <div className="flex-1 h-px bg-gray-100" />
-                  <span className="text-[10px] font-medium text-gray-400 flex items-center gap-1">
-                    <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-                    </svg>
-                    {fmtMin(nextLegMinutes)}
-                  </span>
-                  <div className="flex-1 h-px bg-gray-100" />
-                </>
-              ) : (
-                <div className="h-2" />
+              {(job.time || hasDuration) && (
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                  {job.time && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                      <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {job.time}
+                    </span>
+                  )}
+                  {hasDuration && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                      <svg className="w-3 h-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="13" r="8" />
+                        <path d="M12 9v4l2.5 2.5M9 2h6" />
+                      </svg>
+                      {fmtMin(job.estimated_duration_minutes!)}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
-          )}
+
+            {/* Drag handle — clear grip affordance */}
+            <button
+              type="button"
+              {...attributes}
+              {...listeners}
+              onClick={e => e.stopPropagation()}
+              className="flex-shrink-0 self-stretch flex items-center px-1.5 text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none transition-colors"
+              title={t('app.routePlanner.dragReorder', 'Drag to reorder')}
+              aria-label={t('app.routePlanner.dragReorder', 'Drag to reorder')}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" />
+                <circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" />
+                <circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -263,6 +419,8 @@ function HomeStopRow({
   onMouseLeave,
   dimmed,
   showConnectorBelow = true,
+  connectorDriveAbove,
+  connectorDriveBelow,
 }: {
   companySlug?: string
   userId?: number
@@ -272,50 +430,81 @@ function HomeStopRow({
   onMouseLeave: () => void
   dimmed?: boolean
   showConnectorBelow?: boolean
+  /** Drive time on the rail segment above this stop (e.g. last job → end). */
+  connectorDriveAbove?: number | null
+  /** Drive time on the rail segment below this stop (e.g. start → first job). */
+  connectorDriveBelow?: number | null
 }) {
   const { t } = useAppI18n()
   const isEmpty = !job.address || job.address.trim() === ''
-  const settingsHref = companySlug && userId != null ? `/${companySlug}/team/${userId}` : null
+  const settingsHref =
+    companySlug && userId != null
+      ? `/${companySlug}/settings/business?routeFor=${userId}`
+      : companySlug
+        ? `/${companySlug}/settings/business`
+        : null
+  // start node keeps the rail flowing below it; end node is the last item.
+  const isStart = showConnectorBelow
 
   return (
     <div
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      className={`flex gap-3 ${dimmed ? 'opacity-40 pointer-events-none' : ''}`}
+      className={`flex gap-3 ${dimmed ? 'opacity-35 pointer-events-none' : ''}`}
     >
-      <div className="flex flex-col items-center flex-shrink-0" style={{ width: 28 }}>
+      {/* ── Rail: home node + connector ── */}
+      <div className="flex flex-col items-center flex-shrink-0 pt-1" style={{ width: RAIL_W }}>
+        {connectorDriveAbove != null && connectorDriveAbove > 0 && (
+          <RailDriveConnector minutes={connectorDriveAbove} />
+        )}
         <div
-          className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-white"
-          style={{ background: color, boxShadow: `0 1px 2px ${color}40` }}
+          className="flex items-center justify-center rounded-full bg-white flex-shrink-0"
+          style={{ width: 26, height: 26, border: `2px solid ${color}` }}
           title={t('app.routePlanner.startEndFixed', 'Start/end - fixed')}
         >
-          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" style={{ color }}>
             <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
           </svg>
         </div>
         {showConnectorBelow && (
-          <div className="w-px flex-1 mt-1 bg-gray-200" style={{ minHeight: 12 }} />
+          connectorDriveBelow != null && connectorDriveBelow > 0 ? (
+            <RailDriveConnector minutes={connectorDriveBelow} />
+          ) : (
+            <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[18px]" />
+          )
         )}
       </div>
-      <div className="flex-1 min-w-0 rounded-2xl px-4 py-3 border border-gray-100 bg-gray-50/80">
-        <p className="text-sm font-semibold text-gray-700 truncate">{job.label}</p>
-        {isEmpty ? (
-          settingsHref ? (
-            <Link
-              href={settingsHref}
-              className="text-[11px] text-accent-600 hover:text-accent-700 hover:underline mt-0.5 inline-block"
-            >
-              {t('app.routePlanner.selectStartEnd', 'Select start/end location')}
-            </Link>
-          ) : (
-            <p className="text-[11px] text-gray-400 mt-0.5">{t('app.routePlanner.selectStartEnd', 'Select start/end location')}</p>
-          )
-        ) : (
-          <>
-            <p className="text-[11px] text-gray-400 truncate mt-0.5">{job.address}</p>
-            <p className="text-[10px] text-gray-400 mt-1">{t('app.routePlanner.fixedNotReorderable', 'Fixed location - not reorderable')}</p>
-          </>
-        )}
+
+      {/* ── Card ── */}
+      <div className={`flex-1 min-w-0 pb-2.5 ${connectorDriveAbove ? 'flex flex-col justify-end' : ''}`}>
+        <div className="rounded-2xl px-4 py-3 bg-gray-50 border border-gray-100 flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-[0.12em] text-gray-500 bg-white border border-gray-200 rounded px-1.5 py-0.5 flex-shrink-0">
+                {isStart ? t('app.routePlanner.start', 'Start') : t('app.routePlanner.end', 'End')}
+              </span>
+              <p className="text-[13px] font-semibold text-gray-700 truncate">{job.label}</p>
+            </div>
+            {isEmpty ? (
+              settingsHref ? (
+                <Link
+                  href={settingsHref}
+                  className="text-[12px] text-accent-600 hover:text-accent-700 hover:underline mt-1 inline-block"
+                >
+                  {t('app.routePlanner.selectStartEnd', 'Select start/end location')}
+                </Link>
+              ) : (
+                <p className="text-[12px] text-gray-400 mt-1">{t('app.routePlanner.selectStartEnd', 'Select start/end location')}</p>
+              )
+            ) : (
+              <p className="text-[12px] text-gray-400 truncate mt-1">{job.address}</p>
+            )}
+          </div>
+          {/* Fixed (not draggable) indicator */}
+          <svg className="w-4 h-4 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
       </div>
     </div>
   )
@@ -341,6 +530,8 @@ function UserRoutePanel({
   onDrawAssign,
   onDrawReset,
   onDrawExit,
+  onAddJob,
+  jobsFirst = false,
 }: {
   companySlug?: string
   route: UserRoute
@@ -359,8 +550,12 @@ function UserRoutePanel({
   onDrawAssign?: (jobId: number | string) => void
   onDrawReset?: () => void
   onDrawExit?: () => void
+  onAddJob?: () => void
+  /** Mobile sheet: show the job timeline before stats / draw controls */
+  jobsFirst?: boolean
 }) {
   const { t } = useAppI18n()
+  const [actionsOpen, setActionsOpen] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
   const activeJobs = route.jobs.filter(j => !j.is_cancelled)
   const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
@@ -393,21 +588,6 @@ function UserRoutePanel({
   ), [middleJobs, drawNumberByJob])
   const nextDrawNumber = drawOrderSafe.length + 1
   const drawComplete = drawMode && remainingDrawJobs.length === 0 && middleJobs.length > 0
-  const driveMinutes = route.totalMinutes ?? 0
-  const workMinutes = sumWorkMinutes(activeJobs)
-  const fullMinutes = driveMinutes + workMinutes
-  const overMinutes =
-    availableMinutes != null && availableMinutes > 0 ? fullMinutes - availableMinutes : null
-
-  /** Driving time vs first directions snapshot this day (negative = saved time). */
-  const driveVsBaselineDiff = useMemo(() => {
-    const total = route.totalMinutes
-    const baseline = baselineMinutes
-    if (baseline == null || baseline <= 0 || total == null || !Number.isFinite(total)) return null
-    const diff = total - baseline
-    if (Math.abs(diff) < 0.5) return null
-    return diff
-  }, [route.totalMinutes, baselineMinutes])
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -424,117 +604,52 @@ function UserRoutePanel({
   )
 
   return (
-    <div className={`flex flex-col gap-3 ${drawMode ? 'is-draw-mode' : ''}`}>
-      {/* Stats strip */}
-      {(route.totalMinutes != null || route.totalKm != null || fullMinutes > 0) && (
-        <div
-          className="grid grid-cols-3 gap-1.5 transition-opacity duration-200"
-          style={{ opacity: drawMode ? 0.32 : 1 }}
-        >
-          <div className="rounded-lg px-2.5 py-2 text-center bg-accent-50 border border-accent-100">
-            <p className="text-[9px] uppercase tracking-widest font-bold mb-0.5 text-accent-500">{t('app.routePlanner.drive', 'Drive')}</p>
-            <p className="text-[13px] font-bold text-accent-600 leading-tight">
-              {route.totalMinutes != null ? fmtMin(route.totalMinutes) : '—'}
-            </p>
-            {driveVsBaselineDiff != null && (
-              <p
-                className={`mt-1 text-[9px] font-semibold leading-tight ${
-                  driveVsBaselineDiff < 0 ? 'text-emerald-600' : 'text-orange-600'
-                }`}
-              >
-                {driveVsBaselineDiff < 0
-                  ? t('app.routePlanner.driveDeltaSavedShort', '{{amount}} saved').replace(
-                      '{{amount}}',
-                      fmtDeltaMin(driveVsBaselineDiff),
-                    )
-                  : t('app.routePlanner.driveDeltaExtraShort', '{{amount}} extra').replace(
-                      '{{amount}}',
-                      fmtDeltaMin(driveVsBaselineDiff),
-                    )}
-              </p>
-            )}
-          </div>
-          <div className="rounded-lg px-2.5 py-2 text-center bg-gray-50 border border-gray-100">
-            <p className="text-[9px] uppercase tracking-widest font-bold mb-0.5 text-gray-400">{t('app.routePlanner.distance', 'Dist.')}</p>
-            <p className="text-[13px] font-bold text-gray-800 leading-tight">
-              {route.totalKm != null ? `${route.totalKm.toFixed(1)} km` : '—'}
-            </p>
-          </div>
-          <div
-            className={`rounded-lg px-2.5 py-2 text-center border ${
-              overMinutes != null && overMinutes > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'
-            }`}
-          >
-            <p
-              className={`text-[9px] uppercase tracking-widest font-bold mb-0.5 ${
-                overMinutes != null && overMinutes > 0 ? 'text-amber-600' : 'text-gray-400'
-              }`}
-            >
-              {t('app.routePlanner.fullTime', 'Full time')}
-            </p>
-            <p
-              className={`text-[13px] font-bold leading-tight ${
-                overMinutes != null && overMinutes > 0 ? 'text-amber-700' : 'text-gray-800'
-              }`}
-            >
-              {fmtMin(fullMinutes)}
-            </p>
-            {availableMinutes != null && availableMinutes > 0 && (
-              <p
-                className={`mt-0.5 text-[9px] font-medium leading-tight ${
-                  overMinutes != null && overMinutes > 0 ? 'text-amber-600' : 'text-gray-500'
-                }`}
-              >
-                {overMinutes != null && overMinutes > 0
-                  ? t('app.routePlanner.overAvailable', 'Over by {{amount}}').replace('{{amount}}', fmtMin(overMinutes))
-                  : t('app.routePlanner.withinAvailable', '{{amount}} available').replace('{{amount}}', fmtMin(availableMinutes))}
-              </p>
-            )}
-          </div>
+    <div className={`flex flex-col ${jobsFirst ? '' : 'gap-3'} ${drawMode ? 'is-draw-mode' : ''}`}>
+      {/* Mobile: plan actions + stats before the job list */}
+      {jobsFirst && !drawMode && (
+        <div className="flex flex-col gap-2 mb-3 flex-shrink-0">
+          <RoutePlanMenu
+            label={t('app.routePlanner.actions', 'Actions')}
+            actionsOpen={actionsOpen}
+            onToggle={() => setActionsOpen(o => !o)}
+            onClose={() => setActionsOpen(false)}
+            canDraw={canDraw}
+            optimizing={optimizing}
+            hasCoords={hasCoords}
+            onDrawStart={onDrawStart}
+            onOptimize={onOptimize}
+            userId={route.userId}
+          />
+          <RouteStatsLine
+            route={route}
+            baselineMinutes={baselineMinutes}
+            availableMinutes={availableMinutes}
+            className="px-0.5"
+          />
         </div>
       )}
 
-      {/* Draw route (primary) + auto-draw (secondary) — or draw-mode controls */}
-      {!drawMode ? (
-        <div className="flex flex-col gap-1.5">
-          <button
-            type="button"
-            onClick={() => onDrawStart?.()}
-            disabled={!canDraw || optimizing || !onDrawStart}
-            className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl text-[13px] font-bold bg-gray-900 text-white hover:bg-gray-800 transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-[0_4px_14px_rgba(0,0,0,0.12)]"
-            title={t('app.routePlanner.drawRouteHint', 'Click stops in the order you want to visit them.')}
-          >
-            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6.586-6.586a2 2 0 112.828 2.828L11.828 13.828A2 2 0 0110 14H8v-2a2 2 0 01.586-1.414L9 11zM3 21l4-1 9-9-3-3-9 9-1 4z" />
-            </svg>
-            {t('app.routePlanner.drawRoute', 'Draw route')}
-          </button>
-          <button
-            type="button"
-            onClick={() => onOptimize(route.userId)}
-            disabled={optimizing || !hasCoords}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {optimizing ? (
-              <>
-                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                {t('app.routePlanner.optimizing', 'Optimizing...')}
-              </>
-            ) : (
-              <>
-                <svg className="w-3.5 h-3.5 flex-shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                {t('app.routePlanner.autoDraw', 'Auto-draw route')}
-              </>
-            )}
-          </button>
+      {/* Desktop: plan route menu before the job list */}
+      {!jobsFirst && !drawMode && (
+        <div className="mb-3 flex-shrink-0">
+          <RoutePlanMenu
+            label={t('app.routePlanner.planRoute', 'Plan route')}
+            actionsOpen={actionsOpen}
+            onToggle={() => setActionsOpen(o => !o)}
+            onClose={() => setActionsOpen(false)}
+            canDraw={canDraw}
+            optimizing={optimizing}
+            hasCoords={hasCoords}
+            onDrawStart={onDrawStart}
+            onOptimize={onOptimize}
+            userId={route.userId}
+          />
         </div>
-      ) : (
-        <div className="rounded-2xl border border-accent-200 bg-gradient-to-br from-accent-50 via-white to-accent-50/50 px-3 py-3 shadow-[0_4px_18px_rgba(61,213,122,0.18)]">
+      )}
+
+      {/* Desktop: draw-mode banner */}
+      {!jobsFirst && drawMode && (
+        <div className="mb-3 rounded-2xl border border-accent-200 bg-gradient-to-br from-accent-50 via-white to-accent-50/50 px-3 py-3 shadow-[0_4px_18px_rgba(61,213,122,0.18)]">
           <div className="flex items-center gap-2 mb-2">
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0"
@@ -621,10 +736,60 @@ function UserRoutePanel({
         </div>
       )}
 
-      {/* Divider */}
-      <div className="h-px bg-gray-100" />
+      {/* Mobile draw-mode banner — above jobs */}
+      {jobsFirst && drawMode && (
+        <div className="mb-3 flex-shrink-0 rounded-2xl border border-accent-200 bg-gradient-to-br from-accent-50 via-white to-accent-50/50 px-3 py-3 shadow-[0_4px_18px_rgba(61,213,122,0.18)]">
+          <div className="flex items-center gap-2 mb-2">
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0"
+              style={{ background: route.color, boxShadow: `0 2px 8px ${route.color}50` }}
+            >
+              {drawComplete ? (
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                nextDrawNumber
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[12px] font-bold text-gray-900 leading-tight truncate">
+                {drawComplete
+                  ? t('app.routePlanner.drawComplete', 'Route drawn!')
+                  : t('app.routePlanner.drawNext', 'Pick stop #{{n}}').replace('{{n}}', String(nextDrawNumber))}
+              </p>
+              <p className="text-[10.5px] text-gray-500 mt-0.5 leading-tight">
+                {drawComplete
+                  ? t('app.routePlanner.drawCompleteHint', 'Saving order…')
+                  : t('app.routePlanner.drawRouteHint', 'Click stops in the order you want to visit them.')}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onDrawReset?.()}
+              disabled={drawOrderSafe.length === 0 || !onDrawReset}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-white/80 border border-gray-200 text-gray-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('app.routePlanner.drawReset', 'Reset')}
+            </button>
+            <button
+              type="button"
+              onClick={() => onDrawExit?.()}
+              disabled={!onDrawExit}
+              className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-gray-900 text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('app.routePlanner.drawExit', 'Exit')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Timeline job list */}
+      <div>
+      {!jobsFirst && <div className="h-px bg-gray-100 mb-3" />}
+
       {activeJobs.length === 0 && cancelledJobs.length === 0 ? (
         <p className="text-sm text-gray-400 text-center py-10">{t('app.routePlanner.noJobsToday', 'No jobs today')}</p>
       ) : drawMode ? (
@@ -704,12 +869,19 @@ function UserRoutePanel({
             <>
               {/* Fixed start (home) row */}
               {startJob && (
-                <HomeStopRow companySlug={companySlug} userId={route.userId} job={startJob} color={route.color} onMouseEnter={() => onJobCardHover?.(startJob.id)} onMouseLeave={() => onJobCardHover?.(null)} />
-              )}
-
-              {/* Drive time from start (home) to first stop */}
-              {startJob && middleJobs.length > 0 && middleJobs[0].legMinutes != null && middleJobs[0].legMinutes > 0 && (
-                <TimelineDrivePill minutes={middleJobs[0].legMinutes!} />
+                <HomeStopRow
+                  companySlug={companySlug}
+                  userId={route.userId}
+                  job={startJob}
+                  color={route.color}
+                  connectorDriveBelow={
+                    middleJobs.length > 0 && middleJobs[0].legMinutes != null && middleJobs[0].legMinutes > 0
+                      ? middleJobs[0].legMinutes!
+                      : null
+                  }
+                  onMouseEnter={() => onJobCardHover?.(startJob.id)}
+                  onMouseLeave={() => onJobCardHover?.(null)}
+                />
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -733,15 +905,49 @@ function UserRoutePanel({
                 </SortableContext>
               </DndContext>
 
+              {onAddJob && (
+                <div className="flex gap-3">
+                  {/* Rail: dashed "add" node keeps the timeline flowing */}
+                  <div className="flex flex-col items-center flex-shrink-0 pt-1" style={{ width: RAIL_W }}>
+                    <div className="w-[26px] h-[26px] rounded-full border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-300">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </div>
+                  </div>
+                  {/* Button */}
+                  <div className="flex-1 min-w-0 pb-2.5">
+                    <button
+                      type="button"
+                      onClick={onAddJob}
+                      className="w-full flex items-center justify-center gap-2 border border-dashed border-gray-300 rounded-2xl py-3 text-[13px] font-semibold text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/40 transition-colors"
+                    >
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      {t('app.jobsPage.addNewJob', 'Add new job')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Fixed end (home) row */}
               {endJob && (
                 <>
-                  {/* Drive time from last stop back to end (home) */}
-                  {middleJobs.length > 0 && endJob.legMinutes != null && endJob.legMinutes > 0 && (
-                    <TimelineDrivePill minutes={endJob.legMinutes!} />
-                  )}
-
-                <HomeStopRow companySlug={companySlug} userId={route.userId} job={endJob} color={route.color} showConnectorBelow={false} onMouseEnter={() => onJobCardHover?.(endJob.id)} onMouseLeave={() => onJobCardHover?.(null)} />
+                <HomeStopRow
+                  companySlug={companySlug}
+                  userId={route.userId}
+                  job={endJob}
+                  color={route.color}
+                  showConnectorBelow={false}
+                  connectorDriveAbove={
+                    middleJobs.length > 0 && endJob.legMinutes != null && endJob.legMinutes > 0
+                      ? endJob.legMinutes!
+                      : null
+                  }
+                  onMouseEnter={() => onJobCardHover?.(endJob.id)}
+                  onMouseLeave={() => onJobCardHover?.(null)}
+                />
                 </>
               )}
             </>
@@ -771,6 +977,7 @@ function UserRoutePanel({
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }
@@ -932,6 +1139,9 @@ interface DayRoutePanelProps {
   onDrawAssign?: (jobId: number | string) => void
   onDrawReset?: () => void
   onDrawExit?: () => void
+  onAddJob?: () => void
+  /** Compact layout for the mobile bottom sheet (datepicker lives in sheet header) */
+  mobileSheet?: boolean
 }
 
 export default function DayRoutePanel({
@@ -959,6 +1169,8 @@ export default function DayRoutePanel({
   onDrawAssign,
   onDrawReset,
   onDrawExit,
+  onAddJob,
+  mobileSheet = false,
 }: DayRoutePanelProps) {
   const { t, locale } = useAppI18n()
   // Solo company: only one user has routes today → skip the "all employees" picker entirely
@@ -983,9 +1195,11 @@ export default function DayRoutePanel({
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-[#F8F9FB] border-r border-gray-200">
+    <div className={`h-full flex flex-col overflow-hidden bg-[#F8F9FB] ${mobileSheet ? '' : 'border-r border-gray-200'}`}>
 
-      {/* ── Header ──────────────────────────────────────────────── */}
+      {/* ── Header (desktop sidebar only) ───────────────────────── */}
+      {!mobileSheet && (
+      <>
       <div className="flex-shrink-0 px-5 pt-4 pb-3">
         <div className="flex items-center gap-2.5">
           {focusedRoute && !isSoloCompany ? (
@@ -1031,8 +1245,11 @@ export default function DayRoutePanel({
 
       {/* Divider */}
       <div className="mx-5 mb-3 h-px bg-gray-200" />
+      </>
+      )}
 
       {focusedRoute &&
+        !mobileSheet &&
         drawRouteComparison != null &&
         Math.abs(drawRouteComparison.diffMinutes) >= 0.5 && (
           <div
@@ -1076,7 +1293,7 @@ export default function DayRoutePanel({
 
       {/* ── Scrollable body ─────────────────────────────────────── */}
       <div
-        className="flex-1 overflow-y-auto px-5 pb-4"
+        className={`flex-1 overflow-y-auto min-h-0 ${mobileSheet ? 'px-4 pt-1 pb-3' : 'px-5 pb-4'}`}
         style={{ scrollbarWidth: 'none' } as React.CSSProperties}
       >
         {focusedRoute ? (
@@ -1098,6 +1315,8 @@ export default function DayRoutePanel({
             onDrawAssign={onDrawAssign}
             onDrawReset={onDrawReset}
             onDrawExit={onDrawExit}
+            onAddJob={onAddJob}
+            jobsFirst={mobileSheet}
           />
         ) : (
           <AllUsersPanel
@@ -1108,11 +1327,19 @@ export default function DayRoutePanel({
         )}
       </div>
 
-      {/* ── Sticky footer: save button ──────────────────────────── */}
+      {/* ── Sticky footer: stats + save button ──────────────────── */}
       <div
-        className="flex-shrink-0 px-5 pt-3 pb-5 border-t border-gray-200 transition-opacity duration-200"
+        className={`flex-shrink-0 border-t border-gray-200 transition-opacity duration-200 ${mobileSheet ? 'px-4 pt-2.5 pb-4' : 'px-5 pt-3 pb-5'}`}
         style={{ opacity: drawMode ? 0.32 : 1 }}
       >
+        {focusedRoute && !mobileSheet && (
+          <RouteStatsLine
+            route={focusedRoute}
+            baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
+            availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
+            className="mb-3"
+          />
+        )}
         {geocodingCount > 0 && (
           <p className="text-[11px] text-amber-500 mb-2 flex items-center gap-1.5 justify-center">
             <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1132,7 +1359,7 @@ export default function DayRoutePanel({
           title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
           style={{
             background: saved ? '#10b981' : '#3DD57A',
-            color: saved ? '#fff' : '#0A1A0A',
+            color: '#fff',
             boxShadow: saved
               ? '0 0 20px rgba(16,185,129,0.3)'
               : '0 4px 20px rgba(61,213,122,0.28)',

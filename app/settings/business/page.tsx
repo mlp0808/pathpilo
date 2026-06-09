@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   PencilIcon,
   CheckCircleIcon,
@@ -9,7 +9,6 @@ import {
   TrashIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '../../utils/api'
-import AddressSearchInput from '../../components/AddressSearchInput'
 import { useAppI18n } from '../../components/I18nProvider'
 import { countryRules, getCountryRule } from '../../config/countryRules'
 import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
@@ -17,15 +16,14 @@ import {
   SettingsHeader,
   SettingsSection,
   SettingsRow,
-  SettingsField,
   SettingsLabel,
   SettingsInput,
   SettingsButton,
-  SettingsToggle,
   SettingsHint,
   SettingsSavedNote,
   SettingsErrorNote,
 } from '../../components/settings/SettingsUI'
+import RouteLocationsSettings from '../../components/settings/RouteLocationsSettings'
 
 const selectClass =
   'w-56 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-900 focus:border-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500'
@@ -49,9 +47,6 @@ interface CompanyProfile {
   website: string
   /** Public URL path to the company logo (set via the upload endpoint). */
   logoUrl: string
-  defaultStartAddress: string
-  defaultEndAddress: string
-  routeLocationsEnabled: boolean
 }
 
 type SlugStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid'
@@ -90,9 +85,6 @@ export default function BusinessSettingsPage() {
     phone: '',
     website: '',
     logoUrl: '',
-    defaultStartAddress: '',
-    defaultEndAddress: '',
-    routeLocationsEnabled: true,
   })
 
   // Slug-change state (its own separate section)
@@ -132,9 +124,6 @@ export default function BusinessSettingsPage() {
           phone: c.phone || '',
           website: c.website || '',
           logoUrl: c.logoUrl || '',
-          defaultStartAddress: c.defaultStartAddress || '',
-          defaultEndAddress: c.defaultEndAddress || '',
-          routeLocationsEnabled: c.routeLocationsEnabled !== false,
         })
         setSlugInput(c.slug || '')
       } catch (err) {
@@ -475,72 +464,10 @@ export default function BusinessSettingsPage() {
         />
       </SettingsSection>
 
-      {/* ── Route locations ── */}
-      <SettingsSection title={t('settings.business.routes.title', 'Start & end locations for routes')}>
-        <SettingsRow
-          title={t('settings.business.routes.enable', 'Enable route locations')}
-          description={t('settings.business.routes.help', 'When on, employees can set a start and end address (e.g. home). Routes in the planner will begin and end at those locations.')}
-          control={
-            isEditing ? (
-              <SettingsToggle
-                checked={formData.routeLocationsEnabled}
-                onChange={(v) => setFormData(prev => ({ ...prev, routeLocationsEnabled: v }))}
-                label={t('settings.business.routes.title', 'Start & end locations for routes')}
-              />
-            ) : (
-              <span className="text-sm font-medium text-gray-500">
-                {formData.routeLocationsEnabled ? t('settings.business.routes.on', 'On') : t('settings.business.routes.off', 'Off')}
-              </span>
-            )
-          }
-        />
-        {formData.routeLocationsEnabled && (
-          <SettingsField description={t('settings.business.routes.defaultHelp', 'Default addresses used when an employee has not set their own.')}>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {isEditing ? (
-                <>
-                  <AddressSearchInput
-                    label={t('settings.business.routes.defaultStart', 'Default start address')}
-                    value={formData.defaultStartAddress}
-                    onChange={v => setFormData(prev => ({ ...prev, defaultStartAddress: v }))}
-                    placeholder={t('settings.business.routes.searchStartPlaceholder', 'Search for a start address...')}
-                    countryCode={formData.countryCode}
-                  />
-                  <AddressSearchInput
-                    label={t('settings.business.routes.defaultEnd', 'Default end address')}
-                    value={formData.defaultEndAddress}
-                    onChange={v => setFormData(prev => ({ ...prev, defaultEndAddress: v }))}
-                    placeholder={t('settings.business.routes.endPlaceholder', 'Leave empty to use start address')}
-                    countryCode={formData.countryCode}
-                  />
-                </>
-              ) : (
-                <>
-                  <div>
-                    <SettingsLabel>{t('settings.business.routes.defaultStart', 'Default start address')}</SettingsLabel>
-                    <SettingsInput type="text" readOnly value={formData.defaultStartAddress} className="bg-gray-50 text-gray-500" />
-                  </div>
-                  <div>
-                    <SettingsLabel>{t('settings.business.routes.defaultEnd', 'Default end address')}</SettingsLabel>
-                    <SettingsInput type="text" readOnly value={formData.defaultEndAddress} className="bg-gray-50 text-gray-500" />
-                  </div>
-                </>
-              )}
-            </div>
-          </SettingsField>
-        )}
-
-        {isEditing && (
-          <div className="mt-4 flex items-center gap-3">
-            <SettingsButton variant="secondary" onClick={handleCancel}>
-              {t('settings.business.cancel', 'Cancel')}
-            </SettingsButton>
-            <SettingsButton variant="primary" onClick={handleSave} disabled={loading}>
-              {loading ? t('settings.business.saving', 'Saving...') : t('settings.business.save', 'Save Changes')}
-            </SettingsButton>
-          </div>
-        )}
-      </SettingsSection>
+      {/* ── Route locations (default + per person) ── */}
+      <Suspense fallback={null}>
+        <RouteLocationsSettings />
+      </Suspense>
 
       {/* ── Company Logo ── */}
       <SettingsSection

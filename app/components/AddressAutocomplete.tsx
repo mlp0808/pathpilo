@@ -6,6 +6,13 @@ import { MapPinIcon } from '@heroicons/react/24/outline'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
 
+function formatFullAddress(address: string, zip_code: string, city: string): string {
+  const street = String(address || '').trim()
+  const locality = [String(zip_code || '').trim(), String(city || '').trim()].filter(Boolean).join(' ')
+  if (street && locality) return `${street}, ${locality}`
+  return street || locality
+}
+
 interface AddressSuggestion {
   address: string
   zip_code: string
@@ -36,6 +43,8 @@ interface AddressAutocompleteProps {
   countryCode?: string
   zipLabel?: string
   cityLabel?: string
+  /** Hide zip/city inputs — values still populate from autocomplete selection. */
+  hidePostalFields?: boolean
 }
 
 export default function AddressAutocomplete({
@@ -51,6 +60,7 @@ export default function AddressAutocomplete({
   countryCode,
   zipLabel = 'Zip code',
   cityLabel = 'City',
+  hidePostalFields = false,
 }: AddressAutocompleteProps) {
   const [query, setQuery] = useState(address || '')
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
@@ -64,10 +74,17 @@ export default function AddressAutocomplete({
 
   useEffect(() => { setMounted(true) }, [])
 
-  // Sync query when address prop changes externally
+  // Sync visible input when parent state changes (e.g. after picking a suggestion).
   useEffect(() => {
-    setQuery(address || '')
-  }, [address])
+    if (hidePostalFields && lat != null && lng != null) {
+      const formatted = formatFullAddress(address, zip_code, city)
+      if (formatted) setQuery(formatted)
+      return
+    }
+    if (!hidePostalFields) {
+      setQuery(address || '')
+    }
+  }, [address, zip_code, city, lat, lng, hidePostalFields])
 
   const updateDropdownPos = () => {
     if (inputRef.current) {
@@ -126,13 +143,20 @@ export default function AddressAutocomplete({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
     setQuery(val)
-    onChange({ address: val, zip_code, city, lat, lng })
+    if (hidePostalFields) {
+      onChange({ address: val, zip_code: '', city: '', lat: null, lng: null })
+    } else {
+      onChange({ address: val, zip_code, city, lat, lng })
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => fetchSuggestions(val), 400)
   }
 
   const handleSelect = (result: AddressSuggestion) => {
-    setQuery(result.address)
+    const displayValue = hidePostalFields
+      ? (result.display || formatFullAddress(result.address, result.zip_code, result.city))
+      : result.address
+    setQuery(displayValue)
     setSuggestions([])
     setIsOpen(false)
     onChange({
@@ -198,7 +222,7 @@ export default function AddressAutocomplete({
         </div>
       </div>
 
-      {/* Zip + City row */}
+      {!hidePostalFields && (
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1.5">{zipLabel}</label>
@@ -227,6 +251,7 @@ export default function AddressAutocomplete({
           />
         </div>
       </div>
+      )}
 
       {/* Dropdown portal */}
       {mounted && isOpen &&

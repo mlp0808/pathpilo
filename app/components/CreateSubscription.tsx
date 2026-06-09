@@ -25,6 +25,7 @@ import {
   firstOccurrenceOnOrAfterAnchor,
 } from '../utils/subscriptionHelpers'
 import { useAppI18n } from './I18nProvider'
+import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
 
 interface Service {
   id: number
@@ -91,6 +92,7 @@ export default function CreateSubscription({
   const [showClientDropdown, setShowClientDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
+  const [showServiceCreateSheet, setShowServiceCreateSheet] = useState(false)
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [newClientData, setNewClientData] = useState({ ...initialNewClientData })
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -398,14 +400,43 @@ export default function CreateSubscription({
   }
 
   const addCustomService = () => {
-    const tempId = -Date.now()
-    setSelectedServices(prev => [...prev, {
-      id: tempId, title: t('app.subscription.customTask', '(custom task)'), price: 0, duration_minutes: 0,
-      customPrice: '0', customDuration: 0, isCustom: true, customTitle: '',
-    }])
-    setEditingTitle(tempId)
     setShowServiceDropdown(false)
+    setShowServiceCreateSheet(true)
+  }
+
+  const handleInlineServiceCreated = (result: InlineServiceCreateResult) => {
+    if (result.kind === 'catalog') {
+      const svc: Service = {
+        id: result.service.id,
+        title: result.service.title,
+        price: result.service.price,
+        duration_minutes: result.service.duration_minutes,
+      }
+      setServices((prev) => {
+        if (prev.some((x) => x.id === svc.id)) {
+          return prev.map((x) => (x.id === svc.id ? svc : x))
+        }
+        return [...prev, svc].sort((a, b) => a.title.localeCompare(b.title))
+      })
+      addService(svc)
+      return
+    }
+    const tempId = -Date.now()
+    setSelectedServices((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        title: result.title,
+        price: result.price,
+        duration_minutes: result.durationMinutes,
+        customPrice: String(result.price),
+        customDuration: result.durationMinutes,
+        isCustom: true,
+        customTitle: result.title,
+      },
+    ])
     setServiceSearch('')
+    setShowServiceDropdown(false)
   }
 
   const removeService = (id: number) => setSelectedServices(prev => prev.filter(s => s.id !== id))
@@ -930,7 +961,7 @@ export default function CreateSubscription({
             ))}
           <button onClick={addCustomService} className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0">
             <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
-              <PlusIcon className="w-4 h-4" />{t('app.subscription.addCustomTask', 'Add custom task')}
+              <PlusIcon className="w-4 h-4" />{t('app.inlineService.createNew', 'Create new service')}
             </div>
           </button>
         </div>,
@@ -1053,6 +1084,12 @@ export default function CreateSubscription({
           />
         </div>
       </ConfirmModal>
+      <InlineServiceCreateSheet
+        isOpen={showServiceCreateSheet}
+        scope="subscription"
+        onClose={() => setShowServiceCreateSheet(false)}
+        onComplete={handleInlineServiceCreated}
+      />
     </>
   )
 }

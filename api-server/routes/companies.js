@@ -452,13 +452,16 @@ router.post('/onboarding/progress', authenticateToken, async (req, res) => {
     }
 
     const target = String(req.body?.step || '').trim();
-    const allowed = new Set(['services', 'clients', 'plan', 'wizard_completed']);
+    const allowed = new Set(['services', 'clients', 'jobs', 'route', 'plan', 'wizard_completed']);
     if (!allowed.has(target)) {
       return res.status(400).json({ error: 'Invalid onboarding step' });
     }
 
     const mapped = target === 'wizard_completed' ? 'plan' : target;
     const nextStep = await advanceCompanyOnboardingStep(companyId, mapped);
+    if (!nextStep) {
+      return res.status(500).json({ error: 'Failed to advance onboarding step' });
+    }
 
     const owner = await pool.query(
       `SELECT u.email, u.first_name, u.last_name
@@ -472,7 +475,7 @@ router.post('/onboarding/progress', authenticateToken, async (req, res) => {
       const funnelStep =
         mapped === 'services'
           ? 'wizard_services'
-          : mapped === 'clients'
+          : mapped === 'clients' || mapped === 'jobs' || mapped === 'route'
             ? 'wizard_clients'
             : 'wizard_completed';
       await upsertSignupDraftByEmail({
@@ -610,8 +613,36 @@ router.post('/onboarding/complete', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Only the company owner can complete setup' });
     }
 
-    await advanceCompanyOnboardingStep(companyId, 'plan');
-    res.json({ success: true, onboardingCompleted: false });
+    await pool.query(
+      `UPDATE companies
+       SET onboarding_completed = true,
+           onboarding_step = 'done',
+           plan = COALESCE(NULLIF(plan, ''), 'standard'),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [companyId]
+    );
+
+    const ownerRow = await pool.query(
+      `SELECT u.email, u.first_name, u.last_name
+       FROM users u
+       INNER JOIN companies c ON c.owner_id = u.id
+       WHERE c.id = $1`,
+      [companyId]
+    );
+    const owner = ownerRow.rows[0];
+    if (owner?.email) {
+      await upsertSignupDraftByEmail({
+        email: owner.email,
+        firstName: owner.first_name,
+        lastName: owner.last_name,
+        step: 'plan_solo',
+        userId,
+        companyId,
+      });
+    }
+
+    res.json({ success: true, onboardingCompleted: true, onboardingStep: 'done' });
   } catch (error) {
     console.error('Error completing onboarding:', error);
     res.status(500).json({ error: 'Failed to complete onboarding' });
@@ -927,6 +958,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
     } catch (e) { /* ignore */ }
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
@@ -965,6 +997,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         defaultStartAddress: company.default_start_address ?? '',
         defaultEndAddress: company.default_end_address ?? '',
         routeLocationsEnabled: company.route_locations_enabled !== false,
+        dailyCapacityEnabled: company.daily_capacity_enabled === true,
       }
     });
   } catch (error) {
@@ -1017,6 +1050,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       defaultStartAddress,
       defaultEndAddress,
       routeLocationsEnabled,
+      dailyCapacityEnabled,
     } = req.body;
 
     const { isValidIanaTimeZone } = require('../utils/companyTimezone');
@@ -1032,6 +1066,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
     } catch (e) { /* ignore */ }
 
     const hasTimezoneKey = Object.prototype.hasOwnProperty.call(req.body, 'timezone');
@@ -1051,6 +1086,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
     }
 
     const locationsEnabled = routeLocationsEnabled === undefined ? undefined : Boolean(routeLocationsEnabled);
+    const capacityEnabled =
+      dailyCapacityEnabled === undefined ? undefined : Boolean(dailyCapacityEnabled);
 
     // COALESCE on every nullable field so a partial PATCH-like PUT (frontend
     // only sends what changed) doesn't accidentally wipe the others.
@@ -1066,6 +1103,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         default_start_address = COALESCE($8, default_start_address),
         default_end_address   = COALESCE($9, default_end_address),
         route_locations_enabled = COALESCE($10, route_locations_enabled, TRUE),
+        daily_capacity_enabled = COALESCE($17, daily_capacity_enabled, false),
         timezone       = CASE WHEN $12::boolean THEN $11 ELSE timezone END,
         email          = COALESCE($14, email),
         phone          = COALESCE($15, phone),
@@ -1089,6 +1127,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         email != null ? String(email).trim() : null,
         phone != null ? String(phone).trim() : null,
         website != null ? String(website).trim() : null,
+        capacityEnabled,
       ]
     );
 

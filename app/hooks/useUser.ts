@@ -4,6 +4,12 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '@/app/utils/api'
 import { getDashboardHref, hasAppWorkspace } from '@/app/utils/sessionClient'
+import {
+  getOwnerSetupResumePath,
+  mergeOnboardingStep,
+  mergeSessionUserPreservingOnboarding,
+  ownerMustCompleteSetup,
+} from '@/app/utils/onboardingClient'
 
 interface User {
   id: number
@@ -108,25 +114,31 @@ export function useUser() {
                 ...storedActive,
                 ...match,
                 id: match.id,
-                onboardingCompleted: match.onboardingCompleted,
-                onboardingStep: match.onboardingStep,
+                onboardingCompleted: match.onboardingCompleted || storedActive.onboardingCompleted,
+                onboardingStep: mergeOnboardingStep(
+                  storedActive.onboardingStep,
+                  match.onboardingStep
+                ),
               }
             }
           }
           const membershipRole = activeCompany?.role
-          const merged = {
-            ...user,
-            firstName: p.firstName ?? user.firstName,
-            lastName: p.lastName ?? user.lastName,
-            email: p.email ?? user.email,
-            languageCode: p.languageCode ?? user.languageCode,
-            role: membershipRole ?? p.role ?? user.role,
-            ...(Array.isArray(companies) ? { companies } : {}),
-            ...(p.pendingInvites !== undefined ? { pendingInvites: p.pendingInvites } : {}),
-            activeCompany: activeCompany ?? null,
-            companyId: activeCompany?.id ?? p.companyId ?? user.companyId,
-            companyName: activeCompany?.name ?? p.companyName ?? user.companyName,
-          }
+          const merged = mergeSessionUserPreservingOnboarding(
+            {
+              ...user,
+              firstName: p.firstName ?? user.firstName,
+              lastName: p.lastName ?? user.lastName,
+              email: p.email ?? user.email,
+              languageCode: p.languageCode ?? user.languageCode,
+              role: membershipRole ?? p.role ?? user.role,
+              ...(Array.isArray(companies) ? { companies } : {}),
+              ...(p.pendingInvites !== undefined ? { pendingInvites: p.pendingInvites } : {}),
+              activeCompany: activeCompany ?? null,
+              companyId: activeCompany?.id ?? p.companyId ?? user.companyId,
+              companyName: activeCompany?.name ?? p.companyName ?? user.companyName,
+            },
+            p
+          )
           localStorage.setItem('user', JSON.stringify(merged))
           setUser(merged)
         })
@@ -134,19 +146,28 @@ export function useUser() {
           // Keep existing local session payload if sync fails.
         })
       
-      // Owners must finish setup wizard (through plan selection); employees skip it.
+      // Owners must finish setup wizard; employees skip it.
       if (!hasAppWorkspace(user as Record<string, unknown>)) {
-        router.push('/setup/company')
+        router.push(getOwnerSetupResumePath(user as Record<string, unknown>))
         return
       }
 
       const href = getDashboardHref(user as Record<string, unknown>)
-      if (
-        href.startsWith('/setup/') &&
+      const resumePath = ownerMustCompleteSetup(user as Record<string, unknown>)
+        ? getOwnerSetupResumePath(user as Record<string, unknown>)
+        : href
+      const resumeBase = resumePath.split('?')[0]
+      const onWizardAppPage =
         typeof window !== 'undefined' &&
-        !window.location.pathname.startsWith('/setup')
+        !resumePath.startsWith('/setup/') &&
+        window.location.pathname.startsWith(resumeBase)
+      if (
+        resumePath.startsWith('/setup/') &&
+        typeof window !== 'undefined' &&
+        !window.location.pathname.startsWith('/setup') &&
+        !onWizardAppPage
       ) {
-        router.push(href)
+        router.push(resumePath)
         return
       }
 

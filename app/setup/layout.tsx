@@ -14,15 +14,14 @@ import {
   ownerMustCompleteSetup,
   setupPathForStep,
   setupStepIndex,
-  type SetupWizardStep,
 } from '@/app/utils/onboardingClient'
 
-function pathToWizardStep(pathname: string): SetupWizardStep | 'done' {
-  if (pathname.includes('/setup/plan')) return 'plan'
+function pathToWizardStep(pathname: string): string {
   if (pathname.includes('/setup/clients')) return 'clients'
+  if (pathname.includes('/setup/plan')) return 'plan'
   if (pathname.includes('/setup/services')) return 'services'
   if (pathname.includes('/setup/company')) return 'company'
-  return 'company'
+  return 'clients'
 }
 
 export default function SetupLayout({ children }: { children: React.ReactNode }) {
@@ -50,8 +49,14 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
     if (isOwnerUser(user) && ownerMustCompleteSetup(user)) {
       const required = getOwnerOnboardingStep(user)
       const current = pathToWizardStep(pathname)
-      if (required !== 'done' && setupStepIndex(current) > setupStepIndex(required)) {
-        router.replace(setupPathForStep(required))
+      if (required !== 'done' && required !== 'jobs' && required !== 'route') {
+        if (setupStepIndex(current) > setupStepIndex(required)) {
+          router.replace(setupPathForStep(required, user))
+          return
+        }
+      }
+      if (required === 'jobs' || required === 'route') {
+        router.replace(setupPathForStep(required, user))
         return
       }
     }

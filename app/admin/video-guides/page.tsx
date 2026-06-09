@@ -265,6 +265,9 @@ export default function AdminVideoGuidesPage() {
               <Link href="/admin/coupons" className="text-gray-600 hover:text-gray-900">
                 Coupons
               </Link>
+              <Link href="/admin/activity" className="text-gray-600 hover:text-gray-900">
+                Activity
+              </Link>
               <button
                 onClick={() => {
                   localStorage.removeItem('token')

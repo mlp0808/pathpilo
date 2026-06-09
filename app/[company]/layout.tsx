@@ -1,13 +1,20 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, usePathname } from 'next/navigation'
 import { useUser, SESSION_UPDATED_EVENT } from '@/app/hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 import { clearClientLocaleStorage } from '@/app/i18n'
 import { isOverwatchActive, stopOverwatchSession } from '@/app/utils/overwatch'
 import WorkspaceAccessGuard from '@/app/components/WorkspaceAccessGuard'
-import { getOwnerSetupResumePath, isOwnerUser, ownerMustCompleteSetup } from '@/app/utils/onboardingClient'
+import {
+  getOwnerOnboardingStep,
+  getOwnerSetupResumePath,
+  isAppWizardStep,
+  isOwnerUser,
+  mergeSessionUserPreservingOnboarding,
+  ownerMustCompleteSetup,
+} from '@/app/utils/onboardingClient'
 
 function SuspendedWall({ companyName }: { companyName: string }) {
   const handleLogout = () => {
@@ -93,6 +100,7 @@ function pickFallbackCompany(
 function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   const params = useParams()
   const router = useRouter()
+  const pathname = usePathname()
   const { user, loading: userLoading } = useUser()
   const [isResolving, setIsResolving] = useState(true)
   const [lastResolvedSlug, setLastResolvedSlug] = useState<string | null>(null)
@@ -192,8 +200,20 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
 
         if (switchResponse.ok) {
           const switchData = await switchResponse.json()
+          const userStrBefore = localStorage.getItem('user')
+          let mergedUser = switchData.user
+          if (userStrBefore) {
+            try {
+              mergedUser = mergeSessionUserPreservingOnboarding(
+                JSON.parse(userStrBefore) as Record<string, unknown>,
+                switchData.user as Record<string, unknown>
+              )
+            } catch {
+              mergedUser = switchData.user
+            }
+          }
           localStorage.setItem('token', switchData.token)
-          localStorage.setItem('user', JSON.stringify(switchData.user))
+          localStorage.setItem('user', JSON.stringify(mergedUser))
           window.dispatchEvent(new Event(SESSION_UPDATED_EVENT))
           setLastResolvedSlug(companySlug)
           setIsResolving(false)
@@ -228,9 +248,17 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     if (userLoading || isResolving || !user) return
     const u = user as unknown as Record<string, unknown>
     if (isOwnerUser(u) && ownerMustCompleteSetup(u)) {
+      const step = getOwnerOnboardingStep(u)
+      if (isAppWizardStep(step)) {
+        const onJobs = pathname?.includes(`/${companySlug}/jobs`) ?? false
+        if (!onJobs) {
+          router.replace(getOwnerSetupResumePath(u))
+        }
+        return
+      }
       router.replace(getOwnerSetupResumePath(u))
     }
-  }, [user, userLoading, isResolving, router])
+  }, [user, userLoading, isResolving, router, pathname, companySlug])
 
   if (userLoading || isResolving) {
     return (
@@ -246,7 +274,8 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   if (
     user &&
     isOwnerUser(user as unknown as Record<string, unknown>) &&
-    ownerMustCompleteSetup(user as unknown as Record<string, unknown>)
+    ownerMustCompleteSetup(user as unknown as Record<string, unknown>) &&
+    !isAppWizardStep(getOwnerOnboardingStep(user as unknown as Record<string, unknown>))
   ) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">

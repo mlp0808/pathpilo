@@ -58,15 +58,27 @@ export default function CompanyWorkHoursSettingsPage() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
+  const [dailyCapacityEnabled, setDailyCapacityEnabled] = useState(false)
+  const [capacitySaving, setCapacitySaving] = useState(false)
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl('/company-defaults/work-hours'), {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (res.ok) {
-        const d = await res.json()
+      const [whRes, profileRes] = await Promise.all([
+        fetch(apiUrl('/company-defaults/work-hours'), {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(apiUrl('/companies/profile'), {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ])
+      if (profileRes.ok) {
+        const profile = await profileRes.json()
+        setDailyCapacityEnabled(profile.company?.dailyCapacityEnabled === true)
+      }
+      if (whRes.ok) {
+        const d = await whRes.json()
         const row = d.defaults || {}
         setMode(row.work_hours_mode === 'flexible' ? 'flexible' : 'fixed')
         const next: Record<Weekday, DaySchedule> = { ...DEFAULT_SCHEDULE }
@@ -117,6 +129,29 @@ export default function CompanyWorkHoursSettingsPage() {
     }
     return total
   }, [schedule, mode])
+
+  const saveDailyCapacity = async (enabled: boolean) => {
+    setCapacitySaving(true)
+    setError('')
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl('/companies/profile'), {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dailyCapacityEnabled: enabled }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setError(d.error || 'Failed to save capacity setting')
+        return
+      }
+      setDailyCapacityEnabled(enabled)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2500)
+    } finally {
+      setCapacitySaving(false)
+    }
+  }
 
   const save = async () => {
     setSaving(true); setError(''); setSaved(false)
@@ -173,6 +208,33 @@ export default function CompanyWorkHoursSettingsPage() {
           title={t('settings.workHours.title', 'Default work hours')}
           description={t('settings.workHours.subtitle', 'These hours are applied to new employees when they join. Existing employees keep their own schedule.')}
         />
+
+        <SettingsSection title="Jobs calendar">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Daily capacity bars</p>
+              <p className="text-xs text-gray-500 mt-1 max-w-md">
+                When off, weekends and days without scheduled hours stay open on the jobs calendar.
+                The bar shows work time (green) vs drive time (blue) instead of hours available.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={capacitySaving}
+              onClick={() => void saveDailyCapacity(!dailyCapacityEnabled)}
+              className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors ${
+                dailyCapacityEnabled ? 'bg-accent-500' : 'bg-gray-200'
+              } ${capacitySaving ? 'opacity-60' : ''}`}
+              aria-pressed={dailyCapacityEnabled}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                  dailyCapacityEnabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </SettingsSection>
 
         <SettingsSection title={t('app.workHours.title', 'Work hours')}>
           <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">

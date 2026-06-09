@@ -10,6 +10,15 @@ import JobViewSlideout from '@/app/components/JobViewSlideout'
 import AddClientModal from '@/app/components/AddClientModal'
 import ConfirmModal from '@/app/components/ConfirmModal'
 import DayRoutePanel from '@/app/components/DayRoutePanel'
+import MobileRouteSheet from '@/app/components/MobileRouteSheet'
+import RouteAddSearch, { type RouteSearchClient, type RouteLocationPick } from '@/app/components/RouteAddSearch'
+import { SetupWizardFloatingCallout, type WizardHintTarget } from '@/app/components/setup/SetupWizardHint'
+import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
+import {
+  advanceOnboardingProgress,
+  completeOnboardingWizard,
+  getOwnerOnboardingStep,
+} from '@/app/utils/onboardingClient'
 import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoney } from '@/app/config/countryRules'
@@ -145,6 +154,11 @@ function JobsPageContent() {
   const { user, loading: userLoading } = useUser()
   const companyCountryCode = useCompanyCountryCode(user)
   const companySlug = (params?.company as string) || ''
+  const ownerOnboardingStep = user
+    ? getOwnerOnboardingStep(user as unknown as Record<string, unknown>)
+    : 'done'
+  const inJobsWizard = ownerOnboardingStep === 'jobs'
+  const inRouteWizard = ownerOnboardingStep === 'route'
   
   // Format a Date as YYYY-MM-DD in local time (avoids timezone shifting from toISOString)
   const toLocalDateString = (d: Date) => {
@@ -192,16 +206,23 @@ function JobsPageContent() {
   const [showCreateMenu, setShowCreateMenu] = useState(false)
   const [createJobPrefillDate, setCreateJobPrefillDate] = useState<string | null>(null)
   const [createJobPrefillUserId, setCreateJobPrefillUserId] = useState<number | null>(null)
+  // Route planner "add a job" search → prefill the create-job modal
+  const [createJobClientId, setCreateJobClientId] = useState<number | undefined>(undefined)
+  const [createJobLockClient, setCreateJobLockClient] = useState(false)
+  const [createJobNewClient, setCreateJobNewClient] = useState<{ name?: string; address?: string; zip_code?: string; city?: string } | null>(null)
+  const [routeClients, setRouteClients] = useState<RouteSearchClient[]>([])
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
   const [workHours, setWorkHours] = useState<WorkHours | null>(null)
   const [allUsersWorkHours, setAllUsersWorkHours] = useState<WorkHours | null>(null)
+  const [workHoursByUser, setWorkHoursByUser] = useState<Record<number, WorkHours>>({})
   // Per-user schedule hours keyed by user id. Populated whenever we fetch the
   // all-team aggregate so the all-team week view can show individual employees
   // as "off" on days where *they* have zero scheduled hours (weekend, day off,
   // part-time schedule) even when other team members are working.
-  const [workHoursByUser, setWorkHoursByUser] = useState<Record<number, WorkHours>>({})
+  const [dailyCapacityEnabled, setDailyCapacityEnabled] = useState(false)
+  const [wizardHintTarget, setWizardHintTarget] = useState<WizardHintTarget | null>(null)
   // Initialise viewMode from URL ?view= param
   const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() =>
     searchParams.get('view') === 'day' ? 'day' : 'week'
@@ -223,6 +244,32 @@ function JobsPageContent() {
   // ── Day view / route planner ──────────────────────────────────────────────
   const [dayRoutes, setDayRoutes] = useState<UserRoute[]>([])
   const [dayFocusUserId, setDayFocusUserId] = useState<number | null>(null)
+  // lg breakpoint (1024px) — drives the mobile bottom-sheet vs desktop split layout
+  const [isDesktopRoute, setIsDesktopRoute] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const onChange = () => setIsDesktopRoute(mq.matches)
+    onChange()
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  // Saved clients for the route planner "add a job" search
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/clients'), { headers: { Authorization: `Bearer ${token}` } })
+        if (!res.ok) return
+        const data = await res.json()
+        setRouteClients(Array.isArray(data.clients) ? data.clients : [])
+      } catch {
+        /* ignore */
+      }
+    }
+    load()
+  }, [])
   const [dayOptimizing, setDayOptimizing] = useState(false)
   const [dayGeocodingCount, setDayGeocodingCount] = useState(0)
   const [hoveredJobId, setHoveredJobId] = useState<number | string | null>(null)
@@ -255,6 +302,11 @@ function JobsPageContent() {
       if (raw) setPlannedDays(new Set(JSON.parse(raw)))
     } catch { /* ignore */ }
   }, [])
+
+  useEffect(() => {
+    if (!inRouteWizard || viewMode !== 'day') return
+    void completeOnboardingWizard()
+  }, [inRouteWizard, viewMode])
 
   // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
   const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
@@ -297,6 +349,21 @@ function JobsPageContent() {
     | null
   >(null)
 
+
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    fetch(apiUrl('/companies/profile'), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.company) {
+          setDailyCapacityEnabled(data.company.dailyCapacityEnabled === true)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Fetch saved travel times from daily_routes whenever the visible week changes
   useEffect(() => {
@@ -943,94 +1010,75 @@ function JobsPageContent() {
     // (Sat/Sun → indices 5/6 in our Monday-first layout), scroll the row all
     // the way to the right so the weekend columns are actually visible.
     // Otherwise scroll back to the start (Monday).
-    // Reset scroll position when week changes.
-    // If today's date is inside the visible week and it falls on a weekend
-    // (Sat/Sun → indices 5/6 in our Monday-first layout), scroll the row so
-    // those weekend columns are actually visible. Otherwise scroll back to
-    // the start (Monday).
-    //
-    // We have to fight two things:
-    //   1) The columns mount asynchronously, so scrollWidth is sometimes 0
-    //      on the first frame.
-    //   2) The container uses scroll-snap-type: x mandatory which can override
-    //      a raw `scrollLeft = max` assignment by snapping back to a snap
-    //      point. So instead of setting scrollLeft directly we look up the
-    //      today-column DOM node via a data attribute and use
-    //      `scrollIntoView({ inline: 'end' })`, then nudge scrollLeft to max
-    //      to make sure the very last column is flush with the right edge.
-    //
-    // We also retry across a few animation frames so we recover from the
-    // initial layout where the inner columns haven't been measured yet.
     useEffect(() => {
         if (viewMode !== 'week') return
-        const el = weekScrollContainerRef.current
-        if (!el) return
 
-        const todayIndex = weekDays.findIndex(d => isToday(d))
-        // Only adjust scroll when today is inside the currently visible week.
-        if (todayIndex === -1) return
-        const isWeekendToday = todayIndex === 5 || todayIndex === 6
-
-        let cancelled = false
-        let rafId = 0
-        let attempts = 0
-        const MAX_ATTEMPTS = 20
-
-        const apply = () => {
-            if (cancelled) return
+        const scrollWeekRow = () => {
             const node = weekScrollContainerRef.current
             if (!node) return
-
-            // Wait until the row actually has horizontal overflow, otherwise
-            // there's nothing to scroll yet and the columns probably haven't
-            // been laid out.
-            const overflow = node.scrollWidth - node.clientWidth
-            if (overflow <= 0 && attempts < MAX_ATTEMPTS) {
-                attempts++
-                rafId = requestAnimationFrame(apply)
-                return
-            }
-
-            if (isWeekendToday) {
-                // Find the actual today column and scroll it into view at the
-                // right edge. This sidesteps scroll-snap quirks because the
-                // browser will pick the nearest valid snap point that keeps
-                // the today column visible.
-                const todayEl = node.querySelector<HTMLElement>('[data-is-today="true"]')
-                if (todayEl) {
-                    try {
-                        todayEl.scrollIntoView({ inline: 'end', block: 'nearest' })
-                    } catch {
-                        node.scrollLeft = overflow
-                    }
-                    // Belt-and-suspenders: also push the scroller to its max
-                    // so the weekend columns are flush to the right edge.
-                    node.scrollLeft = overflow
-                    setWeekScrollPosition(overflow)
-                } else if (attempts < MAX_ATTEMPTS) {
-                    // Today column not in DOM yet — try again next frame.
-                    attempts++
-                    rafId = requestAnimationFrame(apply)
-                    return
-                } else {
-                    node.scrollLeft = overflow
-                    setWeekScrollPosition(overflow)
-                }
-            } else {
+            const todayIndex = weekDays.findIndex((d) => isToday(d))
+            if (todayIndex === -1) return
+            const overflow = Math.max(0, node.scrollWidth - node.clientWidth)
+            if (todayIndex >= 5 && overflow > 0) {
+                node.scrollLeft = overflow
+                setWeekScrollPosition(overflow)
+            } else if (todayIndex < 5) {
                 node.scrollLeft = 0
                 setWeekScrollPosition(0)
             }
         }
 
-        rafId = requestAnimationFrame(apply)
+        scrollWeekRow()
+        const t1 = window.setTimeout(scrollWeekRow, 80)
+        const t2 = window.setTimeout(scrollWeekRow, 300)
+        const t3 = window.setTimeout(scrollWeekRow, 800)
         return () => {
-            cancelled = true
-            if (rafId) cancelAnimationFrame(rafId)
+            window.clearTimeout(t1)
+            window.clearTimeout(t2)
+            window.clearTimeout(t3)
         }
-        // weekDays is derived from currentWeek; depending on currentWeek/viewMode
-        // is enough to re-run this when navigating between weeks.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentWeek, viewMode])
+    }, [currentWeek, viewMode, loading, jobs.length])
+
+    useEffect(() => {
+        if (!inJobsWizard || viewMode !== 'week') {
+            setWizardHintTarget(null)
+            return
+        }
+        const update = () => {
+            const el = document.querySelector('[data-wizard-today-col]')
+            if (!el) {
+                setWizardHintTarget(null)
+                return
+            }
+            const r = el.getBoundingClientRect()
+            if (r.width === 0 && r.height === 0) {
+                setWizardHintTarget(null)
+                return
+            }
+            setWizardHintTarget({ x: r.left, y: r.top, width: r.width, height: r.height })
+        }
+        update()
+        window.addEventListener('resize', update)
+        window.addEventListener('scroll', update, true)
+        const weekScroller = weekScrollContainerRef.current
+        weekScroller?.addEventListener('scroll', update, { passive: true })
+        const el = document.querySelector('[data-wizard-today-col]')
+        const ro = el ? new ResizeObserver(update) : null
+        if (el && ro) ro.observe(el)
+        const t1 = window.setTimeout(update, 100)
+        const t2 = window.setTimeout(update, 400)
+        const t3 = window.setTimeout(update, 900)
+        return () => {
+            window.removeEventListener('resize', update)
+            window.removeEventListener('scroll', update, true)
+            weekScroller?.removeEventListener('scroll', update)
+            ro?.disconnect()
+            window.clearTimeout(t1)
+            window.clearTimeout(t2)
+            window.clearTimeout(t3)
+        }
+    }, [inJobsWizard, viewMode, currentWeek, weekScrollPosition, loading, jobs.length])
 
     // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch)
     useEffect(() => {
@@ -1126,10 +1174,56 @@ function JobsPageContent() {
     }
 
     const openCreateJobForDate = (dateString: string) => {
+        setCreateJobClientId(undefined)
+        setCreateJobLockClient(false)
+        setCreateJobNewClient(null)
         setCreateJobPrefillDate(dateString)
         setCreateJobPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
         setShowCreateMenu(false)
         setIsCreateModalOpen(true)
+    }
+
+    // Route planner search → start a job for an existing client
+    const openCreateJobForClient = (clientId: number) => {
+        setCreateJobNewClient(null)
+        setCreateJobClientId(clientId)
+        setCreateJobLockClient(true)
+        setCreateJobPrefillDate(toLocalDateString(currentWeek))
+        setCreateJobPrefillUserId(
+            dayFocusUserId ?? (selectedUserId === 'all' ? null : selectedUserId),
+        )
+        setShowCreateMenu(false)
+        setIsCreateModalOpen(true)
+    }
+
+    // Route planner search → start a job at a picked map location (new client)
+    const openCreateJobForLocation = (loc: RouteLocationPick) => {
+        setCreateJobClientId(undefined)
+        setCreateJobLockClient(false)
+        setCreateJobNewClient({
+            address: loc.address,
+            zip_code: loc.zip_code,
+            city: loc.city,
+        })
+        setCreateJobPrefillDate(toLocalDateString(currentWeek))
+        setCreateJobPrefillUserId(
+            dayFocusUserId ?? (selectedUserId === 'all' ? null : selectedUserId),
+        )
+        setShowCreateMenu(false)
+        setIsCreateModalOpen(true)
+    }
+
+    const handleWizardAfterJobCreated = async (info?: { scheduledDate?: string | null }) => {
+        if (ownerOnboardingStep !== 'jobs') return
+        await advanceOnboardingProgress('route')
+        const dateStr = info?.scheduledDate || createJobPrefillDate || toLocalDateString(new Date())
+        const [y, m, d] = dateStr.split('-').map(Number)
+        if (y && m && d) setCurrentWeek(new Date(y, m - 1, d))
+        if (selectedUserId !== 'all') {
+            const uid = typeof selectedUserId === 'string' ? parseInt(selectedUserId, 10) : selectedUserId
+            setDayFocusUserId(uid)
+        }
+        setViewMode('day')
     }
 
     // Get a specific user's scheduled work hours for a day-of-week.
@@ -1444,6 +1538,23 @@ function JobsPageContent() {
         }, 0)
         return totalMinutes / 60
     }
+
+    const getJobMinutesForDay = (date: Date) => Math.round(getOccupiedTime(date) * 60)
+
+    const isDayBlockedFromLeaveOnly = (dateString: string) => {
+        if (selectedUserId !== 'all') {
+            const leave = employeeLeaveByDate[dateString]
+            if (leave?.leave_type === 'full_day') return true
+        }
+        const appts = appointmentsByDate[dateString] || []
+        const relevant = selectedUserId === 'all'
+            ? appts
+            : appts.filter((a) => Number(a.user_id) === Number(selectedUserId))
+        return relevant.some((a) => a.status === 'approved' && a.time_mode === 'all_day')
+    }
+
+    const isCalendarDayBlocked = (workHoursNum: number, dateString: string) =>
+        dailyCapacityEnabled ? workHoursNum === 0 : isDayBlockedFromLeaveOnly(dateString)
 
     // Format time duration (compact)
     const formatDuration = (minutes: number) => {
@@ -2019,51 +2130,60 @@ function JobsPageContent() {
       try {
         const companyRes = await fetch(apiUrl('/companies/profile'), { headers })
         const companyData = companyRes.ok ? await companyRes.json() : null
-        const routeLocationsEnabled = companyData?.company?.routeLocationsEnabled !== false
-        const defaultStart = companyData?.company?.defaultStartAddress || ''
-        const defaultEnd = companyData?.company?.defaultEndAddress || defaultStart
+        const defaultStart = (companyData?.company?.defaultStartAddress || '').trim()
+        const defaultEnd = (companyData?.company?.defaultEndAddress || defaultStart).trim()
 
-        if (routeLocationsEnabled) {
-          enhancedRoutes = await Promise.all(
-            routes.map(async (route): Promise<UserRoute> => {
-              let startAddr = defaultStart
-              let endAddr = defaultEnd
-              try {
-                const whRes = await fetch(apiUrl(`/work-hours/${route.userId}`), { headers })
-                if (whRes.ok) {
-                  const whData = await whRes.json()
-                  const wh = whData.workHours
-                  const useDefault = wh?.use_company_default_location !== false
-                  startAddr = useDefault ? defaultStart : (wh?.start_address || '')
-                  endAddr = useDefault ? (companyData?.company?.defaultEndAddress || defaultStart) : (wh?.end_address || wh?.start_address || '')
-                  if (!endAddr) endAddr = startAddr
+        enhancedRoutes = await Promise.all(
+          routes.map(async (route): Promise<UserRoute> => {
+            let startAddr = ''
+            let endAddr = ''
+            try {
+              const whRes = await fetch(apiUrl(`/work-hours/${route.userId}`), { headers })
+              if (whRes.ok) {
+                const whData = await whRes.json()
+                const wh = whData.workHours
+                const useDefault = wh?.use_company_default_location !== false
+                if (useDefault) {
+                  startAddr = defaultStart
+                  endAddr = defaultEnd || defaultStart
+                } else {
+                  startAddr = (wh?.start_address || '').trim()
+                  endAddr = (wh?.end_address || wh?.start_address || '').trim()
+                  if (!endAddr && startAddr) endAddr = startAddr
                 }
-              } catch { /* ignore */ }
+              } else {
+                startAddr = defaultStart
+                endAddr = defaultEnd || defaultStart
+              }
+            } catch {
+              startAddr = defaultStart
+              endAddr = defaultEnd || defaultStart
+            }
 
-              const jobs = [...route.jobs]
-              // Always add start and end slots when feature is on (empty = prompt to set in settings)
-              jobs.unshift({
-                id: `start-${route.userId}`,
-                lat: null,
-                lng: null,
-                label: 'Start (home)',
-                address: startAddr || '',
-                is_home: true,
-                has_own_coords: !!startAddr,
-              } as RouteJob)
-              jobs.push({
-                id: `end-${route.userId}`,
-                lat: null,
-                lng: null,
-                label: 'End (home)',
-                address: endAddr || '',
-                is_home: true,
-                has_own_coords: !!endAddr,
-              } as RouteJob)
-              return { ...route, jobs }
-            })
-          )
-        }
+            if (!startAddr) return route
+
+            const jobs = [...route.jobs]
+            jobs.unshift({
+              id: `start-${route.userId}`,
+              lat: null,
+              lng: null,
+              label: 'Start (home)',
+              address: startAddr,
+              is_home: true,
+              has_own_coords: true,
+            } as RouteJob)
+            jobs.push({
+              id: `end-${route.userId}`,
+              lat: null,
+              lng: null,
+              label: 'End (home)',
+              address: endAddr || startAddr,
+              is_home: true,
+              has_own_coords: true,
+            } as RouteJob)
+            return { ...route, jobs }
+          })
+        )
       } catch { /* ignore */ }
 
       setDayRoutes(enhancedRoutes)
@@ -2525,22 +2645,105 @@ function JobsPageContent() {
                     the route panel on top of the map so both are reachable.
                     The hardcoded `left: 200` is gone — we use Tailwind so it can
                     flex with the new responsive shell. */}
-                {viewMode === 'day' && (
-                  <div className="fixed inset-0 z-10 flex flex-col lg:flex-row top-[var(--app-mobile-topbar-h)] lg:top-0 left-0 lg:left-[200px]">
-                    {/* Left/top: job list panel. Full width on mobile,
-                        fixed 380 column on desktop. */}
-                    <div className="w-full lg:w-[380px] lg:flex-shrink-0 flex flex-col overflow-hidden h-1/2 lg:h-full border-b lg:border-b-0 border-gray-200">
+                {viewMode === 'day' && (() => {
+                  const handleBackToWeek = () => {
+                    setViewMode('week')
+                    setDayFocusUserId(null)
+                    setHoveredJobId(null)
+                    drawCompareBaselineRef.current = null
+                    if (drawRouteComparisonTimerRef.current) {
+                      clearTimeout(drawRouteComparisonTimerRef.current)
+                      drawRouteComparisonTimerRef.current = null
+                    }
+                    setDrawRouteComparison(null)
+                    setDrawMode(false)
+                    setDrawOrder([])
+                  }
+                  const handleClearEmployee = () => {
+                    setDayFocusUserId(null)
+                    setDrawMode(false)
+                    setDrawOrder([])
+                    setHoveredJobId(null)
+                  }
+                  const handleMobileSheetBack = () => {
+                    if (dayFocusUserId != null && dayRoutes.length > 1) handleClearEmployee()
+                    else handleBackToWeek()
+                  }
+
+                  const dayWeekPicker = (mobile: boolean) => (
+                    <>
+                      <div
+                        className={
+                          mobile
+                            ? 'flex items-center gap-1 bg-gray-50 rounded-2xl px-1.5 py-1.5'
+                            : 'bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-2 sm:px-3.5 py-2 sm:py-3 flex items-center gap-1 sm:gap-2 justify-between sm:justify-start'
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={goToPreviousWeek}
+                          className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                          title={t('app.jobsPage.prevWeek')}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <div className="flex items-center gap-0.5 flex-1 justify-between min-w-0">
+                          {weekDays.map((day, i) => {
+                            const letters = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
+                            const isSelected = toLocalDateString(day) === toLocalDateString(currentWeek)
+                            const isTodayDay = isToday(day)
+                            const isWeekend = i >= 5
+                            return (
+                              <button
+                                key={i}
+                                type="button"
+                                onClick={() => setCurrentWeek(new Date(day))}
+                                className={`flex flex-col items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-full transition-all duration-150 flex-shrink-0 ${
+                                  isSelected
+                                    ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 scale-105'
+                                    : isTodayDay
+                                    ? 'bg-accent-50 text-accent-700 ring-2 ring-accent-400/50'
+                                    : isWeekend
+                                    ? 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                }`}
+                              >
+                                <span className={`text-[8px] sm:text-[9px] font-bold leading-none uppercase tracking-wide ${isSelected ? 'text-white/70' : 'text-current opacity-60'}`}>
+                                  {letters[i]}
+                                </span>
+                                <span className="text-[12px] sm:text-[13px] font-bold leading-none mt-[2px]">{day.getDate()}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={goToNextWeek}
+                          className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
+                          title={t('app.jobsPage.nextWeek')}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </button>
+                      </div>
+                      {!mobile && (
+                        <p className="text-[11px] font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)] mt-1.5 text-center tracking-wide">
+                          {weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })}
+                        </p>
+                      )}
+                    </>
+                  )
+
+                  const routePanel = (
                       <DayRoutePanel
                         companySlug={companySlug}
                         routes={dayRoutes}
                         focusUserId={dayFocusUserId}
                         onSelectUser={setDayFocusUserId}
-                        onClearUser={() => {
-                          setDayFocusUserId(null)
-                          setDrawMode(false)
-                          setDrawOrder([])
-                          setHoveredJobId(null)
-                        }}
+                        onClearUser={handleClearEmployee}
                         onReorder={handleDayReorder}
                         onJobOpen={id => {
                           // Look up from the full dataset so we always have assigned_user_id, even when
@@ -2552,19 +2755,7 @@ function JobsPageContent() {
                         optimizing={dayOptimizing}
                         geocodingCount={dayGeocodingCount}
                         onSave={handleSaveAndApply}
-                        onBackToWeek={() => {
-                          setViewMode('week')
-                          setDayFocusUserId(null)
-                          setHoveredJobId(null)
-                          drawCompareBaselineRef.current = null
-                          if (drawRouteComparisonTimerRef.current) {
-                            clearTimeout(drawRouteComparisonTimerRef.current)
-                            drawRouteComparisonTimerRef.current = null
-                          }
-                          setDrawRouteComparison(null)
-                          setDrawMode(false)
-                          setDrawOrder([])
-                        }}
+                        onBackToWeek={handleBackToWeek}
                         dateLabel={currentWeek.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'short' })}
                         highlightedJobId={hoveredJobId}
                         onJobCardHover={setHoveredJobId}
@@ -2582,10 +2773,20 @@ function JobsPageContent() {
                         onDrawReset={handleDrawReset}
                         onDrawExit={handleDrawExit}
                         drawRouteComparison={drawRouteComparison}
+                        onAddJob={() => openCreateJobForDate(toLocalDateString(currentWeek))}
+                        mobileSheet={!isDesktopRoute}
                       />
-                    </div>
+                  )
+                  return (
+                  <div className="fixed inset-0 z-[45] lg:z-10 flex flex-col lg:flex-row top-0 left-0 lg:left-[200px]">
+                    {/* Desktop: static left column beside the map */}
+                    {isDesktopRoute && (
+                      <div className="w-[380px] flex-shrink-0 flex flex-col overflow-hidden h-full">
+                        {routePanel}
+                      </div>
+                    )}
 
-                    {/* Right: full-bleed map */}
+                    {/* Map: full-bleed on mobile, fills remaining space on desktop */}
                     <div className="flex-1 relative overflow-hidden">
                       <RouteMap
                         routes={dayRoutes}
@@ -2602,78 +2803,63 @@ function JobsPageContent() {
                         onDrawAssign={handleDrawAssign}
                       />
 
-                      {/* ── Calendar nav overlay.
-                          Desktop: floats top-left of the map.
-                          Mobile: spans the top of the map full-width so the 7
-                          day buttons remain easy to tap. Day circles shrink and
-                          gap tightens on small screens. */}
+                      {/* Desktop: calendar floats on the map */}
+                      {isDesktopRoute && (
                       <div className="absolute top-3 left-3 right-3 sm:right-auto z-20 pointer-events-auto select-none">
-                        <div className="bg-white/96 backdrop-blur-md rounded-2xl shadow-xl shadow-black/[0.12] border border-white/60 px-2 sm:px-3.5 py-2 sm:py-3 flex items-center gap-1 sm:gap-2 justify-between sm:justify-start">
-                          {/* Prev week */}
-                          <button
-                            type="button"
-                            onClick={goToPreviousWeek}
-                            className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
-                            title={t('app.jobsPage.prevWeek')}
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-                            </svg>
-                          </button>
-
-                          {/* Day circles M T W T F S S — share width on mobile so
-                              all 7 always fit; nominal size on desktop. */}
-                          <div className="flex items-center gap-0.5 sm:gap-1 flex-1 sm:flex-initial justify-between">
-                            {weekDays.map((day, i) => {
-                              const letters = ['M','T','W','T','F','S','S']
-                              const isSelected = toLocalDateString(day) === toLocalDateString(currentWeek)
-                              const isTodayDay = isToday(day)
-                              const isWeekend = i >= 5
-                              return (
-                                <button
-                                  key={i}
-                                  type="button"
-                                  onClick={() => setCurrentWeek(new Date(day))}
-                                  className={`flex flex-col items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full transition-all duration-150 ${
-                                    isSelected
-                                      ? 'bg-accent-500 text-white shadow-md shadow-accent-500/30 scale-105'
-                                      : isTodayDay
-                                      ? 'bg-accent-50 text-accent-700 ring-2 ring-accent-400/50'
-                                      : isWeekend
-                                      ? 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                  }`}
-                                >
-                                  <span className={`text-[9px] font-bold leading-none uppercase tracking-wide ${isSelected ? 'text-white/70' : 'text-current opacity-60'}`}>
-                                    {letters[i]}
-                                  </span>
-                                  <span className="text-[13px] font-bold leading-none mt-[3px]">{day.getDate()}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-
-                          {/* Next week */}
-                          <button
-                            type="button"
-                            onClick={goToNextWeek}
-                            className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all flex-shrink-0"
-                            title={t('app.jobsPage.nextWeek')}
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
-                            </svg>
-                          </button>
-                        </div>
-
-                        {/* Month + year label below the pill */}
-                        <p className="text-[11px] font-semibold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)] mt-1.5 text-center tracking-wide">
-                          {weekDays[0].toLocaleDateString(dateLocale, { month: 'long', year: 'numeric' })}
-                        </p>
+                        {dayWeekPicker(false)}
                       </div>
+                      )}
+
+                      {/* Mobile: floating back button + quick "add a job" search */}
+                      {!isDesktopRoute && (
+                      <div
+                        className="absolute left-3 right-3 z-40 flex items-center gap-2 pointer-events-auto select-none"
+                        style={{ top: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={handleMobileSheetBack}
+                          className="flex-shrink-0 w-12 h-12 flex items-center justify-center rounded-full bg-white text-gray-700 active:scale-95 transition-transform"
+                          style={{ boxShadow: '0 4px 18px rgba(15,30,22,0.18)' }}
+                          title={
+                            dayFocusUserId != null && dayRoutes.length > 1
+                              ? t('app.routePlanner.allEmployees', 'All employees')
+                              : t('app.routePlanner.backToWeek', 'Back to week view')
+                          }
+                          aria-label={t('app.routePlanner.backToWeek', 'Back to week view')}
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <div className="flex-1 min-w-0">
+                          <RouteAddSearch
+                            clients={routeClients}
+                            countryCode={companyCountryCode}
+                            onPickClient={openCreateJobForClient}
+                            onPickLocation={openCreateJobForLocation}
+                          />
+                        </div>
+                      </div>
+                      )}
+
+                      {/* Mobile: draggable bottom sheet — date picker then jobs */}
+                      {!isDesktopRoute && (
+                        <MobileRouteSheet
+                          snapPoints={[0.3, 0.58, 0.85]}
+                          footer={
+                            <div className="px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                              {dayWeekPicker(true)}
+                            </div>
+                          }
+                        >
+                          {routePanel}
+                        </MobileRouteSheet>
+                      )}
                     </div>
                   </div>
-                )}
+                  )
+                })()}
 
                 {/* ── Month / Week views ────────────────────────────────── */}
                 {viewMode !== 'day' && (
@@ -2719,11 +2905,19 @@ function JobsPageContent() {
                                 // "Blocked day" = 0 hours available (weekend, full-day leave,
                                 // all-day appointment, etc.). Drives the diagonal-stripe overlay
                                 // and the muted styling on any jobs still scheduled here.
-                                const isDayBlocked = workHoursNum === 0
+                                const isDayBlocked = isCalendarDayBlocked(workHoursNum, dateString)
 
                                 // If there are jobs but 0 available hours (day off or no hours set), show red
-                                const hasJobsButNoHours = dayJobs.length > 0 && workHoursNum === 0
+                                const hasJobsButNoHours = dailyCapacityEnabled && dayJobs.length > 0 && workHoursNum === 0
                                 
+                                const monthJobMins = getJobMinutesForDay(day)
+                                const monthDriveMins = (() => {
+                                    if (typeof selectedUserId === 'number') {
+                                        return travelMinutes[`${dateString}:${selectedUserId}`] ?? 0
+                                    }
+                                    const userIds = [...new Set(dayJobs.map((j: { assigned_user_id?: number }) => Number(j.assigned_user_id)).filter(Boolean))]
+                                    return userIds.reduce((sum, uid) => sum + (travelMinutes[`${dateString}:${uid}`] ?? 0), 0)
+                                })()
                                 // Calculate utilization - if jobs exist but no hours, treat as 100%+ (red)
                                 const utilizationPercent = hasJobsButNoHours 
                                     ? 100 
@@ -2790,8 +2984,8 @@ function JobsPageContent() {
                                         {/* Capacity bar - always show if current month */}
                                         {isCurrentMonth && (
                                             <div className="mb-2" title={barTooltip}>
+                                                {dailyCapacityEnabled ? (
                                                 <div className="w-full h-1 bg-primary-500/30 rounded-full overflow-hidden relative">
-                                                    {/* Bar - capped at 100% width, color depends on utilization */}
                                                     {barPercent > 0 && (
                                                         <div
                                                             className="h-full rounded-full transition-all absolute left-0 top-0 z-10"
@@ -2802,6 +2996,9 @@ function JobsPageContent() {
                                                         />
                                                     )}
                                                 </div>
+                                                ) : (
+                                                <WorkDriveDayBar jobMinutes={monthJobMins} driveMinutes={monthDriveMins} className="h-1" />
+                                                )}
                                             </div>
                                         )}
                                         
@@ -2938,7 +3135,7 @@ function JobsPageContent() {
                                     // "Blocked day" = 0 hours available (weekend, full-day leave,
                                     // all-day appointment, etc.). Drives the diagonal-stripe overlay
                                     // on the column and the muted styling on any jobs still here.
-                                    const isDayBlocked = workHoursNum === 0
+                                    const isDayBlocked = isCalendarDayBlocked(workHoursNum, dateString)
 
                                     // Parse saved route for this day once — drives both the button colour
                                     // and the planned/unplanned divider in the job list.
@@ -2986,6 +3183,7 @@ function JobsPageContent() {
                                             key={originalIndex}
                                             data-day-index={originalIndex}
                                             data-is-today={isTodayBanner ? 'true' : undefined}
+                                            {...(isTodayBanner ? { 'data-wizard-today-col': 'true' } : {})}
                                             className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative flex-shrink-0 h-full ${isDragOver ? 'ring-2 ring-accent-500/50' : ''}`}
                                             style={{
                                                 width: 'calc((100% - 32px) / 5)', // 5 columns visible, accounting for gap (8px * 4 gaps = 32px)
@@ -3073,10 +3271,13 @@ function JobsPageContent() {
                                                 )
                                             })()}
 
-                                            {/* Total hour: "Total hour:" above left, "X / Y" above right; bar 100% width below. No bottom border. */}
+                                            {/* Day summary bar + quick actions */}
                                             <div className="pt-2.5 pb-1.5">
+                                                {dailyCapacityEnabled && (
                                                 <div className="flex items-center justify-between mb-1.5">
-                                                    <span className="text-[11px] font-medium text-gray-700">{t('app.jobsPage.totalHours')}</span>
+                                                    <span className="text-[11px] font-medium text-gray-700">
+                                                        {t('app.jobsPage.totalHours')}
+                                                    </span>
                                                     <span className="text-[11px] font-medium text-gray-700 tabular-nums">
                                                         {dayTravelMins > 0 && (
                                                             <span className="text-gray-400 mr-1">{t('app.jobsPage.driveMins').replace('{{mins}}', String(dayTravelMins))}</span>
@@ -3084,7 +3285,8 @@ function JobsPageContent() {
                                                         {totalHoursWithTravel.toFixed(1)} / {workHoursNum.toFixed(1)}
                                                     </span>
                                                 </div>
-                                                {(() => {
+                                                )}
+                                                {dailyCapacityEnabled ? (() => {
                                                     const apptCountToday = (appointmentsByDate[dateString] || [])
                                                         .filter((a) => a.status === 'approved' && (selectedUserId === 'all' || Number(a.user_id) === Number(selectedUserId)))
                                                         .length
@@ -3096,14 +3298,12 @@ function JobsPageContent() {
                                                         (overHoursW > 0 ? ` · ${overHoursW.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
                                                     return (
                                                         <div className="w-full h-2 bg-primary-500/30 rounded-full relative" title={weekBarTooltip} style={{ overflow: 'visible' }}>
-                                                    {/* Green bar - shows capacity up to 100% */}
                                                     {greenWithTravel > 0 && (
                                                         <div
                                                             className="h-full rounded-full transition-all absolute left-0 top-0 z-10"
                                                             style={{ width: `${greenWithTravel}%`, backgroundColor: '#3DD57A' }}
                                                         />
                                                     )}
-                                                    {/* Overflow bar - shows overflow above 100%, overlays green from left */}
                                                     {amberWithTravel > 0 && (
                                                         <div
                                                             className="h-full rounded-full transition-all absolute left-0 top-0 z-20"
@@ -3115,7 +3315,9 @@ function JobsPageContent() {
                                                     )}
                                                         </div>
                                                     )
-                                                })()}
+                                                })() : (
+                                                    <WorkDriveDayBar jobMinutes={getJobMinutesForDay(day)} driveMinutes={dayTravelMins} />
+                                                )}
                                                 {/* Action buttons: Add job (left) + Plan route (right) */}
                                                 <div className="flex items-center justify-between mt-2 gap-1">
                                                     <button
@@ -3130,10 +3332,10 @@ function JobsPageContent() {
                                                             })
                                                         }}
                                                         className="flex items-center gap-1 text-[11px] font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-1.5 py-0.5 rounded-md transition-colors"
-                                                        title={t('app.jobsPage.addJob')}
+                                                        title="Add a job"
                                                     >
                                                         <PlusIcon className="w-3 h-3" />
-                                                        {t('app.jobsPage.addJob')}
+                                                        Add a job
                                                     </button>
                                                     <button
                                                         type="button"
@@ -3214,7 +3416,7 @@ function JobsPageContent() {
                                                                   // Independent of the column-level `isDayBlocked`, which
                                                                   // only fires when the whole team is off.
                                                                   const userScheduledHours = getWorkHoursForUserDay(Number(u.id), dayOfWeekIndex)
-                                                                  const isUserDayBlocked = isDayBlocked || userScheduledHours === 0
+                                                                  const isUserDayBlocked = dailyCapacityEnabled && (isDayBlocked || userScheduledHours === 0)
                                                                   return (
                                                                     <button
                                                                       key={u.id}
@@ -3353,9 +3555,16 @@ function JobsPageContent() {
                                                             )
                                                         })}
                                                         </>
-                                                        ) : (
-                                                            <div className="text-center text-gray-400 text-xs mt-8">No jobs</div>
-                                                        )}
+                                                        ) : null}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openCreateJobForDate(dateString)}
+                                                            {...(isTodayBanner ? { 'data-wizard-today-add-job': 'true' } : {})}
+                                                            className="mt-2 w-full flex items-center justify-center gap-1.5 border border-dashed border-gray-300 rounded-xl py-2.5 text-xs font-medium text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/50 transition-colors"
+                                                        >
+                                                            <PlusIcon className="w-3.5 h-3.5" />
+                                                            Add a job
+                                                        </button>
                                                     </div>
                                                 )}
                                             </div>
@@ -3372,7 +3581,15 @@ function JobsPageContent() {
 
             </div>
 
-            {/* Floating Create Button with Menu */}
+            {inJobsWizard && (
+                <SetupWizardFloatingCallout
+                    target={wizardHintTarget}
+                    createModalOpen={isCreateModalOpen}
+                >
+                    Start by adding a job today
+                </SetupWizardFloatingCallout>
+            )}
+
             <div className="fixed bottom-6 right-6 z-40" data-create-menu>
                 {/* Dropdown Menu */}
                 {showCreateMenu && (
@@ -3411,16 +3628,26 @@ function JobsPageContent() {
                     setIsCreateModalOpen(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
+                    setCreateJobClientId(undefined)
+                    setCreateJobLockClient(false)
+                    setCreateJobNewClient(null)
                 }}
-                onJobCreated={() => {
+                onJobCreated={(info) => {
                     setIsCreateModalOpen(false)
                     setShowCreateMenu(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
+                    setCreateJobClientId(undefined)
+                    setCreateJobLockClient(false)
+                    setCreateJobNewClient(null)
                     fetchJobsForWeek()
+                    void handleWizardAfterJobCreated(info)
                 }}
                 initialDate={createJobPrefillDate || undefined}
                 initialAssignedUserId={createJobPrefillUserId}
+                initialClientId={createJobClientId}
+                lockClient={createJobLockClient}
+                initialNewClient={createJobNewClient}
                 mode="job"
             />
 

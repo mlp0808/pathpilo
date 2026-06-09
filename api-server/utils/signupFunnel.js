@@ -16,7 +16,7 @@ const SIGNUP_FUNNEL_STEPS = new Set([
   'plan_company',
 ]);
 
-const ONBOARDING_WIZARD_STEPS = ['company', 'services', 'clients', 'plan', 'done'];
+const ONBOARDING_WIZARD_STEPS = ['company', 'services', 'clients', 'jobs', 'route', 'plan', 'done'];
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -44,6 +44,18 @@ async function ensureSignupFunnelSchema() {
     UPDATE companies SET onboarding_step = 'done'
     WHERE COALESCE(onboarding_completed, true) = true
       AND onboarding_step IS DISTINCT FROM 'done'
+  `);
+  // Legacy in-progress signups: skip removed wizard steps.
+  await pool.query(`
+    UPDATE companies SET onboarding_step = 'clients'
+    WHERE COALESCE(onboarding_completed, false) = false
+      AND onboarding_step IN ('company', 'services')
+  `);
+  await pool.query(`
+    UPDATE companies
+    SET onboarding_step = 'done', onboarding_completed = true, updated_at = NOW()
+    WHERE COALESCE(onboarding_completed, false) = false
+      AND onboarding_step = 'plan'
   `);
   await pool.query(`
     UPDATE companies SET onboarding_step = 'company'
@@ -155,6 +167,8 @@ function funnelStepForCompanyRow(row) {
     return row.plan === 'pro' ? 'plan_company' : 'plan_solo';
   }
   const step = row.onboarding_step || 'company';
+  if (step === 'jobs') return 'wizard_clients';
+  if (step === 'route') return 'wizard_clients';
   if (step === 'plan') return 'wizard_completed';
   if (step === 'services') return 'wizard_services';
   if (step === 'clients') return 'wizard_clients';

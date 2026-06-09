@@ -14,6 +14,7 @@ import {
   ClientStandardNotesPicker,
   type ClientStandardNoteRow,
 } from './ClientStandardNotesPicker'
+import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
 
 // Calendar View Component
 interface CalendarViewProps {
@@ -345,15 +346,22 @@ interface SelectedService {
 interface CreateJobProps {
   isOpen: boolean
   onClose: () => void
-  onJobCreated?: () => void
+  onJobCreated?: (info?: { scheduledDate?: string | null }) => void
   initialDate?: string
   initialAssignedUserId?: number | null
   mode?: 'job' | 'subscription'
   initialClientId?: number
   lockClient?: boolean
+  /** Start the "new client" flow with these fields prefilled (e.g. picked a map location). */
+  initialNewClient?: {
+    name?: string
+    address?: string
+    zip_code?: string
+    city?: string
+  } | null
 }
 
-export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false }: CreateJobProps) {
+export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false, initialNewClient }: CreateJobProps) {
   const { t, locale } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
   const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
@@ -376,6 +384,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   })
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
+  const [showServiceCreateSheet, setShowServiceCreateSheet] = useState(false)
   const [showClientDropdown, setShowClientDropdown] = useState(false)
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -485,18 +494,37 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setSelectedPastJob(null)
       setEditingPrice(null)
       setEditingDuration(null)
-      setIsAddingNewClient(false)
-      setNewClientData({
-        client_type: 'person',
-        name: '',
-        last_name: '',
-        company_number: '',
-        address: '',
-        zip_code: '',
-        city: '',
-        email: '',
-        phone: ''
-      })
+      // When opened from a picked map location, jump straight into the
+      // "new client" flow with the address prefilled so the only thing left
+      // is naming the client.
+      if (initialNewClient && !initialClientId) {
+        setIsAddingNewClient(true)
+        setNewClientData({
+          client_type: 'person',
+          name: initialNewClient.name || '',
+          last_name: '',
+          company_number: '',
+          address: initialNewClient.address || '',
+          zip_code: initialNewClient.zip_code || '',
+          city: initialNewClient.city || '',
+          email: '',
+          phone: ''
+        })
+        setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
+      } else {
+        setIsAddingNewClient(false)
+        setNewClientData({
+          client_type: 'person',
+          name: '',
+          last_name: '',
+          company_number: '',
+          address: '',
+          zip_code: '',
+          city: '',
+          email: '',
+          phone: ''
+        })
+      }
     }
   }, [isOpen, initialDate, initialAssignedUserId])
 
@@ -684,6 +712,46 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     setShowServiceDropdown(false)
   }
 
+  const handleInlineServiceCreated = (result: InlineServiceCreateResult) => {
+    if (result.kind === 'catalog') {
+      const svc: Service = {
+        id: result.service.id,
+        title: result.service.title,
+        price: result.service.price,
+        duration_minutes: result.service.duration_minutes,
+      }
+      setServices((prev) => {
+        if (prev.some((x) => x.id === svc.id)) {
+          return prev.map((x) => (x.id === svc.id ? svc : x))
+        }
+        return [...prev, svc].sort((a, b) => a.title.localeCompare(b.title))
+      })
+      addService(svc)
+      return
+    }
+    const tempId = -Date.now()
+    setSelectedServices((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        title: result.title,
+        price: result.price,
+        duration_minutes: result.durationMinutes,
+        customPrice: String(result.price),
+        customDuration: result.durationMinutes,
+        isCustom: true,
+        customTitle: result.title,
+      },
+    ])
+    setServiceSearch('')
+    setShowServiceDropdown(false)
+  }
+
+  const openServiceCreateSheet = () => {
+    setShowServiceDropdown(false)
+    setShowServiceCreateSheet(true)
+  }
+
   const removeService = (serviceId: number) => {
     setSelectedServices(selectedServices.filter(s => s.id !== serviceId))
   }
@@ -847,7 +915,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
         if (response.ok) {
           setCreatedJobId(data.job.id)
-          onJobCreated?.()
+          onJobCreated?.({ scheduledDate: jobData.scheduled_date })
           onClose()
         } else {
           console.error('Error creating job:', data.error)
@@ -974,6 +1042,16 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="text-xs text-gray-500">{formatMoney(Number(service.price) || 0, companyCountryCode)} · {service.duration_minutes} {t('app.createJob.minutesUnit', 'min')}</div>
                           </button>
                         ))}
+                        <button
+                          type="button"
+                          onClick={openServiceCreateSheet}
+                          className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0"
+                        >
+                          <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
+                            <PlusIcon className="w-4 h-4" />
+                            {t('app.inlineService.createNew', 'Create new service')}
+                          </div>
+                        </button>
                       </div>,
                       document.body
                     )}
@@ -981,7 +1059,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       <div className="space-y-2">
                         {selectedServices.map((service) => (
                           <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
-                            <div className="text-sm font-semibold text-primary-800">{service.title}</div>
+                            <div className="text-sm font-semibold text-primary-800">
+                              {service.isCustom ? (service.customTitle?.trim() || service.title) : service.title}
+                            </div>
                             <div className="flex items-center gap-2">
                               <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
                               <span className="text-xs text-gray-500 tabular-nums">{companyCurrency}</span>
@@ -1148,6 +1228,12 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             </div>
           </ConfirmModal>
         , document.body)}
+        <InlineServiceCreateSheet
+          isOpen={showServiceCreateSheet}
+          scope="job"
+          onClose={() => setShowServiceCreateSheet(false)}
+          onComplete={handleInlineServiceCreated}
+        />
       </>
     )
   }
@@ -1711,66 +1797,28 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                                   </button>
                                 ))}
                                 <button
-                                  onClick={() => {
-                                    const tempId = -Date.now()
-                                    setSelectedServices(prev => [
-                                      ...prev,
-                                      {
-                                        id: tempId,
-                                        title: '(custom task)',
-                                        price: 0,
-                                        duration_minutes: 0,
-                                        customPrice: '0',
-                                        customDuration: 0,
-                                        isCustom: true,
-                                        customTitle: ''
-                                      }
-                                    ])
-                                    setEditingTitle(tempId)
-                                    setShowServiceDropdown(false)
-                                    setServiceSearch('')
-                                  }}
+                                  type="button"
+                                  onClick={openServiceCreateSheet}
                                   className="w-full px-3 py-2 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out sticky bottom-0"
                                 >
                                   <div className="text-sm font-medium text-blue-600 flex items-center">
-                                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                    </svg>
-                                    Add custom task
-                            </div>
-                          </button>
+                                    <PlusIcon className="w-4 h-4 mr-2" />
+                                    {t('app.inlineService.createNew', 'Create new service')}
+                                  </div>
+                                </button>
                               </>
                               ) : (
                               <>
                                 <div className="px-3 py-2 text-sm text-gray-500">No services found</div>
                                 <button
-                                  onClick={() => {
-                                    const tempId = -Date.now()
-                                    setSelectedServices(prev => [
-                                      ...prev,
-                                      {
-                                        id: tempId,
-                                        title: '(custom task)',
-                                        price: 0,
-                                        duration_minutes: 0,
-                                        customPrice: '0',
-                                        customDuration: 0,
-                                        isCustom: true,
-                                        customTitle: ''
-                                      }
-                                    ])
-                                    setEditingTitle(tempId)
-                                    setShowServiceDropdown(false)
-                                    setServiceSearch('')
-                                  }}
+                                  type="button"
+                                  onClick={openServiceCreateSheet}
                                   className="w-full px-3 py-2 text-left hover:bg-blue-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out"
                                 >
                                   <div className="text-sm font-medium text-blue-600 flex items-center">
-                                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                    </svg>
-                                    Add custom task
-                        </div>
+                                    <PlusIcon className="w-4 h-4 mr-2" />
+                                    {t('app.inlineService.createNew', 'Create new service')}
+                                  </div>
                                 </button>
                               </>
                       )}
@@ -2314,6 +2362,12 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         , document.body)}
 
       </div>
+      <InlineServiceCreateSheet
+        isOpen={showServiceCreateSheet}
+        scope="job"
+        onClose={() => setShowServiceCreateSheet(false)}
+        onComplete={handleInlineServiceCreated}
+      />
     </>
   )
 }

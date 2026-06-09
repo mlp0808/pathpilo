@@ -16,6 +16,7 @@ import {
   hasAppWorkspace,
   isClientLoggedIn,
 } from '../utils/sessionClient'
+import { getOwnerSetupResumePath } from '../utils/onboardingClient'
 
 // ─── Funnel tracking ──────────────────────────────────────────────────────────
 
@@ -296,12 +297,13 @@ function RegisterForm() {
         const session = applySingleCompanyAutoSelect(userData as Record<string, unknown>)
         if (!inviteToken && session.activeCompany) {
           (session.activeCompany as Record<string, unknown>).onboardingCompleted = false
-          ;(session.activeCompany as Record<string, unknown>).onboardingStep = 'company'
+          ;(session.activeCompany as Record<string, unknown>).onboardingStep =
+            regData.user.activeCompany?.onboardingStep || 'clients'
         }
         localStorage.setItem('user', JSON.stringify(session))
         if (inviteToken) { router.push(getDashboardHref(session)); return }
       }
-      router.push('/setup/company')
+      router.push('/setup/clients')
     } catch {
       setCodeError('Network error. Please try again.')
     } finally {
@@ -344,7 +346,7 @@ function RegisterForm() {
                 <span>{c.name}</span><span className="text-accent-600">→</span>
               </a>
             ))}
-            {!hasAppWorkspace(user) && <a href="/setup/company" className="flex w-full justify-center rounded-xl bg-accent-500 py-3 text-sm font-semibold text-white hover:bg-accent-600">Continue setup</a>}
+            {!hasAppWorkspace(user) && <a href={getOwnerSetupResumePath(user)} className="flex w-full justify-center rounded-xl bg-accent-500 py-3 text-sm font-semibold text-white hover:bg-accent-600">Continue setup</a>}
             <button onClick={() => { clearClientLocaleStorage(); localStorage.removeItem('token'); localStorage.removeItem('user'); setSessionMode('form') }}
               className="w-full rounded-xl border border-gray-200 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50">
               Log out

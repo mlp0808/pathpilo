@@ -69,12 +69,6 @@ export default function Sidebar({ user }: SidebarProps) {
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (sessionStorage.getItem('pathpilo_video_guide_dismissed')) return
-    setIsVideoGuideOpen(true)
-  }, [])
-
-  useEffect(() => {
     setOverwatchActive(isOverwatchActive())
   }, [])
 

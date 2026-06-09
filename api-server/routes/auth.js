@@ -8,6 +8,12 @@ const {
   fetchUserCompanies,
   fetchPendingInvitesForEmail,
 } = require('../utils/userLoginPayload');
+const { initActivitySchema, getRequestMeta, recordLoginEvent } = require('../utils/activityLog');
+const {
+  countryCodeFromLanguage,
+  generateUniqueGuestCompany,
+  ianaTimezoneForCountry,
+} = require('../utils/guestCompany');
 
 const router = express.Router();
 
@@ -21,8 +27,13 @@ pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS language_code VARCHAR(10)
   .catch((err) => console.error('[auth] language_code column check failed:', err.message));
 pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) NOT NULL DEFAULT '${DEFAULT_COUNTRY_CODE}'`)
   .catch((err) => console.error('[auth] country_code column check failed:', err.message));
+pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)')
+  .catch((err) => console.error('[auth] timezone column check failed:', err.message));
 pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'standard'`)
   .catch((err) => console.error('[auth] plan column check failed:', err.message));
+initActivitySchema(pool).catch((err) =>
+  console.error('[auth] activity schema init failed:', err.message)
+);
 // Default true so every existing company is treated as already onboarded.
 // New companies created via registration explicitly set this to false below.
 pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT true`)
@@ -432,35 +443,19 @@ router.post('/register', async (req, res) => {
       user = userResult.rows[0];
       userRole = 'owner';
 
-      // Generate slug from company name
-      const generatedCompanyName = `${firstName}'s Company`
-      const generateSlug = (name) => {
-        return name
-          .toLowerCase()
-          .trim()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '')
-      }
-      let companySlug = generateSlug(generatedCompanyName)
-      // Ensure uniqueness
-      let counter = 1
-      let slugCheck = await client.query('SELECT id FROM companies WHERE slug = $1', [companySlug])
-      while (slugCheck.rows.length > 0) {
-        companySlug = generateSlug(generatedCompanyName) + '-' + counter
-        slugCheck = await client.query('SELECT id FROM companies WHERE slug = $1', [companySlug])
-        counter++
-      }
+      const countryCode = countryCodeFromLanguage(normalizedLanguageCode);
+      const timezone = ianaTimezoneForCountry(countryCode);
+      const guestCompany = await generateUniqueGuestCompany(client);
 
       // Determine final plan: trial invites always start on pro; otherwise use what was requested
       const finalPlan = trialRecord ? 'pro' : requestedPlan;
 
-      // Create company with user as owner. onboarding_completed = false forces
-      // the brand-new owner through the setup wizard before reaching the app.
+      // Create guest company — owner completes client + job wizard before using the app.
       const companyResult = await client.query(
-        `INSERT INTO companies (name, slug, owner_id, country_code, plan, onboarding_completed, onboarding_step)
-         VALUES ($1, $2, $3, $4, $5, false, 'company')
+        `INSERT INTO companies (name, slug, owner_id, country_code, timezone, plan, onboarding_completed, onboarding_step)
+         VALUES ($1, $2, $3, $4, $5, $6, false, 'clients')
          RETURNING id, name, slug, country_code, plan`,
-        [generatedCompanyName, companySlug, user.id, DEFAULT_COUNTRY_CODE, finalPlan]
+        [guestCompany.name, guestCompany.slug, user.id, countryCode, timezone, finalPlan]
       );
       const company = companyResult.rows[0];
       companyId = company.id;
@@ -548,7 +543,7 @@ router.post('/register', async (req, res) => {
       role: userRole,
       // Invited users join an existing (onboarded) company; brand-new owners must onboard.
       onboardingCompleted: !!invitationToken,
-      onboardingStep: invitationToken ? 'done' : 'company',
+      onboardingStep: invitationToken ? 'done' : 'clients',
     };
 
     res.status(201).json({
@@ -697,6 +692,14 @@ router.post('/login', async (req, res) => {
       responseData.user.companyId = activeCompany.id;
       responseData.user.companyName = activeCompany.name;
     }
+
+    const { ip, userAgent } = getRequestMeta(req);
+    recordLoginEvent(pool, {
+      userId: user.id,
+      companyId: activeCompany?.id ?? null,
+      ip,
+      userAgent,
+    }).catch((e) => console.warn('[auth] recordLoginEvent failed:', e.message || e));
 
     res.status(200).json(responseData);
 

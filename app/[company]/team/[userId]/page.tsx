@@ -5,7 +5,6 @@ import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../../components/AppLayout'
 import ProFeatureGate from '../../../components/ProFeatureGate'
 import { apiUrl } from '../../../utils/api'
-import AddressSearchInput from '../../../components/AddressSearchInput'
 import { useAppI18n } from '../../../components/I18nProvider'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -17,10 +16,6 @@ interface Member {
   email: string
   role: string
   created_at: string
-}
-
-interface LocationSettings {
-  start_address: string; end_address: string; use_company_default_location: boolean
 }
 
 type WorkHoursMode = 'fixed' | 'flexible'
@@ -111,22 +106,12 @@ export default function EmployeeSettingsPage() {
   const userId = params?.userId as string
 
   const [member, setMember] = useState<Member | null>(null)
-  const [companyDefaultStart, setCompanyDefaultStart] = useState('')
-  const [companyDefaultEnd, setCompanyDefaultEnd] = useState('')
-  const [routeLocationsEnabled, setRouteLocationsEnabled] = useState(true)
 
   // Work hours model: a mode toggle + one DaySchedule per weekday. Fixed mode
   // uses start/end/break; flexible mode uses `hours` only. We always keep both
   // around so flipping between modes never loses user input.
   const [workHoursMode, setWorkHoursMode] = useState<WorkHoursMode>('fixed')
   const [schedule, setSchedule] = useState<Record<Weekday, DaySchedule>>(DEFAULT_FIXED)
-
-  const [location, setLocation] = useState<LocationSettings>({
-    start_address: '', end_address: '', use_company_default_location: true,
-  })
-  const [locationSaving, setLocationSaving] = useState(false)
-  const [locationSaved, setLocationSaved] = useState(false)
-  const [locationError, setLocationError] = useState('')
 
   const [hoursSaving, setHoursSaving] = useState(false)
   const [hoursSaved, setHoursSaved] = useState(false)
@@ -159,10 +144,9 @@ export default function EmployeeSettingsPage() {
     const headers = { Authorization: `Bearer ${token}` }
     setLoading(true)
     try {
-      const [usersRes, hoursRes, companyRes] = await Promise.all([
+      const [usersRes, hoursRes] = await Promise.all([
         fetch(apiUrl('/users'), { headers }),
         fetch(apiUrl(`/work-hours/${userId}`), { headers }),
-        fetch(apiUrl('/companies/profile'), { headers }),
       ])
       if (usersRes.ok) {
         const d = await usersRes.json()
@@ -191,17 +175,6 @@ export default function EmployeeSettingsPage() {
           }
         }
         setSchedule(next)
-        setLocation({
-          start_address:               wh.start_address  || '',
-          end_address:                 wh.end_address    || '',
-          use_company_default_location: wh.use_company_default_location !== false,
-        })
-      }
-      if (companyRes.ok) {
-        const d = await companyRes.json()
-        setCompanyDefaultStart(d.company?.defaultStartAddress || '')
-        setCompanyDefaultEnd(d.company?.defaultEndAddress || '')
-        setRouteLocationsEnabled(d.company?.routeLocationsEnabled !== false)
       }
     } finally { setLoading(false) }
   }, [userId])
@@ -214,9 +187,6 @@ export default function EmployeeSettingsPage() {
   const buildWorkHoursPayload = () => {
     const payload: Record<string, unknown> = {
       work_hours_mode: workHoursMode,
-      start_address: location.start_address,
-      end_address: location.end_address,
-      use_company_default_location: location.use_company_default_location,
     }
     for (const { key } of WEEKDAYS) {
       const d = schedule[key]
@@ -258,20 +228,6 @@ export default function EmployeeSettingsPage() {
       if (!res.ok) { const d = await res.json(); setHoursError(d.error || t('app.teamMember.errSave', 'Failed to save')) }
       else { setHoursSaved(true); setTimeout(() => setHoursSaved(false), 2500) }
     } catch { setHoursError(t('app.teamMember.errNetwork', 'Network error')) } finally { setHoursSaving(false) }
-  }
-
-  const saveLocation = async () => {
-    setLocationSaving(true); setLocationError(''); setLocationSaved(false)
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/work-hours/${userId}`), {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildWorkHoursPayload()),
-      })
-      if (!res.ok) { const d = await res.json(); setLocationError(d.error || t('app.teamMember.errSave', 'Failed to save')) }
-      else { setLocationSaved(true); setTimeout(() => setLocationSaved(false), 2500) }
-    } catch { setLocationError(t('app.teamMember.errNetwork', 'Network error')) } finally { setLocationSaving(false) }
   }
 
   // Copy Monday's values to Tue-Fri as a quick starting point.
@@ -531,88 +487,30 @@ export default function EmployeeSettingsPage() {
           </div>
         </SectionCard>
 
-        {/* ── Section 2: Route Locations (only when company has feature on) ── */}
+        {/* ── Section 2: Route locations → Business settings ─────────── */}
         <SectionCard
           icon={<MapPinIcon />}
           iconBg="bg-blue-50"
           iconColor="text-blue-600"
           title={t('app.teamMember.routeLocations', 'Route locations')}
-          subtitle={t('app.teamMember.routeLocationsHelp', 'Start and end point for daily routes')}
+          subtitle={t('app.teamMember.routeLocationsMoved', 'Start and end points are set in Business Settings')}
         >
-          {!routeLocationsEnabled ? (
-            <div className="py-4 px-4 bg-amber-50 border border-amber-200 rounded-xl">
-              <p className="text-sm text-amber-800 font-medium">{t('app.teamMember.routeDisabledTitle', 'Start & end locations are disabled')}</p>
-              <p className="text-xs text-amber-700 mt-1">{t('app.teamMember.routeDisabledHelp', 'Your company has turned off this feature. An admin can enable it in Settings -> Business.')}</p>
-            </div>
-          ) : (
-            <>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <div className="relative flex-shrink-0 mt-0.5">
-              <input
-                type="checkbox"
-                checked={location.use_company_default_location}
-                onChange={e => setLocation(prev => ({ ...prev, use_company_default_location: e.target.checked }))}
-                className="sr-only"
-              />
-              <div className={`w-10 h-6 rounded-full transition-colors ${location.use_company_default_location ? 'bg-accent-500' : 'bg-gray-200'}`}>
-                <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${location.use_company_default_location ? 'translate-x-4' : 'translate-x-0'}`} />
-              </div>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900">{t('app.teamMember.useCompanyDefault', 'Use company default')}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                {companyDefaultStart
-                  ? `${t('app.teamMember.startsAt', 'Starts at:')} ${companyDefaultStart}`
-                  : t('app.teamMember.noCompanyDefault', 'No company default set - configure in Business Settings')}
-              </p>
-            </div>
-          </label>
-
-          {!location.use_company_default_location && (
-            <div className="space-y-4 mt-4">
-              <AddressSearchInput
-                label={t('app.teamMember.startLocation', 'Start location')}
-                dotColor="#3DD57A"
-                value={location.start_address}
-                onChange={v => setLocation(prev => ({ ...prev, start_address: v }))}
-                placeholder={t('app.teamMember.searchStartAddress', 'Search for a start address...')}
-              />
-              <AddressSearchInput
-                label={t('app.teamMember.endLocation', 'End location')}
-                dotColor="#F87171"
-                value={location.end_address}
-                onChange={v => setLocation(prev => ({ ...prev, end_address: v }))}
-                placeholder={t('app.teamMember.leaveEmptyUseStart', 'Leave empty to use start location')}
-              />
-              <p className="text-[11px] text-gray-400">{t('app.teamMember.endLocationHelp', 'If end location is empty, the route ends at the start location.')}</p>
-            </div>
-          )}
-
-          {location.use_company_default_location && (companyDefaultStart || companyDefaultEnd) && (
-            <div className="mt-4 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 space-y-2">
-              {companyDefaultStart && (
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0" />
-                  <span className="text-gray-400 w-10">{t('app.teamMember.start', 'Start')}</span>
-                  <span>{companyDefaultStart}</span>
-                </div>
-              )}
-              {companyDefaultEnd && (
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
-                  <span className="text-gray-400 w-10">{t('app.teamMember.end', 'End')}</span>
-                  <span>{companyDefaultEnd}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {locationError && <p className="mt-3 text-sm text-red-600">{locationError}</p>}
-          <div className="flex justify-end mt-4">
-            <SaveButton saving={locationSaving} saved={locationSaved} onClick={saveLocation} t={t} />
-          </div>
-            </>
-          )}
+          <p className="text-sm text-gray-600 leading-relaxed">
+            {t(
+              'app.teamMember.routeLocationsMovedHelp',
+              'Configure the default route start and end for everyone, or set custom locations per person.',
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push(`/${company}/settings/business?routeFor=${userId}`)}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+          >
+            {t('app.teamMember.openRouteSettings', 'Open route locations')}
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
         </SectionCard>
 
         {/* ── Section 3: Upcoming appointments (read-only) ─────────────── */}
