@@ -1762,6 +1762,7 @@ router.delete('/:invoiceId', authenticateToken, async (req, res) => {
     const deleteJobs = req.query.deleteJobs === 'true';
 
     const client = await pool.connect();
+    let jobIds = [];
     try {
       await client.query('BEGIN');
 
@@ -1784,44 +1785,35 @@ router.delete('/:invoiceId', authenticateToken, async (req, res) => {
 
       // Gather linked job ids before deleting items
       const itemsRes = await client.query(
-        `SELECT job_id FROM invoice_items WHERE invoice_id = $1 AND job_id IS NOT NULL`,
+        `SELECT job_id FROM invoice_items WHERE invoice_id = $1`,
         [invoiceId],
       );
-      const jobIds = itemsRes.rows.map(r => r.job_id).filter(Boolean);
+      jobIds = itemsRes.rows.map(r => r.job_id).filter(Boolean);
 
-      // Remove invoice items
+      // Remove invoice items and the invoice itself (order matters for FK)
       await client.query(`DELETE FROM invoice_items WHERE invoice_id = $1`, [invoiceId]);
-
-      // Remove any public tokens and pending reminders linked to this invoice
-      await client.query(
-        `DELETE FROM invoice_public_tokens WHERE invoice_id = $1`,
-        [invoiceId],
-      ).catch(() => {});
-      await client.query(
-        `DELETE FROM scheduled_emails WHERE payload->>'invoiceId' = $1`,
-        [String(invoiceId)],
-      ).catch(() => {});
-
-      // Delete the invoice itself
+      await client.query(`DELETE FROM invoice_transactions WHERE invoice_id = $1`, [invoiceId]).catch(() => {});
       await client.query(`DELETE FROM invoices WHERE id = $1`, [invoiceId]);
 
-      if (jobIds.length > 0) {
-        if (deleteJobs) {
-          // Hard-delete the jobs
-          await client.query(`DELETE FROM jobs WHERE id = ANY($1) AND company_id = $2`, [jobIds, companyId]);
-        }
-        // When NOT deleting jobs, they simply lose the invoice_items reference —
-        // no action needed; the jobs already exist independently in the jobs table.
+      if (deleteJobs && jobIds.length > 0) {
+        await client.query(`DELETE FROM jobs WHERE id = ANY($1) AND company_id = $2`, [jobIds, companyId]);
       }
 
       await client.query('COMMIT');
-      return res.json({ ok: true, deletedJobIds: deleteJobs ? jobIds : [] });
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
       client.release();
     }
+
+    // Best-effort cleanup of ancillary rows that may or may not exist in this
+    // deployment (tables are created lazily). Run OUTSIDE the transaction so a
+    // missing table can't abort the main delete.
+    pool.query(`DELETE FROM invoice_public_tokens WHERE invoice_id = $1`, [invoiceId]).catch(() => {});
+    pool.query(`DELETE FROM scheduled_emails WHERE payload->>'invoiceId' = $1`, [String(invoiceId)]).catch(() => {});
+
+    return res.json({ ok: true, deletedJobIds: deleteJobs ? jobIds : [] });
   } catch (err) {
     console.error('DELETE /invoices/:id error:', err);
     return res.status(500).json({ error: 'Failed to delete invoice' });
