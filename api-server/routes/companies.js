@@ -1887,8 +1887,15 @@ router.post('/', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Company logo upload (rendered on every invoice). Stored on local disk under
-// api-server/uploads/company-logos/. The DB only stores the public URL path.
+// Company logo upload & serve.
+//
+// Files are stored on disk in api-server/uploads/company-logos/.
+// The DB stores the logo as an /api/companies/logo/<filename> path so it goes
+// through the same /api/* Next.js rewrite that all other API calls use —
+// no separate /uploads rewrite is required.
+//
+// Legacy rows that still have an /uploads/ path are served transparently
+// via the logo-serve endpoint below (same local-file resolution).
 // ─────────────────────────────────────────────────────────────────────────────
 const multer = require('multer');
 const fsNode = require('fs');
@@ -1897,6 +1904,39 @@ const cryptoNode = require('crypto');
 
 const LOGO_DIR = pathNode.resolve(__dirname, '..', 'uploads', 'company-logos');
 try { fsNode.mkdirSync(LOGO_DIR, { recursive: true }); } catch (_) { /* exists */ }
+
+/**
+ * Extract just the bare filename from a stored logo_url, regardless of whether
+ * it is the legacy "/uploads/company-logos/<file>" format or the new
+ * "/api/companies/logo/<file>" format.  Returns null for unexpected values.
+ */
+function logoFilenameFromUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  // New path: /api/companies/logo/<filename>
+  const newMatch = url.match(/\/api\/companies\/logo\/([^/?#]+)$/);
+  if (newMatch) return newMatch[1];
+  // Legacy path: /uploads/company-logos/<filename>
+  const legacyMatch = url.match(/\/uploads\/company-logos\/([^/?#]+)$/);
+  if (legacyMatch) return legacyMatch[1];
+  return null;
+}
+
+// GET /api/companies/logo/:filename — serve a company logo from local disk.
+// Uses the /api/* path so the Next.js rewrite proxy handles it without a
+// separate /uploads rewrite (which may not be available in all deployments).
+router.get('/logo/:filename', (req, res) => {
+  // path.basename prevents directory traversal (e.g. "../../etc/passwd")
+  const filename = pathNode.basename(req.params.filename);
+  const filePath = pathNode.join(LOGO_DIR, filename);
+  if (!fsNode.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Logo not found' });
+  }
+  // Allow cross-origin embedding so the image works in <img> tags from any
+  // origin (e.g. the public invoice page on a different domain).
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  res.sendFile(filePath);
+});
 
 const logoUpload = multer({
   storage: multer.diskStorage({
@@ -1954,12 +1994,17 @@ router.post('/profile/logo', authenticateToken, (req, res) => {
       // Best-effort: delete the previous logo file to avoid orphans.
       const previous = await pool.query('SELECT logo_url FROM companies WHERE id = $1', [companyId]);
       const prevUrl = previous.rows[0]?.logo_url;
-      if (prevUrl && prevUrl.startsWith('/uploads/company-logos/')) {
-        const prevPath = pathNode.resolve(__dirname, '..', prevUrl.replace(/^\//, ''));
-        fsNode.promises.unlink(prevPath).catch(() => {});
+      if (prevUrl) {
+        const prevFilename = logoFilenameFromUrl(prevUrl);
+        if (prevFilename) {
+          const prevPath = pathNode.join(LOGO_DIR, prevFilename);
+          fsNode.promises.unlink(prevPath).catch(() => {});
+        }
       }
 
-      const publicUrl = `/uploads/company-logos/${req.file.filename}`;
+      // Store as an /api/companies/logo/<filename> path so it is served
+      // through the Next.js /api/* rewrite — no separate /uploads proxy needed.
+      const publicUrl = `/api/companies/logo/${req.file.filename}`;
       await pool.query(
         `UPDATE companies SET logo_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
         [publicUrl, companyId],
@@ -1987,9 +2032,12 @@ router.delete('/profile/logo', authenticateToken, async (req, res) => {
     }
     const previous = await pool.query('SELECT logo_url FROM companies WHERE id = $1', [companyId]);
     const prevUrl = previous.rows[0]?.logo_url;
-    if (prevUrl && prevUrl.startsWith('/uploads/company-logos/')) {
-      const prevPath = pathNode.resolve(__dirname, '..', prevUrl.replace(/^\//, ''));
-      fsNode.promises.unlink(prevPath).catch(() => {});
+    if (prevUrl) {
+      const prevFilename = logoFilenameFromUrl(prevUrl);
+      if (prevFilename) {
+        const prevPath = pathNode.join(LOGO_DIR, prevFilename);
+        fsNode.promises.unlink(prevPath).catch(() => {});
+      }
     }
     await pool.query(
       `UPDATE companies SET logo_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,

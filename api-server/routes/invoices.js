@@ -392,15 +392,20 @@ function buildInvoicePdf(invoice, bankRow = null) {
         // local file when possible. If the URL is external or unreadable we
         // silently fall back to the text mark.
         try {
+          const pdfPath = require('path');
+          const pdfFs = require('fs');
           const url = String(invoice.company_logo_url);
-          if (url.startsWith('/uploads/')) {
-            const path = require('path');
-            const fs = require('fs');
-            const local = path.resolve(__dirname, '..', url.replace(/^\//, ''));
-            if (fs.existsSync(local)) {
-              doc.image(local, margin, headerTop, { fit: [logoMaxW, logoMaxH] });
-              headerLeftBottom = headerTop + logoMaxH + 4;
-            }
+          // Resolve to a local file path — supports both the legacy /uploads/
+          // format and the new /api/companies/logo/ format.
+          let localLogoPath = null;
+          const LOGO_DIR_PDF = pdfPath.resolve(__dirname, '..', 'uploads', 'company-logos');
+          const newMatch = url.match(/\/api\/companies\/logo\/([^/?#]+)$/);
+          const legacyMatch = url.match(/\/uploads\/company-logos\/([^/?#]+)$/);
+          if (newMatch) localLogoPath = pdfPath.join(LOGO_DIR_PDF, pdfPath.basename(newMatch[1]));
+          else if (legacyMatch) localLogoPath = pdfPath.join(LOGO_DIR_PDF, pdfPath.basename(legacyMatch[1]));
+          if (localLogoPath && pdfFs.existsSync(localLogoPath)) {
+            doc.image(localLogoPath, margin, headerTop, { fit: [logoMaxW, logoMaxH] });
+            headerLeftBottom = headerTop + logoMaxH + 4;
           }
         } catch (_) {
           /* fall through to text mark */

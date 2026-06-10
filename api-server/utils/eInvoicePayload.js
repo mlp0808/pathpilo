@@ -2,13 +2,18 @@ const { resolveClientInvoiceContact } = require('./invoiceClientDisplay');
 const { t: tI18n, tInterp: tInterpI18n } = require('./invoiceI18n');
 
 /**
- * Turn a relative /uploads/ logo path into an absolute URL so it renders in
- * emails and any context that doesn't have the Next.js /uploads rewrite.
+ * Turn a relative logo path into an absolute URL so it renders in emails
+ * and any context outside the Next.js rewrite layer.
+ *
+ * New format:  /api/companies/logo/<filename>
+ * Legacy:      /uploads/company-logos/<filename>
+ *
+ * Both are served by the API server, so we prefix with API_SERVER_URL.
  */
 function resolveLogoUrl(url) {
   if (!url) return null;
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  if (url.startsWith('/uploads/')) {
+  if (url.startsWith('/api/') || url.startsWith('/uploads/')) {
     const base = process.env.API_SERVER_URL || process.env.NEXT_PUBLIC_API_URL || '';
     return base ? `${base.replace(/\/$/, '')}${url}` : url;
   }

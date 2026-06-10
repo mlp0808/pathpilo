@@ -55,12 +55,13 @@ export const resolveAssetUrl = (url: string | null | undefined): string | null =
   if (!url) return null
   // Already absolute — use as-is
   if (url.startsWith('http://') || url.startsWith('https://')) return url
-  // Relative /uploads/ path — prefix with the API server base URL
+  // New format: /api/companies/logo/<filename>
+  // These go through the standard Next.js /api/* rewrite — no transformation needed.
+  if (url.startsWith('/api/')) return url
+  // Legacy /uploads/ path — prefix with the API server base URL so the browser
+  // can reach it directly without relying on a potentially-missing /uploads rewrite.
   if (url.startsWith('/uploads/')) {
-    const apiBase =
-      (typeof window === 'undefined'
-        ? process.env.NEXT_PUBLIC_API_URL
-        : null) || process.env.NEXT_PUBLIC_API_URL || ''
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || ''
     return apiBase ? `${apiBase.replace(/\/$/, '')}${url}` : url
   }
   return url
