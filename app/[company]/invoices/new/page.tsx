@@ -443,6 +443,15 @@ function NewInvoicePageContent() {
           // Hydrate from the company default only if the user hasn't already typed
           // something into the per-invoice override.
           payment_terms: prev.payment_terms.trim() ? prev.payment_terms : savedTerms,
+          // Company-level VAT settings override the country-default tax rate.
+          // invoiceVatEnabled === false means VAT-exempt → set rate to 0.
+          // invoiceDefaultTaxRate != null → use the configured rate.
+          tax_rate:
+            d.invoiceVatEnabled === false
+              ? 0
+              : d.invoiceDefaultTaxRate != null
+                ? Number(d.invoiceDefaultTaxRate)
+                : prev.tax_rate,
         }))
       })
       .catch(() => {})

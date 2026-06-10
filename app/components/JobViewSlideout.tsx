@@ -2337,6 +2337,42 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       {!isLocked && <ChevronDownIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />}
                     </button>
                   </div>
+                  {!isLocked && !isProjectedJob && (
+                    <div className="flex items-start gap-2 pt-1">
+                      <SparklesIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+                      <select
+                        value={(jobDetails || job)?.scheduling_flexibility || 'fixed_date'}
+                        onChange={async (e) => {
+                          const jobId = parseJobId((jobDetails || job)?.id)
+                          if (!jobId) return
+                          const value = e.target.value
+                          try {
+                            const token = localStorage.getItem('token')
+                            const res = await fetch(apiUrl(`/jobs/${jobId}`), {
+                              method: 'PUT',
+                              headers: {
+                                Authorization: `Bearer ${token}`,
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({ scheduling_flexibility: value }),
+                            })
+                            if (!res.ok) return
+                            if (jobDetails) {
+                              setJobDetails({ ...jobDetails, scheduling_flexibility: value })
+                            }
+                            if (onJobUpdated) onJobUpdated()
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                        className="text-sm text-primary-500 bg-transparent border-none p-0 focus:ring-0 cursor-pointer"
+                      >
+                        <option value="fixed_date">{t('app.scheduling.fixedDate', 'Fixed date')}</option>
+                        <option value="fixed_weekday">{t('app.scheduling.fixedWeekday', 'Fixed weekday')}</option>
+                        <option value="flexible">{t('app.scheduling.flexible', 'Flexible this week')}</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
 

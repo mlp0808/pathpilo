@@ -1,11 +1,11 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl } from '@/app/utils/api'
 import Link from 'next/link'
-import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, BellAlertIcon, EyeIcon } from '@heroicons/react/24/outline'
+import { ArrowLeftIcon, PaperAirplaneIcon, ArrowDownTrayIcon, PencilSquareIcon, BanknotesIcon, BellAlertIcon, EyeIcon, TrashIcon } from '@heroicons/react/24/outline'
 import { SettingsToggle } from '@/app/components/settings/SettingsUI'
 import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
 import { useAppI18n } from '@/app/components/I18nProvider'
@@ -57,6 +57,7 @@ export default function InvoicePage() {
   const tr = (key: MessageKey, fallback?: string) => t(key, fallback)
   const params = useParams()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const company = params?.company as string
   const id = params?.id as string
 
@@ -111,6 +112,12 @@ export default function InvoicePage() {
     lead_unit: 'hours' | 'minutes'
   } | null>(null)
   const [automationToggling, setAutomationToggling] = useState(false)
+
+  // Delete draft invoice
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [deleteJobsToo, setDeleteJobsToo] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -424,6 +431,29 @@ export default function InvoicePage() {
       alert(tr('invoice.detail.failedDownloadPdf', 'Failed to download PDF'))
     } finally {
       setPdfDownloading(false)
+    }
+  }
+
+  const handleDeleteDraft = async () => {
+    const token = localStorage.getItem('token')
+    if (!token || !id) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const url = apiUrl(`/invoices/${id}${deleteJobsToo ? '?deleteJobs=true' : ''}`)
+      const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setDeleteError(data.error || 'Failed to delete invoice')
+        return
+      }
+      // Navigate back to the invoice list after successful deletion
+      const listHref = company ? `/${company}/invoices` : '/invoices'
+      router.push(listHref)
+    } catch {
+      setDeleteError('Network error — please try again.')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -824,13 +854,23 @@ export default function InvoicePage() {
             </div>
 
             {(invoice.status === 'draft' || !invoice.status) && (
-              <Link
-                href={`/${company}/invoices/${id}/edit`}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
-              >
-                <PencilSquareIcon className="h-5 w-5" />
-                {tr('invoice.detail.edit', 'Edit')}
-              </Link>
+              <div className="flex gap-2">
+                <Link
+                  href={`/${company}/invoices/${id}/edit`}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
+                >
+                  <PencilSquareIcon className="h-5 w-5" />
+                  {tr('invoice.detail.edit', 'Edit')}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => { setDeleteJobsToo(false); setDeleteError(null); setDeleteModalOpen(true) }}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50 hover:border-red-200 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+                  title={tr('invoice.detail.deleteDraft', 'Delete draft')}
+                >
+                  <TrashIcon className="h-5 w-5" />
+                </button>
+              </div>
             )}
             {isDraft && (
               <button
@@ -1137,6 +1177,85 @@ export default function InvoicePage() {
         )}
 
       </div>
+
+      {/* ── Delete draft invoice modal ──────────────────────────────────── */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100">
+                <TrashIcon className="h-5 w-5 text-red-600" aria-hidden />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">
+                  {tr('invoice.detail.deleteDraftTitle', 'Delete draft invoice?')}
+                </h2>
+                <p className="mt-1 text-sm text-gray-500 leading-snug">
+                  {tr('invoice.detail.deleteDraftDesc', 'This cannot be undone. The draft invoice and all its line items will be permanently removed.')}
+                </p>
+              </div>
+            </div>
+
+            {/* What happens to the jobs */}
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 mb-5">
+              <p className="text-sm font-medium text-gray-800 mb-3">
+                {tr('invoice.detail.deleteDraftJobsTitle', 'What should happen to the linked jobs?')}
+              </p>
+              <label className="flex items-start gap-3 cursor-pointer mb-2.5">
+                <input
+                  type="radio"
+                  name="deleteJobsOpt"
+                  checked={!deleteJobsToo}
+                  onChange={() => setDeleteJobsToo(false)}
+                  className="mt-0.5 h-4 w-4 text-accent-600 border-gray-300 focus:ring-accent-500"
+                />
+                <span className="text-sm text-gray-700">
+                  <span className="font-medium">{tr('invoice.detail.keepJobs', 'Keep jobs')}</span>
+                  <span className="text-gray-500"> — {tr('invoice.detail.keepJobsDesc', 'Jobs are returned to unbilled status and can be added to a new invoice.')}</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="deleteJobsOpt"
+                  checked={deleteJobsToo}
+                  onChange={() => setDeleteJobsToo(true)}
+                  className="mt-0.5 h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500"
+                />
+                <span className="text-sm text-gray-700">
+                  <span className="font-medium text-red-600">{tr('invoice.detail.deleteJobsToo', 'Also delete the jobs')}</span>
+                  <span className="text-gray-500"> — {tr('invoice.detail.deleteJobsTooDesc', 'Permanently removes the jobs from the system.')}</span>
+                </span>
+              </label>
+            </div>
+
+            {deleteError && (
+              <p className="mb-3 text-sm text-red-600">{deleteError}</p>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModalOpen(false)}
+                disabled={deleting}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:opacity-50"
+              >
+                {tr('invoice.detail.cancel', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteDraft}
+                disabled={deleting}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50"
+              >
+                {deleting
+                  ? tr('invoice.detail.deleting', 'Deleting…')
+                  : tr('invoice.detail.confirmDelete', 'Delete invoice')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   )
 }

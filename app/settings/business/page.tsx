@@ -8,7 +8,7 @@ import {
   PhotoIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline'
-import { apiUrl } from '../../utils/api'
+import { apiUrl, resolveAssetUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
 import {
   LOGO_ACCEPT_ATTR,
@@ -491,7 +491,7 @@ export default function BusinessSettingsPage() {
         title={t('settings.business.logo.title', 'Company logo')}
         description={t(
           'settings.business.logo.help',
-          'Shown at the top of every invoice. PNG, JPG, WEBP or SVG \u2014 max 4 MB. Transparent backgrounds look best.',
+          'Shown at the top of every invoice. PNG, JPG or WEBP \u2014 max 4 MB. Transparent backgrounds look best.',
         )}
       >
         <div className="flex flex-col items-start gap-6 sm:flex-row">
@@ -500,7 +500,7 @@ export default function BusinessSettingsPage() {
               {formData.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={formData.logoUrl}
+                  src={resolveAssetUrl(formData.logoUrl) ?? formData.logoUrl}
                   alt={t('settings.business.logo.preview', 'Company logo preview')}
                   className="max-h-full max-w-full object-contain"
                 />

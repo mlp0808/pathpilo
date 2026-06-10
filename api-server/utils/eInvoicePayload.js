@@ -1,6 +1,20 @@
 const { resolveClientInvoiceContact } = require('./invoiceClientDisplay');
 const { t: tI18n, tInterp: tInterpI18n } = require('./invoiceI18n');
 
+/**
+ * Turn a relative /uploads/ logo path into an absolute URL so it renders in
+ * emails and any context that doesn't have the Next.js /uploads rewrite.
+ */
+function resolveLogoUrl(url) {
+  if (!url) return null;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (url.startsWith('/uploads/')) {
+    const base = process.env.API_SERVER_URL || process.env.NEXT_PUBLIC_API_URL || '';
+    return base ? `${base.replace(/\/$/, '')}${url}` : url;
+  }
+  return url;
+}
+
 // Locale-aware short-date formatter. Falls back to English month names when
 // the invoice has no locale (legacy rows). Adding a locale is a matter of
 // adding an array below.
@@ -236,7 +250,7 @@ function buildPublicInvoicePayload(invoice, bankRow) {
       email: invoice.company_email || null,
       phone: invoice.company_phone || null,
       website: invoice.company_website || null,
-      logoUrl: invoice.company_logo_url || null,
+      logoUrl: resolveLogoUrl(invoice.company_logo_url),
     },
     taxLabel: invoice.tax_label || tr('invoice.vatFallback', 'VAT'),
     referenceText:

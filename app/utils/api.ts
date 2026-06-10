@@ -41,3 +41,28 @@ export const apiUrl = (endpoint: string): string => {
   return base.replace(/\/$/, '') + cleanEndpoint
 }
 
+/**
+ * Resolve a server-side asset URL (e.g. a company logo stored as
+ * `/uploads/company-logos/abc.jpg`) to an absolute URL.
+ *
+ * Logos are served by the Express API server. In most browsers the Next.js
+ * `/uploads` rewrite proxies these requests correctly, but the rewrite
+ * destination is baked in at build time and may not match every deployment.
+ * Resolving to an absolute URL using `NEXT_PUBLIC_API_URL` makes logos work
+ * reliably in all environments (dev, staging, production, mobile devices, etc.)
+ */
+export const resolveAssetUrl = (url: string | null | undefined): string | null => {
+  if (!url) return null
+  // Already absolute — use as-is
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  // Relative /uploads/ path — prefix with the API server base URL
+  if (url.startsWith('/uploads/')) {
+    const apiBase =
+      (typeof window === 'undefined'
+        ? process.env.NEXT_PUBLIC_API_URL
+        : null) || process.env.NEXT_PUBLIC_API_URL || ''
+    return apiBase ? `${apiBase.replace(/\/$/, '')}${url}` : url
+  }
+  return url
+}
+

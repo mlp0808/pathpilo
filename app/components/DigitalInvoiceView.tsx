@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { resolveAssetUrl } from '@/app/utils/api'
 import Link from 'next/link'
 import {
   BuildingOffice2Icon,
@@ -263,7 +264,7 @@ export function DigitalInvoiceView({
               // proxy). max-h ensures even tall logos don't blow up the header.
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={inv.company.logoUrl}
+                src={resolveAssetUrl(inv.company.logoUrl) ?? inv.company.logoUrl ?? ''}
                 alt={inv.company.name || 'Company logo'}
                 className="h-14 w-auto max-w-[180px] object-contain rounded-md bg-white"
               />

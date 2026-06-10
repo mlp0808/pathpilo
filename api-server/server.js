@@ -42,6 +42,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const { multiUserWorkspaceGate } = require('./middleware/multiUserWorkspaceGate');
+const { ensureSchedulingSchema } = require('./services/routePlanner/ensureSchedulingSchema');
 app.use(multiUserWorkspaceGate);
 
 // Static serving for user-uploaded company assets (logos). Stored on local
@@ -175,6 +176,7 @@ const companyUsersRoutes = require('./routes/company-users');
 const emailTemplateRoutes = require('./routes/email-templates');
 const videoGuideRoutes = require('./routes/video-guides');
 const dailyRoutesRoutes = require('./routes/daily-routes');
+const routePlannerRoutes = require('./routes/route-planner');
 const employeeLeaveRoutes = require('./routes/employee-leave');
 const appointmentRoutes = require('./routes/appointments');
 const companyDefaultsRoutes = require('./routes/company-defaults');
@@ -216,6 +218,7 @@ app.use('/api/work-hours', workHoursRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/video-guides', videoGuideRoutes);
 app.use('/api/daily-routes', dailyRoutesRoutes);
+app.use('/api/route-planner', routePlannerRoutes);
 app.use('/api/employee-leave', employeeLeaveRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/company-defaults', companyDefaultsRoutes);
@@ -335,6 +338,10 @@ process.on('SIGINT', () => {
     // Stripe billing columns on companies table (stripe_customer_id etc.)
     initStripeSchema(pool).catch((e) =>
       console.warn('[stripeSchema] migration failed:', e.message || e)
+    );
+
+    ensureSchedulingSchema().catch((e) =>
+      console.warn('[routePlanner] scheduling schema migration failed:', e.message || e)
     );
   });
 })();

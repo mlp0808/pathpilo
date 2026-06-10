@@ -19,6 +19,7 @@ import RouteAddSearch, {
   type RouteLocationPick,
 } from '@/app/components/RouteAddSearch'
 import { SetupWizardFloatingCallout, type WizardHintTarget } from '@/app/components/setup/SetupWizardHint'
+import WeekPlanPanel from '@/app/components/WeekPlanPanel'
 import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
 import {
   advanceOnboardingProgress,
@@ -33,7 +34,13 @@ import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useParams, useSearchParams } from 'next/navigation'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon } from '@heroicons/react/24/outline'
-import type { UserRoute, RouteJob } from '@/app/components/RouteMap'
+import type { UserRoute, RouteJob, IsolatedRouteSeg } from '@/app/components/RouteMap'
+import {
+  buildDayJobsFingerprint,
+  formatRouteTime,
+  routesHaveDirections,
+} from '@/app/utils/routeDirections'
+import { optimizeMiddleJobsClient } from '@/app/utils/clientRouteOptimize'
 
 // RouteMap uses mapbox-gl which cannot be server-rendered
 const RouteMap = dynamic(() => import('@/app/components/RouteMap'), { ssr: false })
@@ -261,6 +268,16 @@ function JobsPageContent() {
   // ── Day view / route planner ──────────────────────────────────────────────
   const [dayRoutes, setDayRoutes] = useState<UserRoute[]>([])
   const [dayFocusUserId, setDayFocusUserId] = useState<number | null>(null)
+  // AllEmployees panel: hover-to-preview and checkbox-select isolation
+  const [allPanelHoveredUserId, setAllPanelHoveredUserId] = useState<number | null>(null)
+  const [allPanelSelectedIds, setAllPanelSelectedIds] = useState<number[]>([])
+  // Clear panel isolation when navigating into a focused-employee route view
+  useEffect(() => {
+    if (dayFocusUserId != null) {
+      setAllPanelHoveredUserId(null)
+      setAllPanelSelectedIds([])
+    }
+  }, [dayFocusUserId])
   // lg breakpoint (1024px) — drives the mobile bottom-sheet vs desktop split layout
   const [isDesktopRoute, setIsDesktopRoute] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
@@ -301,8 +318,52 @@ function JobsPageContent() {
     load()
   }, [])
   const [dayOptimizing, setDayOptimizing] = useState(false)
+  const [optimizeNotice, setOptimizeNotice] = useState<string | null>(null)
+  const optimizeNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [weekPlanOpen, setWeekPlanOpen] = useState(false)
   const [dayGeocodingCount, setDayGeocodingCount] = useState(0)
   const [hoveredJobId, setHoveredJobId] = useState<number | string | null>(null)
+  const hoverClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleJobHover = useCallback((jobId: number | string | null) => {
+    if (hoverClearTimerRef.current) {
+      clearTimeout(hoverClearTimerRef.current)
+      hoverClearTimerRef.current = null
+    }
+    if (jobId === null) {
+      // Defer clear so mouseleave on job A doesn't wipe hover when entering job B.
+      hoverClearTimerRef.current = setTimeout(() => {
+        setHoveredJobId(null)
+        hoverClearTimerRef.current = null
+      }, 16)
+    } else {
+      setHoveredJobId(jobId)
+    }
+  }, [])
+  const clearJobHover = useCallback(() => {
+    if (hoverClearTimerRef.current) {
+      clearTimeout(hoverClearTimerRef.current)
+      hoverClearTimerRef.current = null
+    }
+    setHoveredJobId(null)
+  }, [])
+  // Hover-to-isolate: hovering a drive-time badge isolates that leg on the map.
+  const [isolatedLeg, setIsolatedLeg] = useState<IsolatedRouteSeg | null>(null)
+  const isolateClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleIsolateRoute = useCallback((seg: IsolatedRouteSeg | null) => {
+    if (isolateClearTimerRef.current) {
+      clearTimeout(isolateClearTimerRef.current)
+      isolateClearTimerRef.current = null
+    }
+    if (seg === null) {
+      // Defer so moving between adjacent badges doesn't flicker the map.
+      isolateClearTimerRef.current = setTimeout(() => {
+        setIsolatedLeg(null)
+        isolateClearTimerRef.current = null
+      }, 40)
+    } else {
+      setIsolatedLeg(seg)
+    }
+  }, [])
   // Manual draw-route mode (per focused user — only one drawable at a time)
   const [drawMode, setDrawMode] = useState(false)
   const [drawOrder, setDrawOrder] = useState<(number | string)[]>([])
@@ -314,6 +375,9 @@ function JobsPageContent() {
   const [dayRoutesVersion, setDayRoutesVersion] = useState(0)
   const directionsFetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const routeOrderSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Cached fully-built day routes (with directions) keyed by YYYY-MM-DD. */
+  const dayRouteCacheRef = useRef<Map<string, UserRoute[]>>(new Map())
+  const dayRouteCacheFpRef = useRef<Map<string, string>>(new Map())
 
   // Baseline driving minutes per user for the current day (before edits in this session)
   const [dayBaselineMinutes, setDayBaselineMinutes] = useState<Record<number, number>>({})
@@ -321,51 +385,103 @@ function JobsPageContent() {
 
   // Pending assignee changes in route planner (applied only on Save & apply)
   const [pendingAssigneeChanges, setPendingAssigneeChanges] = useState<Record<number, number>>({})
+  // Ref so the build-routes effect can read pendingAssigneeChanges without it being a dep
+  // (adding it as a dep would rebuild all routes from scratch on every drag-reassign).
+  const pendingAssigneeChangesRef = useRef<Record<number, number>>({})
 
   // Date strings (YYYY-MM-DD) where a route has been explicitly saved via Save & Apply
   const [plannedDays, setPlannedDays] = useState<Set<string>>(new Set())
 
-  const buildRouteFingerprint = useCallback(
-    (routes: UserRoute[], assignees: Record<number, number>) =>
-      JSON.stringify({
-        order: routes.map(r => ({
-          userId: r.userId,
-          jobIds: r.jobs.filter(j => !j.is_home).map(j => j.id),
-        })),
-        assignees,
-      }),
+  /** Fingerprint for a single user's job order — used to detect per-user unsaved changes. */
+  const buildUserFingerprint = useCallback(
+    (route: UserRoute) => JSON.stringify(route.jobs.filter(j => !j.is_home).map(j => j.id)),
     [],
   )
 
-  /** Fingerprint of route order + pending assignees — compared to last saved state. */
-  const routeFingerprint = useMemo(
-    () => buildRouteFingerprint(dayRoutes, pendingAssigneeChanges),
-    [dayRoutes, pendingAssigneeChanges, buildRouteFingerprint],
-  )
-  const [savedRouteFingerprint, setSavedRouteFingerprint] = useState<string | null>(null)
-  const syncSavedFingerprintAfterApplyRef = useRef(false)
+  /** Per-user saved fingerprints — null entry means "not yet initialised for this user". */
+  const [savedFingerprintsByUser, setSavedFingerprintsByUser] = useState<Record<number, string>>({})
+  /** Per-user discard snapshots — kept fresh whenever a user's route is clean. */
+  const discardSnapshotsByUserRef = useRef<Record<number, UserRoute>>({})
 
+  /** IDs of users whose current route order differs from the last saved state. */
+  const unsavedUserIds = useMemo(
+    () =>
+      dayRoutes
+        .filter(r => {
+          const saved = savedFingerprintsByUser[r.userId]
+          return saved != null && buildUserFingerprint(r) !== saved
+        })
+        .map(r => r.userId),
+    [dayRoutes, savedFingerprintsByUser, buildUserFingerprint],
+  )
+  const hasUnsavedRouteChanges = unsavedUserIds.length > 0
+
+  // Map-only route isolation driven by the AllEmployees panel.
+  // Hover takes precedence over checkbox selection; both are cleared when
+  // entering a focused-employee view (dayFocusUserId != null).
+  const mapIsolatedUserIds = useMemo((): number[] | null => {
+    if (dayFocusUserId != null) return null
+    if (allPanelHoveredUserId != null) return [allPanelHoveredUserId]
+    if (allPanelSelectedIds.length > 0) return allPanelSelectedIds
+    return null
+  }, [dayFocusUserId, allPanelHoveredUserId, allPanelSelectedIds])
+
+  // Keep ref in sync so the build-routes effect can read it without declaring it as a dep.
+  pendingAssigneeChangesRef.current = pendingAssigneeChanges
+
+  // Reset on day/view change
   useEffect(() => {
     if (viewMode !== 'day') {
-      setSavedRouteFingerprint(null)
+      setSavedFingerprintsByUser({})
       return
     }
-    setSavedRouteFingerprint(null)
+    setSavedFingerprintsByUser({})
+    discardSnapshotsByUserRef.current = {}
   }, [viewMode, toLocalDateString(currentWeek)])
 
+  // Initialise fingerprint once per user when their route first loads
   useEffect(() => {
     if (viewMode !== 'day' || dayRoutes.length === 0) return
-    setSavedRouteFingerprint(prev => prev ?? routeFingerprint)
-  }, [viewMode, dayRoutes.length, routeFingerprint])
+    setSavedFingerprintsByUser(prev => {
+      let changed = false
+      const next = { ...prev }
+      dayRoutes.forEach(r => {
+        if (next[r.userId] == null) { next[r.userId] = buildUserFingerprint(r); changed = true }
+      })
+      return changed ? next : prev
+    })
+  }, [viewMode, dayRoutes, buildUserFingerprint])
 
+  // Keep each user's discard snapshot fresh while their route is clean
   useEffect(() => {
-    if (!syncSavedFingerprintAfterApplyRef.current) return
-    syncSavedFingerprintAfterApplyRef.current = false
-    setSavedRouteFingerprint(routeFingerprint)
-  }, [routeFingerprint])
+    if (viewMode !== 'day') return
+    dayRoutes.forEach(r => {
+      if (!unsavedUserIds.includes(r.userId)) discardSnapshotsByUserRef.current[r.userId] = r
+    })
+  }, [dayRoutes, unsavedUserIds, viewMode])
 
-  const hasUnsavedRouteChanges =
-    savedRouteFingerprint != null && routeFingerprint !== savedRouteFingerprint
+  const handleDiscardUser = useCallback((userId: number) => {
+    const snap = discardSnapshotsByUserRef.current[userId]
+    if (!snap) return
+    setDayRoutes(prev => prev.map(r => r.userId === userId ? snap : r))
+    const dateStr = toLocalDateString(currentWeek)
+    dayRouteCacheRef.current.delete(dateStr)
+    setSavedFingerprintsByUser(prev => ({ ...prev, [userId]: buildUserFingerprint(snap) }))
+  }, [currentWeek, buildUserFingerprint])
+
+  const handleDiscardAll = useCallback(() => {
+    const snaps = discardSnapshotsByUserRef.current
+    setDayRoutes(prev => prev.map(r => snaps[r.userId] ?? r))
+    const dateStr = toLocalDateString(currentWeek)
+    dayRouteCacheRef.current.delete(dateStr)
+    setSavedFingerprintsByUser(prev => {
+      const next = { ...prev }
+      for (const [uid, snap] of Object.entries(snaps)) {
+        next[Number(uid)] = buildUserFingerprint(snap as Parameters<typeof buildUserFingerprint>[0])
+      }
+      return next
+    })
+  }, [currentWeek, buildUserFingerprint])
 
   useEffect(() => {
     try {
@@ -1993,8 +2109,8 @@ function JobsPageContent() {
           address: [job.address, job.zip_code, job.city].filter(Boolean).join(', '),
           time: job.scheduled_time_from
             ? job.scheduled_time_to
-              ? `${job.scheduled_time_from} – ${job.scheduled_time_to}`
-              : job.scheduled_time_from
+              ? `${formatRouteTime(job.scheduled_time_from)} – ${formatRouteTime(job.scheduled_time_to)}`
+              : formatRouteTime(job.scheduled_time_from)
             : undefined,
           is_projected: !!(job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))),
           is_cancelled: job.status === 'cancelled',
@@ -2089,14 +2205,13 @@ function JobsPageContent() {
     const coords = waypointPts.map(j => `${j.lng},${j.lat}`).join(';')
     try {
       const res = await fetch(
-        `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full&steps=false`
+        `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full`
       )
       const data = await res.json()
       if (!data.routes?.[0]) return {}
       const r = data.routes[0]
       const totalMinutes = r.duration / 60
       const totalKm = r.distance / 1000
-      // Full road geometry for drawing on map (active stops only)
       const routeGeometry = r.geometry as { type: string; coordinates: [number, number][] }
       let cumulative = 0
       const updatedJobs = route.jobs.map((job) => {
@@ -2117,18 +2232,19 @@ function JobsPageContent() {
     if (viewMode !== 'day') return
     if (directionsFetchTimeoutRef.current) clearTimeout(directionsFetchTimeoutRef.current)
     directionsFetchTimeoutRef.current = setTimeout(async () => {
-      // Fetch all direction patches in parallel (each patch = totalMinutes/km/geometry/legMinutes).
-      // We intentionally do NOT rebuild full route objects here — instead we collect patches
-      // keyed by userId so we can apply them via a functional updater below.
-      // This prevents a race condition where setDayRoutes(updated) could overwrite the last
-      // geocoded coordinate that the geocoding loop just set via its own functional updater.
-      const routeSnapshot = dayRoutes // snapshot for directions fetch only
+      const routeSnapshot = dayRoutes
+      if (routesHaveDirections(routeSnapshot)) return
+
       const patches = new Map<number, Partial<UserRoute>>()
+      // Only re-fetch routes whose geometry was cleared (e.g. the 2 affected by a reassign).
+      // Routes that still have geometry keep their existing lines — no wasted API calls.
       await Promise.all(
-        routeSnapshot.map(async route => {
-          const patch = await fetchDirections(route)
-          patches.set(route.userId, patch)
-        })
+        routeSnapshot
+          .filter(route => route.routeGeometry == null)
+          .map(async route => {
+            const patch = await fetchDirections(route)
+            patches.set(route.userId, patch)
+          })
       )
 
       // Capture baseline totalMinutes per user the first time we have directions
@@ -2138,7 +2254,7 @@ function JobsPageContent() {
         const next: Record<number, number> = {}
         routeSnapshot.forEach(route => {
           const patch = patches.get(route.userId)
-          const total = patch.totalMinutes ?? route.totalMinutes
+          const total = patch?.totalMinutes ?? route.totalMinutes
           if (total != null) next[route.userId] = total
         })
         setDayBaselineDate(dateStr)
@@ -2146,22 +2262,29 @@ function JobsPageContent() {
       })
       // Apply patches onto the CURRENT state (prev) — not the stale snapshot —
       // so any coordinates that geocoding wrote between snapshot and now are preserved.
-      setDayRoutes(prev => prev.map(prevRoute => {
-        const patch = patches.get(prevRoute.userId)
-        if (!patch || Object.keys(patch).length === 0) return prevRoute
-        return {
-          ...prevRoute,
-          totalMinutes: patch.totalMinutes ?? prevRoute.totalMinutes,
-          totalKm: patch.totalKm ?? prevRoute.totalKm,
-          routeGeometry: patch.routeGeometry ?? prevRoute.routeGeometry,
-          // Merge per-job leg/eta minutes but keep the current lat/lng from prev
-          jobs: prevRoute.jobs.map(prevJob => {
-            const patchJob = (patch.jobs ?? []).find(j => j.id === prevJob.id)
-            if (!patchJob) return prevJob
-            return { ...prevJob, legMinutes: patchJob.legMinutes, etaMinutes: patchJob.etaMinutes }
-          }),
+      setDayRoutes(prev => {
+        const next = prev.map(prevRoute => {
+          const patch = patches.get(prevRoute.userId)
+          if (!patch || Object.keys(patch).length === 0) return prevRoute
+          return {
+            ...prevRoute,
+            totalMinutes: patch.totalMinutes ?? prevRoute.totalMinutes,
+            totalKm: patch.totalKm ?? prevRoute.totalKm,
+            routeGeometry: patch.routeGeometry ?? prevRoute.routeGeometry,
+            jobs: prevRoute.jobs.map(prevJob => {
+              const patchJob = (patch.jobs ?? []).find(j => j.id === prevJob.id)
+              if (!patchJob) return prevJob
+              return { ...prevJob, legMinutes: patchJob.legMinutes, etaMinutes: patchJob.etaMinutes }
+            }),
+          }
+        })
+        const dateStr = toLocalDateString(currentWeek)
+        const fp = dayRouteCacheFpRef.current.get(dateStr)
+        if (fp && routesHaveDirections(next)) {
+          dayRouteCacheRef.current.set(dateStr, next)
         }
-      }))
+        return next
+      })
     }, 600)
     return () => { if (directionsFetchTimeoutRef.current) clearTimeout(directionsFetchTimeoutRef.current) }
   // dayRoutesVersion ensures re-fetch even when coordinates haven't changed
@@ -2176,10 +2299,20 @@ function JobsPageContent() {
     const dayDate = currentWeek
     const dateStr = toLocalDateString(dayDate)
     const dayJobs = allJobs.filter(j => toDateOnlyString(j.scheduled_date) === dateStr)
+    // Use ref (not state) so drag-reassigns don't trigger a full rebuild here.
     const dayJobsWithPending = dayJobs.map(j => ({
       ...j,
-      assigned_user_id: pendingAssigneeChanges[j.id] ?? j.assigned_user_id
+      assigned_user_id: pendingAssigneeChangesRef.current[j.id] ?? j.assigned_user_id
     }))
+    const jobsFp = buildDayJobsFingerprint(dayJobsWithPending)
+    dayRouteCacheFpRef.current.set(dateStr, jobsFp)
+
+    const cachedRoutes = dayRouteCacheRef.current.get(dateStr)
+    if (cachedRoutes && dayRouteCacheFpRef.current.get(dateStr) === jobsFp) {
+      setDayRoutes(cachedRoutes)
+      if (routesHaveDirections(cachedRoutes)) return
+    }
+
     const routes = buildDayRoutes(dayJobsWithPending)
 
     // Re-apply saved route order from localStorage (middle jobs only; no start/end in saved order).
@@ -2272,15 +2405,110 @@ function JobsPageContent() {
       } catch { /* ignore */ }
 
       setDayRoutes(enhancedRoutes)
+      if (routesHaveDirections(enhancedRoutes)) {
+        dayRouteCacheRef.current.set(dateStr, enhancedRoutes)
+      }
       setDayRoutesVersion(v => v + 1)
       geocodeMissingAddresses(enhancedRoutes)
     })()
-  }, [viewMode, currentWeek, allJobs, users, buildDayRoutes, geocodeMissingAddresses, pendingAssigneeChanges])
+  // pendingAssigneeChanges intentionally omitted — changes are read via ref to avoid
+  // rebuilding routes from scratch every time a job is drag-reassigned.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, currentWeek, allJobs, users, buildDayRoutes, geocodeMissingAddresses])
 
   // Reorder handler — updates local state only (save via Save & apply button)
   const handleDayReorder = useCallback((userId: number, newJobs: RouteJob[]) => {
-    setDayRoutes(prev => prev.map(r => r.userId === userId ? { ...r, jobs: newJobs } : r))
-  }, [])
+    setDayRoutes(prev => {
+      const next = prev.map(r =>
+        r.userId === userId
+          ? {
+              ...r,
+              jobs: newJobs,
+              // Clear stale directions so they re-fetch for the new stop order.
+              routeGeometry: undefined,
+              totalMinutes: undefined,
+              totalKm: undefined,
+            }
+          : r,
+      )
+      const dateStr = toLocalDateString(currentWeek)
+      dayRouteCacheRef.current.delete(dateStr)
+      return next
+    })
+  }, [currentWeek])
+
+  // Move a stop from one employee to another (drag-and-drop on the map/sidebar).
+  // Inserts the job at the cheapest position in the target route, clears stale
+  // directions on BOTH routes so they redraw, and records the assignee change
+  // so it is persisted on the next save.
+  const handleReassignJob = useCallback((
+    jobId: number | string,
+    fromUserId: number,
+    toUserId: number,
+  ) => {
+    if (fromUserId === toUserId) return
+    setDayRoutes(prev => {
+      const fromRoute = prev.find(r => r.userId === fromUserId)
+      const toRoute = prev.find(r => r.userId === toUserId)
+      if (!fromRoute || !toRoute) return prev
+      const moving = fromRoute.jobs.find(j => String(j.id) === String(jobId))
+      if (!moving || moving.is_home) return prev
+
+      const nextFromJobs = fromRoute.jobs.filter(j => String(j.id) !== String(jobId))
+
+      // Find the cheapest insertion slot among the target's middle stops so the
+      // redrawn line looks sensible (straight-line proxy; Mapbox draws the road).
+      const tJobs = [...toRoute.jobs]
+      const firstMiddle = tJobs.findIndex(j => !j.is_home)
+      let lastMiddle = -1
+      for (let i = tJobs.length - 1; i >= 0; i--) { if (!tJobs[i].is_home) { lastMiddle = i; break } }
+      let insertAt = lastMiddle >= 0 ? lastMiddle + 1 : (firstMiddle >= 0 ? firstMiddle : tJobs.length)
+
+      if (moving.lat != null && moving.lng != null && firstMiddle >= 0) {
+        const d = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+          const dLat = aLat - bLat
+          const dLng = (aLng - bLng) * Math.cos((aLat * Math.PI) / 180)
+          return Math.sqrt(dLat * dLat + dLng * dLng)
+        }
+        // Candidate slots are between consecutive located stops (home included as anchors).
+        const located = tJobs.filter(j => j.lat != null && j.lng != null)
+        let bestCost = Infinity
+        for (let i = 0; i < located.length - 1; i++) {
+          const a = located[i], b = located[i + 1]
+          const cost =
+            d(a.lat as number, a.lng as number, moving.lat as number, moving.lng as number) +
+            d(moving.lat as number, moving.lng as number, b.lat as number, b.lng as number) -
+            d(a.lat as number, a.lng as number, b.lat as number, b.lng as number)
+          if (cost < bestCost) {
+            bestCost = cost
+            const idxInAll = tJobs.findIndex(j => String(j.id) === String(b.id))
+            if (idxInAll >= 0) insertAt = idxInAll
+          }
+        }
+      }
+
+      const nextToJobs = [...tJobs]
+      nextToJobs.splice(insertAt, 0, { ...moving, assigned_user_id: toUserId } as RouteJob)
+
+      const next = prev.map(r => {
+        if (r.userId === fromUserId) {
+          return { ...r, jobs: nextFromJobs, routeGeometry: undefined, totalMinutes: undefined, totalKm: undefined }
+        }
+        if (r.userId === toUserId) {
+          return { ...r, jobs: nextToJobs, routeGeometry: undefined, totalMinutes: undefined, totalKm: undefined }
+        }
+        return r
+      })
+      const dateStr = toLocalDateString(currentWeek)
+      dayRouteCacheRef.current.delete(dateStr)
+      return next
+    })
+
+    // Record the assignee move so Save & Apply persists it to the server.
+    if (Number.isInteger(Number(jobId))) {
+      setPendingAssigneeChanges(prev => ({ ...prev, [jobId]: toUserId }))
+    }
+  }, [currentWeek])
 
   // ── Manual "Draw route" mode ─────────────────────────────────────────────────
   //   The user clicks middle stops (in the focused user's route) one by one to
@@ -2297,11 +2525,17 @@ function JobsPageContent() {
       clearTimeout(drawRouteComparisonTimerRef.current)
       drawRouteComparisonTimerRef.current = null
     }
+    // Ensure focusUserId is set so RouteMap can identify the draw target.
+    // For solo companies dayFocusUserId stays null, which would leave the map
+    // unable to compute drawTargetUserId correctly.
+    if (uid != null && dayFocusUserId == null) {
+      setDayFocusUserId(uid)
+    }
     setDrawRouteComparison(null)
     setDrawMode(true)
     setDrawOrder([])
-    setHoveredJobId(null)
-  }, [dayFocusUserId, dayRoutes])
+    clearJobHover()
+  }, [dayFocusUserId, dayRoutes, clearJobHover])
 
   const handleDrawExit = useCallback(() => {
     drawCompareBaselineRef.current = null
@@ -2312,8 +2546,8 @@ function JobsPageContent() {
     setDrawRouteComparison(null)
     setDrawMode(false)
     setDrawOrder([])
-    setHoveredJobId(null)
-  }, [])
+    clearJobHover()
+  }, [clearJobHover])
 
   const handleDrawReset = useCallback(() => {
     setDrawOrder([])
@@ -2383,7 +2617,7 @@ function JobsPageContent() {
           handleDayReorder(userId, fullOrder)
           setDrawMode(false)
           setDrawOrder([])
-          setHoveredJobId(null)
+          clearJobHover()
         }, 280)
       }
       return next
@@ -2411,12 +2645,18 @@ function JobsPageContent() {
     setViewingJob(prev => prev?.id === jobId ? { ...prev, assigned_user_id: newUserId } : prev)
   }, [])
 
-  // Save the current route order to DB and update local job state
-  const handleSaveAndApply = useCallback(async () => {
+  // Save the current route order to DB and update local job state.
+  // Pass userId to save only that employee; omit to save all with unsaved changes.
+  const handleSaveRoute = useCallback(async (userId?: number) => {
+    const routesToSave = userId != null
+      ? dayRoutes.filter(r => r.userId === userId)
+      : dayRoutes.filter(r => unsavedUserIds.includes(r.userId))
+    if (routesToSave.length === 0) return
+
     // Only include real (non-projected) jobs with integer IDs.
     // Projected/subscription jobs have string IDs like 'subscription-42' which cause
     // a PostgreSQL type error in the UPDATE query and silently kill the whole save.
-    const allJobIds = dayRoutes.flatMap(r =>
+    const allJobIds = routesToSave.flatMap(r =>
       r.jobs.filter(j => !j.is_projected && Number.isInteger(Number(j.id))).map(j => Number(j.id))
     )
     console.log('[Save & Apply] allJobIds:', allJobIds.length, allJobIds)
@@ -2450,12 +2690,14 @@ function JobsPageContent() {
 
     // Baseline becomes the saved route — deltas only count from the next edit
     const dateStrForBaseline = toLocalDateString(currentWeek)
-    const newBaseline: Record<number, number> = {}
-    dayRoutes.forEach(route => {
-      const tm = route.totalMinutes
-      if (tm != null && Number.isFinite(tm)) newBaseline[route.userId] = tm
+    setDayBaselineMinutes(prev => {
+      const next = { ...prev }
+      routesToSave.forEach(route => {
+        const tm = route.totalMinutes
+        if (tm != null && Number.isFinite(tm)) next[route.userId] = tm
+      })
+      return next
     })
-    setDayBaselineMinutes(newBaseline)
     setDayBaselineDate(dateStrForBaseline)
     // Do NOT call setJobs here. Updating jobs.route_order would trigger the build-routes
     // useEffect (jobs is in its dependency array), which calls setDayRoutes(freshRoutes) and
@@ -2476,11 +2718,13 @@ function JobsPageContent() {
     // Persist route order to localStorage (exclude home start/end so they stay fixed).
     try {
       const company = window.location.pathname.split('/')[1]
-      const orderMap: Record<number, (number | string)[]> = {}
-      dayRoutes.forEach(route => {
+      const storageKey = `route-order-${company}-${dateStr}`
+      let orderMap: Record<number, (number | string)[]> = {}
+      try { orderMap = JSON.parse(localStorage.getItem(storageKey) ?? '{}') } catch { /* ignore */ }
+      routesToSave.forEach(route => {
         orderMap[route.userId] = route.jobs.filter(j => !j.is_home).map(j => j.id)
       })
-      localStorage.setItem(`route-order-${company}-${dateStr}`, JSON.stringify(orderMap))
+      localStorage.setItem(storageKey, JSON.stringify(orderMap))
     } catch { /* ignore */ }
 
     // Persist pending assignee changes (from route planner) so jobs are actually moved on the server
@@ -2500,8 +2744,8 @@ function JobsPageContent() {
       fetchJobsForWeek()
     }
 
-    // Fetch fresh Mapbox directions for each route (including start/end home if present).
-    await Promise.all(dayRoutes.map(async route => {
+    // Fetch fresh Mapbox directions for each saved route (including start/end home if present).
+    await Promise.all(routesToSave.map(async route => {
       const realJobs = route.jobs.filter(j => !j.is_projected && !j.is_cancelled && Number.isInteger(Number(j.id)))
       // All stops with coords for directions (include home start/end so drive time is correct)
       const waypointJobs = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
@@ -2575,41 +2819,322 @@ function JobsPageContent() {
       } catch { /* best-effort */ }
     }))
 
-    if (hadAssigneePending) {
-      syncSavedFingerprintAfterApplyRef.current = true
-    } else {
-      setSavedRouteFingerprint(buildRouteFingerprint(dayRoutes, {}))
-    }
+    // Mark saved users as clean
+    setSavedFingerprintsByUser(prev => {
+      const next = { ...prev }
+      routesToSave.forEach(r => { next[r.userId] = buildUserFingerprint(r) })
+      return next
+    })
+    dayRouteCacheRef.current.set(toLocalDateString(currentWeek), dayRoutes)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayRoutes, currentWeek, fetchDirections, pendingAssigneeChanges, buildRouteFingerprint])
+  }, [dayRoutes, unsavedUserIds, currentWeek, fetchDirections, pendingAssigneeChanges, buildUserFingerprint])
 
-  // Auto-optimize using OSRM /trip (free, no API key)
+  // Auto-optimize the day's route: fastest visiting order via Mapbox drive matrix + 2-opt.
+  // Runs entirely in the browser so it works regardless of API server state, and keeps
+  // every located stop (including string-id subscription/projected jobs).
   const handleDayOptimize = useCallback(async (userId: number) => {
     const route = dayRoutes.find(r => r.userId === userId)
     if (!route) return
-    // Only optimize non-cancelled jobs; cancelled ones are dropped from routing entirely
-    const pts = route.jobs.filter(j => !j.is_cancelled && j.lat && j.lng)
-    if (pts.length < 2) return
+
+    const showNotice = (msg: string, ms = 6000) => {
+      setOptimizeNotice(msg)
+      if (optimizeNoticeTimerRef.current) clearTimeout(optimizeNoticeTimerRef.current)
+      optimizeNoticeTimerRef.current = setTimeout(() => setOptimizeNotice(null), ms)
+    }
+
+    // Every middle stop with coordinates is routable, no matter the id type.
+    const middleJobs = route.jobs.filter(
+      j => !j.is_cancelled && !j.is_home && j.lat != null && j.lng != null,
+    )
+    if (middleJobs.length < 2) {
+      showNotice(t('app.routePlanner.optimizeNeedTwoStops', 'Need at least 2 located stops to optimize.'))
+      return
+    }
+
     setDayOptimizing(true)
+    setOptimizeNotice(null)
+
+    const startJob = route.jobs.find(j => j.is_home && String(j.id).startsWith('start-'))
+    const endJob = route.jobs.find(j => j.is_home && String(j.id).startsWith('end-'))
+
     try {
-      const coords = pts.map(j => `${j.lng},${j.lat}`).join(';')
-      const res = await fetch(
-        `https://router.project-osrm.org/trip/v1/driving/${coords}?roundtrip=false&source=first&destination=last&geometries=geojson`
+      const result = await optimizeMiddleJobsClient(
+        middleJobs.map(j => ({ id: j.id, lat: j.lat as number, lng: j.lng as number })),
+        {
+          start: startJob?.lat != null && startJob?.lng != null
+            ? { lat: startJob.lat, lng: startJob.lng }
+            : null,
+          end: endJob?.lat != null && endJob?.lng != null
+            ? { lat: endJob.lat, lng: endJob.lng }
+            : null,
+        },
       )
-      const data = await res.json()
-      if (data.code === 'Ok' && data.waypoints) {
-        // Build optimized order: waypoints[i].waypoint_index = original index in pts array
-        const sortedWaypoints = [...data.waypoints].sort((a: any, b: any) => a.trip_index - b.trip_index)
-        const optimizedJobs = sortedWaypoints.map((wp: any) => pts[wp.waypoint_index])
-        // Re-attach non-cancelled jobs without coords, then cancelled jobs at the end
-        const noCoordJobs = route.jobs.filter(j => !j.is_cancelled && (!j.lat || !j.lng))
-        const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
-        const newOrder = [...optimizedJobs, ...noCoordJobs, ...cancelledJobs]
-        handleDayReorder(userId, newOrder)
+
+      // Re-order the middle jobs by the optimized id sequence; keep every stop.
+      const middleById = new Map(middleJobs.map(j => [String(j.id), j] as const))
+      const optimizedMiddle = result.orderedIds
+        .map(id => middleById.get(String(id)))
+        .filter((j): j is RouteJob => !!j)
+      // Append any stop missing from the optimized list (safety; shouldn't happen).
+      const placed = new Set(optimizedMiddle.map(j => String(j.id)))
+      for (const j of middleJobs) {
+        if (!placed.has(String(j.id))) optimizedMiddle.push(j)
       }
-    } catch { /* ignore */ }
+
+      const noCoordJobs = route.jobs.filter(
+        j => !j.is_cancelled && !j.is_home && (j.lat == null || j.lng == null),
+      )
+      const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
+      const newOrder: RouteJob[] = [
+        ...(startJob ? [startJob] : []),
+        ...optimizedMiddle,
+        ...noCoordJobs,
+        ...(endJob ? [endJob] : []),
+        ...cancelledJobs,
+      ]
+      handleDayReorder(userId, newOrder)
+
+      const savedMinutes = (result.beforeSeconds - result.afterSeconds) / 60
+      if (Number.isFinite(savedMinutes) && savedMinutes >= 0.5) {
+        if (drawRouteComparisonTimerRef.current) clearTimeout(drawRouteComparisonTimerRef.current)
+        setDrawRouteComparison({ diffMinutes: savedMinutes })
+        drawRouteComparisonTimerRef.current = setTimeout(() => {
+          setDrawRouteComparison(null)
+          drawRouteComparisonTimerRef.current = null
+        }, 8000)
+      } else {
+        showNotice(t('app.routePlanner.optimizeAlreadyFast', 'This is already the fastest order we found.'))
+      }
+    } catch (err) {
+      console.warn('[optimize-day] failed', err)
+      showNotice(t('app.routePlanner.optimizeFailed', 'Could not optimize this route. Try again in a moment.'))
+    }
     setDayOptimizing(false)
-  }, [dayRoutes, handleDayReorder])
+  }, [dayRoutes, handleDayReorder, t])
+
+  // ── Bulk / multi-employee route optimisation ──────────────────────────────
+
+  const handleBulkOptimize = useCallback(async (
+    userIds: number[],
+    allowReassign: boolean,
+    onProgress: (p: { step: number; total: number; message: string }) => void,
+  ) => {
+    if (userIds.length === 0) return
+
+    if (!allowReassign) {
+      // ── Simple mode: run existing single-employee optimizer in sequence ──
+      const total = userIds.length
+      for (let i = 0; i < userIds.length; i++) {
+        const uid = userIds[i]
+        const route = dayRoutes.find(r => r.userId === uid)
+        const name = route?.userName ?? `Employee ${i + 1}`
+        onProgress({ step: i, total, message: `Optimising route for ${name}…` })
+        await handleDayOptimize(uid)
+        await new Promise(r => setTimeout(r, 80))
+      }
+      onProgress({ step: total, total, message: 'Done!' })
+      return
+    }
+
+    // ── Reassign mode: adaptive geo-first territory assignment ──────────────
+    //
+    // Goal: each employee owns a tight, contiguous area. We anchor every
+    // employee at their home/start location and give each job to the nearest
+    // anchor (a Voronoi partition). Employees who share an anchor (e.g. one
+    // shared company depot) are split apart with compact k-means so nobody
+    // ends up with two disjoint blobs. Workload is NOT balanced — geography
+    // decides everything, which is what produces sensible, local routes.
+
+    const routes = dayRoutes.filter(r => userIds.includes(r.userId))
+    const k = routes.length
+    const totalSteps = k + 2
+    let step = 0
+
+    // 1. Pool all locatable, non-cancelled, non-home jobs
+    onProgress({ step: step++, total: totalSteps, message: 'Pooling jobs…' })
+    await new Promise(r => setTimeout(r, 30))
+
+    type PooledJob = RouteJob & { _origUserId: number }
+    const pooled: PooledJob[] = routes.flatMap(route =>
+      route.jobs
+        .filter(j => !j.is_cancelled && !j.is_home && j.lat != null && j.lng != null)
+        .map(j => ({ ...j, _origUserId: route.userId })),
+    )
+
+    if (pooled.length === 0) {
+      onProgress({ step: totalSteps, total: totalSteps, message: 'No jobs to reassign.' })
+      return
+    }
+
+    // Longitude shrinks toward the poles — scale it by cos(latitude) so that
+    // squared distances reflect real ground distance (critical this far north).
+    const refLat = pooled.reduce((s, j) => s + (j.lat as number), 0) / pooled.length
+    const LNG_SCALE = Math.cos((refLat * Math.PI) / 180)
+    const dist2 = (a: [number, number], b: [number, number]) => {
+      const dLat = a[0] - b[0]
+      const dLng = (a[1] - b[1]) * LNG_SCALE
+      return dLat * dLat + dLng * dLng
+    }
+
+    // Compact geographic clustering used only to split a shared anchor.
+    const kMeans = (points: [number, number][], numK: number, maxIter = 60): number[] => {
+      if (numK <= 1 || points.length === 0) return points.map(() => 0)
+      if (numK >= points.length) return points.map((_, i) => i % numK)
+      const centroids: [number, number][] = [points[Math.floor(Math.random() * points.length)]]
+      while (centroids.length < numK) {
+        const dists = points.map(p => Math.min(...centroids.map(c => dist2(p, c))))
+        const total = dists.reduce((s, d) => s + d, 0)
+        let rand = Math.random() * total
+        let chosen = points[points.length - 1]
+        for (let i = 0; i < points.length; i++) {
+          rand -= dists[i]
+          if (rand <= 0) { chosen = points[i]; break }
+        }
+        centroids.push([...chosen] as [number, number])
+      }
+      let assignments = new Array(points.length).fill(0)
+      for (let iter = 0; iter < maxIter; iter++) {
+        const next = points.map(p => {
+          let best = 0, bestD = Infinity
+          centroids.forEach((c, ci) => { const d = dist2(p, c); if (d < bestD) { bestD = d; best = ci } })
+          return best
+        })
+        if (next.every((a, i) => a === assignments[i])) break
+        assignments = next
+        for (let ci = 0; ci < numK; ci++) {
+          const clPts = points.filter((_, i) => assignments[i] === ci)
+          if (clPts.length === 0) {
+            centroids[ci] = points[Math.floor(Math.random() * points.length)]
+          } else {
+            centroids[ci] = [
+              clPts.reduce((s, p) => s + p[0], 0) / clPts.length,
+              clPts.reduce((s, p) => s + p[1], 0) / clPts.length,
+            ]
+          }
+        }
+      }
+      return assignments
+    }
+
+    // 2. Anchor each employee. Prefer their geocoded home/start, else the
+    //    centroid of their current jobs, else the global centroid.
+    onProgress({ step: step++, total: totalSteps, message: 'Mapping territories…' })
+    await new Promise(r => setTimeout(r, 30))
+
+    const globalCentroid: [number, number] = [
+      refLat,
+      pooled.reduce((s, j) => s + (j.lng as number), 0) / pooled.length,
+    ]
+    const anchorOf = (route: UserRoute): [number, number] => {
+      const home = route.jobs.find(
+        j => j.is_home && String(j.id).startsWith('start-') && j.lat != null && j.lng != null,
+      )
+      if (home) return [home.lat as number, home.lng as number]
+      const own = route.jobs.filter(j => !j.is_cancelled && !j.is_home && j.lat != null && j.lng != null)
+      if (own.length > 0) {
+        return [
+          own.reduce((s, j) => s + (j.lat as number), 0) / own.length,
+          own.reduce((s, j) => s + (j.lng as number), 0) / own.length,
+        ]
+      }
+      return globalCentroid
+    }
+    const anchors: [number, number][] = routes.map(anchorOf)
+
+    // Group employees that share (almost) the same anchor. 3-decimal rounding
+    // ≈ 100 m, so everyone on a single shared depot lands in one group.
+    const keyOf = (a: [number, number]) => `${a[0].toFixed(3)},${a[1].toFixed(3)}`
+    const groupByKey = new Map<string, number[]>()
+    anchors.forEach((a, ei) => {
+      const key = keyOf(a)
+      const existing = groupByKey.get(key)
+      if (existing) existing.push(ei)
+      else groupByKey.set(key, [ei])
+    })
+    const groups = [...groupByKey.values()].map(members => ({
+      members,
+      anchor: [
+        members.reduce((s, ei) => s + anchors[ei][0], 0) / members.length,
+        members.reduce((s, ei) => s + anchors[ei][1], 0) / members.length,
+      ] as [number, number],
+    }))
+
+    // 3. Assign every job to the nearest anchor group.
+    const groupJobs: PooledJob[][] = groups.map(() => [])
+    pooled.forEach(job => {
+      let best = 0, bestD = Infinity
+      groups.forEach((g, gi) => {
+        const d = dist2([job.lat as number, job.lng as number], g.anchor)
+        if (d < bestD) { bestD = d; best = gi }
+      })
+      groupJobs[best].push(job)
+    })
+
+    // 4. Within each group, hand jobs to members. A solo member takes the
+    //    whole territory; shared anchors are split into compact sub-blobs.
+    const employeeJobs: PooledJob[][] = Array.from({ length: k }, () => [])
+    groups.forEach((g, gi) => {
+      const jobs = groupJobs[gi]
+      if (g.members.length === 1) {
+        employeeJobs[g.members[0]] = jobs
+        return
+      }
+      const sub = kMeans(jobs.map(j => [j.lat as number, j.lng as number]), g.members.length)
+      g.members.forEach((ei, ci) => {
+        employeeJobs[ei] = jobs.filter((_, ji) => sub[ji] === ci)
+      })
+    })
+
+    // 5. For each employee, run TSP on their assigned territory.
+    for (let ei = 0; ei < k; ei++) {
+      const route = routes[ei]
+      const uid = route.userId
+
+      const middleJobs: PooledJob[] = employeeJobs[ei]
+      onProgress({
+        step: step++,
+        total: totalSteps,
+        message: `Optimising ${route.userName} (${middleJobs.length} stop${middleJobs.length !== 1 ? 's' : ''})…`,
+      })
+
+      const startJob = route.jobs.find(j => j.is_home && String(j.id).startsWith('start-'))
+      const endJob   = route.jobs.find(j => j.is_home && String(j.id).startsWith('end-'))
+      const noCoords = route.jobs.filter(j => !j.is_cancelled && !j.is_home && (j.lat == null || j.lng == null))
+      const cancelled = route.jobs.filter(j => j.is_cancelled)
+
+      let orderedMiddle: RouteJob[] = middleJobs
+
+      if (middleJobs.length >= 2) {
+        try {
+          const result = await optimizeMiddleJobsClient(
+            middleJobs.map(j => ({ id: j.id, lat: j.lat as number, lng: j.lng as number })),
+            {
+              start: startJob?.lat != null ? { lat: startJob.lat, lng: startJob.lng } : null,
+              end:   endJob?.lat   != null ? { lat: endJob.lat,   lng: endJob.lng   } : null,
+            },
+          )
+          const byId = new Map(middleJobs.map(j => [String(j.id), j as RouteJob] as const))
+          const sorted = result.orderedIds.map(id => byId.get(String(id))).filter((j): j is RouteJob => !!j)
+          const placed = new Set(sorted.map(j => String(j.id)))
+          for (const j of middleJobs) { if (!placed.has(String(j.id))) sorted.push(j) }
+          orderedMiddle = sorted
+        } catch {
+          // fall back to unoptimised order
+        }
+      }
+
+      handleDayReorder(uid, [
+        ...(startJob  ? [startJob]  : []),
+        ...orderedMiddle,
+        ...noCoords,
+        ...(endJob    ? [endJob]    : []),
+        ...cancelled,
+      ])
+      await new Promise(r => setTimeout(r, 80))
+    }
+
+    onProgress({ step: totalSteps, total: totalSteps, message: 'All routes updated!' })
+  }, [dayRoutes, handleDayOptimize, handleDayReorder])
 
   const formatLeaveBadge = (leaveType: string, hoursOff: number | null) => {
     switch (leaveType) {
@@ -2741,6 +3266,16 @@ function JobsPageContent() {
                                 </button>
                             ))}
                         </div>
+                        {viewMode === 'week' && (
+                          <button
+                            type="button"
+                            onClick={() => setWeekPlanOpen(true)}
+                            className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-accent-500/40 bg-accent-50 text-accent-700 text-xs font-semibold hover:bg-accent-100 flex-shrink-0"
+                          >
+                            <CalendarDaysIcon className="w-4 h-4" />
+                            {t('app.weekPlanner.title', 'Plan week')}
+                          </button>
+                        )}
                     </div>
                 </div>}
 
@@ -2754,7 +3289,7 @@ function JobsPageContent() {
                   const handleBackToWeek = () => {
                     setViewMode('week')
                     setDayFocusUserId(null)
-                    setHoveredJobId(null)
+                    clearJobHover()
                     drawCompareBaselineRef.current = null
                     if (drawRouteComparisonTimerRef.current) {
                       clearTimeout(drawRouteComparisonTimerRef.current)
@@ -2768,7 +3303,13 @@ function JobsPageContent() {
                     setDayFocusUserId(null)
                     setDrawMode(false)
                     setDrawOrder([])
-                    setHoveredJobId(null)
+                    clearJobHover()
+                    // Cancel any pending debounced clear so the immediate null wins.
+                    if (isolateClearTimerRef.current) {
+                      clearTimeout(isolateClearTimerRef.current)
+                      isolateClearTimerRef.current = null
+                    }
+                    setIsolatedLeg(null)
                   }
                   const handleMobileSheetBack = () => {
                     if (dayFocusUserId != null && dayRoutes.length > 1) handleClearEmployee()
@@ -2883,6 +3424,7 @@ function JobsPageContent() {
                         onClearUser={handleClearEmployee}
                         onReorder={handleDayReorder}
                         onJobOpen={id => {
+                          if (drawMode) return
                           // Look up from the full dataset so we always have assigned_user_id, even when
                           // the main jobs list is filtered to a single employee.
                           const job = allJobs.find(j => j.id === id)
@@ -2891,11 +3433,19 @@ function JobsPageContent() {
                         onOptimize={handleDayOptimize}
                         optimizing={dayOptimizing}
                         geocodingCount={dayGeocodingCount}
-                        onSave={handleSaveAndApply}
+                        onSave={handleSaveRoute}
+                        onSaveAll={hasUnsavedRouteChanges ? () => handleSaveRoute() : undefined}
+                        onDiscardUser={handleDiscardUser}
+                        onDiscardAll={hasUnsavedRouteChanges ? handleDiscardAll : undefined}
+                        unsavedUserIds={unsavedUserIds}
+                        onBulkOptimize={handleBulkOptimize}
+                        onHoverUser={setAllPanelHoveredUserId}
+                        onAllPanelSelectionChange={setAllPanelSelectedIds}
                         onBackToWeek={handleBackToWeek}
                         dateLabel={currentWeek.toLocaleDateString(dateLocale, { weekday: 'long', day: 'numeric', month: 'short' })}
                         highlightedJobId={hoveredJobId}
-                        onJobCardHover={setHoveredJobId}
+                        onJobCardHover={handleJobHover}
+                        onIsolateRoute={handleIsolateRoute}
                         baselineMinutesByUser={dayBaselineMinutes}
                         availableMinutesByUser={Object.fromEntries(
                           dayRoutes.map(r => [
@@ -2910,9 +3460,11 @@ function JobsPageContent() {
                         onDrawReset={handleDrawReset}
                         onDrawExit={handleDrawExit}
                         drawRouteComparison={drawRouteComparison}
+                        optimizeNotice={optimizeNotice}
                         onAddJob={() => openCreateJobForDate(toLocalDateString(currentWeek))}
                         mobileSheet={!isDesktopRoute}
                         hasUnsavedChanges={hasUnsavedRouteChanges}
+
                         wrapMobileSheet={
                           !isDesktopRoute
                             ? ({ body, toolbar }) => (
@@ -2943,15 +3495,22 @@ function JobsPageContent() {
                         routes={dayRoutes}
                         focusUserId={dayFocusUserId}
                         onJobClick={id => {
+                          if (drawMode) { handleDrawAssign(id); return }
                           const job = allJobs.find(j => j.id === id)
                           if (job) { setViewingJob(job); setIsViewModalOpen(true) }
                         }}
                         className="w-full h-full"
                         highlightedJobId={hoveredJobId}
-                        onPinHover={setHoveredJobId}
+                        onPinHover={handleJobHover}
+                        isolatedLeg={isolatedLeg}
+                        isDirectionsLoading={dayRoutes.some(r =>
+                          !r.routeGeometry && r.jobs.filter(j => j.lat && j.lng && !j.is_cancelled).length >= 2
+                        )}
                         drawMode={drawMode}
                         drawOrder={drawOrder}
                         onDrawAssign={handleDrawAssign}
+                        onReassignJob={handleReassignJob}
+                        visibleUserIds={mapIsolatedUserIds}
                         fitInsets={!isDesktopRoute ? MOBILE_ROUTE_MAP_FIT_INSETS : undefined}
                         showZoomControl={isDesktopRoute}
                       />
@@ -4070,6 +4629,15 @@ function JobsPageContent() {
                     </div>
                 )}
             </ConfirmModal>
+            <WeekPlanPanel
+              open={weekPlanOpen}
+              onClose={() => setWeekPlanOpen(false)}
+              startDate={toLocalDateString(weekDays[0])}
+              endDate={toLocalDateString(weekDays[6])}
+              users={users}
+              selectedUserId={selectedUserId}
+              onApplied={() => { fetchJobsForWeek() }}
+            />
         </AppLayout>
     )
 }

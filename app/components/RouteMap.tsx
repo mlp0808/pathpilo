@@ -42,6 +42,13 @@ export interface UserRoute {
   routeGeometry?: { type: string; coordinates: [number, number][] }
 }
 
+/** Identifies a single route leg for hover-to-isolate on the map. */
+export interface IsolatedRouteSeg {
+  userId: number
+  fromCoord: [number, number]
+  toCoord: [number, number]
+}
+
 interface RouteMapProps {
   routes: UserRoute[]
   focusUserId: number | null
@@ -49,12 +56,31 @@ interface RouteMapProps {
   className?: string
   highlightedJobId?: number | string | null
   onPinHover?: (jobId: number | string | null) => void
+  /**
+   * Highlight a single route leg: hides all other routes and shows only the
+   * segment from `fromCoord` to `toCoord` without moving the camera.
+   * `null` = no isolation (falls back to normal `focusUserId` behaviour).
+   */
+  isolatedLeg?: IsolatedRouteSeg | null
+  /** Show a "Calculating route…" spinner badge over the map while directions are loading. */
+  isDirectionsLoading?: boolean
   /** When true, the map enters manual draw-route mode (white dots, click-to-assign). */
   drawMode?: boolean
   /** Job ids already assigned a number, in chosen order (only meaningful when drawMode). */
   drawOrder?: (number | string)[]
   /** Called when an un-numbered draw-mode pin is clicked. */
   onDrawAssign?: (jobId: number | string) => void
+  /**
+   * Drag a stop pin onto another employee's home pin (or a sidebar row tagged
+   * with `data-reassign-userid`) to reassign it. Receives the dragged job id,
+   * the employee it currently belongs to, and the employee to move it to.
+   */
+  onReassignJob?: (jobId: number | string, fromUserId: number, toUserId: number) => void
+  /**
+   * When set, only these users' routes are drawn (used by the AllEmployees panel for
+   * hover-to-preview and multi-select-to-isolate). `null` means draw all routes.
+   */
+  visibleUserIds?: number[] | null
   /** Inset the camera fit so pins sit in the visible map (e.g. above a mobile bottom sheet). */
   fitInsets?: {
     top?: number
@@ -128,7 +154,43 @@ function jobLngLat(job: Pick<RouteJob, 'lat' | 'lng'>): [number, number] | null 
   return [lng, lat]
 }
 
-function visibleRoutesForMap(routes: UserRoute[], focusUserId: number | null): UserRoute[] {
+/**
+ * Extract the sub-section of a LineString that runs between `from` and `to`.
+ * Finds the closest vertex to each endpoint and slices the coordinate array,
+ * then clamps the exact job coordinates at both ends.
+ */
+function sliceLineBetween(
+  coords: [number, number][],
+  from: [number, number],
+  to: [number, number],
+): [number, number][] {
+  if (coords.length < 2) return [from, to]
+  const d2 = (a: [number, number], b: [number, number]) => {
+    const dx = a[0] - b[0]; const dy = a[1] - b[1]; return dx * dx + dy * dy
+  }
+  // Search the first 80% of the line for `from` (avoids double-back routes picking the far end)
+  const cap = Math.max(0, Math.floor(coords.length * 0.8))
+  let fi = 0; let fd = Infinity
+  for (let i = 0; i <= cap; i++) { const d = d2(coords[i], from); if (d < fd) { fd = d; fi = i } }
+  // Search from fi onwards for `to`
+  let ti = coords.length - 1; let td = Infinity
+  for (let i = fi; i < coords.length; i++) { const d = d2(coords[i], to); if (d < td) { td = d; ti = i } }
+  const slice = coords.slice(fi, ti + 1)
+  if (slice.length === 0) return [from, to]
+  // Clamp exact job coordinates at both ends so the line starts/ends exactly at the stops
+  return [from, ...slice, to]
+}
+
+function visibleRoutesForMap(
+  routes: UserRoute[],
+  focusUserId: number | null,
+  visibleUserIds?: number[] | null,
+): UserRoute[] {
+  // AllEmployees panel hover/select: show only the highlighted employee(s).
+  if (visibleUserIds != null && visibleUserIds.length > 0) {
+    const filtered = routes.filter(r => visibleUserIds.includes(r.userId))
+    return filtered.length > 0 ? filtered : routes
+  }
   const effectiveFocus =
     focusUserId ?? (routes.length === 1 ? routes[0]?.userId ?? null : null)
   const focused =
@@ -224,7 +286,31 @@ type PinSourceMeta = {
   highlightedId: SequentialPickId | null | undefined
 }
 
+/** Home glyph ≈ 50% of stop circle diameter (circle r 12→16 px @ zoom 8→14; 64px image @ pixelRatio 2 = 32 logical px). */
+const HOME_ICON_SIZE_EXPR: mapboxgl.Expression = ['interpolate', ['linear'], ['zoom'], 8, 0.375, 14, 0.5]
 const PICK_PIN_ICON_ID = 'sequential-pick-pin'
+const HOME_PIN_ICON_ID = 'route-home-pin-v2'
+
+/** Heroicons outline Home — same glyph as dashboard nav (`HomeIcon`). */
+const HOME_PIN_ICON_SVG =
+  `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">` +
+  `<path d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12"/>` +
+  `<path d="M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75"/>` +
+  `<path d="M8.25 21h7.5"/>` +
+  `</svg>`
+
+function ensureHomePinImage(map: mapboxgl.Map) {
+  if (map.hasImage(HOME_PIN_ICON_ID)) return
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(HOME_PIN_ICON_SVG)}`
+  const img = new Image(64, 64)
+  img.onload = () => {
+    if (!map.hasImage(HOME_PIN_ICON_ID)) {
+      map.addImage(HOME_PIN_ICON_ID, img, { pixelRatio: 2 })
+      map.triggerRepaint()
+    }
+  }
+  img.src = url
+}
 
 /** Load location-pin SVG into the map sprite (idle unpicked stops). */
 function ensureSequentialPickPinImage(map: mapboxgl.Map) {
@@ -267,9 +353,13 @@ export default function RouteMap({
   className,
   highlightedJobId,
   onPinHover,
+  isolatedLeg,
+  isDirectionsLoading,
   drawMode,
   drawOrder,
   onDrawAssign,
+  onReassignJob,
+  visibleUserIds,
   fitInsets,
   showZoomControl = true,
   zoomControlPosition = 'top-right',
@@ -292,6 +382,14 @@ export default function RouteMap({
   const mapClickHandlersRef = useRef<{ fn: (e: mapboxgl.MapMouseEvent) => void }[]>([])
   const onDrawAssignRef = useRef(onDrawAssign)
   onDrawAssignRef.current = onDrawAssign
+  const onReassignJobRef = useRef(onReassignJob)
+  onReassignJobRef.current = onReassignJob
+  // Layer-bound mousedown handlers for pin dragging (cleaned up on each redraw).
+  const dragHandlersRef = useRef<{ layer: string; fn: (e: mapboxgl.MapLayerMouseEvent) => void }[]>([])
+  // Circle layer ids that contain home pins, used as drop-target hit layers.
+  const homeLayersRef = useRef<string[]>([])
+  // Set true briefly after a drag so the trailing click doesn't open the job.
+  const suppressClickRef = useRef(false)
   /** Cancel stale moveend listener when draw() runs again before camera animation finishes. */
   const pendingMoveEndEnforceRef = useRef<(() => void) | null>(null)
   const hasFittedCameraRef = useRef(false)
@@ -410,7 +508,7 @@ export default function RouteMap({
   }, [routesFitKey, routes, focusUserId, fitInsets])
 
   // Pin data refresh on hover / pick order (layer swap handled in draw() + useLayoutEffect).
-  useEffect(() => {
+  useLayoutEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
 
@@ -418,8 +516,6 @@ export default function RouteMap({
       const src = map.getSource(sourceId) as mapboxgl.GeoJSONSource | undefined
       const meta = pinSourceMetaRef.current[sourceId]
       if (!src || !meta) return
-      const onPickLayers = !!map.getLayer(`${sourceId}-hit`)
-      if (onPickLayers !== meta.pickActive) return
 
       const nextMeta: PinSourceMeta = {
         pickActive: meta.pickActive,
@@ -454,6 +550,11 @@ export default function RouteMap({
       try { map.off('click', fn) } catch { /* ignore */ }
     })
     mapClickHandlersRef.current = []
+    dragHandlersRef.current.forEach(({ layer, fn }) => {
+      try { map.off('mousedown', layer, fn) } catch { /* ignore */ }
+    })
+    dragHandlersRef.current = []
+    homeLayersRef.current = []
 
     addedSourcesRef.current.forEach(({ id, layers }) => {
       layers.forEach(lid => safeRemoveLayer(map, lid))
@@ -463,12 +564,119 @@ export default function RouteMap({
     pinSourceJobsRef.current = {}
     pinSourceMetaRef.current = {}
 
-    const visibleRoutes = visibleRoutesForMap(routes, focusUserId)
+    // Hover-to-isolate: show only the hovered leg's route user; camera stays put.
+    // ONLY apply isolatedLeg when we are already focused on a single employee.
+    // In all-employees overview (focusUserId == null) always show every route,
+    // even if isolatedLeg was somehow left set from a previous focused session.
+    const visibilityFocus =
+      focusUserId != null && isolatedLeg != null ? isolatedLeg.userId : focusUserId
+    // visibleUserIds only applies in all-employees mode (when focusUserId is null)
+    const panelVisibleUserIds = focusUserId == null ? visibleUserIds : null
+    const visibleRoutes = visibleRoutesForMap(routes, visibilityFocus, panelVisibleUserIds)
 
     // Solo companies may show a route before dayFocusUserId is set — align draw mode
     // with the single visible route in that case.
     const drawTargetUserId =
       focusUserId ?? (visibleRoutes.length === 1 ? visibleRoutes[0].userId : null)
+
+    // ── Pin drag-to-reassign machinery ──────────────────────────────────────
+    // Begins a potential drag on pin mousedown. A real drag only starts once the
+    // pointer moves past a small threshold (so plain clicks still open the job).
+    const startPinDrag = (
+      jobId: number | string,
+      fromUserId: number,
+      label: string,
+      ev: MouseEvent,
+    ) => {
+      const startX = ev.clientX
+      const startY = ev.clientY
+      let dragging = false
+      let ghost: HTMLDivElement | null = null
+      let lastHover: Element | null = null
+
+      const moveGhost = (x: number, y: number) => {
+        if (ghost) { ghost.style.left = `${x + 14}px`; ghost.style.top = `${y + 14}px` }
+      }
+
+      const begin = () => {
+        dragging = true
+        try { map.dragPan.disable() } catch { /* ignore */ }
+        map.getCanvas().style.cursor = 'grabbing'
+        document.body.classList.add('vevago-reassigning')
+        ghost = document.createElement('div')
+        ghost.className = 'vevago-drag-ghost'
+        ghost.textContent = label
+        document.body.appendChild(ghost)
+        moveGhost(startX, startY)
+      }
+
+      const highlightUnder = (x: number, y: number): Element | null => {
+        const el = document.elementFromPoint(x, y)
+        return el ? el.closest('[data-reassign-userid]') : null
+      }
+
+      const onMove = (me: MouseEvent) => {
+        if (!dragging) {
+          if (Math.abs(me.clientX - startX) + Math.abs(me.clientY - startY) < 5) return
+          begin()
+        }
+        moveGhost(me.clientX, me.clientY)
+        const target = highlightUnder(me.clientX, me.clientY)
+        if (target !== lastHover) {
+          lastHover?.classList.remove('vevago-drop-hover')
+          target?.classList.add('vevago-drop-hover')
+          lastHover = target
+        }
+      }
+
+      const finish = (toUserId: number | null) => {
+        if (toUserId != null && Number.isFinite(toUserId) && toUserId !== fromUserId) {
+          onReassignJobRef.current?.(jobId, fromUserId, toUserId)
+        }
+      }
+
+      const onUp = (ue: MouseEvent) => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        if (!dragging) return  // was a plain click — let normal handlers run
+
+        // Teardown visuals
+        try { map.dragPan.enable() } catch { /* ignore */ }
+        map.getCanvas().style.cursor = ''
+        document.body.classList.remove('vevago-reassigning')
+        lastHover?.classList.remove('vevago-drop-hover')
+        ghost?.remove()
+        // Swallow the click Mapbox fires right after the drag.
+        suppressClickRef.current = true
+        setTimeout(() => { suppressClickRef.current = false }, 60)
+
+        // 1) Dropped on a sidebar employee row?
+        const sidebarTarget = highlightUnder(ue.clientX, ue.clientY)
+        if (sidebarTarget) {
+          finish(Number(sidebarTarget.getAttribute('data-reassign-userid')))
+          return
+        }
+
+        // 2) Dropped on a home pin on the map?
+        const rect = map.getCanvas().getBoundingClientRect()
+        const inside =
+          ue.clientX >= rect.left && ue.clientX <= rect.right &&
+          ue.clientY >= rect.top && ue.clientY <= rect.bottom
+        if (!inside) return
+        const pt: [number, number] = [ue.clientX - rect.left, ue.clientY - rect.top]
+        const layers = homeLayersRef.current.filter(id => map.getLayer(id))
+        if (layers.length === 0) return
+        const feats = map.queryRenderedFeatures(pt, { layers })
+        const homeFeat = feats.find(f => featIsHome(f.properties as { isHome?: unknown }))
+        if (!homeFeat) return
+        const homeId = String(featJobId(homeFeat.properties as { jobId?: unknown }))
+        const m = homeId.match(/(?:start|end)-(\d+)/)
+        finish(m ? Number(m[1]) : null)
+      }
+
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    }
 
     visibleRoutes.forEach(route => {
       const pts = route.jobs.filter(j => jobLngLat(j) != null)
@@ -479,23 +687,39 @@ export default function RouteMap({
 
       const isRouteInDrawMode = !!drawMode && drawTargetUserId === route.userId
 
-      // ── Route line — 3-layer glow (hidden during draw mode) ──────────────
+      // ── Route line (hidden during draw mode) ──
       const rawCoords: [number, number][] = activeJobs
         .map(j => jobLngLat(j))
         .filter((c): c is [number, number] => c != null)
-      const lineCoords = route.routeGeometry?.coordinates ?? rawCoords
+      const fullLineCoords = route.routeGeometry?.coordinates ?? rawCoords
+      // When a specific leg is isolated, slice the geometry to just that segment.
+      const lineCoords =
+        isolatedLeg != null && isolatedLeg.userId === route.userId
+          ? sliceLineBetween(fullLineCoords as [number, number][], isolatedLeg.fromCoord, isolatedLeg.toCoord)
+          : fullLineCoords
 
-      if (!isRouteInDrawMode && activeJobs.length >= 2) {
+      if (!isRouteInDrawMode && activeJobs.length >= 2 && lineCoords.length >= 2) {
         const lId = `line-${route.userId}`
         try {
           map.addSource(lId, {
             type: 'geojson',
             data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: lineCoords } },
           })
-          map.addLayer({ id: `${lId}-halo`, type: 'line', source: lId, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': route.color, 'line-width': 20, 'line-opacity': 0.07 } })
-          map.addLayer({ id: `${lId}-glow`, type: 'line', source: lId, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': route.color, 'line-width': 8, 'line-opacity': 0.2 } })
-          map.addLayer({ id: lId, type: 'line', source: lId, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': route.color, 'line-width': 3.5, 'line-opacity': 0.92 } })
-          addedSourcesRef.current.push({ id: lId, layers: [`${lId}-halo`, `${lId}-glow`, lId] })
+          map.addLayer({
+            id: `${lId}-halo`,
+            type: 'line',
+            source: lId,
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': route.color, 'line-width': 12, 'line-opacity': 0.12 },
+          })
+          map.addLayer({
+            id: lId,
+            type: 'line',
+            source: lId,
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': route.color, 'line-width': 3, 'line-opacity': 0.85 },
+          })
+          addedSourcesRef.current.push({ id: lId, layers: [`${lId}-halo`, lId] })
         } catch (e) { console.warn('line add failed', e) }
       }
 
@@ -517,6 +741,7 @@ export default function RouteMap({
 
           if (isRouteInDrawMode) {
             ensureSequentialPickPinImage(map)
+            ensureHomePinImage(map)
             const idle = SEQUENTIAL_PICK_THEME.pinIdle
             const accent = route.color
 
@@ -555,7 +780,7 @@ export default function RouteMap({
                   ['==', ['get', 'isHome'], 1], accent,
                   accent,
                 ],
-                'circle-stroke-width': ['case', ['==', ['get', 'isHome'], 1], 2.5, 0],
+                'circle-stroke-width': 0,
                 'circle-stroke-color': '#ffffff',
               },
             })
@@ -596,17 +821,16 @@ export default function RouteMap({
             })
 
             map.addLayer({
-              id: `${pId}-label`,
+              id: `${pId}-home-icon-draw`,
               type: 'symbol',
               source: pId,
+              filter: ['==', ['get', 'isHome'], 1],
               layout: {
-                'text-field': ['case', ['==', ['get', 'isHome'], 1], '⌂', ''],
-                'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
-                'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 14],
-                'text-allow-overlap': true,
-                'text-ignore-placement': true,
+                'icon-image': HOME_PIN_ICON_ID,
+                'icon-size': HOME_ICON_SIZE_EXPR,
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
               },
-              paint: { 'text-color': '#ffffff' },
             })
 
             // Invisible hit target above icons/text so clicks are not blocked by symbols
@@ -628,10 +852,11 @@ export default function RouteMap({
 
             addedSourcesRef.current.push({
               id: pId,
-              layers: [`${pId}-shadow`, `${pId}-circle`, `${pId}-pin-icon`, `${pId}-center`, `${pId}-label`, `${pId}-hit`],
+              layers: [`${pId}-shadow`, `${pId}-circle`, `${pId}-pin-icon`, `${pId}-center`, `${pId}-home-icon-draw`, `${pId}-hit`],
             })
           } else {
-            // Normal mode: numbered route pins
+            ensureHomePinImage(map)
+            // Normal mode: numbered route pins + prominent home depot
             map.addLayer({
               id: `${pId}-ring`,
               type: 'circle', source: pId,
@@ -651,7 +876,7 @@ export default function RouteMap({
               paint: {
                 'circle-radius': [
                   'interpolate', ['linear'], ['zoom'],
-                  8,  ['case', ['==', ['get', 'highlight'], 1], 17, 12],
+                  8, ['case', ['==', ['get', 'highlight'], 1], 17, 12],
                   14, ['case', ['==', ['get', 'highlight'], 1], 22, 16],
                 ],
                 'circle-color': route.color,
@@ -661,10 +886,23 @@ export default function RouteMap({
             })
 
             map.addLayer({
+              id: `${pId}-home-icon`,
+              type: 'symbol', source: pId,
+              filter: ['==', ['get', 'isHome'], 1],
+              layout: {
+                'icon-image': HOME_PIN_ICON_ID,
+                'icon-size': HOME_ICON_SIZE_EXPR,
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
+              },
+            })
+
+            map.addLayer({
               id: `${pId}-label`,
               type: 'symbol', source: pId,
+              filter: ['==', ['get', 'isHome'], 0],
               layout: {
-                'text-field': ['case', ['==', ['get', 'isHome'], 1], '⌂', ['get', 'seq']],
+                'text-field': ['get', 'seq'],
                 'text-font': ['DIN Offc Pro Bold', 'Arial Unicode MS Bold'],
                 'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 12, 13, 14, 15],
                 'text-allow-overlap': true,
@@ -677,7 +915,10 @@ export default function RouteMap({
               },
             })
 
-            addedSourcesRef.current.push({ id: pId, layers: [`${pId}-ring`, `${pId}-circle`, `${pId}-label`] })
+            addedSourcesRef.current.push({
+              id: pId,
+              layers: [`${pId}-ring`, `${pId}-circle`, `${pId}-home-icon`, `${pId}-label`],
+            })
           }
 
           // ── Hover: show popup + highlight ──────────────────────────────────
@@ -760,6 +1001,7 @@ export default function RouteMap({
             : [`${pId}-circle`]
 
           const handlePinPick = (props: { jobId?: unknown; isHome?: unknown }) => {
+            if (suppressClickRef.current) return  // trailing click after a drag
             if (featIsHome(props)) return
             const jobId = featJobId(props)
             if (clickPopupRef.current) { clickPopupRef.current.remove(); clickPopupRef.current = null }
@@ -780,14 +1022,15 @@ export default function RouteMap({
           })
 
           if (isRouteInDrawMode) {
-            // Map-level query so symbol/icon layers never block picks
-            const onMapClick = (e: mapboxgl.MapMouseEvent) => {
-              const features = map.queryRenderedFeatures(e.point, { layers: [`${pId}-hit`] })
-              if (!features[0]) return
-              handlePinPick(features[0].properties as { jobId?: unknown; isHome?: unknown })
+            // ${pId}-hit is the top-most layer so a direct layer click works and
+            // avoids the queryRenderedFeatures race where features are not yet in
+            // the WebGL buffer on the very first click after entering draw mode.
+            const onHitClick = (e: mapboxgl.MapLayerMouseEvent) => {
+              if (!e.features?.[0]) return
+              handlePinPick(e.features[0].properties as { jobId?: unknown; isHome?: unknown })
             }
-            map.on('click', onMapClick)
-            mapClickHandlersRef.current.push({ fn: onMapClick })
+            map.on('click', `${pId}-hit`, onHitClick)
+            clickHandlersRef.current.push({ layer: `${pId}-hit`, fn: onHitClick })
           } else {
             const onPinClick = (e: mapboxgl.MapLayerMouseEvent) => {
               if (!e.features?.[0]) return
@@ -797,6 +1040,30 @@ export default function RouteMap({
               map.on('click', layer, onPinClick)
               clickHandlersRef.current.push({ layer, fn: onPinClick })
             })
+
+            // ── Drag-to-reassign: pull a stop pin onto another employee's home
+            //    pin (on the map) or onto a sidebar row (data-reassign-userid). ──
+            if (onReassignJobRef.current) {
+              // This route's circle layer carries its home pin → a drop target.
+              homeLayersRef.current.push(`${pId}-circle`)
+
+              const onPinMouseDown = (e: mapboxgl.MapLayerMouseEvent) => {
+                if (!onReassignJobRef.current) return
+                const feat = e.features?.[0]
+                if (!feat) return
+                const props = feat.properties as { jobId?: unknown; isHome?: unknown; label?: unknown }
+                if (featIsHome(props)) return  // don't drag homes
+                e.preventDefault()
+                startPinDrag(
+                  featJobId(props),
+                  route.userId,
+                  typeof props.label === 'string' ? props.label : 'Stop',
+                  e.originalEvent,
+                )
+              }
+              map.on('mousedown', `${pId}-circle`, onPinMouseDown)
+              dragHandlersRef.current.push({ layer: `${pId}-circle`, fn: onPinMouseDown })
+            }
           }
         } catch (e) { console.warn('active pins add failed', e) }
       }
@@ -850,7 +1117,8 @@ export default function RouteMap({
         } catch (e) { console.warn('cancelled pins add failed', e) }
       }
     })
-  }, [routes, focusUserId, onJobClick, onPinHover, highlightedJobId, drawMode, drawOrder, onDrawAssign])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routes, focusUserId, isolatedLeg, onJobClick, onPinHover, drawMode, drawOrder, onDrawAssign, onReassignJob, visibleUserIds?.join(',') ?? ''])
 
   const drawRef = useRef(draw)
   drawRef.current = draw
@@ -866,12 +1134,13 @@ export default function RouteMap({
     }
   }, [draw])
 
-  // Swap layer stack before paint when toggling pick mode or employee focus.
+  // Swap layer stack before paint when toggling pick mode, employee focus, or leg isolation.
   useLayoutEffect(() => {
     const map = mapRef.current
     if (!map?.isStyleLoaded()) return
     drawRef.current()
-  }, [drawMode, focusUserId])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawMode, focusUserId, isolatedLeg, visibleUserIds?.join(',') ?? ''])
 
   return (
     <>
@@ -884,8 +1153,50 @@ export default function RouteMap({
           overflow: hidden;
         }
         .vevago-hover-popup .mapboxgl-popup-tip { border-top-color: #fff; }
+        .vevago-drag-ghost {
+          position: fixed;
+          z-index: 9999;
+          pointer-events: none;
+          background: #111827;
+          color: #fff;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 6px 10px;
+          border-radius: 8px;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+          max-width: 220px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .vevago-drag-ghost::before {
+          content: '↗';
+          margin-right: 6px;
+          opacity: 0.7;
+        }
+        body.vevago-reassigning [data-reassign-userid] {
+          outline: 2px dashed rgba(61,213,122,0.5);
+          outline-offset: 2px;
+          border-radius: 16px;
+          transition: outline-color 0.12s, background 0.12s;
+        }
+        body.vevago-reassigning [data-reassign-userid].vevago-drop-hover {
+          outline: 2px solid #3DD57A;
+          background: rgba(61,213,122,0.08);
+        }
       `}</style>
-      <div ref={containerRef} className={className ?? 'w-full h-full rounded-2xl overflow-hidden'} />
+      <div ref={containerRef} className={`${className ?? 'w-full h-full rounded-2xl overflow-hidden'} relative`} />
+      {isDirectionsLoading && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+          <div className="flex items-center gap-1.5 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-full px-3 py-1.5 shadow-md text-[11px] font-semibold text-gray-600">
+            <svg className="w-3 h-3 animate-spin text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Calculating route…
+          </div>
+        </div>
+      )}
     </>
   )
 }

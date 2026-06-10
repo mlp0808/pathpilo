@@ -7,8 +7,23 @@ const {
   removeSubscriptionCompletely,
 } = require('../utils/subscriptionStopCleanup');
 const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
+const { ensureSchedulingSchema } = require('../services/routePlanner/ensureSchedulingSchema');
 
 const router = express.Router();
+
+async function markSubscriptionJobScheduling(dbClient, jobId, dayOfWeek) {
+  if (dayOfWeek == null || dayOfWeek === undefined) return;
+  try {
+    await dbClient.query(
+      `UPDATE jobs
+       SET scheduling_flexibility = 'fixed_weekday', allowed_weekdays = $1::int[]
+       WHERE id = $2`,
+      [[Number(dayOfWeek)], jobId],
+    );
+  } catch (e) {
+    console.warn('[subscriptions] scheduling columns unavailable:', e.message || e);
+  }
+}
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -199,6 +214,7 @@ router.get('/', authenticateToken, async (req, res) => {
 // POST /api/subscriptions - Create new subscription
 router.post('/', authenticateToken, async (req, res) => {
   try {
+    await ensureSchedulingSchema();
     const {
       title,
       client_id,
@@ -348,6 +364,9 @@ router.post('/', authenticateToken, async (req, res) => {
 
         // Add services to the first job
         firstJob = firstJobResult.rows[0];
+        if (firstJob) {
+          await markSubscriptionJobScheduling(dbClient, firstJob.id, finalDayOfWeek);
+        }
         if (firstJob && firstNotePlain) {
           await jobEncryptedNotes.setJobNoteText({
             companyId,
@@ -842,6 +861,8 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
       ]
     );
     const jobId = jobRes.rows[0].id;
+
+    await markSubscriptionJobScheduling(dbClient, jobId, sub.day_of_week);
 
     if (matNotePlain) {
       try {

@@ -17,9 +17,21 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { UserRoute, RouteJob } from './RouteMap'
+import { HomeIcon } from '@heroicons/react/24/outline'
+import { UserRoute, RouteJob, IsolatedRouteSeg } from './RouteMap'
 import { useAppI18n } from './I18nProvider'
 import { SequentialPickListRow } from './sequentialPick/SequentialPickListRow'
+
+/** Returns Mapbox [lng, lat] for a job, or null if coords are missing. */
+function jobCoord(job: Pick<RouteJob, 'lat' | 'lng'>): [number, number] | null {
+  const parse = (v: unknown): number | null => {
+    const n = v == null ? null : typeof v === 'string' ? parseFloat(v) : typeof v === 'number' ? v : null
+    return n != null && isFinite(n) ? n : null
+  }
+  const lat = parse(job.lat); const lng = parse(job.lng)
+  if (lat == null || lng == null) return null
+  return [lng, lat]
+}
 
 function fmtMin(minutes: number) {
   if (!minutes || minutes < 1) return ''
@@ -89,11 +101,22 @@ function fmtMinRail(minutes: number) {
 }
 
 /** Drive-time segment living inside the timeline rail between two stops. */
-function RailDriveConnector({ minutes }: { minutes: number }) {
+function RailDriveConnector({
+  minutes,
+  onHover,
+  onLeave,
+}: {
+  minutes: number
+  /** Hovering the drive-time badge isolates this route on the map. */
+  onHover?: () => void
+  onLeave?: () => void
+}) {
   const label = fmtMinRail(minutes)
   if (!label) {
     return <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[22px]" />
   }
+
+  const hoverable = !!onHover
 
   return (
     <div
@@ -102,7 +125,9 @@ function RailDriveConnector({ minutes }: { minutes: number }) {
     >
       <div className="w-px flex-1 bg-gray-200 min-h-[6px]" />
       <span
-        className="inline-flex items-center justify-center rounded-md bg-gray-100 border border-gray-200/70 px-[3px] py-1.5 text-[9px] font-semibold text-gray-500 tabular-nums leading-none select-none shrink-0"
+        onMouseEnter={onHover}
+        onMouseLeave={onLeave}
+        className={`inline-flex items-center justify-center rounded-md bg-gray-100 border border-gray-200/70 px-[3px] py-1.5 text-[9px] font-semibold text-gray-500 tabular-nums leading-none select-none shrink-0 transition-colors ${hoverable ? 'cursor-pointer hover:bg-gray-200 hover:text-gray-700 hover:border-gray-300' : ''}`}
         style={{ writingMode: 'vertical-lr' }}
       >
         {label}
@@ -117,6 +142,68 @@ function sumWorkMinutes(jobs: RouteJob[]) {
     if (j.is_cancelled || j.is_home) return sum
     return sum + (j.estimated_duration_minutes ?? 0)
   }, 0)
+}
+
+/** Three compact stat chips shown directly under the Actions/Plan-route button. */
+function RouteQuickStats({
+  route,
+  baselineMinutes,
+}: {
+  route: UserRoute
+  baselineMinutes?: number
+}) {
+  const activeJobs = route.jobs.filter(j => !j.is_cancelled)
+  const driveMin = route.totalMinutes ?? 0
+  const workMin = sumWorkMinutes(activeJobs)
+  const totalMin = driveMin + workMin
+
+  const driveDelta = (() => {
+    const t = route.totalMinutes; const b = baselineMinutes
+    if (b == null || b <= 0 || t == null || !Number.isFinite(t)) return null
+    const d = t - b; return Math.abs(d) < 0.5 ? null : d
+  })()
+
+  const fmtShort = (m: number) => {
+    if (!m || m < 1) return '—'
+    if (m < 60) return `${Math.round(m)}m`
+    const h = Math.floor(m / 60); const rem = Math.round(m % 60)
+    return rem > 0 ? `${h}h ${rem}m` : `${h}h`
+  }
+
+  const activeJobs2 = route.jobs.filter(j => !j.is_cancelled)
+  const locatedStops = activeJobs2.filter(j => j.lat != null && j.lng != null).length
+  const driveLoading = route.totalMinutes == null && locatedStops >= 2
+
+  if (!driveLoading && driveMin === 0 && workMin === 0) return null
+
+  const SpinVal = () => (
+    <svg className="w-3 h-3 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  )
+
+  return (
+    <div className="grid grid-cols-3 gap-1 mt-1.5">
+      <div className="flex flex-col items-center rounded-lg bg-gray-50 border border-gray-100 px-1 py-1.5">
+        <span className="text-[8px] font-semibold uppercase tracking-wider text-gray-400 leading-none mb-0.5">Drive</span>
+        {driveLoading ? <SpinVal /> : <span className="text-[11px] font-bold text-gray-700 tabular-nums leading-none">{fmtShort(driveMin)}</span>}
+        {!driveLoading && driveDelta != null && (
+          <span className={`text-[8px] font-semibold tabular-nums leading-none mt-0.5 ${driveDelta < 0 ? 'text-emerald-600' : 'text-orange-500'}`}>
+            {driveDelta < 0 ? `−${fmtShort(-driveDelta)}` : `+${fmtShort(driveDelta)}`}
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col items-center rounded-lg bg-gray-50 border border-gray-100 px-1 py-1.5">
+        <span className="text-[8px] font-semibold uppercase tracking-wider text-gray-400 leading-none mb-0.5">Work</span>
+        <span className="text-[11px] font-bold text-gray-700 tabular-nums leading-none">{fmtShort(workMin)}</span>
+      </div>
+      <div className="flex flex-col items-center rounded-lg bg-gray-50 border border-gray-100 px-1 py-1.5">
+        <span className="text-[8px] font-semibold uppercase tracking-wider text-gray-400 leading-none mb-0.5">Total</span>
+        {driveLoading ? <SpinVal /> : <span className="text-[11px] font-bold text-gray-700 tabular-nums leading-none">{fmtShort(totalMin)}</span>}
+      </div>
+    </div>
+  )
 }
 
 /** Text-only route summary line (drive, distance, delta). */
@@ -281,6 +368,8 @@ function SortableJobCard({
   isHighlighted,
   onMouseEnter,
   onMouseLeave,
+  onRailHover,
+  onRailLeave,
 }: {
   job: RouteJob
   index: number
@@ -291,6 +380,9 @@ function SortableJobCard({
   isHighlighted?: boolean
   onMouseEnter?: () => void
   onMouseLeave?: () => void
+  /** Hovering the drive-time badge below this stop isolates the route on the map. */
+  onRailHover?: () => void
+  onRailLeave?: () => void
 }) {
   const { t } = useAppI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -325,7 +417,7 @@ function SortableJobCard({
           </div>
           {!isLast && (
             nextLegMinutes != null && nextLegMinutes > 0 ? (
-              <RailDriveConnector minutes={nextLegMinutes} />
+              <RailDriveConnector minutes={nextLegMinutes} onHover={onRailHover} onLeave={onRailLeave} />
             ) : (
               <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[18px]" />
             )
@@ -340,7 +432,7 @@ function SortableJobCard({
             onMouseLeave={onMouseLeave}
             className="rounded-2xl pl-4 pr-2 py-3 flex items-center gap-2 cursor-pointer transition-all duration-150 active:scale-[0.99]"
             style={{
-              background: isHighlighted ? '#f0fdf4' : '#fff',
+              background: isHighlighted ? `${color}14` : '#fff',
               border: `1.5px solid ${isHighlighted ? color : '#eef0ee'}`,
               boxShadow: isDragging
                 ? '0 12px 30px rgba(0,0,0,0.14)'
@@ -417,7 +509,10 @@ function HomeStopRow({
   color,
   onMouseEnter,
   onMouseLeave,
+  onRailHover,
+  onRailLeave,
   dimmed,
+  isHighlighted,
   showConnectorBelow = true,
   connectorDriveAbove,
   connectorDriveBelow,
@@ -428,7 +523,11 @@ function HomeStopRow({
   color: string
   onMouseEnter: () => void
   onMouseLeave: () => void
+  /** Hovering a drive-time badge on this row isolates the route on the map. */
+  onRailHover?: () => void
+  onRailLeave?: () => void
   dimmed?: boolean
+  isHighlighted?: boolean
   showConnectorBelow?: boolean
   /** Drive time on the rail segment above this stop (e.g. last job → end). */
   connectorDriveAbove?: number | null
@@ -455,20 +554,26 @@ function HomeStopRow({
       {/* ── Rail: home node + connector ── */}
       <div className="flex flex-col items-center flex-shrink-0 pt-1" style={{ width: RAIL_W }}>
         {connectorDriveAbove != null && connectorDriveAbove > 0 && (
-          <RailDriveConnector minutes={connectorDriveAbove} />
+          <RailDriveConnector minutes={connectorDriveAbove} onHover={onRailHover} onLeave={onRailLeave} />
         )}
         <div
-          className="flex items-center justify-center rounded-full bg-white flex-shrink-0"
-          style={{ width: 26, height: 26, border: `2px solid ${color}` }}
+          className="flex items-center justify-center rounded-full flex-shrink-0 transition-all duration-150"
+          style={{
+            width: 26,
+            height: 26,
+            background: color,
+            boxShadow: isHighlighted
+              ? `0 0 0 4px ${color}33, 0 2px 6px ${color}55`
+              : `0 2px 5px ${color}45`,
+            transform: isHighlighted ? 'scale(1.12)' : 'scale(1)',
+          }}
           title={t('app.routePlanner.startEndFixed', 'Start/end - fixed')}
         >
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" style={{ color }}>
-            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
-          </svg>
+          <HomeIcon className="w-[13px] h-[13px] text-white" strokeWidth={2.25} aria-hidden />
         </div>
         {showConnectorBelow && (
           connectorDriveBelow != null && connectorDriveBelow > 0 ? (
-            <RailDriveConnector minutes={connectorDriveBelow} />
+            <RailDriveConnector minutes={connectorDriveBelow} onHover={onRailHover} onLeave={onRailLeave} />
           ) : (
             <div className="w-px flex-1 mt-1 bg-gray-200 min-h-[18px]" />
           )
@@ -521,6 +626,7 @@ function UserRoutePanel({
   optimizing,
   highlightedJobId,
   onJobCardHover,
+  onIsolateRoute,
   baselineMinutes,
   availableMinutes,
   drawMode,
@@ -540,6 +646,8 @@ function UserRoutePanel({
   onOptimize: (userId: number) => void
   optimizing: boolean
   highlightedJobId?: number | string | null
+  /** Isolate a single drive leg on the map while its drive-time badge is hovered. */
+  onIsolateRoute?: (seg: IsolatedRouteSeg | null) => void
   onJobCardHover?: (jobId: number | string | null) => void
   baselineMinutes?: number
   availableMinutes?: number
@@ -568,7 +676,7 @@ function UserRoutePanel({
       : endJob
         ? activeJobs.slice(0, -1)
         : activeJobs
-  const hasCoords = activeJobs.filter(j => j.lat && j.lng).length > 1
+  const hasCoords = middleJobs.filter(j => j.lat != null && j.lng != null).length >= 2
   const canDraw = middleJobs.length >= 2
 
   // ── Draw mode: derive numbered + remaining lists from drawOrder ──────────────
@@ -629,21 +737,24 @@ function UserRoutePanel({
         </div>
       )}
 
-      {/* Desktop: plan route menu before the job list */}
+      {/* Desktop: compact stats + plan route menu */}
       {!jobsFirst && !drawMode && (
         <div className="mb-3 flex-shrink-0">
-          <RoutePlanMenu
-            label={t('app.routePlanner.planRoute', 'Plan route')}
-            actionsOpen={actionsOpen}
-            onToggle={() => setActionsOpen(o => !o)}
-            onClose={() => setActionsOpen(false)}
-            canDraw={canDraw}
-            optimizing={optimizing}
-            hasCoords={hasCoords}
-            onDrawStart={onDrawStart}
-            onOptimize={onOptimize}
-            userId={route.userId}
-          />
+          <RouteQuickStats route={route} baselineMinutes={baselineMinutes} />
+          <div className="mt-2">
+            <RoutePlanMenu
+              label={t('app.routePlanner.planRoute', 'Plan route')}
+              actionsOpen={actionsOpen}
+              onToggle={() => setActionsOpen(o => !o)}
+              onClose={() => setActionsOpen(false)}
+              canDraw={canDraw}
+              optimizing={optimizing}
+              hasCoords={hasCoords}
+              onDrawStart={onDrawStart}
+              onOptimize={onOptimize}
+              userId={route.userId}
+            />
+          </div>
         </div>
       )}
 
@@ -881,6 +992,12 @@ function UserRoutePanel({
                   }
                   onMouseEnter={() => onJobCardHover?.(startJob.id)}
                   onMouseLeave={() => onJobCardHover?.(null)}
+                  onRailHover={() => {
+                    const from = jobCoord(startJob); const to = jobCoord(middleJobs[0] ?? endJob ?? startJob)
+                    if (from && to) onIsolateRoute?.({ userId: route.userId, fromCoord: from, toCoord: to })
+                  }}
+                  onRailLeave={() => onIsolateRoute?.(null)}
+                  isHighlighted={highlightedJobId != null && String(startJob.id) === String(highlightedJobId)}
                 />
               )}
 
@@ -899,6 +1016,12 @@ function UserRoutePanel({
                         isHighlighted={highlightedJobId != null && String(job.id) === String(highlightedJobId)}
                         onMouseEnter={() => onJobCardHover?.(job.id)}
                         onMouseLeave={() => onJobCardHover?.(null)}
+                        onRailHover={() => {
+                          const nextJob = middleJobs[idx + 1] ?? endJob
+                          const from = jobCoord(job); const to = nextJob ? jobCoord(nextJob) : null
+                          if (from && to) onIsolateRoute?.({ userId: route.userId, fromCoord: from, toCoord: to })
+                        }}
+                        onRailLeave={() => onIsolateRoute?.(null)}
                       />
                     ))}
                   </div>
@@ -947,6 +1070,13 @@ function UserRoutePanel({
                   }
                   onMouseEnter={() => onJobCardHover?.(endJob.id)}
                   onMouseLeave={() => onJobCardHover?.(null)}
+                  onRailHover={() => {
+                    const prevJob = middleJobs.length > 0 ? middleJobs[middleJobs.length - 1] : startJob
+                    const from = prevJob ? jobCoord(prevJob) : null; const to = jobCoord(endJob)
+                    if (from && to) onIsolateRoute?.({ userId: route.userId, fromCoord: from, toCoord: to })
+                  }}
+                  onRailLeave={() => onIsolateRoute?.(null)}
+                  isHighlighted={highlightedJobId != null && String(endJob.id) === String(highlightedJobId)}
                 />
                 </>
               )}
@@ -984,16 +1114,74 @@ function UserRoutePanel({
 
 // ── All-users overview ────────────────────────────────────────────────────────
 
+export interface BulkOptimizeProgress {
+  step: number
+  total: number
+  message: string
+}
+
 function AllUsersPanel({
   routes,
   onSelectUser,
   baselineMinutesByUser,
+  unsavedUserIds = [],
+  onSaveAll,
+  onDiscardAll,
+  onBulkOptimize,
+  onHoverUser,
+  onSelectionChange,
 }: {
   routes: UserRoute[]
   onSelectUser: (userId: number) => void
   baselineMinutesByUser?: Record<number, number>
+  unsavedUserIds?: number[]
+  onSaveAll?: () => Promise<void>
+  onDiscardAll?: () => void
+  onBulkOptimize?: (
+    userIds: number[],
+    allowReassign: boolean,
+    onProgress: (p: BulkOptimizeProgress) => void,
+  ) => Promise<void>
+  /** Called when the user hovers in/out of an employee row (map-only isolation). */
+  onHoverUser?: (userId: number | null) => void
+  /** Called whenever the checkbox selection changes. */
+  onSelectionChange?: (ids: number[]) => void
 }) {
   const { t } = useAppI18n()
+  const [savingAll, setSavingAll] = useState(false)
+  const [savedAll, setSavedAll] = useState(false)
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [hoveredRowId, setHoveredRowId] = useState<number | null>(null)
+  const [allowReassign, setAllowReassign] = useState(false)
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<BulkOptimizeProgress | null>(null)
+
+  const isSelectMode = selectedIds.length > 0
+
+  const toggleSelect = (userId: number) => {
+    setSelectedIds(prev => {
+      const next = prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+      onSelectionChange?.(next)
+      return next
+    })
+  }
+
+  const handleBulkRun = async () => {
+    if (!onBulkOptimize || selectedIds.length === 0) return
+    setBulkRunning(true)
+    setBulkProgress({ step: 0, total: selectedIds.length + 2, message: 'Starting…' })
+    try {
+      await onBulkOptimize(selectedIds, allowReassign, p => setBulkProgress(p))
+    } finally {
+      setBulkRunning(false)
+      setTimeout(() => {
+        setBulkProgress(null)
+        setSelectedIds([])
+      }, 1200)
+    }
+  }
+
   const totalDelta = routes.reduce((sum, route) => {
     const baseline = baselineMinutesByUser?.[route.userId]
     const total = route.totalMinutes
@@ -1004,25 +1192,54 @@ function AllUsersPanel({
 
   return (
     <div>
-      <p className="text-[11px] text-gray-400 text-center mb-1">
-        {t('app.routePlanner.selectEmployeePlan', 'Select an employee to plan their route')}
-      </p>
-      {showTotalDelta && (
+      {/* Header hint — hidden during bulk run */}
+      {!bulkRunning && (
+        <p className="text-[11px] text-gray-400 text-center mb-1">
+          {isSelectMode
+            ? `${selectedIds.length} selected — click avatar to deselect`
+            : t('app.routePlanner.selectEmployeePlan', 'Select an employee to plan their route')}
+        </p>
+      )}
+
+      {/* Total delta */}
+      {showTotalDelta && !bulkRunning && (
         <p className="text-[11px] text-center mb-4">
-          <span
-            className={
-              totalDelta < 0
-                ? 'text-emerald-600 font-medium'
-                : 'text-amber-600 font-medium'
-            }
-          >
+          <span className={totalDelta < 0 ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'}>
             {totalDelta < 0
               ? `${t('app.routePlanner.totalSaved', 'Total saved:')} ${fmtMin(Math.abs(totalDelta))}`
               : `${t('app.routePlanner.totalAdded', 'Total added:')} ${fmtMin(totalDelta)}`}
           </span>
         </p>
       )}
-      {!showTotalDelta && <div className="mb-4" />}
+      {!showTotalDelta && !bulkRunning && <div className="mb-4" />}
+
+      {/* ── Progress bar (bulk running) ── */}
+      {bulkRunning && bulkProgress && (
+        <div className="mb-4 rounded-2xl bg-white border border-gray-100 shadow-sm px-4 py-4">
+          <div className="flex items-center gap-3 mb-3">
+            <svg className="w-4 h-4 flex-shrink-0 animate-spin text-[#3DD57A]" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <p className="text-xs font-medium text-gray-700 truncate flex-1">{bulkProgress.message}</p>
+            <span className="text-[10px] text-gray-400 flex-shrink-0">
+              {bulkProgress.step}/{bulkProgress.total}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[#3DD57A] transition-all duration-500"
+              style={{
+                width: `${bulkProgress.total > 0
+                  ? Math.round((bulkProgress.step / bulkProgress.total) * 100)
+                  : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Employee rows */}
       <div className="space-y-2">
         {routes.map(route => {
           const stops = route.jobs.filter(j => !j.is_cancelled && !j.is_home).length
@@ -1037,75 +1254,271 @@ function AllUsersPanel({
                 : `+${fmtDeltaMin(diff)}`
               : null
           const timeDeltaSaved = diff != null && diff < -0.5
+          const isSelected = selectedIds.includes(route.userId)
+          const isRowHovered = hoveredRowId === route.userId
+          const showCheckbox = isSelected || isRowHovered
 
           return (
-            <button
+            <div
               key={route.userId}
-              type="button"
-              onClick={() => onSelectUser(route.userId)}
-              className="w-full text-left rounded-2xl px-4 py-3.5 flex items-center gap-3.5 bg-white border border-gray-100 shadow-sm hover:border-gray-200 hover:shadow-md transition-all group"
+              data-reassign-userid={route.userId}
+              onMouseEnter={() => {
+                setHoveredRowId(route.userId)
+                onHoverUser?.(route.userId)
+              }}
+              onMouseLeave={() => {
+                setHoveredRowId(null)
+                onHoverUser?.(null)
+              }}
+              className={`relative flex items-center gap-3.5 rounded-2xl px-4 py-3.5 bg-white border shadow-sm transition-all cursor-pointer ${
+                isSelected
+                  ? 'border-[#3DD57A]/40 shadow-[0_2px_12px_rgba(61,213,122,0.12)]'
+                  : 'border-gray-100 hover:border-gray-200 hover:shadow-md'
+              } ${bulkRunning ? 'opacity-50 pointer-events-none' : ''}`}
             >
-              {/* Avatar */}
-              <div
-                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-bold"
-                style={{ background: route.color, boxShadow: `0 4px 10px ${route.color}40` }}
+              {/* Avatar / Checkbox — click toggles selection */}
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); toggleSelect(route.userId) }}
+                aria-label={isSelected ? 'Deselect employee' : 'Select employee'}
+                className="relative w-9 h-9 flex-shrink-0 focus:outline-none"
               >
-                {route.userName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
-              </div>
+                {/* Colored avatar (hidden when checkbox is shown) */}
+                <div
+                  className="absolute inset-0 rounded-full flex items-center justify-center text-white text-sm font-bold transition-all duration-150"
+                  style={{
+                    background: route.color,
+                    boxShadow: `0 4px 10px ${route.color}40`,
+                    opacity: showCheckbox ? 0 : 1,
+                    transform: showCheckbox ? 'scale(0.7)' : 'scale(1)',
+                  }}
+                >
+                  {route.userName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                </div>
 
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">{route.userName}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  {stops} {stops === 1 ? t('app.routePlanner.stop', 'stop') : t('app.routePlanner.stops', 'stops')}
-                  {total != null && ` · ${fmtMin(total)} ${t('app.routePlanner.driving', 'driving')}`}
-                  {timeDeltaLabel && (
-                    <span
-                      className={
-                        timeDeltaSaved
-                          ? ' text-emerald-600 font-medium'
-                          : ' text-amber-600 font-medium'
-                      }
-                    >
-                      {' · '}
-                      {timeDeltaLabel}
-                    </span>
+                {/* Square checkbox (shown on row hover or when selected) */}
+                <div
+                  className="absolute inset-0 rounded-md flex items-center justify-center transition-all duration-150"
+                  style={{
+                    background: isSelected ? '#3DD57A' : '#fff',
+                    border: `2px solid ${isSelected ? '#3DD57A' : '#9ca3af'}`,
+                    opacity: showCheckbox ? 1 : 0,
+                    transform: showCheckbox ? 'scale(1)' : 'scale(0.7)',
+                  }}
+                >
+                  {isSelected && (
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
                   )}
-                </p>
-                {/* Stop progress dots */}
-                {stops > 0 && (
-                  <div className="flex gap-1 mt-1.5">
-                    {Array.from({ length: Math.min(stops, 10) }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="h-1 rounded-full flex-1"
-                        style={{
-                          background: route.color,
-                          opacity: 0.3 + 0.7 * (i / Math.max(stops - 1, 1)),
-                          maxWidth: 20,
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+                </div>
+              </button>
 
-              {/* Chevron */}
-              <svg
-                className="w-4 h-4 text-gray-300 group-hover:text-gray-500 flex-shrink-0 transition-all group-hover:translate-x-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+              {/* Info + nav — clicking navigates (or in select mode also toggles) */}
+              <button
+                type="button"
+                onClick={() => isSelectMode ? toggleSelect(route.userId) : onSelectUser(route.userId)}
+                className="flex-1 flex items-center gap-3 min-w-0 text-left"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{route.userName}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    {stops} {stops === 1 ? t('app.routePlanner.stop', 'stop') : t('app.routePlanner.stops', 'stops')}
+                    {total != null && ` · ${fmtMin(total)} ${t('app.routePlanner.driving', 'driving')}`}
+                    {timeDeltaLabel && (
+                      <span className={timeDeltaSaved ? ' text-emerald-600 font-medium' : ' text-amber-600 font-medium'}>
+                        {' · '}{timeDeltaLabel}
+                      </span>
+                    )}
+                  </p>
+                  {stops > 0 && (
+                    <div className="flex gap-1 mt-1.5">
+                      {Array.from({ length: Math.min(stops, 10) }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-1 rounded-full flex-1"
+                          style={{
+                            background: route.color,
+                            opacity: 0.3 + 0.7 * (i / Math.max(stops - 1, 1)),
+                            maxWidth: 20,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Chevron (hidden in select mode) */}
+                {!isSelectMode && (
+                  <svg className="w-4 h-4 text-gray-300 flex-shrink-0 transition-all group-hover:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                )}
+              </button>
+            </div>
           )
         })}
         {routes.length === 0 && (
           <p className="text-sm text-gray-400 text-center py-12">{t('app.routePlanner.noJobsScheduledToday', 'No jobs scheduled today')}</p>
         )}
       </div>
+
+      {/* ── Bulk-action toolbar (shown when employees are selected) ── */}
+      {isSelectMode && !bulkRunning && onBulkOptimize && (
+        <div className="mt-4 rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+            <span className="text-xs font-semibold text-gray-700">
+              {selectedIds.length === routes.length
+                ? 'All employees selected'
+                : `${selectedIds.length} employee${selectedIds.length !== 1 ? 's' : ''} selected`}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  selectedIds.length === routes.length
+                    ? setSelectedIds([])
+                    : setSelectedIds(routes.map(r => r.userId))
+                }
+                className="text-[11px] text-[#3DD57A] font-semibold hover:underline"
+              >
+                {selectedIds.length === routes.length ? 'Deselect all' : 'Select all'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="text-[11px] text-gray-400 hover:text-gray-600 font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+
+          {/* Allow reassign toggle */}
+          <label className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50">
+            <div className="flex-shrink-0 mt-0.5 relative">
+              <input
+                type="checkbox"
+                checked={allowReassign}
+                onChange={e => setAllowReassign(e.target.checked)}
+                className="sr-only"
+              />
+              <div
+                className="w-9 h-5 rounded-full transition-colors duration-200"
+                style={{ background: allowReassign ? '#3DD57A' : '#e5e7eb' }}
+              >
+                <div
+                  className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200"
+                  style={{ transform: allowReassign ? 'translateX(16px)' : 'translateX(0)' }}
+                />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-gray-800">Allow employee reassign</p>
+              <p className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">
+                Re-distributes all jobs by location so each employee gets a tight area near their home — minimising driving across the whole team.
+              </p>
+            </div>
+          </label>
+
+          {/* Run button */}
+          <div className="px-4 py-3">
+            <button
+              type="button"
+              disabled={bulkRunning}
+              onClick={handleBulkRun}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
+              style={{
+                background: allowReassign
+                  ? 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'
+                  : '#3DD57A',
+                color: '#fff',
+                boxShadow: allowReassign
+                  ? '0 4px 20px rgba(99,102,241,0.3)'
+                  : '0 4px 20px rgba(61,213,122,0.28)',
+              }}
+            >
+              {allowReassign ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Reassign &amp; optimise {selectedIds.length} routes
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Auto-plan {selectedIds.length} route{selectedIds.length !== 1 ? 's' : ''}
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Save / Cancel all unsaved routes */}
+      {(unsavedUserIds.length > 0 || savingAll || savedAll) && onSaveAll && !bulkRunning && (
+        <div className="mt-4 flex gap-2">
+          {/* Cancel all */}
+          {onDiscardAll && !savingAll && !savedAll && (
+            <button
+              type="button"
+              onClick={onDiscardAll}
+              className="flex items-center justify-center gap-1.5 px-4 py-3.5 rounded-2xl text-sm font-semibold text-gray-500 bg-white border border-gray-200 hover:border-gray-300 hover:text-gray-700 transition-all flex-shrink-0"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Cancel all
+            </button>
+          )}
+
+          {/* Save all */}
+          <button
+            type="button"
+            disabled={savingAll}
+            onClick={async () => {
+              setSavingAll(true); setSavedAll(false)
+              await onSaveAll()
+              setSavingAll(false); setSavedAll(true)
+              setTimeout(() => setSavedAll(false), 1600)
+            }}
+            className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
+            style={{
+              background: savedAll ? '#10b981' : '#3DD57A',
+              color: '#fff',
+              boxShadow: savedAll ? '0 0 20px rgba(16,185,129,0.3)' : '0 4px 20px rgba(61,213,122,0.28)',
+            }}
+          >
+            {savingAll ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {t('app.routePlanner.saving', 'Saving...')}
+              </>
+            ) : savedAll ? (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                </svg>
+                {t('app.routePlanner.allRoutesSaved', 'All routes saved!')}
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                {t('app.routePlanner.saveAllRoutes', 'Save all routes')} ({unsavedUserIds.length})
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1123,11 +1536,20 @@ interface DayRoutePanelProps {
   onOptimize: (userId: number) => void
   optimizing: boolean
   geocodingCount: number
-  onSave: () => Promise<void>
+  /** Save a specific user's route (or all unsaved routes when called without argument). */
+  onSave: (userId?: number) => Promise<void>
+  /** Save all users' unsaved routes at once. */
+  onSaveAll?: () => Promise<void>
+  /** Discard unsaved changes for a specific user. */
+  onDiscardUser?: (userId: number) => void
+  /** Discard unsaved changes for ALL users at once. */
+  onDiscardAll?: () => void
   onBackToWeek?: () => void
   dateLabel?: string
   highlightedJobId?: number | string | null
   onJobCardHover?: (jobId: number | string | null) => void
+  /** Isolate a single drive leg on the map while its drive-time badge is hovered. */
+  onIsolateRoute?: (seg: IsolatedRouteSeg | null) => void
   baselineMinutesByUser?: Record<number, number>
   availableMinutesByUser?: Record<number, number>
   /** Manual route-drawing mode (one click per stop). */
@@ -1135,6 +1557,8 @@ interface DayRoutePanelProps {
   drawOrder?: (number | string)[]
   /** Driving time delta after draw-route vs order before draw (+ = saved). */
   drawRouteComparison?: { diffMinutes: number } | null
+  /** Short-lived notice after auto-optimize (success hint or error). */
+  optimizeNotice?: string | null
   onDrawStart?: () => void
   onDrawAssign?: (jobId: number | string) => void
   onDrawReset?: () => void
@@ -1144,8 +1568,20 @@ interface DayRoutePanelProps {
   mobileSheet?: boolean
   /** Mobile: lift save bar into the sheet toolbar so it stays visible above the day picker */
   wrapMobileSheet?: (parts: { body: React.ReactNode; toolbar: React.ReactNode }) => React.ReactNode
+  /** IDs of users whose current route order differs from the last saved state. */
+  unsavedUserIds?: number[]
   /** Route order or assignees differ from last save — controls save bar visibility */
   hasUnsavedChanges?: boolean
+  /** Bulk optimize / reassign multiple employees at once. */
+  onBulkOptimize?: (
+    userIds: number[],
+    allowReassign: boolean,
+    onProgress: (p: BulkOptimizeProgress) => void,
+  ) => Promise<void>
+  /** AllEmployees panel: called when the user hovers in/out of an employee row. */
+  onHoverUser?: (userId: number | null) => void
+  /** AllEmployees panel: called when the checkbox selection changes. */
+  onAllPanelSelectionChange?: (ids: number[]) => void
 }
 
 export default function DayRoutePanel({
@@ -1160,15 +1596,21 @@ export default function DayRoutePanel({
   optimizing,
   geocodingCount,
   onSave,
+  onSaveAll,
+  onDiscardUser,
+  onDiscardAll,
+  unsavedUserIds = [],
   onBackToWeek,
   dateLabel,
   highlightedJobId,
   onJobCardHover,
+  onIsolateRoute,
   baselineMinutesByUser,
   availableMinutesByUser,
   drawMode,
   drawOrder,
   drawRouteComparison,
+  optimizeNotice,
   onDrawStart,
   onDrawAssign,
   onDrawReset,
@@ -1177,6 +1619,9 @@ export default function DayRoutePanel({
   mobileSheet = false,
   wrapMobileSheet,
   hasUnsavedChanges = false,
+  onBulkOptimize,
+  onHoverUser,
+  onAllPanelSelectionChange,
 }: DayRoutePanelProps) {
   const { t, locale } = useAppI18n()
   // Solo company: only one user has routes today → skip the "all employees" picker entirely
@@ -1190,12 +1635,13 @@ export default function DayRoutePanel({
       : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const saveBarVisible = hasUnsavedChanges || saving || saved
+  const focusedUserUnsaved = focusedRoute != null && unsavedUserIds.includes(focusedRoute.userId)
+  const saveBarVisible = focusedUserUnsaved || saving || saved
 
   const handleSave = async () => {
     setSaving(true)
     setSaved(false)
-    await onSave()
+    await onSave(focusedRoute?.userId)
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 1600)
@@ -1211,7 +1657,7 @@ export default function DayRoutePanel({
           route={focusedRoute}
           baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
           availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
-          className="mb-3"
+          className="mb-2.5 justify-center"
         />
       )}
       {geocodingCount > 0 && (
@@ -1225,45 +1671,59 @@ export default function DayRoutePanel({
             .replace('{{suffix}}', geocodingCount !== 1 ? (locale === 'da' ? 'r' : 'es') : '')}
         </p>
       )}
-      <button
-        type="button"
-        onClick={handleSave}
-        disabled={saving || drawMode}
-        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
-        title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
-        style={{
-          background: saved ? '#10b981' : '#3DD57A',
-          color: '#fff',
-          boxShadow: saved
-            ? '0 0 20px rgba(16,185,129,0.3)'
-            : '0 4px 20px rgba(61,213,122,0.28)',
-          transform: saving ? 'scale(0.98)' : 'scale(1)',
-        }}
-      >
-        {saving ? (
-          <>
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            {t('app.routePlanner.saving', 'Saving...')}
-          </>
-        ) : saved ? (
-          <>
+      <div className="flex gap-2">
+        {onDiscardUser && focusedRoute && focusedUserUnsaved && !saved && !saving && (
+          <button
+            type="button"
+            onClick={() => onDiscardUser(focusedRoute.userId)}
+            className="flex items-center justify-center gap-1.5 px-4 py-3.5 rounded-2xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-all active:scale-[0.98] flex-shrink-0"
+          >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
-            {t('app.routePlanner.routeSaved', 'Route saved!')}
-          </>
-        ) : (
-          <>
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-            </svg>
-            {t('app.routePlanner.saveApply', 'Save & apply route')}
-          </>
+            {t('app.routePlanner.cancel', 'Cancel')}
+          </button>
         )}
-      </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || drawMode}
+          className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
+          title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
+          style={{
+            background: saved ? '#10b981' : '#3DD57A',
+            color: '#fff',
+            boxShadow: saved
+              ? '0 0 20px rgba(16,185,129,0.3)'
+              : '0 4px 20px rgba(61,213,122,0.28)',
+            transform: saving ? 'scale(0.98)' : 'scale(1)',
+          }}
+        >
+          {saving ? (
+            <>
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {t('app.routePlanner.saving', 'Saving...')}
+            </>
+          ) : saved ? (
+            <>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+              {t('app.routePlanner.routeSaved', 'Route saved!')}
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+              {t('app.routePlanner.saveApply', 'Save & apply route')}
+            </>
+          )}
+        </button>
+      </div>
     </div>
   )
 
@@ -1346,6 +1806,7 @@ export default function DayRoutePanel({
           optimizing={optimizing}
           highlightedJobId={highlightedJobId}
           onJobCardHover={onJobCardHover}
+          onIsolateRoute={onIsolateRoute}
           baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
           availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
           drawMode={drawMode}
@@ -1363,6 +1824,12 @@ export default function DayRoutePanel({
           routes={routes}
           onSelectUser={onSelectUser}
           baselineMinutesByUser={baselineMinutesByUser}
+          unsavedUserIds={unsavedUserIds}
+          onSaveAll={onSaveAll}
+          onDiscardAll={onDiscardAll}
+          onBulkOptimize={onBulkOptimize}
+          onHoverUser={onHoverUser}
+          onSelectionChange={onAllPanelSelectionChange}
         />
       )}
     </>

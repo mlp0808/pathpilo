@@ -1745,6 +1745,89 @@ router.put('/:invoiceId/status', authenticateToken, async (req, res) => {
 });
 
 // Export the router as the default. We also expose `getInvoiceWithItems` and
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE draft invoice
+// Only drafts (invoice_number IS NULL / status = 'draft') can be deleted.
+// Query param: ?deleteJobs=true  → also hard-delete the linked jobs
+//              (default)         → unlink jobs from the invoice (jobs stay)
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/:invoiceId', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const { invoiceId } = req.params;
+    const deleteJobs = req.query.deleteJobs === 'true';
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Fetch invoice — must belong to this company and still be a draft
+      const invRes = await client.query(
+        `SELECT id, status, invoice_number FROM invoices WHERE id = $1 AND company_id = $2`,
+        [invoiceId, companyId],
+      );
+      if (invRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Invoice not found' });
+      }
+      const inv = invRes.rows[0];
+      if (inv.status !== 'draft') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'Only draft invoices can be deleted. Consider cancelling sent invoices instead.',
+        });
+      }
+
+      // Gather linked job ids before deleting items
+      const itemsRes = await client.query(
+        `SELECT job_id FROM invoice_items WHERE invoice_id = $1 AND job_id IS NOT NULL`,
+        [invoiceId],
+      );
+      const jobIds = itemsRes.rows.map(r => r.job_id).filter(Boolean);
+
+      // Remove invoice items
+      await client.query(`DELETE FROM invoice_items WHERE invoice_id = $1`, [invoiceId]);
+
+      // Remove any public tokens and pending reminders linked to this invoice
+      await client.query(
+        `DELETE FROM invoice_public_tokens WHERE invoice_id = $1`,
+        [invoiceId],
+      ).catch(() => {});
+      await client.query(
+        `DELETE FROM scheduled_emails WHERE payload->>'invoiceId' = $1`,
+        [String(invoiceId)],
+      ).catch(() => {});
+
+      // Delete the invoice itself
+      await client.query(`DELETE FROM invoices WHERE id = $1`, [invoiceId]);
+
+      if (jobIds.length > 0) {
+        if (deleteJobs) {
+          // Hard-delete the jobs
+          await client.query(`DELETE FROM jobs WHERE id = ANY($1) AND company_id = $2`, [jobIds, companyId]);
+        }
+        // When NOT deleting jobs, they simply lose the invoice_items reference —
+        // no action needed; the jobs already exist independently in the jobs table.
+      }
+
+      await client.query('COMMIT');
+      return res.json({ ok: true, deletedJobIds: deleteJobs ? jobIds : [] });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('DELETE /invoices/:id error:', err);
+    return res.status(500).json({ error: 'Failed to delete invoice' });
+  }
+});
+
 // `buildInvoicePdf` as named props so the public PDF route in
 // routes/public-invoices.js can reuse them — same loader, same builder, same
 // PDF bytes for both admin and customer downloads (a hard accounting

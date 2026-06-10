@@ -11,6 +11,7 @@ import {
   type BankTransferConfig,
 } from '../../utils/bankTransfer'
 import { BuildingLibraryIcon, CreditCardIcon, ChevronDownIcon } from '@heroicons/react/24/outline'
+import { getCountryRule } from '../../config/countryRules'
 import {
   InvoiceSendEmailCard,
   InvoiceDueReminderCard,
@@ -39,6 +40,10 @@ type InvoiceDefaults = {
   maxNumericInvoice: number
   invoiceNumberingConfigured: boolean
   invoicingEnabled: boolean
+  /** null = not yet configured (use country default); true/false = explicit */
+  invoiceVatEnabled: boolean | null
+  /** null = not yet configured (use country default) */
+  invoiceDefaultTaxRate: number | null
 }
 
 type PaymentConfig = BankTransferConfig & {
@@ -61,7 +66,11 @@ type PaymentDraft = {
 
 type SavableInvoiceDefaults = Pick<
   InvoiceDefaults,
-  'invoiceDefaultDueDays' | 'invoiceDefaultPaymentTerms' | 'invoiceNextNumber'
+  | 'invoiceDefaultDueDays'
+  | 'invoiceDefaultPaymentTerms'
+  | 'invoiceNextNumber'
+  | 'invoiceVatEnabled'
+  | 'invoiceDefaultTaxRate'
 >
 
 type ActivationFieldErrors = {
@@ -110,6 +119,8 @@ export default function InvoiceOptionsPage() {
     invoiceDefaultDueDays: '',
     invoiceDefaultPaymentTerms: '',
     invoiceNextNumber: '',
+    invoiceVatEnabled: null,
+    invoiceDefaultTaxRate: null,
   })
   const [form, setForm] = useState<InvoiceDefaults>({
     invoiceDefaultDueDays: '',
@@ -118,6 +129,8 @@ export default function InvoiceOptionsPage() {
     maxNumericInvoice: 0,
     invoiceNumberingConfigured: false,
     invoicingEnabled: false,
+    invoiceVatEnabled: null,
+    invoiceDefaultTaxRate: null,
   })
   const [activationFieldErrors, setActivationFieldErrors] = useState<ActivationFieldErrors>({
     nextNumber: false,
@@ -138,9 +151,11 @@ export default function InvoiceOptionsPage() {
     return (
       form.invoiceDefaultDueDays !== saved.invoiceDefaultDueDays ||
       form.invoiceDefaultPaymentTerms !== saved.invoiceDefaultPaymentTerms ||
-      form.invoiceNextNumber !== saved.invoiceNextNumber
+      form.invoiceNextNumber !== saved.invoiceNextNumber ||
+      form.invoiceVatEnabled !== saved.invoiceVatEnabled ||
+      form.invoiceDefaultTaxRate !== saved.invoiceDefaultTaxRate
     )
-  }, [form.invoiceDefaultDueDays, form.invoiceDefaultPaymentTerms, form.invoiceNextNumber])
+  }, [form.invoiceDefaultDueDays, form.invoiceDefaultPaymentTerms, form.invoiceNextNumber, form.invoiceVatEnabled, form.invoiceDefaultTaxRate])
 
   const paymentDirty = useMemo(() => {
     return paymentOptions.some((opt) => {
@@ -185,6 +200,8 @@ export default function InvoiceOptionsPage() {
             : false
         const nextNumber = nextNumberRaw != null ? Number(nextNumberRaw) : ''
         const dueDays = dueDaysRaw != null ? Number(dueDaysRaw) : ''
+        const vatEnabled = data.defaults.invoiceVatEnabled ?? null
+        const taxRate = data.defaults.invoiceDefaultTaxRate ?? null
         setForm({
           invoiceDefaultDueDays: dueDays,
           invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
@@ -192,11 +209,15 @@ export default function InvoiceOptionsPage() {
           maxNumericInvoice: maxIssued,
           invoiceNumberingConfigured: configured,
           invoicingEnabled: Boolean(data.defaults.invoicingEnabled),
+          invoiceVatEnabled: vatEnabled,
+          invoiceDefaultTaxRate: taxRate,
         })
         savedDefaultsRef.current = {
           invoiceDefaultDueDays: dueDays,
           invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
           invoiceNextNumber: nextNumber,
+          invoiceVatEnabled: vatEnabled,
+          invoiceDefaultTaxRate: taxRate,
         }
       }
     } catch {
@@ -332,6 +353,12 @@ export default function InvoiceOptionsPage() {
         if (form.invoiceNextNumber !== '') {
           payload.invoiceNextNumber = form.invoiceNextNumber
         }
+        if (form.invoiceVatEnabled !== savedDefaultsRef.current.invoiceVatEnabled) {
+          payload.invoiceVatEnabled = form.invoiceVatEnabled
+        }
+        if (form.invoiceDefaultTaxRate !== savedDefaultsRef.current.invoiceDefaultTaxRate) {
+          payload.invoiceDefaultTaxRate = form.invoiceDefaultTaxRate
+        }
 
         const res = await fetch(apiUrl('/companies/invoice-defaults'), {
           method: 'PUT',
@@ -347,6 +374,8 @@ export default function InvoiceOptionsPage() {
           invoiceDefaultDueDays: form.invoiceDefaultDueDays,
           invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
           invoiceNextNumber: form.invoiceNextNumber,
+          invoiceVatEnabled: form.invoiceVatEnabled,
+          invoiceDefaultTaxRate: form.invoiceDefaultTaxRate,
         }
         savedDefaultsRef.current = nextSaved
         if (data.defaults) {
@@ -356,11 +385,16 @@ export default function InvoiceOptionsPage() {
             data.defaults.invoiceDefaultDueDays != null
               ? Number(data.defaults.invoiceDefaultDueDays)
               : nextSaved.invoiceDefaultDueDays
+          const savedVat = data.defaults.invoiceVatEnabled ?? nextSaved.invoiceVatEnabled
+          const savedRate =
+            data.defaults.invoiceDefaultTaxRate != null ? Number(data.defaults.invoiceDefaultTaxRate) : nextSaved.invoiceDefaultTaxRate
           setForm((prev) => ({
             ...prev,
             ...data.defaults,
             invoiceNextNumber: savedNext,
             invoiceDefaultDueDays: savedDue,
+            invoiceVatEnabled: savedVat,
+            invoiceDefaultTaxRate: savedRate,
             invoiceNumberingConfigured: true,
           }))
           savedDefaultsRef.current = {
@@ -368,6 +402,8 @@ export default function InvoiceOptionsPage() {
             invoiceDefaultPaymentTerms:
               data.defaults.invoiceDefaultPaymentTerms ?? nextSaved.invoiceDefaultPaymentTerms,
             invoiceNextNumber: savedNext,
+            invoiceVatEnabled: savedVat,
+            invoiceDefaultTaxRate: savedRate,
           }
         } else {
           setForm((prev) => ({ ...prev, invoiceNumberingConfigured: true }))
@@ -629,6 +665,86 @@ export default function InvoiceOptionsPage() {
               </SettingsHint>
             </SettingsField>
           </SettingsSection>
+
+          {/* ── VAT / Tax settings ──────────────────────────────────────── */}
+          {(() => {
+            const countryRule = getCountryRule(countryCode)
+            const countryDefaultRate = countryRule.defaultTaxRate
+            const vatOn = form.invoiceVatEnabled !== false
+            return (
+              <SettingsSection
+                title={t('settings.invoices.vat.section', 'Tax / VAT')}
+                description={t(
+                  'settings.invoices.vat.sectionHelp',
+                  'Controls whether VAT is shown on invoices and what rate is used. Changing this only affects new invoices — existing ones keep their original rate.',
+                )}
+              >
+                <SettingsRow
+                  htmlFor="vat-toggle"
+                  title={t('settings.invoices.vat.enabled', 'Charge VAT')}
+                  description={t(
+                    'settings.invoices.vat.enabledHelp',
+                    'When on, a tax line is added to every invoice. Turn this off if you are VAT-exempt.',
+                  )}
+                  control={
+                    <SettingsToggle
+                      id="vat-toggle"
+                      checked={vatOn}
+                      onChange={(v) =>
+                        setForm((f) => ({
+                          ...f,
+                          invoiceVatEnabled: v,
+                          // When turning VAT back on, default to country rate if no custom rate set
+                          invoiceDefaultTaxRate:
+                            v && f.invoiceDefaultTaxRate == null ? countryDefaultRate : f.invoiceDefaultTaxRate,
+                        }))
+                      }
+                    />
+                  }
+                />
+                {vatOn && (
+                  <SettingsRow
+                    htmlFor="vat-rate"
+                    title={t('settings.invoices.vat.rate', 'Default VAT rate')}
+                    description={t(
+                      'settings.invoices.vat.rateHelp',
+                      `Standard rate for your country is ${countryDefaultRate}%. You can still override the rate on individual invoices.`,
+                    )}
+                    control={
+                      <div className="flex items-center gap-1.5">
+                        <SettingsInput
+                          id="vat-rate"
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.01}
+                          className="w-20 text-right"
+                          value={
+                            form.invoiceDefaultTaxRate != null
+                              ? form.invoiceDefaultTaxRate
+                              : countryDefaultRate
+                          }
+                          onChange={(e) => {
+                            const raw = e.target.value
+                            if (!raw) {
+                              setForm((f) => ({ ...f, invoiceDefaultTaxRate: null }))
+                              return
+                            }
+                            const parsed = parseFloat(raw)
+                            setForm((f) => ({
+                              ...f,
+                              invoiceDefaultTaxRate: isNaN(parsed) ? null : Math.min(100, Math.max(0, parsed)),
+                            }))
+                          }}
+                        />
+                        <span className="text-sm text-gray-500">%</span>
+                      </div>
+                    }
+                  />
+                )}
+              </SettingsSection>
+            )
+          })()}
 
           <div className="mt-16">
             <InvoiceSendEmailCard />

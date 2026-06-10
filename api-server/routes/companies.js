@@ -1151,6 +1151,9 @@ async function ensureCompanyInvoiceSettingsColumns() {
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_subject TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_body TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1');
+  // VAT / tax settings (NULL = fall back to country-specific default)
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_vat_enabled BOOLEAN DEFAULT NULL');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_tax_rate DECIMAL(5,2) DEFAULT NULL');
   await pool.query(
     'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_numbering_configured BOOLEAN NOT NULL DEFAULT FALSE'
   );
@@ -1227,7 +1230,9 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_body,
         invoice_next_number,
         invoice_numbering_configured,
-        invoicing_enabled
+        invoicing_enabled,
+        invoice_vat_enabled,
+        invoice_default_tax_rate
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -1272,6 +1277,9 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
       invoiceNumberingConfigured: numberingConfigured,
       invoicingEnabled: invoicingOn,
       maxNumericInvoice,
+      // VAT. NULL = "not yet configured — use country default"
+      invoiceVatEnabled: row.invoice_vat_enabled,
+      invoiceDefaultTaxRate: row.invoice_default_tax_rate != null ? Number(row.invoice_default_tax_rate) : null,
     };
 
     res.json({ defaults });
@@ -1300,6 +1308,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       invoiceReminderDefaultBody,
       invoiceNextNumber,
       invoicingEnabled,
+      invoiceVatEnabled,
+      invoiceDefaultTaxRate,
     } = req.body || {};
 
     const updates = [];
@@ -1360,6 +1370,22 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       // configured, always configured.
       updates.push(`invoice_numbering_configured = TRUE`);
     }
+    if (invoiceVatEnabled !== undefined) {
+      updates.push(`invoice_vat_enabled = $${p++}`);
+      values.push(invoiceVatEnabled === null ? null : Boolean(invoiceVatEnabled));
+    }
+    if (invoiceDefaultTaxRate !== undefined) {
+      if (invoiceDefaultTaxRate === null) {
+        updates.push(`invoice_default_tax_rate = NULL`);
+      } else {
+        const rate = parseFloat(String(invoiceDefaultTaxRate));
+        if (isNaN(rate) || rate < 0 || rate > 100) {
+          return res.status(400).json({ error: 'Tax rate must be between 0 and 100' });
+        }
+        updates.push(`invoice_default_tax_rate = $${p++}`);
+        values.push(rate);
+      }
+    }
 
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
@@ -1383,7 +1409,9 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_body,
         invoice_next_number,
         invoice_numbering_configured,
-        invoicing_enabled
+        invoicing_enabled,
+        invoice_vat_enabled,
+        invoice_default_tax_rate
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -1425,6 +1453,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
         invoicingEnabled: Boolean(row.invoicing_enabled),
         maxNumericInvoice,
+        invoiceVatEnabled: row.invoice_vat_enabled,
+        invoiceDefaultTaxRate: row.invoice_default_tax_rate != null ? Number(row.invoice_default_tax_rate) : null,
       },
     });
   } catch (error) {
