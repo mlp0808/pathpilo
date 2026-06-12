@@ -59,8 +59,10 @@ export type PublicInvoicePayload = {
     country?: string | null
     countryCode?: string | null
     cvr: string | null
-    /** Country-aware label for the company number ("CVR no.", "Org.nr", "USt-IdNr.", etc.) */
+    /** Country-aware label for the company number ("CVR no.", "Co. Reg. No.", etc.) */
     cvrLabel?: string
+    /** Separate VAT registration number (e.g. GB123456789 for UK). */
+    vatNumber?: string | null
     email?: string | null
     phone?: string | null
     website?: string | null
@@ -289,6 +291,11 @@ export function DigitalInvoiceView({
               {inv.company.cvr && (
                 <p className="mt-1 text-xs text-slate-500">
                   {cvrLabel} {inv.company.cvr}
+                </p>
+              )}
+              {inv.company.vatNumber && (
+                <p className="text-xs text-slate-500">
+                  VAT No. {inv.company.vatNumber}
                 </p>
               )}
               {(inv.company.email || inv.company.phone || inv.company.website) && (

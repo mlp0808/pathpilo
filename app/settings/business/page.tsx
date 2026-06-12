@@ -44,6 +44,8 @@ interface CompanyProfile {
   /** IANA timezone; persisted choice for the company */
   timezone: string
   cvrNumber: string
+  /** VAT registration number — separate from company registration number (cvrNumber). */
+  vatNumber: string
   address: string
   city: string
   zipCode: string
@@ -84,6 +86,7 @@ export default function BusinessSettingsPage() {
     countryCode: 'DK',
     timezone: getDefaultTimezoneForCountry('DK'),
     cvrNumber: '',
+    vatNumber: '',
     address: '',
     city: '',
     zipCode: '',
@@ -123,6 +126,7 @@ export default function BusinessSettingsPage() {
             c.effectiveTimezone ||
             getDefaultTimezoneForCountry(c.countryCode || 'DK'),
           cvrNumber: c.cvrNumber || '',
+          vatNumber: c.vatNumber || '',
           address: c.address || '',
           city: c.city || '',
           zipCode: c.zipCode || '',
@@ -410,6 +414,19 @@ export default function BusinessSettingsPage() {
           title={countryRule.companyNumberLabel || t('settings.business.companyNumber', 'Company Number')}
           control={readOrInput('cvrNumber')}
         />
+        {/* VAT number — shown for any country where a separate VAT reg. number exists.
+            UK example: Companies House number goes in the field above; GB123456789 here. */}
+        {(formData.vatNumber || isEditing) && (
+          <SettingsRow
+            title={t('settings.business.vatNumber', 'VAT Number')}
+            description={
+              formData.countryCode === 'GB'
+                ? t('settings.business.vatNumberHelpGB', 'Your HMRC VAT registration number (e.g. GB123456789). Leave blank if you are not VAT registered.')
+                : t('settings.business.vatNumberHelp', 'Your VAT registration number. Leave blank if you are not VAT registered.')
+            }
+            control={readOrInput('vatNumber')}
+          />
+        )}
         <SettingsRow
           title={t('settings.business.countryCode', 'Country code')}
           control={

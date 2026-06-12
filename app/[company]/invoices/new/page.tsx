@@ -1230,7 +1230,7 @@ function NewInvoicePageContent() {
                       {form.title.length}/{MAX_TITLE_LEN}
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <label className="mb-1.5 block text-sm font-medium text-gray-700">
                         {tr('invoice.new.issueDate', 'Issue date')}
@@ -1241,6 +1241,20 @@ function NewInvoicePageContent() {
                         onChange={(e) => setForm((p) => ({ ...p, issue_date: e.target.value }))}
                         className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
                       />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                        {tr('invoice.new.currency', 'Currency')}
+                      </label>
+                      <select
+                        value={form.currency}
+                        onChange={(e) => setForm((p) => ({ ...p, currency: e.target.value }))}
+                        className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+                      >
+                        {['DKK', 'SEK', 'NOK', 'EUR', 'GBP', 'USD'].map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
                     </div>
                     <div>
                       <label className="mb-1.5 block text-sm font-medium text-gray-700">

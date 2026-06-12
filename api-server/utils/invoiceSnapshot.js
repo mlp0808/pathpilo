@@ -25,13 +25,15 @@ const COUNTRY_COMPANY_NUMBER_LABELS = {
   SE: 'Org.nr',
   NO: 'Org.nr',
   FI: 'Y-tunnus',
-  DE: 'USt-IdNr.',
-  GB: 'VAT no.',
+  DE: 'Handelsreg.-Nr.',
+  // UK: Companies House registration number — distinct from the VAT number.
+  // VAT number (GB123456789) is stored separately in companies.vat_number.
+  GB: 'Co. Reg. No.',
   US: 'EIN',
   NL: 'KvK',
-  BE: 'BTW',
+  BE: 'KBO/BCE',
   FR: 'SIRET',
-  IT: 'P.IVA',
+  IT: 'Cod. fiscale',
   ES: 'CIF',
   PL: 'NIP',
 };
@@ -112,6 +114,9 @@ async function ensureSnapshotColumns(pool) {
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT`,
+    // Separate VAT registration number (UK: GB123456789, EU: country-prefix format).
+    // Distinct from cvr_number (Companies House / trade register number).
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT`,
     // Optional client-side fields used by Danish public-sector invoicing.
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS ean_number TEXT`,
     // Optional service-side bookkeeping account code, used when exporting to
@@ -129,6 +134,7 @@ async function ensureSnapshotColumns(pool) {
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_country_code VARCHAR(2)`,
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_company_number TEXT`,
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_company_number_label TEXT`,
+    `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_vat_number TEXT`,
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_email TEXT`,
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_phone TEXT`,
     `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_website TEXT`,
@@ -172,6 +178,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
            co.country        AS company_country,
            co.country_code   AS company_country_code,
            co.cvr_number     AS company_cvr,
+           co.vat_number     AS company_vat_number,
            co.email          AS company_email,
            co.phone          AS company_phone,
            co.website        AS company_website,
@@ -221,6 +228,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
       tax_label                 = $16,
       currency                  = $17,
       invoice_locale            = $18,
+      from_vat_number           = $19,
       frozen_at                 = CURRENT_TIMESTAMP,
       updated_at                = CURRENT_TIMESTAMP
     WHERE id = $1
@@ -244,6 +252,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
       taxLabel,
       currency,
       locale,
+      r.company_vat_number || null,
     ],
   );
 }
@@ -275,6 +284,7 @@ function resolveInvoiceParties(row) {
     companyNumber: pick(row.from_company_number, row.company_cvr_number),
     companyNumberLabel:
       pick(row.from_company_number_label, '') || companyNumberLabelFor(fromCountryCode),
+    vatNumber: pick(row.from_vat_number, row.company_vat_number),
     email: pick(row.from_email, row.company_email),
     phone: pick(row.from_phone, row.company_phone),
     website: pick(row.from_website, row.company_website),

@@ -959,6 +959,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
+      // VAT registration number — separate from cvr_number (trade register / Companies House).
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
@@ -985,6 +987,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         timezone: company.timezone || null,
         effectiveTimezone,
         cvrNumber: company.cvr_number,
+        vatNumber: company.vat_number || '',
         address: company.address,
         city: company.city,
         zipCode: company.zip_code,
@@ -1041,6 +1044,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       countryCode,
       timezone,
       cvrNumber,
+      vatNumber,
       address,
       city,
       zipCode,
@@ -1067,6 +1071,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
 
     const hasTimezoneKey = Object.prototype.hasOwnProperty.call(req.body, 'timezone');
@@ -1108,6 +1113,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         email          = COALESCE($14, email),
         phone          = COALESCE($15, phone),
         website        = COALESCE($16, website),
+        vat_number     = COALESCE($18, vat_number),
         updated_at     = CURRENT_TIMESTAMP
       WHERE id = $13`,
       [
@@ -1128,6 +1134,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         phone != null ? String(phone).trim() : null,
         website != null ? String(website).trim() : null,
         capacityEnabled,
+        vatNumber != null ? String(vatNumber).trim() : null,
       ]
     );
 

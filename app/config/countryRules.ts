@@ -86,7 +86,8 @@ export const countryRules: Record<string, CountryRule> = {
     stateLabel: 'County',
     showStateField: false,
     taxLabel: 'VAT',
-    companyNumberLabel: 'Company Number',
+    // Companies House registration number — separate from the VAT number.
+    companyNumberLabel: 'Co. Reg. No.',
     defaultTaxRate: 20,
     defaultCurrency: 'GBP',
     currencyDisplayLocale: 'en-GB',

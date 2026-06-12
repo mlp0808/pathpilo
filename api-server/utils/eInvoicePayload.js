@@ -252,6 +252,7 @@ function buildPublicInvoicePayload(invoice, bankRow) {
       countryCode: invoice.company_country_code || null,
       cvr: invoice.company_cvr_number || null,
       cvrLabel: invoice.company_number_label || tr('invoice.companyNoFallback', 'Company no.'),
+      vatNumber: invoice.company_vat_number || null,
       email: invoice.company_email || null,
       phone: invoice.company_phone || null,
       website: invoice.company_website || null,

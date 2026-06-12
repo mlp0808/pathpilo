@@ -214,6 +214,7 @@ async function getInvoiceWithItems(invoiceId, companyId) {
            co.country         AS company_country,
            co.country_code    AS company_country_code,
            co.cvr_number      AS company_cvr_number,
+           co.vat_number      AS company_vat_number,
            co.email           AS company_email,
            co.phone           AS company_phone,
            co.website         AS company_website,
@@ -266,6 +267,7 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     company_country_code: parties.from.countryCode || row.company_country_code,
     company_cvr_number: parties.from.companyNumber || row.company_cvr_number,
     company_number_label: parties.from.companyNumberLabel,
+    company_vat_number: parties.from.vatNumber || row.company_vat_number || null,
     company_email: parties.from.email || row.company_email,
     company_phone: parties.from.phone || row.company_phone,
     company_website: parties.from.website || row.company_website,
@@ -481,6 +483,12 @@ function buildInvoicePdf(invoice, bankRow = null) {
       }
       if (invoice.company_cvr_number) {
         doc.fillColor(gray600).text(`${cvrLabel} ${invoice.company_cvr_number}`, fromX, fromY + 4, {
+          width: colW,
+        });
+        fromY = doc.y + 1;
+      }
+      if (invoice.company_vat_number) {
+        doc.fillColor(gray600).text(`VAT No. ${invoice.company_vat_number}`, fromX, fromY + 2, {
           width: colW,
         });
         fromY = doc.y + 1;
@@ -782,6 +790,7 @@ function buildInvoicePdf(invoice, bankRow = null) {
           .filter(Boolean)
           .join(' / '),
         invoice.company_cvr_number ? `${cvrLabel} ${invoice.company_cvr_number}` : null,
+        invoice.company_vat_number ? `VAT No. ${invoice.company_vat_number}` : null,
       ]
         .filter(Boolean)
         .join('  \u00b7  ');
