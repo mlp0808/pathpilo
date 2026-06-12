@@ -7,6 +7,7 @@ import { apiUrl } from '@/app/utils/api'
 import { clearClientLocaleStorage } from '@/app/i18n'
 import { isOverwatchActive, stopOverwatchSession } from '@/app/utils/overwatch'
 import WorkspaceAccessGuard from '@/app/components/WorkspaceAccessGuard'
+import OnboardingCompletePopup from '@/app/components/OnboardingCompletePopup'
 import {
   getOwnerOnboardingStep,
   getOwnerSetupResumePath,
@@ -288,6 +289,13 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     return <SuspendedWall companyName={suspendedCompanyName} />
   }
 
+  // Show the post-onboarding celebration popup on any page *except* the route
+  // planner (where it was just triggered) and the completion page itself.
+  const showCelebration =
+    !pathname?.includes('/jobs') &&
+    !pathname?.includes('/onboarding-complete') &&
+    !pathname?.includes('/setup')
+
   return (
     <>
       {overwatchActive && (
@@ -307,6 +315,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       )}
       {children}
+      {showCelebration && <OnboardingCompletePopup />}
     </>
   )
 }

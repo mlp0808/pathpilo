@@ -79,7 +79,6 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   const gtmId = 'GTM-5FLVBF65'
-  const metaPixelId = '2410572729416293'
   const hotjarId = process.env.NEXT_PUBLIC_HOTJAR_ID
   const hotjarSv = process.env.NEXT_PUBLIC_HOTJAR_SV || '6'
   const shouldEnableHotjar = Boolean(hotjarId)
@@ -87,6 +86,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        {/* GTM — all pixels and tags are fired from GTM, not hardcoded here. */}
         <Script
           id="gtm-base"
           strategy="beforeInteractive"
@@ -98,37 +98,12 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 })(window,document,'script','dataLayer','${gtmId}');`,
           }}
         />
-        <Script
-          id="meta-pixel-base"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `!function(f,b,e,v,n,t,s)
-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-n.queue=[];t=b.createElement(e);t.async=!0;
-t.src=v;s=b.getElementsByTagName(e)[0];
-s.parentNode.insertBefore(t,s)}(window, document,'script',
-'https://connect.facebook.net/en_US/fbevents.js');
-fbq('init', '${metaPixelId}');
-fbq('track', 'PageView');`,
-          }}
-        />
         <noscript>
           <iframe
             src={`https://www.googletagmanager.com/ns.html?id=${gtmId}`}
             height="0"
             width="0"
             style={{ display: 'none', visibility: 'hidden' }}
-          />
-        </noscript>
-        <noscript>
-          <img
-            height="1"
-            width="1"
-            style={{ display: 'none' }}
-            src={`https://www.facebook.com/tr?id=${metaPixelId}&ev=PageView&noscript=1`}
-            alt=""
           />
         </noscript>
         {shouldEnableHotjar && (

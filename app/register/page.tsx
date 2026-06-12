@@ -33,7 +33,6 @@ function getSignupSessionId(): string {
 
 declare global {
   interface Window {
-    fbq?: (...args: unknown[]) => void
     dataLayer?: Record<string, unknown>[]
     hj?: (command: string, eventName?: string) => void
   }
@@ -171,6 +170,7 @@ function RegisterForm() {
         return
       }
       void postSignupProgress(apiUrl, { step: 'email_entered', email: trimmed })
+      pushDataLayer({ event: 'signup_start', email: trimmed })
       // Grid 0fr→1fr animates the white card taller; fields fade/slide in shortly after
       setDetailsOpen(true)
       setStage('form')
@@ -209,8 +209,7 @@ function RegisterForm() {
         }
         return
       }
-      pushDataLayer({ event: 'registration_form_submitted', step: 'details' })
-      window.fbq?.('track', 'CompleteRegistration', { stage: 'details_submitted' })
+      pushDataLayer({ event: 'signup_details_submitted' })
       void postSignupProgress(apiUrl, { step: 'code_sent', firstName: formData.firstName, lastName: formData.lastName, email: email.trim() })
       window.hj?.('event', 'signup_code_sent')
       setCodeSentMsg(`We sent a 6-digit code to ${email.trim()}.`)
@@ -277,7 +276,7 @@ function RegisterForm() {
         lastName: formData.lastName,
         email: email.trim(),
       })
-      pushDataLayer({ event: 'email_verification_completed' })
+      pushDataLayer({ event: 'signup_finish' })
 
       // Persist session
       if (regData.token) {

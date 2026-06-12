@@ -493,7 +493,15 @@ function JobsPageContent() {
 
   useEffect(() => {
     if (!inRouteWizard || viewMode !== 'day') return
-    void completeOnboardingWizard()
+    void completeOnboardingWizard().then(() => {
+      // Flag shown on the next page they navigate to (survives logout/reload).
+      try { localStorage.setItem('vevago_pending_celebration', 'true') } catch { /* ignore */ }
+      // Onboarding complete conversion event — picked up by GTM → Facebook etc.
+      if (typeof window !== 'undefined') {
+        window.dataLayer = window.dataLayer || []
+        window.dataLayer.push({ event: 'onboarding_complete' })
+      }
+    })
   }, [inRouteWizard, viewMode])
 
   // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
