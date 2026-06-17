@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { marketingImages } from '../config/marketingImages'
 import { getLocaleFromPathname, withAppLanguageParam, withLocalePath } from '../lib/i18n'
-import { pushCtaClick, pushMetaCustomEvent } from '../lib/dataLayer'
+import { pushCtaClick } from '../lib/dataLayer'
 
 const COLLAGE = {
   main: marketingImages.hero.collageMain,
@@ -70,11 +70,6 @@ export default function HeroSection() {
                       ctaType: 'register',
                       ctaLabel: da ? 'Kom i gang gratis' : 'Get Started Free',
                       linkUrl: href,
-                      location: 'hero',
-                    })
-                    pushMetaCustomEvent('get_started', {
-                      cta_label: da ? 'Kom i gang gratis' : 'Get Started Free',
-                      link_url: href,
                       location: 'hero',
                     })
                     const hj = typeof window !== 'undefined'

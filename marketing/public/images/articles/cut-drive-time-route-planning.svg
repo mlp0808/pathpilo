@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#14b8c4"/>
+      <stop offset="1" stop-color="#0d2020"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.28" r="0.6">
+      <stop offset="0" stop-color="#3ce0ec" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#14b8c4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#glow)"/>
+  <line x1="0" y1="0" x2="0" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="80" y1="0" x2="80" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="160" y1="0" x2="160" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="240" y1="0" x2="240" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="320" y1="0" x2="320" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="400" y1="0" x2="400" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="480" y1="0" x2="480" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="560" y1="0" x2="560" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="640" y1="0" x2="640" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="720" y1="0" x2="720" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="800" y1="0" x2="800" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="880" y1="0" x2="880" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="960" y1="0" x2="960" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1040" y1="0" x2="1040" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1120" y1="0" x2="1120" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1200" y1="0" x2="1200" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1280" y1="0" x2="1280" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1360" y1="0" x2="1360" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1440" y1="0" x2="1440" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1520" y1="0" x2="1520" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="1600" y1="0" x2="1600" y2="900" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="0" x2="1600" y2="0" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="80" x2="1600" y2="80" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="160" x2="1600" y2="160" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="240" x2="1600" y2="240" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="320" x2="1600" y2="320" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="400" x2="1600" y2="400" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="480" x2="1600" y2="480" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="560" x2="1600" y2="560" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="640" x2="1600" y2="640" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="720" x2="1600" y2="720" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="800" x2="1600" y2="800" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <line x1="0" y1="880" x2="1600" y2="880" stroke="#FFFFFF" stroke-opacity="0.04"/>
+  <circle cx="1320" cy="240" r="360" fill="#FFFFFF" opacity="0.05"/>
+  <path d="M870 385 L992 285 L1114 298 L1236 411 L1358 421 L1480 236" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 22"/>
+  <path d="M870 385 L992 285 L1114 298 L1236 411 L1358 421 L1480 236" stroke="#5afeff" stroke-opacity="0.9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="870" cy="385" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="870" cy="385" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="992" cy="285" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="992" cy="285" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1114" cy="298" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1114" cy="298" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1236" cy="411" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1236" cy="411" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1358" cy="421" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1358" cy="421" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1480" cy="236" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="1480" cy="236" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <text x="110" y="488" fill="#FFFFFF" fill-opacity="0.75" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">ROUTE PLANNING</text>
+  <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1"><tspan x="110" y="616">How to cut drive time</tspan><tspan x="110" y="708">with smarter route</tspan><tspan x="110" y="800">planning</tspan></text>
+  <g>
+    <circle cx="122" cy="852" r="9" fill="#5afeff"/>
+    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo Academy</text>
+  </g>
+</svg>

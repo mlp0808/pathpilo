@@ -94,6 +94,11 @@ export default function Footer() {
             <h3 className="font-semibold text-lg mb-4">{da ? 'Ressourcer' : 'Resources'}</h3>
             <ul className="space-y-2">
               <li>
+                <Link href="/articles" className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Artikler' : 'Articles'}
+                </Link>
+              </li>
+              <li>
                 <Link href={navHref('/contact')} className="text-gray-300 hover:text-white transition-colors">
                   {da ? 'Kontakt os' : 'Contact Us'}
                 </Link>

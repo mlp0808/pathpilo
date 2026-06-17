@@ -38,7 +38,21 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  const first = pathname.split('/').filter(Boolean)[0]
+  const segments = pathname.split('/').filter(Boolean)
+  const first = segments[0]
+
+  // Blog is English-first and lives at /articles (no locale prefix).
+  // Serve /articles* directly, and fold any locale-prefixed blog URL back to it
+  // so the footer language toggle never lands on a 404.
+  if (first === 'articles') {
+    return NextResponse.next()
+  }
+  if ((first === 'en' || first === 'da') && segments[1] === 'articles') {
+    const url = request.nextUrl.clone()
+    url.pathname = '/' + segments.slice(1).join('/')
+    return NextResponse.redirect(url)
+  }
+
   if (first && isMarketingLocale(first)) {
     return NextResponse.next()
   }

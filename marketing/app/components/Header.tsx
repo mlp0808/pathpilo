@@ -148,6 +148,9 @@ export default function Header() {
             >
               {locale === 'da' ? 'Priser' : 'Pricing'}
             </Link>
+            <Link href="/articles" className={desktopLinkClass}>
+              {da ? 'Artikler' : 'Articles'}
+            </Link>
             <Link href={navHref('/contact')} className={desktopLinkClass}>
               {da ? 'Kontakt' : 'Contact'}
             </Link>
@@ -271,6 +274,14 @@ export default function Header() {
                 }`}
               >
                 {locale === 'da' ? 'Priser' : 'Pricing'}
+              </Link>
+              <Link
+                href="/articles"
+                className={`block rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+                  isDarkTop ? 'text-white/90 hover:bg-white/10' : 'text-primary-800 hover:bg-primary-50'
+                }`}
+              >
+                {da ? 'Artikler' : 'Articles'}
               </Link>
               <Link
                 href={navHref('/contact')}

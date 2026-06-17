@@ -1,0 +1,215 @@
+---
+title: "Automated route planning: how it works and why it saves hours every week"
+description: "Automated route planning orders your day's stops to cut drive time, fuel, and admin. Here is how the technology works, how to set it up, and what to expect in the first week."
+slug: "automated-route-planning"
+category: "route-planning"
+tags: ["automated-routing", "route-optimization", "route-planning-software", "fuel-savings", "automation"]
+date: "2026-06-15"
+author: "The PathPilo Team"
+authorRole: "Route planning"
+image: "/images/articles/automated-route-planning.svg"
+imageAlt: "An automatically optimised route drawn across a city map"
+seoTitle: "Automated Route Planning: How It Works, Setup Guide & Time Savings"
+seoDescription: "Automated route planning orders field service stops to cut drive time and fuel. Learn how the algorithm works, how to set it up, and how to measure the time you save."
+---
+
+Planning routes by hand works fine for two or three stops. Add a fourth, a fifth, a second crew member, and a late cancellation, and the daily planning task quietly starts eating your morning. Most service business owners do not notice this happening. They just know that getting the day organised takes longer than it should.
+
+**Automated route planning** removes that task. The system looks at every stop on your list, every job's duration, current traffic, and where your crew starts and ends the day. It outputs an ordered route in under a second. You review it, adjust anything you want, and go.
+
+This guide covers exactly how that works, how to set it up, what to expect in the first week, and how to measure the hours you get back.
+
+<KeyTakeaways>
+- Automated route planning replaces daily manual ordering with an algorithm that runs in under a second.
+- The typical result for a service team is a 20 to 30 percent reduction in drive time per day.
+- For a team of three, that is roughly one additional paid job per person, per day.
+- It is most powerful when it can see job durations, start and end points, and traffic conditions.
+- The first week feels unfamiliar. Most teams stop second-guessing the routes within a month.
+</KeyTakeaways>
+
+## Why manual route planning breaks down
+
+Most service business owners start by doing routes in their head or in a list. They know the area, they know the customers, and they develop a mental feel for a good order. For a small number of stops, this works reasonably well.
+
+The problem is that the number of possible orderings grows exponentially as you add stops. With 5 stops there are 120 possible orderings. With 10 stops there are over three million. No human can evaluate three million orderings in the fifteen minutes between waking up and leaving for the first job. We make a reasonable guess and call it a route.
+
+The waste from that guess is usually invisible. You have never seen the optimised version, so you do not know what you are missing. Studies across logistics and field service consistently show that manually-planned routes use 20 to 30 percent more drive time than optimised ones.
+
+<StatGrid>
+  <Stat value="120" label="Possible orderings for 5 stops" />
+  <Stat value="3.6M" label="Possible orderings for 10 stops" />
+  <Stat value="20-30%" label="Extra drive time in manually planned routes" />
+</StatGrid>
+
+## How automated route planning actually works
+
+You do not need to understand the algorithm to use it, but knowing what it considers helps you give it better inputs and trust the outputs it produces.
+
+### Step 1: The input map
+
+The system starts with a set of locations (your job addresses), a set of constraints (job durations, time windows, start and end points), and a cost function (typically total drive time, though some systems also minimise distance or balance workloads across a team).
+
+### Step 2: The optimisation pass
+
+Modern route planning uses a family of algorithms called heuristic optimisers. These do not evaluate every possible ordering (impossible at scale) but instead make intelligent local improvements. A common technique is called 2-opt: the algorithm looks for any two routes that would be shorter if the legs between them were swapped. It keeps swapping until no more improvements are possible.
+
+Better systems layer multiple techniques: nearest-neighbour starts, 2-opt and 3-opt refinement, and simulated annealing to escape local optima. The result is a route that is typically within a few percent of the true mathematical best, computed in under a second.
+
+### Step 3: Traffic and real roads
+
+Distance is not time. A shorter route on a map can take longer than a longer one if it goes through a city centre at rush hour. Good automated routing uses real-road travel times, not straight-line distances, and accounts for time-of-day traffic patterns. This is why the system sometimes proposes a route that looks longer on a map but arrives faster.
+
+### Step 4: Re-planning
+
+When something changes (a cancellation, a new urgent job, a crew member running late), the system replans instantly. This is where automated routing pays off most visibly: the mental effort of re-planning manually after a mid-morning cancellation is completely removed.
+
+<InfoBox type="info" title="It optimises for time, not distance">
+A good automated route planner cares about how long driving takes, not how many kilometres it covers. A slightly longer route that avoids a congested road and keeps a service window beats a shorter one that misses it.
+</InfoBox>
+
+## Setting up automated route planning: step by step
+
+Getting from zero to a fully optimised working day takes most small teams a few hours spread across two days.
+
+### Step 1: Get your jobs into one place
+
+Automated routing is only as good as the data it has to work with. Before you run your first optimised route, you need:
+
+- Customer addresses (not just names)
+- A job duration for each stop (even a rough estimate: 30 minutes, 1 hour, 2 hours)
+- Your starting point (home or depot) and where you end the day
+
+If you are moving from a paper diary or a basic calendar app, this data entry step is the main investment. It typically takes one to two hours to enter a month's worth of regular customers.
+
+### Step 2: Set up recurring jobs
+
+If you have regular customers on a repeating schedule, set these up as recurring jobs before you start optimising. The route planner sees every job in your calendar, so recurring jobs already in the system will be included in the optimisation automatically.
+
+For more on how recurring jobs make route planning more efficient, see our guide to [recurring jobs and predictable revenue](/articles/recurring-jobs-predictable-revenue).
+
+### Step 3: Run your first optimised route
+
+With jobs in the system, generating an optimised route is typically one button. The system:
+
+1. Takes all jobs assigned to a person on a given day
+2. Applies the routing algorithm
+3. Returns an ordered list with estimated drive times and arrival windows
+
+Review the result. You will almost certainly find one or two stops where you would order things differently based on local knowledge (the customer who is only home until 10am, the site with parking only in the morning). Make those adjustments. The system should let you lock those positions and reoptimise the remaining stops around them.
+
+### Step 4: Comparing the planned route to what you would have done
+
+Before you run your first week of optimised routes, write down the order you would have chosen manually for one day. Then compare it to what the system produces. Most teams find the differences are small but the total drive time is meaningfully shorter in the automated version.
+
+This exercise builds trust in the output, which is the main barrier to full adoption.
+
+## Real-world scenarios: what automated routing looks like in practice
+
+### Scenario 1: Solo operator, 8 stops a day
+
+Tom runs a pest control business alone. He has 8 stops most days, mostly in a 15-mile radius. Before automation, he ordered his day by memory, working roughly north-to-south.
+
+After setting up automated routing, his average drive time dropped from 2 hours 40 minutes to 1 hour 55 minutes per day. That is 45 minutes per day, or nearly 4 hours per five-day week. He uses that time to take on one or two extra jobs per week, which more than covers the cost of the software.
+
+The biggest change was not the time saved: it was that he stopped thinking about the route entirely. The system does it, he reviews it in 30 seconds, and he is out the door.
+
+### Scenario 2: Three-person cleaning company
+
+Maria runs three cleaning vans across a city. Before automation, she spent 30 to 45 minutes every morning working out who should cover which area, then ordering each person's day. She was good at it but occasionally sent two vans to the same part of town on the same day.
+
+With automated routing and [map-based scheduling](/articles/map-based-scheduling), she reviews the system's proposed plan for all three vans on a single map, makes two or three adjustments based on customer preferences, and approves it. Total morning planning time: under 10 minutes.
+
+The route efficiency improvement was significant. The system found that her three vans were crossing each other's territories regularly. Regrouping them by area saved approximately 40 minutes of drive time per van per day.
+
+### Scenario 3: Seasonal landscaping business
+
+James runs a landscaping crew of five in spring and summer. The challenge is that the roster changes week to week as clients pause and resume seasonal work, and new one-off jobs are added constantly.
+
+For him, the key feature is instant re-planning. When a customer calls to cancel or a new job is booked last minute, the system recalculates all five routes instantly. What used to be a 20-minute phone-and-spreadsheet exercise is now handled in under a minute.
+
+## How automated routing handles real-world complications
+
+### Cancellations and same-day additions
+
+When a job drops out or is added, good systems replan only the affected route rather than rebuilding the entire day. If your software rebuilds all routes every time anything changes, you will find the constant reassignments disruptive. The best tools let you replan selectively.
+
+### Customer time windows
+
+Some customers can only be visited in a specific window (school runs, medical appointments, work schedules). Time windows are a standard constraint in route optimisation: you tell the system "this customer needs a visit between 9am and 11am" and the algorithm respects that window while optimising everything else around it.
+
+### Crew start and end points
+
+If your crew starts from home rather than a central depot, good routing software accounts for each person's home address as their start point. This is often where significant savings are found, because crews starting from different points of the city can take very different optimal routes.
+
+### Traffic and time-of-day routing
+
+A job that needs to be done at 8am in a city centre versus 11am has a different optimal approach route. Time-of-day routing accounts for this. If your software only uses average traffic times, the morning rush-hour impact will not be accurately reflected in the plan.
+
+If the optimised route looks wrong, check whether there is a time window, a traffic condition, or a start-end-point constraint causing it. In most cases the algorithm is correct. Where it is not, you can lock that stop in its position and let the system reoptimise everything else around it.
+
+## How to measure the time you are saving
+
+After two weeks of automated routing, you have enough data to calculate the return. Record your planned drive time each day (the system shows this before you start), then multiply the daily saving by your crew size and working days. A team of three saving 40 minutes per person per day over 250 working days is 500 hours of drive time reclaimed per year. At a billing rate of £60 per hour, that is £30,000 of potential additional capacity, before you account for fuel savings, reduced planning time, or the improvement in on-time arrivals.
+
+## Automated routing and the rest of your operation
+
+Automated route planning is most powerful when it is part of a connected [field service management system](/articles/field-service-management-software-guide). Here is why the connection matters:
+
+- **Scheduling feeds routing.** Jobs need to be in the system, assigned to a person, with durations and locations, for the optimiser to run. Separate tools mean manual copying.
+- **Routing connects to invoicing.** When a route is completed and jobs are marked done, invoices should be ready to send automatically. A separate routing tool cannot trigger that.
+- **Client records inform routing.** Time windows, preferred arrival times, and access notes live in the client record. A routing tool that cannot see these will optimise around incorrect assumptions.
+
+[AI route scheduling software](/articles/ai-route-scheduling-software) takes this further: instead of just ordering one person's stops, it decides who should take which job across a whole team, then optimises each person's route. This is the natural next step once you have single-route automation working well.
+
+## The first week: what to expect
+
+Most teams find the first week of automated routing slightly uncomfortable. The system will suggest an order you would not have chosen. You will override it on the first few days.
+
+By the end of the first week, you will start to notice that the system's suggestions are consistently faster than your instinct, particularly for the middle portion of the day where your mental model of the area is weakest. By the end of the first month, most owners report that they essentially never override the system on normal days.
+
+The adoption curve looks like this:
+
+| Week | Typical behaviour |
+| --- | --- |
+| Week 1 | Override 30 to 50 percent of suggestions |
+| Week 2 | Override 10 to 20 percent of suggestions |
+| Week 3-4 | Override only for specific known constraints |
+| Month 2+ | Review and approve in under two minutes |
+
+This is not blind trust in the algorithm. It is calibration: you learn which constraints the system does not know about (the customer who prefers afternoons, the road with a weight restriction), you add those to the system, and overrides drop further.
+
+<CTABox
+  title="Let your routes plan themselves every morning"
+  text="PathPilo orders every crew's day automatically, re-plans after cancellations, and shows the time you are saving as you go. Start free."
+  buttonLabel="Try automated routing free"
+/>
+
+## Frequently asked questions
+
+### How accurate is automated route planning?
+
+Modern optimisation algorithms produce routes that are typically within 1 to 5 percent of the mathematical ideal. The practical accuracy depends more on the quality of the inputs: accurate job durations, real addresses, and correct start and end points matter more than the algorithm itself.
+
+### Does it work for a single person?
+
+Yes. Even for a solo operator, automated routing removes the daily planning task and consistently produces routes that are 15 to 30 percent more efficient than manually ordered ones.
+
+### What if a customer needs a specific time window?
+
+Time windows are a standard constraint in route optimisation. You set the window for that customer (for example, "must arrive between 9am and 11am"), and the algorithm treats it as a fixed constraint while optimising everything else around it.
+
+### Can I override the system's suggestions?
+
+Yes, always. The system proposes; you approve. You can lock specific stops in position, drag jobs to a different time, or reassign work to a different crew member. The system then reoptimises the remaining stops around your changes.
+
+### How does it handle multiple crew members?
+
+For teams, the system optimises each person's route individually, starting from their home or depot. More advanced [AI route scheduling](/articles/ai-route-scheduling-software) also decides who should take which job across the whole team before routing each person. This produces better results than routing each person separately.
+
+### Does the route account for traffic?
+
+Good route planning software uses real-road travel times with time-of-day traffic weighting. If your software only uses average speeds or straight-line distances, the morning rush-hour impact will not be reflected in the plan. This is worth checking in any evaluation.
+
+### How long does it take to see results?
+
+Most teams see measurable drive time reductions in the first week. The full benefit (including the elimination of morning planning time and the reduction in missed time windows) typically becomes visible within two to three weeks of consistent use.
