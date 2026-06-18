@@ -2,6 +2,8 @@ import type { MetadataRoute } from 'next'
 import { getMarketingSiteUrl } from './lib/siteUrl'
 import { getAllArticles, getAllUsedTags } from './lib/blog/articles'
 import { BLOG_CATEGORIES } from './lib/blog/taxonomy'
+import { INDUSTRIES } from './lib/industries/data'
+import { COMPARISON_PAGES } from './lib/comparisons/data'
 const LOCALES = ['en', 'da'] as const
 const ROUTES = [
   '',
@@ -70,5 +72,35 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.7,
   }))
 
-  return [...localizedEntries, ...blogIndex, ...categoryEntries, ...tagEntries, ...articleEntries]
+  // Industry landing pages — English-first, live at /industries (no locale prefix).
+  const industryEntries: MetadataRoute.Sitemap = [
+    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
+    ...INDUSTRIES.map((i) => ({
+      url: absoluteUrl(`/industries/${i.slug}`),
+      lastModified: now,
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+    })),
+  ]
+
+  // Comparison pages — English-first, live at /comparisons (no locale prefix).
+  const comparisonEntries: MetadataRoute.Sitemap = [
+    { url: absoluteUrl('/comparisons'), lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
+    ...COMPARISON_PAGES.map((c) => ({
+      url: absoluteUrl(`/comparisons/${c.slug}`),
+      lastModified: new Date(c.lastUpdated),
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+    })),
+  ]
+
+  return [
+    ...localizedEntries,
+    ...blogIndex,
+    ...categoryEntries,
+    ...tagEntries,
+    ...articleEntries,
+    ...industryEntries,
+    ...comparisonEntries,
+  ]
 }

@@ -5,13 +5,14 @@ import { useEffect, useState } from 'react'
 interface Heading {
   id: string
   text: string
-  level: number
 }
 
 /**
- * Sticky table of contents. Reads h2/h3 headings (with ids added by
- * rehype-slug) from the article body after mount, and highlights the section
- * currently in view. Renders nothing if the article has fewer than 2 headings.
+ * Sticky table of contents. Reads h2 headings (with ids added by rehype-slug)
+ * from the article body after mount, and highlights the section currently in
+ * view. Only h2 headings are listed — h3 sub-sections would make the list
+ * unmanageably long for longer articles.
+ * Renders nothing if the article has fewer than 3 h2 headings.
  */
 export default function TableOfContents({ bodyId = 'article-body' }: { bodyId?: string }) {
   const [headings, setHeadings] = useState<Heading[]>([])
@@ -20,11 +21,10 @@ export default function TableOfContents({ bodyId = 'article-body' }: { bodyId?: 
   useEffect(() => {
     const body = document.getElementById(bodyId)
     if (!body) return
-    const nodes = Array.from(body.querySelectorAll('h2[id], h3[id]')) as HTMLElement[]
+    const nodes = Array.from(body.querySelectorAll('h2[id]')) as HTMLElement[]
     const found = nodes.map((n) => ({
       id: n.id,
       text: n.textContent || '',
-      level: n.tagName === 'H3' ? 3 : 2,
     }))
     setHeadings(found)
 
@@ -41,14 +41,14 @@ export default function TableOfContents({ bodyId = 'article-body' }: { bodyId?: 
     return () => observer.disconnect()
   }, [bodyId])
 
-  if (headings.length < 2) return null
+  if (headings.length < 3) return null
 
   return (
     <nav aria-label="On this page" className="text-sm">
       <p className="mb-3 font-semibold uppercase tracking-wide text-gray-400">On this page</p>
       <ul className="space-y-2 border-l border-gray-200">
         {headings.map((h) => (
-          <li key={h.id} className={h.level === 3 ? 'pl-4' : ''}>
+          <li key={h.id}>
             <a
               href={`#${h.id}`}
               className={`-ml-px block border-l-2 pl-3 leading-snug transition ${

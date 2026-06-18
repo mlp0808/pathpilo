@@ -13,11 +13,16 @@ import {
   withLocalePath,
 } from '../lib/i18n'
 import { pushCtaClick } from '../lib/dataLayer'
+import { BLOG_CATEGORIES } from '../lib/blog/taxonomy'
+import { INDUSTRIES } from '../lib/industries/data'
+import { COMPARISON_PAGES } from '../lib/comparisons/data'
 
 export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [mobileFeaturesOpen, setMobileFeaturesOpen] = useState(false)
+  const [mobileLearnOpen, setMobileLearnOpen] = useState(false)
   const [desktopFeaturesOpen, setDesktopFeaturesOpen] = useState(false)
+  const [desktopLearnOpen, setDesktopLearnOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const pathname = usePathname()
   const locale = getLocaleFromPathname(pathname || '/')
@@ -68,7 +73,9 @@ export default function Header() {
   useEffect(() => {
     setMobileMenuOpen(false)
     setMobileFeaturesOpen(false)
+    setMobileLearnOpen(false)
     setDesktopFeaturesOpen(false)
+    setDesktopLearnOpen(false)
   }, [pathname])
 
   return (
@@ -148,9 +155,108 @@ export default function Header() {
             >
               {locale === 'da' ? 'Priser' : 'Pricing'}
             </Link>
-            <Link href="/articles" className={desktopLinkClass}>
-              {da ? 'Artikler' : 'Articles'}
-            </Link>
+
+            <div
+              className="relative"
+              onMouseEnter={() => setDesktopLearnOpen(true)}
+              onMouseLeave={() => setDesktopLearnOpen(false)}
+            >
+              <button
+                type="button"
+                className={`inline-flex items-center gap-1 text-sm font-medium transition-colors ${
+                  isDarkTop ? 'text-white/85 hover:text-white' : 'text-gray-600 hover:text-primary-800'
+                }`}
+                onClick={() => setDesktopLearnOpen((v) => !v)}
+                aria-expanded={desktopLearnOpen}
+                aria-controls="desktop-learn-menu"
+              >
+                {da ? 'Lær mere' : 'Learn more'}
+                <ChevronDownIcon className={`w-4 h-4 transition-transform ${desktopLearnOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {desktopLearnOpen && (
+                <div
+                  id="desktop-learn-menu"
+                  className="absolute left-1/2 top-full z-50 w-[min(96vw,900px)] -translate-x-1/2 pt-3"
+                >
+                  <div className="rounded-xl border border-gray-200 bg-white shadow-xl">
+                    <div className="grid grid-cols-3 divide-x divide-gray-100">
+
+                      {/* Articles */}
+                      <div className="px-6 py-5">
+                        <div className="mb-4 flex items-baseline justify-between">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
+                            {da ? 'Artikler' : 'Articles'}
+                          </span>
+                          <Link href="/articles" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                            {da ? 'Se alle' : 'View all'}
+                          </Link>
+                        </div>
+                        <div className="space-y-0.5">
+                          {BLOG_CATEGORIES.map((c) => (
+                            <Link
+                              key={c.slug}
+                              href={`/articles/category/${c.slug}`}
+                              className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                            >
+                              {c.label}
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Comparisons */}
+                      <div className="px-6 py-5">
+                        <div className="mb-4 flex items-baseline justify-between">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
+                            {da ? 'Sammenligninger' : 'Comparisons'}
+                          </span>
+                          <Link href="/comparisons" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                            {da ? 'Se alle' : 'View all'}
+                          </Link>
+                        </div>
+                        <div className="space-y-0.5">
+                          {COMPARISON_PAGES.map((c) => (
+                            <Link
+                              key={c.slug}
+                              href={`/comparisons/${c.slug}`}
+                              className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                            >
+                              {c.headline}
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Industries */}
+                      <div className="px-6 py-5">
+                        <div className="mb-4 flex items-baseline justify-between">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
+                            {da ? 'Brancher' : 'Industries'}
+                          </span>
+                          <Link href="/industries" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                            {da ? 'Se alle' : 'View all'}
+                          </Link>
+                        </div>
+                        <div className="space-y-0.5">
+                          {INDUSTRIES.map((ind) => (
+                            <Link
+                              key={ind.slug}
+                              href={`/industries/${ind.slug}`}
+                              className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                            >
+                              {ind.menuLabel}
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <Link href={navHref('/contact')} className={desktopLinkClass}>
               {da ? 'Kontakt' : 'Contact'}
             </Link>
@@ -275,14 +381,93 @@ export default function Header() {
               >
                 {locale === 'da' ? 'Priser' : 'Pricing'}
               </Link>
-              <Link
-                href="/articles"
-                className={`block rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+              <button
+                type="button"
+                onClick={() => setMobileLearnOpen((v) => !v)}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
                   isDarkTop ? 'text-white/90 hover:bg-white/10' : 'text-primary-800 hover:bg-primary-50'
                 }`}
+                aria-expanded={mobileLearnOpen}
               >
-                {da ? 'Artikler' : 'Articles'}
-              </Link>
+                <span>{da ? 'Lær mere' : 'Learn more'}</span>
+                <ChevronDownIcon className={`w-4 h-4 transition-transform ${mobileLearnOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {mobileLearnOpen && (
+                <div className={`rounded-xl divide-y ${isDarkTop ? 'bg-white/10 divide-white/10' : 'bg-gray-50 divide-gray-200'}`}>
+                  {/* Articles */}
+                  <div className="px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
+                        {da ? 'Artikler' : 'Articles'}
+                      </p>
+                      <Link href="/articles" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                        {da ? 'Se alle' : 'View all'}
+                      </Link>
+                    </div>
+                    <div className="space-y-0.5">
+                      {BLOG_CATEGORIES.map((c) => (
+                        <Link
+                          key={c.slug}
+                          href={`/articles/category/${c.slug}`}
+                          className={`block rounded-md px-2 py-1.5 text-sm ${
+                            isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
+                          }`}
+                        >
+                          {c.label}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Comparisons */}
+                  <div className="px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
+                        {da ? 'Sammenligninger' : 'Comparisons'}
+                      </p>
+                      <Link href="/comparisons" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                        {da ? 'Se alle' : 'View all'}
+                      </Link>
+                    </div>
+                    <div className="space-y-0.5">
+                      {COMPARISON_PAGES.map((c) => (
+                        <Link
+                          key={c.slug}
+                          href={`/comparisons/${c.slug}`}
+                          className={`block rounded-md px-2 py-1.5 text-sm ${
+                            isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
+                          }`}
+                        >
+                          {c.headline}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Industries */}
+                  <div className="px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
+                        {da ? 'Brancher' : 'Industries'}
+                      </p>
+                      <Link href="/industries" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                        {da ? 'Se alle' : 'View all'}
+                      </Link>
+                    </div>
+                    <div className="space-y-0.5">
+                      {INDUSTRIES.map((ind) => (
+                        <Link
+                          key={ind.slug}
+                          href={`/industries/${ind.slug}`}
+                          className={`block rounded-md px-2 py-1.5 text-sm ${
+                            isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
+                          }`}
+                        >
+                          {ind.menuLabel}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               <Link
                 href={navHref('/contact')}
                 className={`block rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${

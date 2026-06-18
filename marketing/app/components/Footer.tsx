@@ -99,6 +99,11 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/industries" className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Brancher' : 'Industries'}
+                </Link>
+              </li>
+              <li>
                 <Link href={navHref('/contact')} className="text-gray-300 hover:text-white transition-colors">
                   {da ? 'Kontakt os' : 'Contact Us'}
                 </Link>

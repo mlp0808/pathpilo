@@ -45,18 +45,18 @@
   <line x1="0" y1="800" x2="1600" y2="800" stroke="#FFFFFF" stroke-opacity="0.04"/>
   <line x1="0" y1="880" x2="1600" y2="880" stroke="#FFFFFF" stroke-opacity="0.04"/>
   <circle cx="1320" cy="240" r="360" fill="#FFFFFF" opacity="0.05"/>
-  <path d="M870 483 L992 353 L1114 202 L1236 289 L1358 178 L1480 197" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 22"/>
-  <path d="M870 483 L992 353 L1114 202 L1236 289 L1358 178 L1480 197" stroke="#54ebff" stroke-opacity="0.9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="870" cy="483" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="870" cy="483" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="992" cy="353" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="992" cy="353" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1114" cy="202" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1114" cy="202" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1236" cy="289" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1236" cy="289" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1358" cy="178" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1358" cy="178" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1480" cy="197" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="1480" cy="197" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <text x="110" y="580" fill="#FFFFFF" fill-opacity="0.75" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">BUSINESS GROWTH</text>
-  <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1"><tspan x="110" y="708">Client management for</tspan><tspan x="110" y="800">field service businesses</tspan></text>
+  <path d="M870 393 L992 301 L1114 213 L1236 258 L1358 453 L1480 237" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 22"/>
+  <path d="M870 393 L992 301 L1114 213 L1236 258 L1358 453 L1480 237" stroke="#54ebff" stroke-opacity="0.9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="870" cy="393" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="870" cy="393" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="992" cy="301" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="992" cy="301" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1114" cy="213" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1114" cy="213" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1236" cy="258" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1236" cy="258" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1358" cy="453" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1358" cy="453" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1480" cy="237" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="1480" cy="237" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <text x="110" y="396" fill="#FFFFFF" fill-opacity="0.75" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">BUSINESS GROWTH</text>
+  <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1"><tspan x="110" y="524">Client management for</tspan><tspan x="110" y="616">field service</tspan><tspan x="110" y="708">businesses: a practical</tspan><tspan x="110" y="800">guide</tspan></text>
   <g>
     <circle cx="122" cy="852" r="9" fill="#54ebff"/>
-    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo Academy</text>
+    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo</text>
   </g>
 </svg>

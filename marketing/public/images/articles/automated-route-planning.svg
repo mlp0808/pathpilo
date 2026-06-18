@@ -45,18 +45,18 @@
   <line x1="0" y1="800" x2="1600" y2="800" stroke="#FFFFFF" stroke-opacity="0.04"/>
   <line x1="0" y1="880" x2="1600" y2="880" stroke="#FFFFFF" stroke-opacity="0.04"/>
   <circle cx="1320" cy="240" r="360" fill="#FFFFFF" opacity="0.05"/>
-  <path d="M870 265 L992 505 L1114 263 L1236 344 L1358 472 L1480 252" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 22"/>
-  <path d="M870 265 L992 505 L1114 263 L1236 344 L1358 472 L1480 252" stroke="#5afeff" stroke-opacity="0.9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="870" cy="265" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="870" cy="265" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="992" cy="505" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="992" cy="505" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1114" cy="263" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1114" cy="263" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1236" cy="344" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1236" cy="344" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1358" cy="472" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1358" cy="472" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <circle cx="1480" cy="252" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="1480" cy="252" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
-  <text x="110" y="488" fill="#FFFFFF" fill-opacity="0.75" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">ROUTE PLANNING</text>
-  <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1"><tspan x="110" y="616">Automated route</tspan><tspan x="110" y="708">planning: how it works</tspan><tspan x="110" y="800">and why it saves hours</tspan></text>
+  <path d="M870 195 L992 481 L1114 205 L1236 456 L1358 406 L1480 167" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 22"/>
+  <path d="M870 195 L992 481 L1114 205 L1236 456 L1358 406 L1480 167" stroke="#5afeff" stroke-opacity="0.9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="870" cy="195" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="870" cy="195" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="992" cy="481" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="992" cy="481" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1114" cy="205" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1114" cy="205" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1236" cy="456" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1236" cy="456" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1358" cy="406" r="11" fill="#FFFFFF" opacity="0.95"/><circle cx="1358" cy="406" r="19" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <circle cx="1480" cy="167" r="16" fill="#FFFFFF" opacity="0.95"/><circle cx="1480" cy="167" r="26" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="3"/>
+  <text x="110" y="396" fill="#FFFFFF" fill-opacity="0.75" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">ROUTE PLANNING</text>
+  <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1"><tspan x="110" y="524">Automated route</tspan><tspan x="110" y="616">planning: how it works</tspan><tspan x="110" y="708">and why it saves hours</tspan><tspan x="110" y="800">every week</tspan></text>
   <g>
     <circle cx="122" cy="852" r="9" fill="#5afeff"/>
-    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo Academy</text>
+    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo</text>
   </g>
 </svg>

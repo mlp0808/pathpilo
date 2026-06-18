@@ -96,7 +96,7 @@ function buildSvg({ title, category }) {
   const W = 1600
   const H = 900
   const color = CATEGORY_COLORS[category] || '#193434'
-  const label = CATEGORY_LABELS[category] || 'PathPilo Academy'
+  const label = CATEGORY_LABELS[category] || 'PathPilo'
   const rand = mulberry32(seedFromString(title + category))
 
   // Route motif: 6 pins left→right zigzag in the upper-right region.
@@ -160,7 +160,7 @@ function buildSvg({ title, category }) {
   <text fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="74" font-weight="800" letter-spacing="-1">${titleTspans}</text>
   <g>
     <circle cx="122" cy="852" r="9" fill="${lighten(color, 70)}"/>
-    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo Academy</text>
+    <text x="144" y="862" fill="#FFFFFF" fill-opacity="0.85" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">PathPilo</text>
   </g>
 </svg>
 `

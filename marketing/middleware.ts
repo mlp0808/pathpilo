@@ -41,13 +41,14 @@ export function middleware(request: NextRequest) {
   const segments = pathname.split('/').filter(Boolean)
   const first = segments[0]
 
-  // Blog is English-first and lives at /articles (no locale prefix).
-  // Serve /articles* directly, and fold any locale-prefixed blog URL back to it
-  // so the footer language toggle never lands on a 404.
-  if (first === 'articles') {
+  // Blog, industry and comparison pages are English-first and live without a
+  // locale prefix. Serve them directly, and fold any locale-prefixed version
+  // back so the footer language toggle never lands on a 404.
+  const ENGLISH_FIRST = new Set(['articles', 'industries', 'comparisons'])
+  if (first && ENGLISH_FIRST.has(first)) {
     return NextResponse.next()
   }
-  if ((first === 'en' || first === 'da') && segments[1] === 'articles') {
+  if ((first === 'en' || first === 'da') && segments[1] && ENGLISH_FIRST.has(segments[1])) {
     const url = request.nextUrl.clone()
     url.pathname = '/' + segments.slice(1).join('/')
     return NextResponse.redirect(url)
