@@ -29,12 +29,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const localizedEntries: MetadataRoute.Sitemap = ROUTES.flatMap((route) =>
     LOCALES.map((locale) => {
       const localizedPath = `/${locale}${route}`
+      const isHome = route === ''
 
       return {
         url: absoluteUrl(localizedPath),
         lastModified: now,
-        changeFrequency: (route === '' ? 'daily' : 'weekly') as 'daily' | 'weekly',
-        priority: route === '' ? 1 : 0.8,
+        changeFrequency: (isHome ? 'daily' : 'weekly') as 'daily' | 'weekly',
+        priority: isHome ? 1 : 0.8,
         alternates: {
           languages: {
             en: absoluteUrl(`/en${route}`),
@@ -48,33 +49,38 @@ export default function sitemap(): MetadataRoute.Sitemap {
 
   // Blog — English-first, lives at /articles (no locale prefix).
   const blogIndex: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/articles'), lastModified: now, changeFrequency: 'daily', priority: 0.8 },
+    { url: absoluteUrl('/articles'), lastModified: now, changeFrequency: 'daily', priority: 0.9 },
   ]
 
   const categoryEntries: MetadataRoute.Sitemap = BLOG_CATEGORIES.map((c) => ({
     url: absoluteUrl(`/articles/category/${c.slug}`),
     lastModified: now,
-    changeFrequency: 'weekly',
+    changeFrequency: 'weekly' as const,
     priority: 0.6,
   }))
 
-  const tagEntries: MetadataRoute.Sitemap = getAllUsedTags().map((tag) => ({
-    url: absoluteUrl(`/articles/tag/${tag}`),
-    lastModified: now,
-    changeFrequency: 'weekly',
-    priority: 0.4,
-  }))
-
-  const articleEntries: MetadataRoute.Sitemap = getAllArticles().map((a) => ({
-    url: absoluteUrl(`/articles/${a.slug}`),
-    lastModified: new Date(a.updated || a.date),
-    changeFrequency: 'monthly',
-    priority: 0.7,
-  }))
+  let tagEntries: MetadataRoute.Sitemap = []
+  let articleEntries: MetadataRoute.Sitemap = []
+  try {
+    tagEntries = getAllUsedTags().map((tag) => ({
+      url: absoluteUrl(`/articles/tag/${tag}`),
+      lastModified: now,
+      changeFrequency: 'weekly' as const,
+      priority: 0.4,
+    }))
+    articleEntries = getAllArticles().map((a) => ({
+      url: absoluteUrl(`/articles/${a.slug}`),
+      lastModified: new Date(a.updated || a.date),
+      changeFrequency: 'monthly' as const,
+      priority: 0.7,
+    }))
+  } catch (err) {
+    console.error('[sitemap] Failed to load articles:', err)
+  }
 
   // Industry landing pages — English-first, live at /industries (no locale prefix).
   const industryEntries: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
+    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
     ...INDUSTRIES.map((i) => ({
       url: absoluteUrl(`/industries/${i.slug}`),
       lastModified: now,
