@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
+import AdminNav from '../components/AdminNav'
 
 interface Company {
   id: number
@@ -284,54 +285,8 @@ export default function AdminUsersPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
-      <nav className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex justify-between items-center">
-            <Link href="/" className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-lg">V</span>
-              </div>
-              <span className="text-xl font-bold text-gray-900">PathPilo Admin</span>
-            </Link>
-            <div className="flex items-center space-x-4">
-              <Link href="/admin" className="text-gray-600 hover:text-gray-900">
-                Overview
-              </Link>
-              <Link href="/admin/users" className="text-blue-600 hover:text-blue-700 font-medium">
-                Users
-              </Link>
-              <Link href="/admin/companies" className="text-gray-600 hover:text-gray-900">
-                Companies
-              </Link>
-              <Link href="/admin/video-guides" className="text-gray-600 hover:text-gray-900">
-                Video Guides
-              </Link>
-              <Link href="/admin/trials" className="text-gray-600 hover:text-gray-900">
-                Trials
-              </Link>
-              <Link href="/admin/coupons" className="text-gray-600 hover:text-gray-900">
-                Coupons
-              </Link>
-              <Link href="/admin/activity" className="text-gray-600 hover:text-gray-900">
-                Activity
-              </Link>
-              <button
-                onClick={() => {
-                  localStorage.removeItem('token')
-                  localStorage.removeItem('user')
-                  router.push('/admin')
-                }}
-                className="text-gray-600 hover:text-gray-900 font-medium"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
+      <AdminNav />
 
-      {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">All Users</h1>

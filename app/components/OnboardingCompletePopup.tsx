@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiUrl } from '../utils/api'
 import { SESSION_UPDATED_EVENT } from '../hooks/useUser'
+import { completeOnboardingWizard } from '../utils/onboardingClient'
 
 const FLAG_KEY = 'vevago_pending_celebration'
 
@@ -16,7 +17,7 @@ function slugify(value: string): string {
     .replace(/^-|-$/g, '')
 }
 
-export default function OnboardingCompletePopup() {
+export default function OnboardingCompletePopup({ forceShow = false }: { forceShow?: boolean }) {
   const [show, setShow] = useState(false)
   const [companyName, setCompanyName] = useState('')
   const [saving, setSaving] = useState(false)
@@ -24,6 +25,18 @@ export default function OnboardingCompletePopup() {
   const [prefilled, setPrefilled] = useState(false)
 
   useEffect(() => {
+    if (forceShow) {
+      try {
+        const raw = localStorage.getItem('user')
+        if (raw) {
+          const user = JSON.parse(raw)
+          const name = user?.activeCompany?.name || user?.companyName || ''
+          if (name) { setCompanyName(name); setPrefilled(true) }
+        }
+      } catch { /* ignore */ }
+      setShow(true)
+      return
+    }
     try {
       const flag = localStorage.getItem(FLAG_KEY)
       if (flag !== 'true') return
@@ -37,7 +50,7 @@ export default function OnboardingCompletePopup() {
       }
       setShow(true)
     } catch { /* ignore */ }
-  }, [])
+  }, [forceShow])
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
@@ -99,7 +112,10 @@ export default function OnboardingCompletePopup() {
         }
       } catch { /* ignore */ }
 
-      // 4. Clear flag + navigate to completion page under the new slug
+      // 4. Mark onboarding as complete in DB (if not already done)
+      await completeOnboardingWizard()
+
+      // 5. Clear flag + navigate to completion page under the new slug
       localStorage.removeItem(FLAG_KEY)
       window.location.href = `/${finalSlug}/onboarding-complete`
     } catch (err) {

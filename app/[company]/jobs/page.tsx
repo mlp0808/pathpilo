@@ -18,12 +18,11 @@ import RouteAddSearch, {
   type RouteSearchClient,
   type RouteLocationPick,
 } from '@/app/components/RouteAddSearch'
-import { SetupWizardFloatingCallout, type WizardHintTarget } from '@/app/components/setup/SetupWizardHint'
+import OnboardingCompletePopup from '@/app/components/OnboardingCompletePopup'
 import WeekPlanPanel from '@/app/components/WeekPlanPanel'
 import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
 import {
   advanceOnboardingProgress,
-  completeOnboardingWizard,
   getOwnerOnboardingStep,
 } from '@/app/utils/onboardingClient'
 import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
@@ -246,7 +245,6 @@ function JobsPageContent() {
   // as "off" on days where *they* have zero scheduled hours (weekend, day off,
   // part-time schedule) even when other team members are working.
   const [dailyCapacityEnabled, setDailyCapacityEnabled] = useState(false)
-  const [wizardHintTarget, setWizardHintTarget] = useState<WizardHintTarget | null>(null)
   // Initialise viewMode from URL ?view= param
   const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() =>
     searchParams.get('view') === 'day' ? 'day' : 'week'
@@ -491,18 +489,8 @@ function JobsPageContent() {
     } catch { /* ignore */ }
   }, [])
 
-  useEffect(() => {
-    if (!inRouteWizard || viewMode !== 'day') return
-    void completeOnboardingWizard().then(() => {
-      // Flag shown on the next page they navigate to (survives logout/reload).
-      try { localStorage.setItem('vevago_pending_celebration', 'true') } catch { /* ignore */ }
-      // Onboarding complete conversion event — picked up by GTM → Facebook etc.
-      if (typeof window !== 'undefined') {
-        window.dataLayer = window.dataLayer || []
-        window.dataLayer.push({ event: 'onboarding_complete' })
-      }
-    })
-  }, [inRouteWizard, viewMode])
+  // Wizard: show company-name popup when user clicks "Save and complete setup"
+  const [showBusinessPopup, setShowBusinessPopup] = useState(false)
 
   // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
   const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
@@ -1249,45 +1237,6 @@ function JobsPageContent() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentWeek, viewMode, loading, jobs.length])
 
-    useEffect(() => {
-        if (!inJobsWizard || viewMode !== 'week') {
-            setWizardHintTarget(null)
-            return
-        }
-        const update = () => {
-            const el = document.querySelector('[data-wizard-today-col]')
-            if (!el) {
-                setWizardHintTarget(null)
-                return
-            }
-            const r = el.getBoundingClientRect()
-            if (r.width === 0 && r.height === 0) {
-                setWizardHintTarget(null)
-                return
-            }
-            setWizardHintTarget({ x: r.left, y: r.top, width: r.width, height: r.height })
-        }
-        update()
-        window.addEventListener('resize', update)
-        window.addEventListener('scroll', update, true)
-        const weekScroller = weekScrollContainerRef.current
-        weekScroller?.addEventListener('scroll', update, { passive: true })
-        const el = document.querySelector('[data-wizard-today-col]')
-        const ro = el ? new ResizeObserver(update) : null
-        if (el && ro) ro.observe(el)
-        const t1 = window.setTimeout(update, 100)
-        const t2 = window.setTimeout(update, 400)
-        const t3 = window.setTimeout(update, 900)
-        return () => {
-            window.removeEventListener('resize', update)
-            window.removeEventListener('scroll', update, true)
-            weekScroller?.removeEventListener('scroll', update)
-            ro?.disconnect()
-            window.clearTimeout(t1)
-            window.clearTimeout(t2)
-            window.clearTimeout(t3)
-        }
-    }, [inJobsWizard, viewMode, currentWeek, weekScrollPosition, loading, jobs.length])
 
     // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch)
     useEffect(() => {
@@ -2837,6 +2786,21 @@ function JobsPageContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayRoutes, unsavedUserIds, currentWeek, fetchDirections, pendingAssigneeChanges, buildUserFingerprint])
 
+  // Wizard "Save and complete setup" button handler
+  const handleCompleteSetupFromWizard = useCallback(async () => {
+    // Save all unsaved routes for the day
+    await handleSaveRoute()
+    // Advance the onboarding step to 'business' (company name entry)
+    await advanceOnboardingProgress('business')
+    // Fire GTM conversion event
+    if (typeof window !== 'undefined') {
+      window.dataLayer = window.dataLayer || []
+      window.dataLayer.push({ event: 'onboarding_complete' })
+    }
+    // Show the company name popup immediately
+    setShowBusinessPopup(true)
+  }, [handleSaveRoute])
+
   // Auto-optimize the day's route: fastest visiting order via Mapbox drive matrix + 2-opt.
   // Runs entirely in the browser so it works regardless of API server state, and keeps
   // every located stop (including string-id subscription/projected jobs).
@@ -3470,6 +3434,8 @@ function JobsPageContent() {
                         drawRouteComparison={drawRouteComparison}
                         optimizeNotice={optimizeNotice}
                         onAddJob={() => openCreateJobForDate(toLocalDateString(currentWeek))}
+                        isWizardMode={inRouteWizard}
+                        onCompleteSetup={handleCompleteSetupFromWizard}
                         mobileSheet={!isDesktopRoute}
                         hasUnsavedChanges={hasUnsavedRouteChanges}
 
@@ -3927,7 +3893,6 @@ function JobsPageContent() {
                                             key={originalIndex}
                                             data-day-index={originalIndex}
                                             data-is-today={isTodayBanner ? 'true' : undefined}
-                                            {...(isTodayBanner ? { 'data-wizard-today-col': 'true' } : {})}
                                             className={`flex flex-col rounded-xl overflow-hidden bg-[#FCFCFC] p-[10px] relative flex-shrink-0 h-full ${isDragOver ? 'ring-2 ring-accent-500/50' : ''}`}
                                             style={{
                                                 width: 'calc((100% - 32px) / 5)', // 5 columns visible, accounting for gap (8px * 4 gaps = 32px)
@@ -4300,15 +4265,26 @@ function JobsPageContent() {
                                                         })}
                                                         </>
                                                         ) : null}
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => openCreateJobForDate(dateString)}
-                                                            {...(isTodayBanner ? { 'data-wizard-today-add-job': 'true' } : {})}
-                                                            className="mt-2 w-full flex items-center justify-center gap-1.5 border border-dashed border-gray-300 rounded-xl py-2.5 text-xs font-medium text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/50 transition-colors"
-                                                        >
-                                                            <PlusIcon className="w-3.5 h-3.5" />
-                                                            Add a job
-                                                        </button>
+                                                        <div className="relative mt-2">
+                                                            {inJobsWizard && (
+                                                                <span
+                                                                    aria-hidden
+                                                                    className="absolute inset-0 rounded-xl animate-ping bg-accent-400/40 pointer-events-none"
+                                                                />
+                                                            )}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openCreateJobForDate(dateString)}
+                                                                className={`relative w-full flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium transition-colors ${
+                                                                    inJobsWizard
+                                                                        ? 'border border-accent-500 bg-accent-50 text-accent-600 font-semibold hover:bg-accent-100 hover:border-accent-600'
+                                                                        : 'border border-dashed border-gray-300 text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/50'
+                                                                }`}
+                                                            >
+                                                                <PlusIcon className="w-3.5 h-3.5" />
+                                                                Add a job
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -4325,14 +4301,6 @@ function JobsPageContent() {
 
             </div>
 
-            {inJobsWizard && (
-                <SetupWizardFloatingCallout
-                    target={wizardHintTarget}
-                    createModalOpen={isCreateModalOpen}
-                >
-                    Start by adding a job today
-                </SetupWizardFloatingCallout>
-            )}
 
             <div className="fixed bottom-6 right-6 z-40" data-create-menu>
                 {/* Dropdown Menu */}
@@ -4356,13 +4324,21 @@ function JobsPageContent() {
                 )}
 
                 {/* Create Button */}
-                <button
-                    onClick={() => setShowCreateMenu(!showCreateMenu)}
-                    className="bg-accent-500 text-white px-4 py-2.5 rounded-xl shadow-md hover:shadow-lg hover:bg-accent-600 transition-all flex items-center space-x-2 font-medium"
-                    title={t('app.jobsPage.createFab')}
-                >
-                    <span>create +</span>
-                </button>
+                <div className="relative">
+                    {inJobsWizard && (
+                        <span
+                            aria-hidden
+                            className="absolute inset-0 rounded-xl animate-ping bg-accent-400/50 pointer-events-none"
+                        />
+                    )}
+                    <button
+                        onClick={() => setShowCreateMenu(!showCreateMenu)}
+                        className="relative bg-accent-500 text-white px-4 py-2.5 rounded-xl shadow-md hover:shadow-lg hover:bg-accent-600 transition-all flex items-center space-x-2 font-medium"
+                        title={t('app.jobsPage.createFab')}
+                    >
+                        <span>create +</span>
+                    </button>
+                </div>
             </div>
 
             {/* Create Job Modal */}
@@ -4646,6 +4622,8 @@ function JobsPageContent() {
               selectedUserId={selectedUserId}
               onApplied={() => { fetchJobsForWeek() }}
             />
+            {/* Setup wizard: company-name popup triggered by "Save and complete setup" */}
+            {showBusinessPopup && <OnboardingCompletePopup forceShow={showBusinessPopup} />}
         </AppLayout>
     )
 }

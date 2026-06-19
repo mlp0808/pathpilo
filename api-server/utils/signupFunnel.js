@@ -16,7 +16,7 @@ const SIGNUP_FUNNEL_STEPS = new Set([
   'plan_company',
 ]);
 
-const ONBOARDING_WIZARD_STEPS = ['company', 'services', 'clients', 'jobs', 'route', 'plan', 'done'];
+const ONBOARDING_WIZARD_STEPS = ['company', 'services', 'clients', 'jobs', 'route', 'business', 'plan', 'done'];
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -56,6 +56,7 @@ async function ensureSignupFunnelSchema() {
     SET onboarding_step = 'done', onboarding_completed = true, updated_at = NOW()
     WHERE COALESCE(onboarding_completed, false) = false
       AND onboarding_step = 'plan'
+      AND onboarding_step != 'business'
   `);
   await pool.query(`
     UPDATE companies SET onboarding_step = 'company'
@@ -169,10 +170,34 @@ function funnelStepForCompanyRow(row) {
   const step = row.onboarding_step || 'company';
   if (step === 'jobs') return 'wizard_clients';
   if (step === 'route') return 'wizard_clients';
+  if (step === 'business') return 'wizard_business';
   if (step === 'plan') return 'wizard_completed';
   if (step === 'services') return 'wizard_services';
   if (step === 'clients') return 'wizard_clients';
   return 'wizard_company';
+}
+
+/**
+ * Maps a combined funnel entry to a numeric funnel step (1–6) for the admin
+ * Lead Funnel page.
+ *
+ * Step definitions:
+ *   1 – Create Account  (email entered, verification code sent)
+ *   2 – Verify Email    (code pending)
+ *   3 – Add Client      (companies.onboarding_step = 'clients')
+ *   4 – Add Job         (onboarding_step = 'jobs' | 'route')
+ *   5 – Setup Business  (onboarding_step = 'business')
+ *   6 – Complete        (onboarding_completed = true)
+ */
+function leadFunnelStep(entry) {
+  if (entry.onboarding_completed) return 6;
+  if (entry.onboarding_step === 'business') return 5;
+  if (entry.onboarding_step === 'route' || entry.onboarding_step === 'jobs') return 4;
+  if (entry.onboarding_step === 'clients') return 3;
+  // Pre-account
+  if (entry.draft_step === 'code_sent') return 2;
+  if (entry.kind === 'verification') return 2;
+  return 1;
 }
 
 module.exports = {
@@ -183,5 +208,6 @@ module.exports = {
   upsertSignupDraftByEmail,
   advanceCompanyOnboardingStep,
   funnelStepForCompanyRow,
+  leadFunnelStep,
   wizardStepIndex,
 };

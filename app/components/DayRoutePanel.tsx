@@ -638,6 +638,8 @@ function UserRoutePanel({
   onDrawExit,
   onAddJob,
   jobsFirst = false,
+  isWizardMode = false,
+  onCompleteSetup,
 }: {
   companySlug?: string
   route: UserRoute
@@ -661,6 +663,9 @@ function UserRoutePanel({
   onAddJob?: () => void
   /** Mobile sheet: show the job timeline before stats / draw controls */
   jobsFirst?: boolean
+  /** Setup wizard mode — show "Keep adding" + "Save and complete setup" CTAs */
+  isWizardMode?: boolean
+  onCompleteSetup?: () => void
 }) {
   const { t } = useAppI18n()
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -1103,6 +1108,38 @@ function UserRoutePanel({
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* ── Setup wizard CTAs ───────────────────────────────────── */}
+          {isWizardMode && (
+            <div className="mt-6 pt-4 border-t border-gray-200 flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={onAddJob}
+                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[13px] font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+              >
+                Keep adding a few more jobs
+              </button>
+              <button
+                type="button"
+                onClick={onCompleteSetup}
+                className="wizard-complete-cta w-full rounded-xl bg-[#3DD57A] px-4 py-3 text-[13px] font-semibold text-white shadow-lg shadow-[#3DD57A]/30 hover:bg-[#2ec46a] transition-colors"
+              >
+                Save and complete setup →
+              </button>
+              <style>{`
+                @keyframes wizard-pulse {
+                  0%, 100% { box-shadow: 0 4px 14px rgba(61,213,122,0.3); }
+                  50% { box-shadow: 0 4px 28px rgba(61,213,122,0.65), 0 0 0 6px rgba(61,213,122,0.15); transform: scale(1.02); }
+                }
+                .wizard-complete-cta {
+                  animation: wizard-pulse 2.8s ease-in-out infinite;
+                }
+                .wizard-complete-cta:hover {
+                  animation: none;
+                }
+              `}</style>
             </div>
           )}
         </div>
@@ -1564,6 +1601,10 @@ interface DayRoutePanelProps {
   onDrawReset?: () => void
   onDrawExit?: () => void
   onAddJob?: () => void
+  /** Setup wizard mode — shows "Keep adding" + pulsing "Save and complete setup" CTAs */
+  isWizardMode?: boolean
+  /** Called when the user clicks "Save and complete setup" in wizard mode */
+  onCompleteSetup?: () => void
   /** Compact layout for the mobile bottom sheet (datepicker lives in sheet header) */
   mobileSheet?: boolean
   /** Mobile: lift save bar into the sheet toolbar so it stays visible above the day picker */
@@ -1616,6 +1657,8 @@ export default function DayRoutePanel({
   onDrawReset,
   onDrawExit,
   onAddJob,
+  isWizardMode = false,
+  onCompleteSetup,
   mobileSheet = false,
   wrapMobileSheet,
   hasUnsavedChanges = false,
@@ -1818,6 +1861,8 @@ export default function DayRoutePanel({
           onDrawExit={onDrawExit}
           onAddJob={onAddJob}
           jobsFirst={mobileSheet}
+          isWizardMode={isWizardMode}
+          onCompleteSetup={onCompleteSetup}
         />
       ) : (
         <AllUsersPanel

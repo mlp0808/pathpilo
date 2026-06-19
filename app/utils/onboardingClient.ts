@@ -7,6 +7,7 @@ export type OwnerOnboardingStep =
   | SetupWizardStep
   | 'jobs'
   | 'route'
+  | 'business'
   | 'done'
   | 'company'
   | 'services'
@@ -18,6 +19,7 @@ const ONBOARDING_STEP_ORDER: OwnerOnboardingStep[] = [
   'clients',
   'jobs',
   'route',
+  'business',
   'plan',
   'done',
 ]
@@ -131,13 +133,13 @@ export function getOwnerOnboardingStep(user: Record<string, unknown> | null): Ow
   if (ac?.onboardingCompleted) return 'done'
   const step = ac?.onboardingStep || 'clients'
   if (step === 'done') return 'done'
-  if (step === 'clients' || step === 'jobs' || step === 'route') return step
+  if (step === 'clients' || step === 'jobs' || step === 'route' || step === 'business') return step
   if (step === 'company' || step === 'services' || step === 'plan') return 'clients'
   return 'clients'
 }
 
-export function isAppWizardStep(step: string): step is 'jobs' | 'route' {
-  return step === 'jobs' || step === 'route'
+export function isAppWizardStep(step: string): step is 'jobs' | 'route' | 'business' {
+  return step === 'jobs' || step === 'route' || step === 'business'
 }
 
 export function ownerMustCompleteSetup(user: Record<string, unknown> | null): boolean {
@@ -188,7 +190,7 @@ export function getActiveCompanyId(user: Record<string, unknown> | null): number
 }
 
 export async function advanceOnboardingProgress(
-  step: 'services' | 'clients' | 'jobs' | 'route' | 'plan' | 'wizard_completed',
+  step: 'services' | 'clients' | 'jobs' | 'route' | 'business' | 'plan' | 'wizard_completed',
   companyId?: number
 ): Promise<{ onboardingStep?: string; error?: string } | null> {
   const token = localStorage.getItem('token')

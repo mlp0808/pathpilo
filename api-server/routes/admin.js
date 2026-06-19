@@ -453,6 +453,87 @@ router.get('/activity/logins', async (req, res) => {
   }
 });
 
+// GET /api/admin/activity/monthly-logins?year=2026&month=6
+// Returns the 20 most-active users for a given month with their active day numbers.
+router.get('/activity/monthly-logins', async (req, res) => {
+  try {
+    const now = new Date();
+    const year  = Math.max(2020, Math.min(2030, parseInt(String(req.query.year  || now.getUTCFullYear()), 10) || now.getUTCFullYear()));
+    const month = Math.max(1,    Math.min(12,   parseInt(String(req.query.month || now.getUTCMonth() + 1), 10) || now.getUTCMonth() + 1));
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+    // Check total rows in the table for the requested period (debug)
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM user_login_events
+       WHERE EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC') = $1
+         AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC') = $2`,
+      [year, month]
+    );
+    console.log(`[monthly-logins] ${year}-${month}: ${countRes.rows[0].count} total events in table`);
+
+    const result = await pool.query(`
+      WITH month_events AS (
+        SELECT
+          e.user_id,
+          e.company_id,
+          e.created_at,
+          EXTRACT(DAY FROM e.created_at AT TIME ZONE 'UTC')::int AS day_num
+        FROM user_login_events e
+        WHERE EXTRACT(YEAR  FROM e.created_at AT TIME ZONE 'UTC') = $1
+          AND EXTRACT(MONTH FROM e.created_at AT TIME ZONE 'UTC') = $2
+      ),
+      user_stats AS (
+        SELECT
+          user_id,
+          ARRAY_AGG(DISTINCT day_num ORDER BY day_num) AS active_days,
+          COUNT(DISTINCT day_num)::int AS active_day_count,
+          MAX(created_at) AS last_seen,
+          (ARRAY_AGG(company_id ORDER BY created_at DESC))[1] AS latest_company_id
+        FROM month_events
+        WHERE user_id IS NOT NULL
+        GROUP BY user_id
+      )
+      SELECT
+        u.id        AS user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        us.active_days,
+        us.active_day_count,
+        us.last_seen,
+        c.name      AS company_name,
+        c.slug      AS company_slug,
+        c.country_code
+      FROM user_stats us
+      JOIN users u ON u.id = us.user_id
+      LEFT JOIN companies c ON c.id = us.latest_company_id
+      ORDER BY us.active_day_count DESC, us.last_seen DESC
+      LIMIT 20
+    `, [year, month]);
+
+    const totalEventsInPeriod = parseInt(countRes.rows[0].count, 10);
+    res.json({
+      year,
+      month,
+      daysInMonth,
+      totalEventsInPeriod,
+      rows: result.rows.map((r) => ({
+        userId: r.user_id,
+        name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || `User ${r.user_id}`,
+        email: r.email,
+        company: r.company_name || null,
+        companySlug: r.company_slug || null,
+        activeDays: Array.isArray(r.active_days) ? r.active_days.map(Number) : [],
+        loginCount: r.active_day_count,
+        lastSeen: r.last_seen,
+      })),
+    });
+  } catch (error) {
+    console.error('[admin/activity/monthly-logins]', error);
+    res.status(500).json({ error: 'Failed to load monthly logins' });
+  }
+});
+
 // GET /api/admin/activity/daily-companies — one company counts once per day
 router.get('/activity/daily-companies', async (req, res) => {
   try {
@@ -642,6 +723,227 @@ router.get('/users', async (req, res) => {
   } catch (error) {
     console.error('Error listing users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// GET /api/admin/funnel — unified lead funnel for the admin Lead Funnel page
+router.get('/funnel', requireAdmin, async (req, res) => {
+  try {
+    // 1. Pre-account drafts (no user account yet)
+    const draftRes = await pool.query(`
+      SELECT
+        d.client_session_id,
+        d.first_name,
+        d.last_name,
+        d.email,
+        d.step,
+        d.created_at,
+        d.updated_at
+      FROM signup_progress_drafts d
+      LEFT JOIN users u ON d.email IS NOT NULL AND LOWER(TRIM(d.email)) = LOWER(u.email)
+      WHERE u.id IS NULL
+      ORDER BY d.updated_at DESC
+      LIMIT 200
+    `);
+
+    // 2. Pending email verifications (no account yet)
+    const verRes = await pool.query(`
+      SELECT
+        r.email,
+        MAX(r.created_at) AS started_at,
+        BOOL_OR(r.verify_token_hash IS NOT NULL) AS code_verified
+      FROM registration_verification_codes r
+      LEFT JOIN users u ON LOWER(u.email) = LOWER(r.email)
+      WHERE r.consumed_at IS NULL AND u.id IS NULL
+      GROUP BY LOWER(r.email), r.email
+      ORDER BY MAX(r.created_at) DESC
+      LIMIT 200
+    `);
+
+    // 3. Owners currently in wizard (incomplete onboarding)
+    const wizardRes = await pool.query(`
+      SELECT
+        u.id AS user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        c.id AS company_id,
+        c.name AS company_name,
+        COALESCE(c.onboarding_step, 'clients') AS onboarding_step,
+        false AS onboarding_completed,
+        c.updated_at
+      FROM companies c
+      INNER JOIN users u ON u.id = c.owner_id
+      WHERE COALESCE(c.onboarding_completed, false) = false
+      ORDER BY c.updated_at DESC
+      LIMIT 500
+    `);
+
+    // 4. Recently completed owners (last 60 days)
+    const completedRes = await pool.query(`
+      SELECT
+        u.id AS user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        c.id AS company_id,
+        c.name AS company_name,
+        'done' AS onboarding_step,
+        true AS onboarding_completed,
+        c.updated_at
+      FROM companies c
+      INNER JOIN users u ON u.id = c.owner_id
+      WHERE COALESCE(c.onboarding_completed, true) = true
+        AND c.updated_at >= NOW() - INTERVAL '60 days'
+      ORDER BY c.updated_at DESC
+      LIMIT 200
+    `);
+
+    // Map each source to a unified shape
+    // Step meanings (matches nudgeEmails.ts STEP_LABELS):
+    //   1 = Enter Email (draft, only typed email — no name/password yet)
+    //   2 = Create Account (submitted registration form, email verification pending)
+    //   3 = Add Client (email verified, logged in, hasn't added a customer)
+    //   4 = Add Job (has customer, no job yet)
+    //   5 = Setup Business (added job, saw route, hasn't filled business name)
+    //   6 = Complete
+    const STEP_NAMES = {
+      1: 'Enter Email',
+      2: 'Create Account',
+      3: 'Add Client',
+      4: 'Add Job',
+      5: 'Setup Business',
+      6: 'Complete',
+    };
+
+    function calcStep(entry) {
+      if (entry.onboarding_completed) return 6;
+      if (entry.onboarding_step === 'business' || entry.onboarding_step === 'route') return 5;
+      if (entry.onboarding_step === 'jobs') return 4;
+      if (entry.onboarding_step === 'clients' || entry.onboarding_step === 'company' ||
+          entry.onboarding_step === 'services' || entry.onboarding_step === 'plan') return 3;
+      if (entry.draft_step === 'code_sent' || entry.kind === 'verification') return 2;
+      return 1;
+    }
+
+    const leads = [];
+
+    // Pre-account drafts
+    for (const d of draftRes.rows) {
+      const entry = { kind: 'draft', draft_step: d.step, onboarding_step: null, onboarding_completed: false };
+      const step = calcStep(entry);
+      leads.push({
+        id: `draft-${d.client_session_id}`,
+        kind: 'draft',
+        firstName: d.first_name || null,
+        lastName: d.last_name || null,
+        email: d.email || null,
+        companyName: null,
+        userId: null,
+        companyId: null,
+        funnelStep: step,
+        funnelStepName: STEP_NAMES[step],
+        updatedAt: d.updated_at,
+        createdAt: d.created_at,
+      });
+    }
+
+    // Pending verifications
+    for (const v of verRes.rows) {
+      const entry = { kind: 'verification', draft_step: null, onboarding_step: null, onboarding_completed: false };
+      const step = calcStep(entry);
+      leads.push({
+        id: `ver-${v.email}`,
+        kind: 'verification',
+        firstName: null,
+        lastName: null,
+        email: v.email,
+        companyName: null,
+        userId: null,
+        companyId: null,
+        funnelStep: step,
+        funnelStepName: STEP_NAMES[step],
+        updatedAt: v.started_at,
+        createdAt: v.started_at,
+      });
+    }
+
+    // Wizard + completed owners (deduplicate by user_id)
+    const seenUserIds = new Set();
+    for (const r of [...wizardRes.rows, ...completedRes.rows]) {
+      if (seenUserIds.has(r.user_id)) continue;
+      seenUserIds.add(r.user_id);
+      const entry = {
+        kind: 'owner',
+        draft_step: null,
+        onboarding_step: r.onboarding_step,
+        onboarding_completed: r.onboarding_completed,
+      };
+      const step = calcStep(entry);
+      leads.push({
+        id: `owner-${r.user_id}`,
+        kind: 'owner',
+        firstName: r.first_name || null,
+        lastName: r.last_name || null,
+        email: r.email,
+        companyName: r.company_name || null,
+        userId: r.user_id,
+        companyId: r.company_id,
+        funnelStep: step,
+        funnelStepName: STEP_NAMES[step],
+        updatedAt: r.updated_at,
+        createdAt: r.updated_at,
+      });
+    }
+
+    // Deduplicate by email: same email can appear in multiple sources (draft + verification).
+    // Keep the entry with the highest funnelStep; on tie prefer owner > draft > verification.
+    const kindOrder = { owner: 0, draft: 1, verification: 2 };
+    const emailMap = new Map(); // normalised email → lead
+    for (const lead of leads) {
+      if (!lead.email) continue; // no email → always keep (can't dedup)
+      const key = lead.email.toLowerCase().trim();
+      const existing = emailMap.get(key);
+      if (!existing) { emailMap.set(key, lead); continue; }
+      const betterStep = lead.funnelStep > existing.funnelStep;
+      const sameStep = lead.funnelStep === existing.funnelStep;
+      const betterKind = (kindOrder[lead.kind] ?? 9) < (kindOrder[existing.kind] ?? 9);
+      if (betterStep || (sameStep && betterKind)) emailMap.set(key, lead);
+    }
+    // Replace leads with deduped list, keeping no-email entries
+    const noEmailLeads = leads.filter(l => !l.email);
+    leads.length = 0;
+    leads.push(...noEmailLeads, ...emailMap.values());
+
+    // Sort: most recently updated first
+    leads.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    // Batch-fetch sent nudge IDs for all leads that have an email
+    const emailsWithAddress = leads.filter(l => l.email).map(l => l.email.toLowerCase().trim());
+    const sentNudgeMap = {}; // email → nudge_id[]
+    if (emailsWithAddress.length > 0) {
+      const sentRes = await pool.query(
+        `SELECT LOWER(TRIM(email)) AS email, nudge_id
+         FROM funnel_nudge_sends
+         WHERE LOWER(TRIM(email)) = ANY($1::text[])`,
+        [emailsWithAddress]
+      );
+      for (const row of sentRes.rows) {
+        if (!sentNudgeMap[row.email]) sentNudgeMap[row.email] = [];
+        sentNudgeMap[row.email].push(row.nudge_id);
+      }
+    }
+
+    // Attach sentNudgeIds to each lead
+    for (const lead of leads) {
+      const key = lead.email ? lead.email.toLowerCase().trim() : null;
+      lead.sentNudgeIds = key ? (sentNudgeMap[key] || []) : [];
+    }
+
+    res.json({ leads, stepNames: STEP_NAMES });
+  } catch (error) {
+    console.error('Error loading funnel:', error);
+    res.status(500).json({ error: 'Failed to load funnel' });
   }
 });
 
@@ -1734,6 +2036,43 @@ router.post('/coupons/:promotionCodeId/deactivate', async (req, res) => {
   } catch (err) {
     console.error('[admin] deactivate coupon error:', err);
     res.status(500).json({ error: err.message || 'Failed to deactivate coupon' });
+  }
+});
+
+// POST /api/admin/funnel-nudges/:nudgeId/send
+// Force-sends this nudge immediately to all eligible leads (ignores afterHours delay).
+// Returns { sent, skipped, errors }
+router.post('/funnel-nudges/:nudgeId/send', async (req, res) => {
+  const { nudgeId } = req.params;
+  const { ensureFunnelNudgeSchema, sendNudgeNow } = require('../utils/funnelNudges');
+  try {
+    await ensureFunnelNudgeSchema();
+    const result = await sendNudgeNow(nudgeId);
+    res.json(result);
+  } catch (err) {
+    console.error('[admin] funnel-nudge send error:', err);
+    res.status(500).json({ error: err.message || 'Send failed' });
+  }
+});
+
+// POST /api/admin/funnel-nudges/:nudgeId/send-one
+// Force-sends this nudge to one specific email address immediately.
+// Allows re-sending. Body: { email: string }
+router.post('/funnel-nudges/:nudgeId/send-one', async (req, res) => {
+  const { nudgeId } = req.params;
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  const { ensureFunnelNudgeSchema, sendNudgeToEmail } = require('../utils/funnelNudges');
+  try {
+    await ensureFunnelNudgeSchema();
+    const result = await sendNudgeToEmail(nudgeId, email.trim());
+    res.json(result);
+  } catch (err) {
+    const msg = err?.message || String(err) || 'Send failed';
+    console.error(`[admin] funnel-nudge send-one error (${nudgeId} → ${email}):`, msg, err?.stack || '');
+    res.status(500).json({ error: msg });
   }
 });
 

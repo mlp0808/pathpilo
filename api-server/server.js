@@ -186,6 +186,7 @@ const publicInvoiceRoutes = require('./routes/public-invoices');
 const stripeRoutes = require('./routes/stripe');
 const { initStripeSchema } = stripeRoutes;
 const { runAutomatedEmailTick } = require('./utils/automatedEmails');
+const { ensureFunnelNudgeSchema, runFunnelNudgeTick } = require('./utils/funnelNudges');
 const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
 const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
 const { ensureWorkHoursSchema } = require('./utils/workHoursSchema');
@@ -310,6 +311,12 @@ process.on('SIGINT', () => {
     setInterval(() => {
       runAutomatedEmailTick(pool);
     }, 60 * 1000);
+
+    // Funnel nudge emails: check every 5 minutes for inactive leads
+    ensureFunnelNudgeSchema().then(() => {
+      runFunnelNudgeTick();
+      setInterval(runFunnelNudgeTick, 5 * 60 * 1000);
+    }).catch(err => console.error('[funnelNudge] schema init failed:', err.message || err));
 
     // One-shot backfill: rewrite any historical jobs whose title is empty so
     // the UI no longer shows "Untitled job". Deferred a few seconds so it

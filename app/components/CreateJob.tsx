@@ -485,6 +485,12 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [showServiceDropdown, setShowServiceDropdown] = useState(false)
   const [showServiceCreateSheet, setShowServiceCreateSheet] = useState(false)
+  const [inlineSvcTitle, setInlineSvcTitle] = useState('')
+  const [inlineSvcPrice, setInlineSvcPrice] = useState('')
+  const [inlineSvcDuration, setInlineSvcDuration] = useState('60')
+  const [inlineSvcSave, setInlineSvcSave] = useState(false)
+  const [inlineSvcBusy, setInlineSvcBusy] = useState(false)
+  const [inlineSvcError, setInlineSvcError] = useState('')
   const [showClientDropdown, setShowClientDropdown] = useState(false)
   const [showUserDropdown, setShowUserDropdown] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
@@ -876,6 +882,34 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     setShowServiceDropdown(false)
   }
 
+  const submitInlineService = async () => {
+    const trimmed = inlineSvcTitle.trim()
+    if (!trimmed) { setInlineSvcError(t('app.inlineService.errName', 'Enter a service name.')); return }
+    const p = parseFloat(String(inlineSvcPrice).replace(',', '.'))
+    const d = parseInt(String(inlineSvcDuration).replace(/\D/g, ''), 10)
+    if (!Number.isFinite(p) || p < 0) { setInlineSvcError(t('app.inlineService.errPrice', 'Enter a valid price.')); return }
+    if (!Number.isFinite(d) || d < 1) { setInlineSvcError(t('app.inlineService.errDuration', 'Enter duration in minutes (at least 1).')); return }
+    setInlineSvcError('')
+    if (inlineSvcSave) {
+      setInlineSvcBusy(true)
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/services'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ title: trimmed, price: p, duration_minutes: d }),
+        })
+        const data = await res.json()
+        if (!res.ok || !data.service?.id) { setInlineSvcError(data.error || t('app.services.errCreate', 'Failed to create service')); return }
+        handleInlineServiceCreated({ kind: 'catalog', service: { id: data.service.id, title: data.service.title || trimmed, price: Number(data.service.price) || p, duration_minutes: Number(data.service.duration_minutes) || d } })
+      } catch { setInlineSvcError(t('app.services.errNetworkCreate', 'Network error: Failed to create service')) }
+      finally { setInlineSvcBusy(false) }
+    } else {
+      handleInlineServiceCreated({ kind: 'adhoc', title: trimmed, price: p, durationMinutes: d })
+    }
+    setInlineSvcTitle(''); setInlineSvcPrice(''); setInlineSvcDuration('60'); setInlineSvcSave(false)
+  }
+
   const openServiceCreateSheet = () => {
     setShowServiceDropdown(false)
     setShowServiceCreateSheet(true)
@@ -1227,51 +1261,119 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                         ))}
                       </div>
                     )}
-                    <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
-                      {showServiceDropdown || serviceSearch ? (
+                    {services.length === 0 && selectedServices.length === 0 ? (
+                      /* No catalog services yet — show inline create fields directly */
+                      <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
+                        <p className="text-xs font-medium text-gray-500">
+                          {t('app.createJob.noServicesHint', "You don't have any services yet — add one to this job:")}
+                        </p>
+                        {inlineSvcError && (
+                          <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">{inlineSvcError}</div>
+                        )}
                         <input
-                          ref={serviceSearchInputRef}
                           type="text"
-                          value={serviceSearch}
-                          onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
-                          onFocus={() => {
-                            setShowServiceDropdown(true)
-                            if (serviceDropdownTriggerRef.current) {
-                              scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
-                            }
-                          }}
-                          placeholder={t('app.createJob.searchServices', 'Search for services...')}
-                          className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
+                          value={inlineSvcTitle}
+                          onChange={e => { setInlineSvcTitle(e.target.value); if (inlineSvcError) setInlineSvcError('') }}
+                          placeholder={t('app.services.placeholderTitle', 'e.g. Window Cleaning')}
+                          className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 bg-white"
+                          autoFocus
                         />
-                      ) : (
-                        <DashedPickerTrigger onClick={openServicePicker} size={selectedServices.length > 0 ? 'md' : 'lg'}>
-                          {t('app.createJob.addServices', 'Add services')}
-                        </DashedPickerTrigger>
-                      )}
-                    </div>
-                    {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
-                      <div
-                        className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-y-auto"
-                        style={{ position: 'fixed', zIndex: 9999, ...getFixedDropdownPlacement(serviceDropdownRect) }}
-                      >
-                        {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
-                          <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
-                            <div className="text-sm font-semibold text-primary-800">{service.title}</div>
-                            <div className="text-xs text-gray-500">{formatMoney(Number(service.price) || 0, companyCountryCode)} · {service.duration_minutes} {t('app.createJob.minutesUnit', 'min')}</div>
-                          </button>
-                        ))}
+                        <div className="grid grid-cols-2 gap-3">
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={inlineSvcPrice}
+                            onChange={e => setInlineSvcPrice(e.target.value)}
+                            placeholder={t('app.subscription.price', 'Price')}
+                            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 bg-white"
+                          />
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min={1}
+                              value={inlineSvcDuration}
+                              onChange={e => setInlineSvcDuration(e.target.value.replace(/\D/g, ''))}
+                              placeholder="60"
+                              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 bg-white pr-12"
+                            />
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
+                              {t('app.createJob.minutesUnit', 'min')}
+                            </span>
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={inlineSvcSave}
+                            onChange={e => setInlineSvcSave(e.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                          />
+                          <span className="text-xs font-medium text-gray-600">
+                            {t('app.inlineService.saveToAccount', 'Save to catalog')}
+                          </span>
+                        </label>
                         <button
                           type="button"
-                          onClick={openServiceCreateSheet}
-                          className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0"
+                          onClick={() => void submitInlineService()}
+                          disabled={inlineSvcBusy || !inlineSvcTitle.trim()}
+                          className="w-full py-3 rounded-xl text-sm font-semibold text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-40 transition-colors"
                         >
-                          <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
-                            <PlusIcon className="w-4 h-4" />
-                            {t('app.inlineService.createNew', 'Create new service')}
-                          </div>
+                          {inlineSvcBusy
+                            ? t('app.services.adding', 'Adding...')
+                            : t('app.inlineService.addService', 'Add service')}
                         </button>
-                      </div>,
-                      document.body
+                      </div>
+                    ) : (
+                      /* Has catalog services (or already picked one) — show normal search picker */
+                      <>
+                        <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
+                          {showServiceDropdown || serviceSearch ? (
+                            <input
+                              ref={serviceSearchInputRef}
+                              type="text"
+                              value={serviceSearch}
+                              onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
+                              onFocus={() => {
+                                setShowServiceDropdown(true)
+                                if (serviceDropdownTriggerRef.current) {
+                                  scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+                                }
+                              }}
+                              placeholder={t('app.createJob.searchServices', 'Search for services...')}
+                              className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
+                            />
+                          ) : (
+                            <DashedPickerTrigger onClick={openServicePicker} size={selectedServices.length > 0 ? 'md' : 'lg'}>
+                              {t('app.createJob.addServices', 'Add services')}
+                            </DashedPickerTrigger>
+                          )}
+                        </div>
+                        {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
+                          <div
+                            className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-y-auto"
+                            style={{ position: 'fixed', zIndex: 9999, ...getFixedDropdownPlacement(serviceDropdownRect) }}
+                          >
+                            {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
+                              <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
+                                <div className="text-sm font-semibold text-primary-800">{service.title}</div>
+                                <div className="text-xs text-gray-500">{formatMoney(Number(service.price) || 0, companyCountryCode)} · {service.duration_minutes} {t('app.createJob.minutesUnit', 'min')}</div>
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={openServiceCreateSheet}
+                              className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0"
+                            >
+                              <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
+                                <PlusIcon className="w-4 h-4" />
+                                {t('app.inlineService.createNew', 'Create new service')}
+                              </div>
+                            </button>
+                          </div>,
+                          document.body
+                        )}
+                      </>
                     )}
               </div>
               </div>

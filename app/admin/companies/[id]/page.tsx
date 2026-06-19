@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter, useParams } from 'next/navigation'
 import { apiUrl } from '../../../utils/api'
+import AdminNav from '../../components/AdminNav'
 import BillingPanel from './BillingPanel'
 
 interface User {
@@ -172,25 +173,7 @@ export default function CompanyDetailPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Nav */}
-      <nav className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-          <Link href="/" className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-lg">V</span>
-            </div>
-            <span className="text-xl font-bold text-gray-900">Vevago Admin</span>
-          </Link>
-          <div className="flex items-center space-x-4">
-            <Link href="/admin/overview" className="text-gray-600 hover:text-gray-900">Overview</Link>
-            <Link href="/admin/users" className="text-gray-600 hover:text-gray-900">Users</Link>
-            <Link href="/admin/companies" className="text-blue-600 font-medium">Companies</Link>
-            <Link href="/admin/trials" className="text-gray-600 hover:text-gray-900">Trials</Link>
-            <Link href="/admin/coupons" className="text-gray-600 hover:text-gray-900">Coupons</Link>
-            <Link href="/admin/activity" className="text-gray-600 hover:text-gray-900">Activity</Link>
-            <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/admin') }} className="text-gray-600 hover:text-gray-900">Logout</button>
-          </div>
-        </div>
-      </nav>
+      <AdminNav />
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         <Link href="/admin/companies" className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 mb-6">
