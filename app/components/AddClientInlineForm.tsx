@@ -36,6 +36,8 @@ interface AddClientInlineFormProps {
   onSave: () => void
   onCancel: () => void
   saveLabel?: string
+  /** ISO-3166-1 alpha-2 country code (e.g. 'GB', 'DK') used to filter address autocomplete suggestions. */
+  countryCode?: string
 }
 
 /**
@@ -48,7 +50,8 @@ export default function AddClientInlineForm({
   onChange,
   onSave,
   onCancel,
-  saveLabel = 'Save & Select Client'
+  saveLabel = 'Save & Select Client',
+  countryCode,
 }: AddClientInlineFormProps) {
   const inputBase = 'w-full px-4 py-3 text-sm bg-white border border-gray-300 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-gray-400 hover:border-gray-400'
 
@@ -119,6 +122,7 @@ export default function AddClientInlineForm({
         city={data.city}
         lat={data.lat}
         lng={data.lng}
+        countryCode={countryCode}
         onChange={(addr) =>
           onChange({
             ...data,

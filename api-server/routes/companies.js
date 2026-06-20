@@ -16,6 +16,17 @@ function normalizeCountryCode(value) {
   return normalized.length === 2 ? normalized : DEFAULT_COUNTRY_CODE;
 }
 
+/** Derive a human-readable country name from an ISO 3166-1 alpha-2 code using the Intl API. */
+function countryNameFromCode(code) {
+  try {
+    const names = new Intl.DisplayNames(['en'], { type: 'region' });
+    const name = names.of(String(code || '').trim().toUpperCase());
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 function buildInvitationEmail({ email, companyName, inviterName, role, inviteLink, expiresAt }) {
   const rolePretty = role === 'owner' ? 'Owner' : role === 'manager' ? 'Manager' : 'Employee';
   const expiryDate = new Date(expiresAt).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1094,6 +1105,13 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const capacityEnabled =
       dailyCapacityEnabled === undefined ? undefined : Boolean(dailyCapacityEnabled);
 
+    // When `country` (display name) is not explicitly provided but `countryCode` is,
+    // auto-derive the country name so the column is never left empty.
+    let effectiveCountry = country != null ? String(country).trim() : null;
+    if (!effectiveCountry && countryCode) {
+      effectiveCountry = countryNameFromCode(normalizeCountryCode(countryCode));
+    }
+
     // COALESCE on every nullable field so a partial PATCH-like PUT (frontend
     // only sends what changed) doesn't accidentally wipe the others.
     await pool.query(
@@ -1118,7 +1136,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       WHERE id = $13`,
       [
         name != null ? String(name).trim() : null,
-        country != null ? String(country).trim() : null,
+        effectiveCountry || null,
         countryCode != null ? normalizeCountryCode(countryCode) : null,
         cvrNumber != null ? String(cvrNumber).trim() : null,
         address != null ? String(address).trim() : null,
@@ -1784,6 +1802,12 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       }
     }
 
+    // Auto-derive country display name from code when not explicitly provided.
+    let wizardCountry = country != null ? String(country).trim() : null;
+    if (!wizardCountry && countryCode) {
+      wizardCountry = countryNameFromCode(normalizeCountryCode(countryCode));
+    }
+
     const result = await pool.query(`
       UPDATE companies
       SET name = $1, slug = $2, country = $3, country_code = COALESCE($4, country_code, '${DEFAULT_COUNTRY_CODE}'),
@@ -1793,7 +1817,7 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
     `, [
       newName,
       slug,
-      country != null ? String(country).trim() : null,
+      wizardCountry,
       countryCode != null ? normalizeCountryCode(countryCode) : null,
       cvrNumber != null ? String(cvrNumber).trim() : null,
       address != null ? String(address).trim() : null,

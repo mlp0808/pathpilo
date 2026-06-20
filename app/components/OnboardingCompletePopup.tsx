@@ -63,6 +63,16 @@ export default function OnboardingCompletePopup({ forceShow = false }: { forceSh
       const token = localStorage.getItem('token')
       const newSlug = slugify(trimmed)
 
+      // Read the current slug from the session so we can fall back to it if the update fails.
+      let currentSlug = ''
+      try {
+        const raw = localStorage.getItem('user')
+        if (raw) {
+          const u = JSON.parse(raw)
+          currentSlug = u?.activeCompany?.slug || ''
+        }
+      } catch { /* ignore */ }
+
       // 1. Update company name
       const nameRes = await fetch(apiUrl('/companies/profile'), {
         method: 'PUT',
@@ -74,11 +84,12 @@ export default function OnboardingCompletePopup({ forceShow = false }: { forceSh
         throw new Error(d.error || 'Failed to update company name')
       }
 
-      // 2. Update slug (derived from name, best-effort — may be taken)
-      let finalSlug = newSlug
+      // 2. Update slug (derived from name, best-effort — may be taken).
+      // The endpoint is PATCH /api/companies/slug.
+      let finalSlug = currentSlug || newSlug
       if (newSlug.length >= 2) {
         const slugRes = await fetch(apiUrl('/companies/slug'), {
-          method: 'PUT',
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ slug: newSlug }),
         })
@@ -86,7 +97,7 @@ export default function OnboardingCompletePopup({ forceShow = false }: { forceSh
           const slugData = await slugRes.json().catch(() => ({}))
           finalSlug = slugData.slug || newSlug
         }
-        // If slug is taken or fails, we just keep the old slug — name is still updated.
+        // If slug is taken or fails, keep the old slug so the redirect still works.
       }
 
       // 3. Patch session so the new name + slug are reflected immediately

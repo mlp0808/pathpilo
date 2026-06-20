@@ -2262,10 +2262,12 @@ function JobsPageContent() {
       assigned_user_id: pendingAssigneeChangesRef.current[j.id] ?? j.assigned_user_id
     }))
     const jobsFp = buildDayJobsFingerprint(dayJobsWithPending)
+    // Read the PREVIOUS fingerprint before overwriting, so we can detect job changes.
+    const prevFp = dayRouteCacheFpRef.current.get(dateStr)
     dayRouteCacheFpRef.current.set(dateStr, jobsFp)
 
     const cachedRoutes = dayRouteCacheRef.current.get(dateStr)
-    if (cachedRoutes && dayRouteCacheFpRef.current.get(dateStr) === jobsFp) {
+    if (cachedRoutes && prevFp === jobsFp) {
       setDayRoutes(cachedRoutes)
       if (routesHaveDirections(cachedRoutes)) return
     }

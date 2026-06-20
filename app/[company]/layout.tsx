@@ -252,7 +252,8 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
       const step = getOwnerOnboardingStep(u)
       if (isAppWizardStep(step)) {
         const onJobs = pathname?.includes(`/${companySlug}/jobs`) ?? false
-        if (!onJobs) {
+        const onComplete = pathname?.includes('/onboarding-complete') ?? false
+        if (!onJobs && !onComplete) {
           router.replace(getOwnerSetupResumePath(u))
         }
         return

@@ -488,7 +488,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [inlineSvcTitle, setInlineSvcTitle] = useState('')
   const [inlineSvcPrice, setInlineSvcPrice] = useState('')
   const [inlineSvcDuration, setInlineSvcDuration] = useState('60')
-  const [inlineSvcSave, setInlineSvcSave] = useState(false)
+  const [inlineSvcSave, setInlineSvcSave] = useState(true)
   const [inlineSvcBusy, setInlineSvcBusy] = useState(false)
   const [inlineSvcError, setInlineSvcError] = useState('')
   const [showClientDropdown, setShowClientDropdown] = useState(false)
@@ -1179,6 +1179,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     <AddClientInlineForm
                       data={newClientData}
                       onChange={setNewClientData}
+                      countryCode={companyCountryCode}
                       onSave={() => {
                         if (newClientData.name.trim()) {
                           setSelectedClient({
