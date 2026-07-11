@@ -1,0 +1,167 @@
+---
+title: "Automatic route planning: how it works, what it costs, and what to expect"
+description: "Automatic route planning removes the daily stop-ordering task from your morning. Here is exactly how the process works, what it costs, and what the first month looks like in practice."
+slug: "automatic-route-planning"
+category: "route-planning"
+tags: ["route-optimization", "fuel-savings", "automated-routing", "multi-stop", "productivity"]
+date: "2026-07-11"
+author: "The PathPilo Team"
+authorRole: "Route planning"
+image: "/images/articles/automatic-route-planning.svg"
+imageAlt: "A field service route being automatically optimised on a map"
+seoTitle: "Automatic Route Planning: How It Works, What It Costs & What to Expect"
+seoDescription: "A plain-English guide to automatic route planning for field service teams. How the process works, what it costs, how many stops it handles, and what the first month looks like."
+---
+
+Every service business that drives to customers has a route planning problem, even if it does not call it that. The question of which stop to visit first, which next, and which last is answered every morning — in the owner's head, in a text thread, or in a rough list on the notes app. It works until it doesn't.
+
+**Automatic route planning** is the process of handing that question to software. The system takes the day's jobs, calculates every possible ordering, and returns the one that minimises total drive time — in under a second. You review it, adjust anything your local knowledge requires, and go.
+
+This guide covers exactly what happens under the hood, how much it costs to set up, and what the first month genuinely looks like in practice.
+
+<KeyTakeaways>
+- Automatic route planning replaces the daily stop-ordering task with an algorithm that runs in under a second.
+- The process works in four steps: input the day's jobs, run the optimiser, review on a map, dispatch to the field.
+- Most field teams see 25 to 40 percent less drive time from the first optimised week.
+- It handles anything from 3 stops to 200+, and re-plans instantly when something changes mid-day.
+- The "route to live" process — from plan approval to technicians moving — takes under 2 minutes.
+</KeyTakeaways>
+
+## What automatic route planning actually means
+
+There is a loose use of this term in the market, so it's worth being precise. Automatic route planning means the software determines the stop order for you — you don't manually sort a list or drag pins around a map to find an efficient sequence. You provide the addresses, the system provides the order.
+
+What it does not mean, unless the software specifically offers it, is that jobs are automatically assigned to the right technician in the first place. Assignment (deciding who does what) and ordering (deciding in what sequence) are related but separate problems. Most route planning tools handle ordering well. The better ones also help with assignment.
+
+<InfoBox type="info" title="Route planning vs route optimisation">
+These terms are often used interchangeably, but technically: route planning is choosing which jobs to include and assigning them to a person. Route optimisation is finding the best sequence for those jobs. Automatic route planning does both, with the optimisation step happening algorithmically in under a second.
+</InfoBox>
+
+## How the process works: step by step
+
+### Step 1: The input
+
+The system needs three things to calculate a useful route:
+
+1. **Addresses** — not just client names. The algorithm geocodes each address to a latitude and longitude and measures real drive time between every pair of stops.
+2. **Job durations** — how long each stop takes. Without durations, the system cannot predict when each job finishes or whether the day is actually feasible.
+3. **Start and end points** — where each technician begins and ends the day. This matters significantly: two technicians in different parts of a city have completely different optimal routes even for the same set of jobs.
+
+Get these three things right and the algorithm produces reliable, genuinely useful routes. Miss any of them and the output looks tidy on a map but doesn't reflect reality.
+
+### Step 2: The optimisation pass
+
+With the inputs mapped, the algorithm works through the stop-ordering problem. The mathematical version of this is called the Travelling Salesman Problem: given a set of locations, find the shortest tour that visits each one exactly once. It is computationally hard to solve perfectly at scale, so modern systems use heuristic optimisers — algorithms that find very good solutions (within 1–3% of the true best) extremely fast.
+
+Common techniques include:
+- **Nearest-neighbour construction** — builds a route by always going to the closest unvisited stop next, creating a rough starting point.
+- **2-opt improvement** — looks for pairs of route segments that would be shorter if swapped, and swaps them until no more improvements are possible.
+- **Simulated annealing** — allows occasional "worse" moves to escape local optima and find globally better routes.
+
+The result is a stop order that is consistently better than human intuition, especially for the middle portion of the day where mental models of geography are weakest.
+
+### Step 3: Traffic weighting
+
+Distance and time are not the same thing. A 5km route through a city centre at 8am can take twice as long as a 7km route that avoids the congestion. Good automatic route planners weight travel times by real-road conditions and time-of-day traffic patterns, not straight-line distances.
+
+This is why the system sometimes proposes a route that looks longer on a map. The algorithm is correct; it has seen the traffic data you haven't.
+
+### Step 4: Review, adjust, go live
+
+The route is presented on a map for human review. You check it against local knowledge — the customer who is only available until 10am, the site with difficult parking on a Tuesday — and make any manual adjustments. You lock those constraints in, and the system reoptimises the remaining stops around them.
+
+This is the "route to live" step. With a good system, it takes under 2 minutes from plan approval to the route appearing on every technician's mobile app. From that point, the field team executes without any further office involvement.
+
+<StatGrid>
+  <Stat value="< 1 sec" label="Time the algorithm takes to optimise a day's route" />
+  <Stat value="< 2 min" label="Typical route-to-live time from plan to field dispatch" />
+  <Stat value="25–40%" label="Typical reduction in daily drive time vs manual planning" />
+</StatGrid>
+
+## How many stops can it handle?
+
+<Columns>
+  <Column title="Solo operators (3–12 stops)">
+  Works extremely well. At this scale, human intuition is decent but the algorithm consistently finds 15–25% better orderings, especially for stops scattered across a wider area. Setup time is under an hour.
+  </Column>
+  <Column title="Teams (5–50 stops per person)">
+  This is where automatic routing pays off most. Multi-technician planning that used to take 30–45 minutes of morning admin is done in under 2 minutes. Workload balancing and geographic territory management become practical at this scale.
+  </Column>
+</Columns>
+
+For very large operations (200+ stops), enterprise-grade logistics platforms are typically needed. Most field service businesses are well within the range that standard route planning software handles perfectly.
+
+## What it costs
+
+Pricing varies significantly by what you actually get:
+
+| Tool type | Typical monthly cost | What you get |
+| --- | --- | --- |
+| Standalone route optimiser | £0–£20 | Stop ordering only — no job management, no invoicing |
+| Field service platform (basic) | £30–£60 | Routing + scheduling + client records |
+| Field service platform (full) | £60–£120 | Routing + scheduling + invoicing + mobile app + recurring jobs |
+| Enterprise dispatch | £200+ per user | Large-fleet logistics, not suited to most service businesses |
+
+For most service businesses, the £40–80/month tier covers everything needed and the ROI is visible within the first two weeks: fewer kilometres driven, less morning planning time, and the occasional extra job that fits into the freed-up time.
+
+<InfoBox type="tip" title="How to calculate your break-even">
+Take the daily drive time you currently spend, multiply by 0.25 (a conservative 25% reduction estimate), and convert that to kilometres or hours saved. At a typical field service billing rate, one additional job per week from the freed-up time covers the software cost several times over.
+</InfoBox>
+
+## What the first month looks like
+
+Most teams go through a predictable adjustment curve. Understanding it in advance prevents abandonment at the first week — which is when routes feel most unfamiliar.
+
+| Week | What typically happens |
+| --- | --- |
+| Week 1 | You override 30–50% of the system's suggestions. The routes feel counterintuitive. You'll often discover the algorithm was right after the fact. |
+| Week 2 | Overrides drop to 15–20%. You start adding constraints the system doesn't know (preferred time windows, access notes) and it incorporates them. |
+| Week 3–4 | Overrides are for specific known exceptions only. Morning planning drops below 10 minutes. |
+| Month 2+ | You review and approve in under 2 minutes. Drive time savings are measurable and consistent. |
+
+The discomfort in week one is not a sign the tool isn't working. It is calibration. The algorithm has better maths; you have better local knowledge. By week three, you have usually taught the system the local constraints and the two work together well.
+
+<Quote author="Tom, pest control, solo operator">
+The first week I kept second-guessing it. By week three I stopped looking at the route and just went. It's been saving me an hour a day ever since.
+</Quote>
+
+## Automatic route planning and the rest of your workflow
+
+Automatic route planning delivers the most value when it connects to the rest of your operations — not as a standalone tool that produces a list you then manually transfer to a calendar or a message thread.
+
+The connected version looks like this: jobs are already in the system (from recurring schedules, new bookings, or manual entry), the route planner sees all of them with their durations and addresses, and when you approve the plan it pushes directly to every technician's mobile app. When a job is marked complete in the field, an invoice is ready to send. When a job cancels mid-day, the route reoptimises automatically.
+
+That is the [field service management platform](/articles/field-service-management-software-guide) version of automatic routing, and it is where the 40% drive-time reduction number actually comes from in practice.
+
+For a practical deep-dive into the underlying algorithm and how to set it up step by step, see [automated route planning: how it works and why it saves hours every week](/articles/automated-route-planning).
+
+## Frequently asked questions
+
+### Can it re-plan mid-day if something changes?
+
+Yes. When a job cancels or a new urgent job is added, good systems reoptimise the remaining route in seconds. You remove the cancelled job or add the new one, and the system recalculates. This is one of the most valuable real-world features — the mental effort of manually reshuffling four stops after a mid-morning cancellation is completely removed.
+
+### Does it work offline?
+
+The optimisation algorithm runs on the server and requires an internet connection. However, most mobile apps cache the day's route locally so technicians can view their jobs and navigate even with poor signal. Check this specifically if your team works in areas with patchy coverage.
+
+### How many stops can it handle in a single route?
+
+Most field service platforms handle up to 50–100 stops per person per day with no performance issues. Beyond that, specialised logistics platforms are more appropriate. For the vast majority of service businesses — 5 to 25 stops per person — standard automatic route planning is more than sufficient.
+
+### Does it account for traffic?
+
+Good systems use real-road travel times with time-of-day traffic weighting. If your platform uses straight-line distances or average speeds rather than live-traffic data, the route will look efficient on paper but run late in practice. This is worth verifying during any trial.
+
+### Can I lock specific stops in position?
+
+Yes. If a customer needs to be first or must be visited between specific times, you can lock that stop and let the algorithm optimise the remaining stops around it. Time windows and position constraints are standard features in field service route planning software.
+
+<CTABox
+  title="See automatic route planning in action"
+  text="PathPilo plans a full team's day in under 2 minutes — automatic stop ordering, live field sync, and instant re-planning when something changes. Start free."
+  buttonLabel="Try PathPilo free"
+/>
+
+**PathPilo help articles:**
+- [Drawing a route in PathPilo](https://help.pathpilo.com) — the step-by-step guide to drawing and confirming your first route in PathPilo

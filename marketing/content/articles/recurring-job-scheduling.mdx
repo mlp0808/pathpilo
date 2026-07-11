@@ -1,0 +1,227 @@
+---
+title: "Recurring job scheduling: how to set up automated rebooking so you never forget a client"
+description: "How to set a job to repeat, edit a single visit without affecting the whole series, skip a week, and handle the scheduling edge cases that trip most service businesses up."
+slug: "recurring-job-scheduling"
+category: "scheduling"
+tags: ["recurring-jobs", "scheduling", "automation", "calendar-management", "client-retention"]
+date: "2026-07-11"
+author: "The PathPilo Team"
+authorRole: "Scheduling"
+image: "/images/articles/recurring-job-scheduling.svg"
+imageAlt: "A recurring job schedule showing repeating service visits on a calendar"
+seoTitle: "Recurring Job Scheduling: Automate Rebooking and Never Forget a Client"
+seoDescription: "How to set up recurring jobs in field service software. Edit a series, skip a visit, handle exceptions, and never miss a scheduled client again."
+---
+
+A client who has their home cleaned every two weeks, or their HVAC serviced every quarter, or their gutters cleared every spring and autumn — this is your best kind of client. They don't require re-selling. The job is predictable. The revenue shows up whether or not you remembered to book it.
+
+The problem is the "whether or not you remembered to book it" part. Most service businesses that don't use recurring job scheduling rely on a mix of memory, spreadsheets, and the client calling to ask why no one showed up. This works until it doesn't, and the moment it doesn't, you've lost a customer who was very easy to keep.
+
+**Recurring job scheduling** in field service software solves this by creating every future visit automatically. Once the schedule is set up, the job appears in your calendar, in your route planner, and in your technician's app on the correct date — without anyone doing anything.
+
+This guide is about the mechanics: how to set a recurring job up, how to edit it when things change, how to handle one-off exceptions, and what to do when a client pauses or cancels.
+
+> **Note:** this article focuses on the mechanics of setting up and managing recurring schedules. For the business case — why recurring jobs are the most predictable path to service business growth — see [recurring jobs: how to turn one-off clients into predictable revenue](/articles/recurring-jobs-predictable-revenue).
+
+<KeyTakeaways>
+- Recurring jobs create every future visit automatically at the interval you define — weekly, fortnightly, monthly, quarterly, or custom.
+- The job appears in the route planner and the technician's mobile app on the correct date without any manual re-creation.
+- You can edit a single occurrence without changing the full series — useful for a one-off time change or a schedule shift.
+- Skipping a visit (client away, weather, public holiday) is a one-click action and does not break the rest of the series.
+- Pausing or cancelling a series ends the automatic scheduling without deleting historical records.
+</KeyTakeaways>
+
+## What a recurring job actually creates in the system
+
+When you set a job to repeat, the system creates a **series** — a parent record that defines the schedule, plus individual job instances for each occurrence. This structure matters because it affects how editing works.
+
+Think of it like a TV series: the series defines the format, the cast, and the schedule. Each episode is an individual instance that can vary slightly (a guest character, a different running time) without changing the rest of the series.
+
+When you set a job to repeat every two weeks:
+- A series record is created with the client, service type, duration, and repeat interval
+- The system creates individual job instances for upcoming dates — how many in advance depends on the platform, but typically 4–12 weeks ahead
+- As time passes, more future instances are generated automatically
+
+This is the structure that allows you to edit one visit without touching the others.
+
+## Setting up a recurring job: the key fields
+
+Regardless of which platform you use, the core configuration is the same:
+
+<InfoBox type="info" title="Recurring job setup checklist">
+**Required:**
+- [ ] Client — who is being visited
+- [ ] Service type — what is being done
+- [ ] Estimated duration — how long the job takes
+- [ ] Start date — the first occurrence
+- [ ] Repeat interval — weekly, fortnightly, monthly, quarterly, custom (e.g. every 6 weeks)
+- [ ] Assigned technician (optional at setup, can assign per visit)
+
+**Recommended:**
+- [ ] Time preference — morning, afternoon, or specific window (if the client has one)
+- [ ] Access notes — gate code, where to park, who to ask for
+- [ ] Service notes — specific tasks, materials, what was done last time
+- [ ] Automatic invoice on completion — yes/no
+</InfoBox>
+
+### Choosing the right repeat interval
+
+Most platforms offer fixed intervals. Here are the most common and when to use each:
+
+| Interval | Common use cases |
+| --- | --- |
+| Weekly | Cleaning companies (residential), regular maintenance rounds |
+| Fortnightly | Residential cleaning (less intensive), lawn care |
+| Monthly | Commercial cleaning, basic maintenance, equipment checks |
+| 6-weekly | Some residential cleaning, routine inspections |
+| Quarterly | HVAC service, pest control (quarterly contracts), fire safety checks |
+| Bi-annually | HVAC seasonal service, gutter cleaning (spring and autumn) |
+| Annually | Annual inspections, certification visits |
+
+If your platform doesn't offer a specific interval (e.g. "every 5 weeks"), look for a custom interval field where you specify the number of days between visits.
+
+## Editing a single visit without changing the series
+
+This is the most commonly needed action, and the one that confuses new users most.
+
+**Scenario:** your cleaner is off sick on the 15th. You need to move client A's visit from the 15th to the 17th — just this one time — without affecting every future fortnightly visit.
+
+This is called editing a **single occurrence**. The process:
+
+1. Open the specific job instance (the one on the 15th)
+2. Select "Edit this occurrence only" (not "Edit all future occurrences")
+3. Change the date to the 17th
+4. Save
+
+The series continues on its original fortnightly schedule. The next visit after this one will appear on the expected date (two weeks from the 15th, not two weeks from the 17th, unless your platform calculates from the last actual visit — check this).
+
+<InfoBox type="warning" title="Occurrence edit vs series edit — check how your platform calculates">
+Some platforms recalculate the next visit from the edited occurrence date. Others maintain the original series cadence regardless of individual edits. This matters: if you move a visit two days and the platform recalculates from there, the whole series drifts. If it maintains the original cadence, it doesn't. Know which behaviour your platform uses.
+</InfoBox>
+
+**When to use "Edit all future occurrences" instead:**
+If a client changes their preference from Wednesday to Thursday permanently, you want to edit the series from today forward, not just one instance. Most platforms offer: "edit this occurrence," "edit this and all future occurrences," and "edit the entire series including past records."
+
+## Skipping a visit
+
+Skipping is different from rescheduling. You're not moving the visit — you're removing one occurrence entirely while keeping the rest of the series intact.
+
+Common skip scenarios:
+- Client going on holiday for a week
+- Public holiday falls on the normal visit day
+- Client cancels one visit for budget reasons
+- Weather makes the job impossible (exterior work)
+
+The skip process:
+1. Open the specific job instance you want to skip
+2. Select "Skip this occurrence" or "Mark as skipped"
+3. The job disappears from the schedule for that date
+4. The rest of the series continues unchanged
+
+Most platforms record the skip with a reason field — useful for review later ("skipped — client on holiday") and for demonstrating to a client that you did have them scheduled.
+
+## Handling series-level changes
+
+When a client's situation changes permanently, you need to edit the series, not an occurrence.
+
+| Situation | Action |
+| --- | --- |
+| Client changes preferred day | Edit all future occurrences, change the day |
+| Client upgrades service (adds extra tasks) | Edit all future occurrences, update service description and duration |
+| Client moves to a new address | Edit the series address — all future visits use the new address |
+| Client changes frequency (monthly to fortnightly) | Edit the series interval |
+| Regular technician changes | Reassign all future occurrences |
+
+<Columns>
+  <Column title="Client pauses their schedule">
+  A pause is a temporary stop — you expect them to return. Mark the series as paused with an expected resume date. No new instances are created during the pause period. When the resume date arrives, the series picks back up automatically (on platforms that support this) or you manually resume it.
+  </Column>
+  <Column title="Client cancels their schedule">
+  A cancellation is permanent. Mark the series as cancelled (not deleted). All historical records remain — invoices, completed visits, notes. If you delete the series, you lose that history. Cancelling preserves it while stopping future auto-generation.
+  </Column>
+</Columns>
+
+## Recurring jobs in the route planner
+
+This is where the value compounds. Because recurring jobs are already in the system, when you open the route planner each morning the visits are already there. You don't create them — they already exist.
+
+For a business with 80% recurring clients, this means the route planner sees an almost-complete day before you touch anything. You're not adding jobs to the plan — you're just optimising and assigning the ones that are already there.
+
+This is the "set and forget" benefit of recurring job scheduling: the planning overhead for existing clients is near-zero. Each new recurring client you add reduces your daily planning work permanently for as long as they stay on your books.
+
+<StatGrid>
+  <Stat value="0" label="Manual actions to create each recurring visit after initial setup" />
+  <Stat value="80%" label="Typical recurring client share for established cleaning/maintenance businesses" />
+  <Stat value="Near-zero" label="Planning overhead per existing recurring client per week" />
+</StatGrid>
+
+## Common edge cases and how to handle them
+
+### The client wants to skip Christmas week but not the actual date
+
+Some platforms let you set automatic skips for specific dates (public holidays, school holidays). If yours doesn't, you'll need to manually skip each affected occurrence. Set a calendar reminder in October to do this for the December and January visits.
+
+### A technician leaves and needs to be replaced on all their recurring jobs
+
+This is a series-level reassignment. Open the relevant recurring series and use "reassign all future occurrences" to transfer to the replacement technician. Do this before the next scheduled visit to avoid the replacement finding jobs appearing in their queue without context.
+
+### A recurring client hasn't been visited in a while — have visits been created?
+
+If the series is set up correctly, visits should be auto-generating. If a client hasn't been visited, check: Is the series still active? Is the end date set correctly (some platforms require an end date)? Was the series accidentally paused? Check the series record first before assuming the client was missed.
+
+### The client wants a reminder sent before each visit
+
+Some platforms support automatic customer-facing appointment reminders for recurring jobs — an SMS or email sent 24 or 48 hours before each visit. This reduces no-shows and last-minute cancellations significantly. If your platform supports it, set it up when you configure the series.
+
+<Quote author="Anna, residential cleaning company">
+We had 60 recurring clients on a spreadsheet. I'd update it every Sunday night. Now the system just knows who needs cleaning this week. I don't update anything — I just look at what's already there and plan around it.
+</Quote>
+
+## Connecting recurring jobs to the full workflow
+
+The most efficient version of recurring job management connects every step:
+
+1. **Recurring job is created** — first and all future visits exist in the system
+2. **Visit appears in route planner** — already in the day's plan automatically
+3. **Technician executes from mobile app** — sees job details, access notes, service history
+4. **Job marked complete** — invoice generated automatically
+5. **Invoice sent** — customer receives it; reminder sequence starts if unpaid
+6. **Next visit already exists** — the cycle continues
+
+No manual re-booking. No forgotten clients. No surprised customers wondering why no one showed up.
+
+For more on the route planning side of this workflow, see the [route planning feature overview](/en/features/routeplanning). For the business case behind building a recurring revenue base, see [recurring jobs: how to turn one-off clients into predictable revenue](/articles/recurring-jobs-predictable-revenue). For the invoicing and payment side, see [how to get paid faster: service invoices that actually work](/articles/get-paid-faster-service-invoices).
+
+<CTABox
+  title="Set up your recurring jobs once, run them forever"
+  text="PathPilo handles recurring scheduling, route integration, mobile execution, and automatic invoicing in one connected platform. Try it free."
+  buttonLabel="Try PathPilo free"
+/>
+
+## Frequently asked questions
+
+### What is recurring job scheduling?
+
+Recurring job scheduling is the practice of creating a repeating job record in field service software so that future visits are automatically generated at the interval you specify — weekly, fortnightly, monthly, or custom. You set it up once and the visits appear in your calendar and route planner automatically, without any manual re-booking.
+
+### How do I edit just one visit in a recurring series without changing all future visits?
+
+Most platforms offer the choice when you save a change: "this occurrence only," "this and all future occurrences," or "the entire series." Select "this occurrence only" to change a single visit (date, time, technician, notes) without affecting any other visits in the series.
+
+### What's the difference between skipping and cancelling a recurring job?
+
+Skipping removes a single occurrence from the schedule while keeping the rest of the series intact. Cancelling ends the entire series from a certain point forward. Skipping is for one-off exceptions; cancelling is when a client stops their recurring arrangement.
+
+### Can I set recurring jobs for seasonal visits — spring and autumn only?
+
+Yes, though the approach varies by platform. Some have a "bi-annual" interval; others let you set specific months. If neither is available, create two separate recurring series — one for spring (e.g. April annually) and one for autumn (e.g. October annually) — so both are automated.
+
+### Do recurring jobs appear in the route planner automatically?
+
+Yes. Because recurring job visits are full job records in the system, they are visible to the route planner on the day they are scheduled. You don't need to re-enter anything. The route planner simply sees the jobs that exist for that day and includes them in the route calculation.
+
+---
+
+**PathPilo help articles:**
+- [How to Set Up a Recurring Job (Subscription)](https://help.pathpilo.com) — the step-by-step setup guide with screenshots, covering intervals, assignment, and time preferences
+- [Save a Default Note for a Client](https://help.pathpilo.com) — how to store access instructions so they appear on every recurring visit automatically
