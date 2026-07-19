@@ -8,7 +8,17 @@
 export function pushToDataLayer(payload: Record<string, unknown>) {
   if (typeof window === 'undefined') return
   window.dataLayer = window.dataLayer || []
-  window.dataLayer.push(payload)
+  // GTM processes the push synchronously and fires any matching tags inline.
+  // If a downstream tag references something not yet loaded (e.g. Meta's `fbq`
+  // before the pixel script is ready), it throws right here — inside whatever
+  // React effect / event handler called us. Never let analytics break the app.
+  try {
+    window.dataLayer.push(payload)
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[dataLayer] push failed (non-fatal):', err)
+    }
+  }
 }
 
 /** Primary marketing CTAs (Get started, register, section buttons, etc.) */

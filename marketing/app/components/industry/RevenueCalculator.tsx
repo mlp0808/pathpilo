@@ -8,7 +8,8 @@ import type { IndustryCalculator } from '../../lib/industries/types'
  * their average jobs/day; we project the extra jobs and revenue a tighter,
  * better-planned round could unlock. Solution-focused, not tech-focused.
  */
-export default function RevenueCalculator({ config }: { config: IndustryCalculator }) {
+export default function RevenueCalculator({ config, locale = 'en' }: { config: IndustryCalculator; locale?: string }) {
+  const da = locale === 'da'
   const [jobs, setJobs] = useState(config.defaultJobs)
 
   const { extraPerWeek, extraMonthlyRevenue, extraYearlyRevenue } = useMemo(() => {
@@ -32,7 +33,7 @@ export default function RevenueCalculator({ config }: { config: IndustryCalculat
         <div className="mb-8">
           <div className="mb-3 flex items-baseline justify-between">
             <label htmlFor="jobs-slider" className="text-sm font-semibold text-primary-800">
-              Jobs you clean on an average day
+              {da ? 'Opgaver på en gennemsnitlig dag' : 'Jobs you clean on an average day'}
             </label>
             <span className="text-2xl font-extrabold text-primary-800">{jobs}</span>
           </div>
@@ -57,21 +58,22 @@ export default function RevenueCalculator({ config }: { config: IndustryCalculat
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl bg-primary-50 p-5 text-center">
             <div className="text-3xl font-extrabold text-primary-800">+{extraPerWeek}</div>
-            <div className="mt-1 text-sm text-gray-600">extra jobs a week</div>
+            <div className="mt-1 text-sm text-gray-600">{da ? 'ekstra opgaver pr. uge' : 'extra jobs a week'}</div>
           </div>
           <div className="rounded-2xl bg-accent-500/10 p-5 text-center ring-1 ring-accent-500/20">
             <div className="text-3xl font-extrabold text-accent-700">{fmt(extraMonthlyRevenue)}</div>
-            <div className="mt-1 text-sm text-gray-600">more a month</div>
+            <div className="mt-1 text-sm text-gray-600">{da ? 'mere om måneden' : 'more a month'}</div>
           </div>
           <div className="rounded-2xl bg-primary-50 p-5 text-center">
             <div className="text-3xl font-extrabold text-primary-800">{fmt(extraYearlyRevenue)}</div>
-            <div className="mt-1 text-sm text-gray-600">more a year</div>
+            <div className="mt-1 text-sm text-gray-600">{da ? 'mere om året' : 'more a year'}</div>
           </div>
         </div>
 
         <p className="mt-6 text-center text-xs leading-relaxed text-gray-400">
-          A rough projection based on tighter rounds freeing up time for extra stops. Your numbers will vary —
-          but the point is simple: less driving means more cleaning.
+          {da
+            ? 'Et omtrentligt overslag baseret på tættere ruter, der frigiver tid til ekstra stop. Dine tal vil variere — men pointen er enkel: mindre kørsel betyder flere opgaver.'
+            : 'A rough projection based on tighter rounds freeing up time for extra stops. Your numbers will vary — but the point is simple: less driving means more cleaning.'}
         </p>
       </div>
     </div>

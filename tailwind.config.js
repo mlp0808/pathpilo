@@ -4,6 +4,8 @@ module.exports = {
     './pages/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './app/**/*.{js,ts,jsx,tsx,mdx}',
+    // Shared route-planner package (map + search UI) moved out of app/ — keep scanning it.
+    './packages/route-planner-core/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {

@@ -75,6 +75,7 @@ function RegisterForm() {
   const searchParams = useSearchParams()
   const inviteToken  = searchParams.get('invite')
   const trialToken   = searchParams.get('trial')
+  const guestRoute   = searchParams.get('guestRoute') // route planned in the free marketing tool
   const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
 
   const [sessionMode, setSessionMode] = useState<'checking' | 'form' | 'loggedIn'>('checking')
@@ -302,13 +303,26 @@ function RegisterForm() {
         localStorage.setItem('user', JSON.stringify(session))
         if (inviteToken) { router.push(getDashboardHref(session)); return }
       }
+
+      // Claim a route planned in the free marketing tool (no login) into the new
+      // account: creates clients + jobs for today. Best-effort — never block signup.
+      if (guestRoute && regData.token) {
+        try {
+          await fetch(apiUrl('/guest-route/claim'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${regData.token}` },
+            body: JSON.stringify({ guestRoute }),
+          })
+        } catch { /* best-effort */ }
+      }
+
       router.push('/setup/clients')
     } catch {
       setCodeError('Network error. Please try again.')
     } finally {
       setIsLoading(false)
     }
-  }, [email, verificationCode, formData, requestedLang, inviteToken, trialToken, router])
+  }, [email, verificationCode, formData, requestedLang, inviteToken, trialToken, guestRoute, router])
 
   // ── Already logged in ─────────────────────────────────────────────────────
 

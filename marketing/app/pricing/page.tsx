@@ -13,7 +13,7 @@ import type { MarketingLocale } from '../lib/i18n'
 import { pushCtaClick } from '../lib/dataLayer'
 import { CheckIcon, MinusIcon } from '@heroicons/react/24/solid'
 
-type FeatureValue = true | false | string
+type FeatureValue = true | false | string | { en: string; da: string }
 
 interface FeatureRow {
   label:   { en: string; da: string }
@@ -87,11 +87,10 @@ const FEATURE_GROUPS: FeatureGroup[] = [
 function FeatureCell({ value, da }: { value: FeatureValue; da: boolean }) {
   if (value === true)  return <CheckIcon className="mx-auto h-5 w-5 text-accent-600" />
   if (value === false) return <MinusIcon  className="mx-auto h-5 w-5 text-gray-300"  />
-  return (
-    <span className="text-sm font-semibold text-primary-800">
-      {da && typeof value === 'object' ? (value as { en: string; da: string }).da : (value as { en: string; da: string }).en}
-    </span>
-  )
+  if (typeof value === 'object') {
+    return <span className="text-sm font-semibold text-primary-800">{da ? value.da : value.en}</span>
+  }
+  return <span className="text-sm font-semibold text-primary-800">{value}</span>
 }
 
 export default function PricingPage({ locale: localeProp }: { locale?: string }) {

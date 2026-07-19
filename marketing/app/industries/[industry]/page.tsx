@@ -1,7 +1,8 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import IndustryLanding from '../../components/industry/IndustryLanding'
-import { getIndustry, getIndustrySlugs } from '../../lib/industries/data'
+import { getIndustry, getLocalizedIndustry, getIndustrySlugs } from '../../lib/industries/data'
 import { getMarketingSiteUrl } from '../../lib/siteUrl'
 
 export function generateStaticParams() {
@@ -14,14 +15,24 @@ export async function generateMetadata({
   params: Promise<{ industry: string }>
 }): Promise<Metadata> {
   const { industry } = await params
-  const data = getIndustry(industry)
+  const headersList = await headers()
+  const locale = headersList.get('x-locale') || 'en'
+  const data = getLocalizedIndustry(industry, locale)
   if (!data) return { title: 'Page not found' }
 
-  const url = `${getMarketingSiteUrl()}/industries/${data.slug}`
+  const siteUrl = getMarketingSiteUrl()
+  const localePrefix = locale === 'da' ? '/da' : '/en'
+  const url = `${siteUrl}${localePrefix}/industries/${data.slug}`
+  const enUrl = `${siteUrl}/en/industries/${data.slug}`
+  const daUrl = `${siteUrl}/da/industries/${data.slug}`
+
   return {
     title: data.seoTitle,
     description: data.seoDescription,
-    alternates: { canonical: `/industries/${data.slug}` },
+    alternates: {
+      canonical: `${localePrefix}/industries/${data.slug}`,
+      languages: { en: enUrl, da: daUrl, 'x-default': enUrl },
+    },
     openGraph: {
       title: data.seoTitle,
       description: data.seoDescription,
@@ -38,12 +49,16 @@ export async function generateMetadata({
 }
 
 export default async function IndustryPage({ params }: { params: Promise<{ industry: string }> }) {
-  const { industry } = await params
-  const data = getIndustry(industry)
+  const { industry: industryParam } = await params
+  const headersList = await headers()
+  const locale = headersList.get('x-locale') || 'en'
+
+  const data = getLocalizedIndustry(industryParam, locale)
   if (!data) notFound()
 
   const siteUrl = getMarketingSiteUrl()
-  const pageUrl = `${siteUrl}/industries/${data.slug}`
+  const localePrefix = locale === 'da' ? '/da' : '/en'
+  const pageUrl = `${siteUrl}${localePrefix}/industries/${data.slug}`
 
   const faqLd = {
     '@context': 'https://schema.org',
@@ -85,7 +100,7 @@ export default async function IndustryPage({ params }: { params: Promise<{ indus
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareLd) }} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd) }} />
-      <IndustryLanding data={data} />
+      <IndustryLanding data={data} locale={locale} />
     </>
   )
 }

@@ -8,6 +8,8 @@ module.exports = {
       './pages/**/*.{js,ts,jsx,tsx,mdx}',
       './components/**/*.{js,ts,jsx,tsx,mdx}',
       './app/**/*.css',
+      // Shared route-planner package (map + search UI) — scan so its classes generate.
+      '../packages/route-planner-core/**/*.{js,ts,jsx,tsx}',
     ],
   },
   theme: {

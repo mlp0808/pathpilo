@@ -99,6 +99,35 @@ export interface IndustryCalculator {
   daysPerWeek: number
 }
 
+/**
+ * Localised string overrides for a specific locale (currently Danish).
+ * All fields are optional — missing fields fall back to the English base.
+ */
+export interface IndustryTranslation {
+  menuLabel?: string
+  trade?: string
+  menuBlurb?: string
+  seoTitle?: string
+  seoDescription?: string
+  hero?: Partial<{
+    eyebrow: string
+    h1: string
+    sub: string
+    trustLine: string
+    imageAlt: string
+  }>
+  trustBar?: { label: string; points: string[] }
+  pain?: { title: string; sub: string; items: string[] }
+  outcomes?: IndustryOutcome[]
+  stats?: IndustryStat[]
+  featureGrid?: { eyebrow: string; title: string; sub: string; items: IndustryFeature[] }
+  testimonials?: { title: string; sub: string; items: IndustryTestimonial[] }
+  freePlan?: { title: string; sub: string; includes: string[]; note: string }
+  faq?: { title: string; sub: string; items: IndustryFaq[] }
+  finalCta?: { title: string; sub: string }
+  calculator?: IndustryCalculator
+}
+
 export interface Industry {
   /** URL slug under /industries/<slug> (SEO keyword-rich). */
   slug: string
@@ -192,4 +221,7 @@ export interface Industry {
     /** href of the full-detail comparison page, e.g. /comparisons/pathpilo-vs-jobber-window-cleaning */
     detailHref?: string
   }
+
+  /** Danish locale overrides — merged on top of the English base at render time. */
+  da?: IndustryTranslation
 }

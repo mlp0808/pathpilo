@@ -1,6 +1,8 @@
 /** @type {import("next").NextConfig} */
 const path = require("path")
 const nextConfig = {
+  // Compile the shared route-planner package (plain TS/TSX, not pre-built).
+  transpilePackages: ["@pathpilo/route-planner-core"],
   typescript: {
     ignoreBuildErrors: true,
   },

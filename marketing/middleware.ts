@@ -19,6 +19,12 @@ function resolveLocaleFromRequest(request: NextRequest): 'en' | 'da' {
   return 'en'
 }
 
+function nextWithLocale(locale: string) {
+  const res = NextResponse.next()
+  res.headers.set('x-locale', locale)
+  return res
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
@@ -41,13 +47,13 @@ export function middleware(request: NextRequest) {
   const segments = pathname.split('/').filter(Boolean)
   const first = segments[0]
 
-  // Blog, industry and comparison pages are English-first and live without a
-  // locale prefix. Serve them directly, and fold any locale-prefixed version
-  // back so the footer language toggle never lands on a 404.
-  const ENGLISH_FIRST = new Set(['articles', 'industries', 'comparisons'])
+  // Articles are English-first (no locale prefix); industry and comparison
+  // pages are now fully localised under /da/industries/ and /da/comparisons/.
+  const ENGLISH_FIRST = new Set(['articles'])
   if (first && ENGLISH_FIRST.has(first)) {
-    return NextResponse.next()
+    return nextWithLocale('en')
   }
+  // Fold locale-prefixed article paths back (language toggle compatibility).
   if ((first === 'en' || first === 'da') && segments[1] && ENGLISH_FIRST.has(segments[1])) {
     const url = request.nextUrl.clone()
     url.pathname = '/' + segments.slice(1).join('/')
@@ -55,7 +61,7 @@ export function middleware(request: NextRequest) {
   }
 
   if (first && isMarketingLocale(first)) {
-    return NextResponse.next()
+    return nextWithLocale(first)
   }
 
   const locale = resolveLocaleFromRequest(request)

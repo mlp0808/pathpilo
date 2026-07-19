@@ -32,85 +32,123 @@ export interface ShowcaseFeature {
   screenshot: string
 }
 
-export const SHOWCASE_FEATURES: ShowcaseFeature[] = [
+interface LocalisedShowcaseFeature {
+  id: string
+  tabLabel: { en: string; da: string }
+  title: { en: string; da: string }
+  description: { en: string; da: string }
+  icon: IconType
+  screenshot: string
+}
+
+const SHOWCASE_FEATURES_DATA: LocalisedShowcaseFeature[] = [
   {
     id: 'scheduling',
-    tabLabel: 'Scheduling',
-    title: 'See your week at a glance',
-    description:
-      'Drag-and-drop calendar, conflict checks, and day or week views so your crew always knows where to be next.',
+    tabLabel: { en: 'Scheduling', da: 'Planlægning' },
+    title: { en: 'See your week at a glance', da: 'Overblik over hele ugen' },
+    description: {
+      en: 'Drag-and-drop calendar, conflict checks, and day or week views so your crew always knows where to be next.',
+      da: 'Træk-og-slip kalender, konfliktcheck og dag- eller ugevisning — dit team ved altid, hvad der er næst.',
+    },
     icon: CalendarDaysIcon,
     screenshot: marketingImages.features.scheduling,
   },
   {
     id: 'jobs',
-    tabLabel: 'Jobs',
-    title: 'Every job, start to finish',
-    description:
-      'Create jobs fast, bundle services, track status, and keep notes and history in one place.',
+    tabLabel: { en: 'Jobs', da: 'Jobs' },
+    title: { en: 'Every job, start to finish', da: 'Hvert job fra start til slut' },
+    description: {
+      en: 'Create jobs fast, bundle services, track status, and keep notes and history in one place.',
+      da: 'Opret jobs hurtigt, saml services, følg status og hold noter og historik samlet ét sted.',
+    },
     icon: ClipboardDocumentListIcon,
     screenshot: marketingImages.features.jobs,
   },
   {
     id: 'recurring',
-    tabLabel: 'Recurring',
-    title: 'Subscriptions on autopilot',
-    description:
-      'Weekly or monthly rules that spawn jobs automatically—less admin, steadier revenue.',
+    tabLabel: { en: 'Recurring', da: 'Abonnementer' },
+    title: { en: 'Subscriptions on autopilot', da: 'Abonnementer på autopilot' },
+    description: {
+      en: 'Weekly or monthly rules that spawn jobs automatically—less admin, steadier revenue.',
+      da: 'Ugentlige eller månedlige regler der opretter jobs automatisk — mindre admin, mere forudsigelig omsætning.',
+    },
     icon: ArrowPathIcon,
     screenshot: marketingImages.features.recurring,
   },
   {
     id: 'clients',
-    tabLabel: 'Clients',
-    title: 'CRM built for service work',
-    description:
-      'Profiles, addresses, billing contacts, and full service history for people and businesses.',
+    tabLabel: { en: 'Clients', da: 'Kunder' },
+    title: { en: 'CRM built for service work', da: 'CRM bygget til servicearbejde' },
+    description: {
+      en: 'Profiles, addresses, billing contacts, and full service history for people and businesses.',
+      da: 'Profiler, adresser, fakturakontakter og fuld servicehistorik for både privatpersoner og virksomheder.',
+    },
     icon: UserGroupIcon,
     screenshot: marketingImages.features.clients,
   },
   {
     id: 'invoicing',
-    tabLabel: 'Invoicing',
-    title: 'Get paid without the chase',
-    description:
-      'Professional invoices, discounts, taxes, and email delivery in minutes.',
+    tabLabel: { en: 'Invoicing', da: 'Fakturering' },
+    title: { en: 'Get paid without the chase', da: 'Bliv betalt uden at jagte' },
+    description: {
+      en: 'Professional invoices, discounts, taxes, and email delivery in minutes.',
+      da: 'Professionelle fakturaer, rabatter, moms og e-maillevering på minutter.',
+    },
     icon: CurrencyDollarIcon,
     screenshot: marketingImages.features.invoicing,
   },
   {
     id: 'analytics',
-    tabLabel: 'Analytics',
-    title: 'Numbers that drive decisions',
-    description:
-      'Revenue, completed jobs, and team performance in real time—not in spreadsheets.',
+    tabLabel: { en: 'Analytics', da: 'Statistik' },
+    title: { en: 'Numbers that drive decisions', da: 'Tal der driver beslutninger' },
+    description: {
+      en: 'Revenue, completed jobs, and team performance in real time—not in spreadsheets.',
+      da: 'Omsætning, afsluttede jobs og teamets præstation i realtid — ikke i regneark.',
+    },
     icon: ChartBarIcon,
     screenshot: marketingImages.features.analytics,
   },
   {
     id: 'routes',
-    tabLabel: 'Routes',
-    title: 'Smarter days on the road',
-    description:
-      'Plan the day in order, cut drive time, and keep the team aligned from the van.',
+    tabLabel: { en: 'Routes', da: 'Ruter' },
+    title: { en: 'Smarter days on the road', da: 'Smartere dage på vejen' },
+    description: {
+      en: 'Plan the day in order, cut drive time, and keep the team aligned from the van.',
+      da: 'Planlæg dagen i rækkefølge, reducer kørselstid og hold teamet opdateret direkte fra bilen.',
+    },
     icon: MapPinIcon,
     screenshot: marketingImages.features.routes,
   },
   {
     id: 'team',
-    tabLabel: 'Team',
-    title: 'Roles, hours, assignments',
-    description:
-      'Invite staff, set permissions, track hours, and assign work with confidence.',
+    tabLabel: { en: 'Team', da: 'Team' },
+    title: { en: 'Roles, hours, assignments', da: 'Roller, timer og opgaver' },
+    description: {
+      en: 'Invite staff, set permissions, track hours, and assign work with confidence.',
+      da: 'Inviter medarbejdere, sæt rettigheder, følg timer og tildel arbejde med overblik.',
+    },
     icon: UsersIcon,
     screenshot: marketingImages.features.team,
   },
 ]
 
+/** Resolved flat feature list for the given locale. */
+function getShowcaseFeatures(da: boolean): ShowcaseFeature[] {
+  return SHOWCASE_FEATURES_DATA.map((f) => ({
+    id: f.id,
+    tabLabel: da ? f.tabLabel.da : f.tabLabel.en,
+    title: da ? f.title.da : f.title.en,
+    description: da ? f.description.da : f.description.en,
+    icon: f.icon,
+    screenshot: f.screenshot,
+  }))
+}
+
 export default function FeaturesShowcase() {
   const pathname = usePathname()
   const locale = getLocaleFromPathname(pathname || '/')
   const da = locale === 'da'
+  const SHOWCASE_FEATURES = getShowcaseFeatures(da)
   const [active, setActive] = useState(0)
   const [paused, setPaused] = useState(false)
   const [progress, setProgress] = useState(0)

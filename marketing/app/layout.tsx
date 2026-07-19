@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Script from 'next/script'
+import { headers } from 'next/headers'
 import './globals.css'
 import { ShowInterestSignalTracker } from './components/ShowInterestSignalTracker'
 import { CrispChat } from '../components/CrispChat'
@@ -73,18 +74,20 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const headersList = await headers()
+  const locale = headersList.get('x-locale') || 'en'
   const gtmId = 'GTM-5FLVBF65'
   const hotjarId = process.env.NEXT_PUBLIC_HOTJAR_ID
   const hotjarSv = process.env.NEXT_PUBLIC_HOTJAR_SV || '6'
   const shouldEnableHotjar = Boolean(hotjarId)
 
   return (
-    <html lang="en">
+    <html lang={locale}>
       <body className="antialiased">
         {/* GTM — all pixels and tags are fired from GTM, not hardcoded here. */}
         <Script

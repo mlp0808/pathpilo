@@ -46,7 +46,8 @@ const ICONS: Record<IconKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   check: CheckCircleIcon,
 }
 
-export default function IndustryLanding({ data }: { data: Industry }) {
+export default function IndustryLanding({ data, locale = 'en' }: { data: Industry; locale?: string }) {
+  const da = locale === 'da'
   return (
     <>
       <Header />
@@ -71,12 +72,12 @@ export default function IndustryLanding({ data }: { data: Industry }) {
               </p>
 
               <div className="mt-9 flex flex-col items-stretch gap-3 sm:mx-auto sm:max-w-md sm:flex-row sm:items-center sm:justify-center lg:mx-0 lg:justify-start">
-                <IndustryCTA label="Get started free" location="industry_hero" industry={data.slug} />
+                <IndustryCTA label={da ? 'Kom i gang gratis' : 'Get started free'} location="industry_hero" industry={data.slug} />
                 <a
                   href="#how"
                   className="inline-flex justify-center py-2 text-base font-semibold text-white/90 underline decoration-white/30 underline-offset-4 transition hover:text-white"
                 >
-                  See how it works
+                  {da ? 'Se hvordan det virker' : 'See how it works'}
                 </a>
               </div>
 
@@ -234,7 +235,7 @@ export default function IndustryLanding({ data }: { data: Industry }) {
               <p className="section-subtitle mx-auto mb-0">{data.calculator.sub}</p>
             </Reveal>
             <Reveal>
-              <RevenueCalculator config={data.calculator} />
+              <RevenueCalculator config={data.calculator} locale={locale} />
             </Reveal>
           </div>
         </section>
@@ -293,7 +294,7 @@ export default function IndustryLanding({ data }: { data: Industry }) {
 
       {/* ─── COMPARISON ─── */}
       {data.comparison && (
-        <ComparisonSection data={data.comparison} detailHref={data.comparison.detailHref} />
+        <ComparisonSection data={data.comparison} detailHref={data.comparison.detailHref} locale={locale} />
       )}
 
       {/* ─── FREE PLAN ─── */}
@@ -304,12 +305,12 @@ export default function IndustryLanding({ data }: { data: Industry }) {
               <div className="grid gap-8 p-8 sm:p-12 md:grid-cols-2 md:items-center">
                 <div>
                   <span className="inline-flex items-center rounded-full bg-accent-500 px-3 py-1 text-xs font-bold uppercase tracking-wider text-white">
-                    Free forever plan
+                    {da ? 'Gratis for altid' : 'Free forever plan'}
                   </span>
                   <h2 className="mt-4 text-3xl font-bold text-primary-800 md:text-4xl">{data.freePlan.title}</h2>
                   <p className="mt-3 text-gray-600">{data.freePlan.sub}</p>
                   <div className="mt-6">
-                    <IndustryCTA label="Start free now" location="industry_free_plan" industry={data.slug} />
+                    <IndustryCTA label={da ? 'Start gratis nu' : 'Start free now'} location="industry_free_plan" industry={data.slug} />
                   </div>
                   <p className="mt-4 text-sm text-gray-500">{data.freePlan.note}</p>
                 </div>
@@ -348,12 +349,12 @@ export default function IndustryLanding({ data }: { data: Industry }) {
           <h2 className="text-3xl font-bold text-white md:text-4xl lg:text-5xl">{data.finalCta.title}</h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-gray-300">{data.finalCta.sub}</p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <IndustryCTA label="Get started free" location="industry_final_cta" industry={data.slug} variant="light" />
+            <IndustryCTA label={da ? 'Kom i gang gratis' : 'Get started free'} location="industry_final_cta" industry={data.slug} variant="light" />
             <a
               href="/articles"
               className="inline-flex items-center justify-center py-2 text-base font-semibold text-white/90 underline decoration-white/30 underline-offset-4 transition hover:text-white"
             >
-              Read the guides
+              {da ? 'Læs guiderne' : 'Read the guides'}
             </a>
           </div>
           <p className="mt-6 text-sm text-white/50">{data.hero.trustLine}</p>

@@ -99,7 +99,7 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/industries" className="text-gray-300 hover:text-white transition-colors">
+                <Link href={withLocalePath(locale, '/industries')} className="text-gray-300 hover:text-white transition-colors">
                   {da ? 'Brancher' : 'Industries'}
                 </Link>
               </li>

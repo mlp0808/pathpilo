@@ -1,5 +1,6 @@
 import type { Industry } from './types'
 import { WINDOW_CLEANING_COMPARISON } from '../comparisons/data'
+import { DA_INDUSTRY_TRANSLATIONS } from './da-translations'
 
 /**
  * Industry registry. Add a new trade by adding an entry to INDUSTRIES below.
@@ -1298,6 +1299,39 @@ const BY_SLUG: Record<string, Industry> = Object.fromEntries(
 export function getIndustry(slug: string | undefined | null): Industry | undefined {
   if (!slug) return undefined
   return BY_SLUG[slug]
+}
+
+/**
+ * Returns the industry data for the given slug, with optional locale overrides
+ * merged on top. Falls back to English if no translation exists for the locale.
+ */
+export function getLocalizedIndustry(slug: string | undefined | null, locale: string): Industry | undefined {
+  const base = getIndustry(slug)
+  if (!base) return undefined
+  if (locale !== 'da') return base
+
+  const da = DA_INDUSTRY_TRANSLATIONS[base.slug]
+  if (!da) return base
+
+  return {
+    ...base,
+    menuLabel: da.menuLabel ?? base.menuLabel,
+    trade: da.trade ?? base.trade,
+    menuBlurb: da.menuBlurb ?? base.menuBlurb,
+    seoTitle: da.seoTitle ?? base.seoTitle,
+    seoDescription: da.seoDescription ?? base.seoDescription,
+    hero: { ...base.hero, ...da.hero },
+    trustBar: da.trustBar ?? base.trustBar,
+    pain: da.pain ?? base.pain,
+    outcomes: da.outcomes ?? base.outcomes,
+    stats: da.stats ?? base.stats,
+    featureGrid: da.featureGrid ?? base.featureGrid,
+    testimonials: da.testimonials ?? base.testimonials,
+    freePlan: da.freePlan ?? base.freePlan,
+    faq: da.faq ?? base.faq,
+    finalCta: da.finalCta ?? base.finalCta,
+    calculator: da.calculator ?? base.calculator,
+  }
 }
 
 export function getIndustrySlugs(): string[] {

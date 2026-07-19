@@ -6,6 +6,7 @@
  * Pricing changes frequently. Treat figures as indicative, not contractual.
  */
 import type { ComparisonPage, ComparisonSection } from './types'
+import { DA_COMPARISON_TRANSLATIONS } from './da-translations'
 
 // ---------------------------------------------------------------------------
 // Shared competitor definitions
@@ -696,6 +697,33 @@ const BY_SLUG: Record<string, ComparisonPage> = Object.fromEntries(
 export function getComparison(slug: string | undefined | null): ComparisonPage | undefined {
   if (!slug) return undefined
   return BY_SLUG[slug]
+}
+
+/**
+ * Returns the comparison data for the given slug with optional locale overrides.
+ * Falls back to English if no Danish translation exists.
+ */
+export function getLocalizedComparison(slug: string | undefined | null, locale: string): ComparisonPage | undefined {
+  const base = getComparison(slug)
+  if (!base) return undefined
+  if (locale !== 'da') return base
+
+  const da = DA_COMPARISON_TRANSLATIONS[base.slug]
+  if (!da) return base
+
+  return {
+    ...base,
+    seoTitle: da.seoTitle ?? base.seoTitle,
+    seoDescription: da.seoDescription ?? base.seoDescription,
+    headline: da.headline ?? base.headline,
+    sub: da.sub ?? base.sub,
+    verdict: da.verdict ?? base.verdict,
+    sections: da.sections ?? base.sections,
+    pricingBreakdown: da.pricingBreakdown ?? base.pricingBreakdown,
+    prosCons: da.prosCons ?? base.prosCons,
+    whoShouldChoose: da.whoShouldChoose ?? base.whoShouldChoose,
+    faq: da.faq ?? base.faq,
+  }
 }
 
 export function getComparisonSlugs(): string[] {

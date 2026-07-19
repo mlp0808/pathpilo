@@ -14,6 +14,7 @@ const ROUTES = [
   '/features/routeplanning',
   '/features/subscriptions',
   '/features/team',
+  '/tools/route-planner',
   '/terms',
   '/privacy',
 ] as const
@@ -78,25 +79,85 @@ export default function sitemap(): MetadataRoute.Sitemap {
     console.error('[sitemap] Failed to load articles:', err)
   }
 
-  // Industry landing pages — English-first, live at /industries (no locale prefix).
-  const industryEntries: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
+  // Industry landing pages — fully localised under /en/ and /da/.
+  const industryEntries: MetadataRoute.Sitemap = LOCALES.flatMap((locale) => [
+    {
+      url: absoluteUrl(`/${locale}/industries`),
+      lastModified: now,
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+      alternates: {
+        languages: {
+          en: absoluteUrl('/en/industries'),
+          da: absoluteUrl('/da/industries'),
+          'x-default': absoluteUrl('/en/industries'),
+        },
+      },
+    },
+    ...INDUSTRIES.map((i) => ({
+      url: absoluteUrl(`/${locale}/industries/${i.slug}`),
+      lastModified: now,
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+      alternates: {
+        languages: {
+          en: absoluteUrl(`/en/industries/${i.slug}`),
+          da: absoluteUrl(`/da/industries/${i.slug}`),
+          'x-default': absoluteUrl(`/en/industries/${i.slug}`),
+        },
+      },
+    })),
+  ])
+
+  // Legacy /industries (no prefix) — redirect handled by middleware; keep for crawlers.
+  const industryLegacy: MetadataRoute.Sitemap = [
+    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     ...INDUSTRIES.map((i) => ({
       url: absoluteUrl(`/industries/${i.slug}`),
       lastModified: now,
       changeFrequency: 'monthly' as const,
-      priority: 0.8,
+      priority: 0.6,
     })),
   ]
 
-  // Comparison pages — English-first, live at /comparisons (no locale prefix).
-  const comparisonEntries: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/comparisons'), lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
+  // Comparison pages — fully localised under /en/ and /da/.
+  const comparisonEntries: MetadataRoute.Sitemap = LOCALES.flatMap((locale) => [
+    {
+      url: absoluteUrl(`/${locale}/comparisons`),
+      lastModified: now,
+      changeFrequency: 'monthly' as const,
+      priority: 0.7,
+      alternates: {
+        languages: {
+          en: absoluteUrl('/en/comparisons'),
+          da: absoluteUrl('/da/comparisons'),
+          'x-default': absoluteUrl('/en/comparisons'),
+        },
+      },
+    },
+    ...COMPARISON_PAGES.map((c) => ({
+      url: absoluteUrl(`/${locale}/comparisons/${c.slug}`),
+      lastModified: new Date(c.lastUpdated),
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+      alternates: {
+        languages: {
+          en: absoluteUrl(`/en/comparisons/${c.slug}`),
+          da: absoluteUrl(`/da/comparisons/${c.slug}`),
+          'x-default': absoluteUrl(`/en/comparisons/${c.slug}`),
+        },
+      },
+    })),
+  ])
+
+  // Legacy /comparisons (no prefix).
+  const comparisonLegacy: MetadataRoute.Sitemap = [
+    { url: absoluteUrl('/comparisons'), lastModified: now, changeFrequency: 'monthly', priority: 0.5 },
     ...COMPARISON_PAGES.map((c) => ({
       url: absoluteUrl(`/comparisons/${c.slug}`),
       lastModified: new Date(c.lastUpdated),
       changeFrequency: 'monthly' as const,
-      priority: 0.8,
+      priority: 0.5,
     })),
   ]
 
@@ -107,6 +168,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...tagEntries,
     ...articleEntries,
     ...industryEntries,
+    ...industryLegacy,
     ...comparisonEntries,
+    ...comparisonLegacy,
   ]
 }

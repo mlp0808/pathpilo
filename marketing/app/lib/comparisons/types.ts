@@ -38,6 +38,23 @@ export interface ComparisonFaq {
   a: string
 }
 
+export interface ComparisonPageTranslation {
+  seoTitle?: string
+  seoDescription?: string
+  headline?: string
+  sub?: string
+  verdict?: string
+  sections?: { id: string; title: string; body: string }[]
+  pricingBreakdown?: {
+    title: string
+    rows: { label: string; pathpilo: string; [key: string]: string }[]
+    note: string
+  }
+  prosCons?: { pathpilo: ComparisonPageProsCons; [key: string]: ComparisonPageProsCons }
+  whoShouldChoose?: { pathpilo: string; [key: string]: string }
+  faq?: ComparisonFaq[]
+}
+
 export interface ComparisonPage {
   slug: string
   seoTitle: string
@@ -74,4 +91,6 @@ export interface ComparisonPage {
     [key: string]: string
   }
   faq: ComparisonFaq[]
+  /** Danish locale overrides */
+  da?: ComparisonPageTranslation
 }

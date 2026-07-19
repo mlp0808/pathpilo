@@ -15,14 +15,18 @@ import {
 import { pushCtaClick } from '../lib/dataLayer'
 import { BLOG_CATEGORIES } from '../lib/blog/taxonomy'
 import { INDUSTRIES } from '../lib/industries/data'
+import { DA_INDUSTRY_TRANSLATIONS } from '../lib/industries/da-translations'
 import { COMPARISON_PAGES } from '../lib/comparisons/data'
+import { DA_COMPARISON_TRANSLATIONS } from '../lib/comparisons/da-translations'
 
 export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [mobileFeaturesOpen, setMobileFeaturesOpen] = useState(false)
   const [mobileLearnOpen, setMobileLearnOpen] = useState(false)
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
   const [desktopFeaturesOpen, setDesktopFeaturesOpen] = useState(false)
   const [desktopLearnOpen, setDesktopLearnOpen] = useState(false)
+  const [desktopToolsOpen, setDesktopToolsOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const pathname = usePathname()
   const locale = getLocaleFromPathname(pathname || '/')
@@ -53,6 +57,16 @@ export default function Header() {
       href: navHref('/features/team'),
     },
   ]
+  const toolItems = [
+    {
+      title: da ? 'Ruteplanlægger' : 'Route Planning',
+      description: da
+        ? 'Planlæg og optimér din rute gratis på et kort — ingen login.'
+        : 'Plan and optimise your route free on a map — no sign-up.',
+      href: navHref('/tools/route-planner'),
+      badge: da ? 'Gratis' : 'Free',
+    },
+  ]
 
   const isHome = basePath === '/'
   const isDarkTop = isHome && !scrolled
@@ -74,8 +88,10 @@ export default function Header() {
     setMobileMenuOpen(false)
     setMobileFeaturesOpen(false)
     setMobileLearnOpen(false)
+    setMobileToolsOpen(false)
     setDesktopFeaturesOpen(false)
     setDesktopLearnOpen(false)
+    setDesktopToolsOpen(false)
   }, [pathname])
 
   return (
@@ -149,6 +165,57 @@ export default function Header() {
                 </div>
               )}
             </div>
+            <div
+              className="relative"
+              onMouseEnter={() => setDesktopToolsOpen(true)}
+              onMouseLeave={() => setDesktopToolsOpen(false)}
+            >
+              <button
+                type="button"
+                className={`inline-flex items-center gap-1 text-sm font-medium transition-colors ${
+                  isDarkTop ? 'text-white/85 hover:text-white' : 'text-gray-600 hover:text-primary-800'
+                }`}
+                onClick={() => setDesktopToolsOpen((v) => !v)}
+                aria-expanded={desktopToolsOpen}
+                aria-controls="desktop-tools-menu"
+              >
+                {da ? 'Værktøjer' : 'Tools'}
+                <ChevronDownIcon className={`w-4 h-4 transition-transform ${desktopToolsOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {desktopToolsOpen && (
+                <div id="desktop-tools-menu" className="absolute left-0 top-full z-50 w-[min(92vw,560px)] pt-4">
+                  <div className="rounded-2xl border border-primary-100 bg-white shadow-xl p-4">
+                    <div className="grid gap-3">
+                      {toolItems.map((item) => (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className="rounded-xl border border-primary-100 bg-primary-50/50 p-4 hover:bg-primary-50 transition-colors"
+                        >
+                          <div className="mb-1 flex items-center gap-2">
+                            <p className="font-semibold text-primary-800">{item.title}</p>
+                            {item.badge && (
+                              <span className="rounded-full bg-accent-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-700">
+                                {item.badge}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-600 leading-relaxed">{item.description}</p>
+                        </Link>
+                      ))}
+                      <div className="rounded-xl border border-dashed border-primary-200 p-4 bg-white">
+                        <p className="font-semibold text-primary-700 mb-1">{da ? 'Flere værktøjer kommer' : 'More tools coming'}</p>
+                        <p className="text-sm text-gray-600">
+                          {da ? 'Gratis værktøjer du kan bruge uden login.' : 'Free tools you can use without signing up.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <Link
               href={navHref('/pricing')}
               className={desktopLinkClass}
@@ -211,20 +278,23 @@ export default function Header() {
                           <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
                             {da ? 'Sammenligninger' : 'Comparisons'}
                           </span>
-                          <Link href="/comparisons" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                          <Link href={withLocalePath(locale, '/comparisons')} className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
                             {da ? 'Se alle' : 'View all'}
                           </Link>
                         </div>
                         <div className="space-y-0.5">
-                          {COMPARISON_PAGES.map((c) => (
-                            <Link
-                              key={c.slug}
-                              href={`/comparisons/${c.slug}`}
-                              className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-                            >
-                              {c.headline}
-                            </Link>
-                          ))}
+                          {COMPARISON_PAGES.map((c) => {
+                            const label = (da && DA_COMPARISON_TRANSLATIONS[c.slug]?.headline) ? DA_COMPARISON_TRANSLATIONS[c.slug]!.headline! : c.headline
+                            return (
+                              <Link
+                                key={c.slug}
+                                href={withLocalePath(locale, `/comparisons/${c.slug}`)}
+                                className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                              >
+                                {label}
+                              </Link>
+                            )
+                          })}
                         </div>
                       </div>
 
@@ -234,20 +304,23 @@ export default function Header() {
                           <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
                             {da ? 'Brancher' : 'Industries'}
                           </span>
-                          <Link href="/industries" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                          <Link href={withLocalePath(locale, '/industries')} className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
                             {da ? 'Se alle' : 'View all'}
                           </Link>
                         </div>
                         <div className="space-y-0.5">
-                          {INDUSTRIES.map((ind) => (
-                            <Link
-                              key={ind.slug}
-                              href={`/industries/${ind.slug}`}
-                              className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-                            >
-                              {ind.menuLabel}
-                            </Link>
-                          ))}
+                          {INDUSTRIES.map((ind) => {
+                            const label = (da && DA_INDUSTRY_TRANSLATIONS[ind.slug]?.menuLabel) ? DA_INDUSTRY_TRANSLATIONS[ind.slug]!.menuLabel! : ind.menuLabel
+                            return (
+                              <Link
+                                key={ind.slug}
+                                href={withLocalePath(locale, `/industries/${ind.slug}`)}
+                                className="block rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                              >
+                                {label}
+                              </Link>
+                            )
+                          })}
                         </div>
                       </div>
 
@@ -373,6 +446,40 @@ export default function Header() {
                   ))}
                 </div>
               )}
+              <button
+                type="button"
+                onClick={() => setMobileToolsOpen((v) => !v)}
+                className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+                  isDarkTop ? 'text-white/90 hover:bg-white/10' : 'text-primary-800 hover:bg-primary-50'
+                }`}
+                aria-expanded={mobileToolsOpen}
+              >
+                <span>{da ? 'Værktøjer' : 'Tools'}</span>
+                <ChevronDownIcon className={`w-4 h-4 transition-transform ${mobileToolsOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {mobileToolsOpen && (
+                <div className={`rounded-xl p-2 space-y-2 ${isDarkTop ? 'bg-white/10' : 'bg-primary-50'}`}>
+                  {toolItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block rounded-lg p-3 ${
+                        isDarkTop ? 'bg-white/10 text-white/90 hover:bg-white/15' : 'bg-white text-primary-800 border border-primary-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold">{item.title}</p>
+                        {item.badge && (
+                          <span className="rounded-full bg-accent-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-700">
+                            {item.badge}
+                          </span>
+                        )}
+                      </div>
+                      <p className={`text-xs mt-1 ${isDarkTop ? 'text-white/75' : 'text-gray-600'}`}>{item.description}</p>
+                    </Link>
+                  ))}
+                </div>
+              )}
               <Link
                 href={navHref('/pricing')}
                 className={`block rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
@@ -424,22 +531,25 @@ export default function Header() {
                       <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
                         {da ? 'Sammenligninger' : 'Comparisons'}
                       </p>
-                      <Link href="/comparisons" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                      <Link href={withLocalePath(locale, '/comparisons')} className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
                         {da ? 'Se alle' : 'View all'}
                       </Link>
                     </div>
                     <div className="space-y-0.5">
-                      {COMPARISON_PAGES.map((c) => (
-                        <Link
-                          key={c.slug}
-                          href={`/comparisons/${c.slug}`}
-                          className={`block rounded-md px-2 py-1.5 text-sm ${
-                            isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
-                          }`}
-                        >
-                          {c.headline}
-                        </Link>
-                      ))}
+                      {COMPARISON_PAGES.map((c) => {
+                        const label = (da && DA_COMPARISON_TRANSLATIONS[c.slug]?.headline) ? DA_COMPARISON_TRANSLATIONS[c.slug]!.headline! : c.headline
+                        return (
+                          <Link
+                            key={c.slug}
+                            href={withLocalePath(locale, `/comparisons/${c.slug}`)}
+                            className={`block rounded-md px-2 py-1.5 text-sm ${
+                              isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
+                            }`}
+                          >
+                            {label}
+                          </Link>
+                        )
+                      })}
                     </div>
                   </div>
                   {/* Industries */}
@@ -448,22 +558,25 @@ export default function Header() {
                       <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
                         {da ? 'Brancher' : 'Industries'}
                       </p>
-                      <Link href="/industries" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                      <Link href={withLocalePath(locale, '/industries')} className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
                         {da ? 'Se alle' : 'View all'}
                       </Link>
                     </div>
                     <div className="space-y-0.5">
-                      {INDUSTRIES.map((ind) => (
-                        <Link
-                          key={ind.slug}
-                          href={`/industries/${ind.slug}`}
-                          className={`block rounded-md px-2 py-1.5 text-sm ${
-                            isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
-                          }`}
-                        >
-                          {ind.menuLabel}
-                        </Link>
-                      ))}
+                      {INDUSTRIES.map((ind) => {
+                        const label = (da && DA_INDUSTRY_TRANSLATIONS[ind.slug]?.menuLabel) ? DA_INDUSTRY_TRANSLATIONS[ind.slug]!.menuLabel! : ind.menuLabel
+                        return (
+                          <Link
+                            key={ind.slug}
+                            href={withLocalePath(locale, `/industries/${ind.slug}`)}
+                            className={`block rounded-md px-2 py-1.5 text-sm ${
+                              isDarkTop ? 'text-white/80 hover:bg-white/10' : 'text-gray-700 hover:bg-white'
+                            }`}
+                          >
+                            {label}
+                          </Link>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>

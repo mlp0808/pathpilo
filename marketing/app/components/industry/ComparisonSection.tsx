@@ -7,6 +7,7 @@ interface Props {
   data: ComparisonSection
   /** Optional link to a dedicated vs-page (e.g. "/comparisons/pathpilo-vs-jobber-window-cleaning") */
   detailHref?: string
+  locale?: string
 }
 
 function Cell({ value, isPathPilo = false }: { value: string | boolean; isPathPilo?: boolean }) {
@@ -50,9 +51,16 @@ function Cell({ value, isPathPilo = false }: { value: string | boolean; isPathPi
   return <span className="text-sm text-slate-500 leading-tight">{value}</span>
 }
 
-export default function ComparisonSection({ data, detailHref }: Props) {
+export default function ComparisonSection({ data, detailHref, locale = 'en' }: Props) {
+  const da = locale === 'da'
   const cols = ['pathpilo', ...data.competitors.map((c) => c.id)]
   const compMap = Object.fromEntries(data.competitors.map((c) => [c.id, c]))
+  // Prefix the detail link with the locale if it points to /comparisons/...
+  const localizedDetailHref = detailHref
+    ? detailHref.startsWith('/comparisons/')
+      ? `/${locale}${detailHref}`
+      : detailHref
+    : undefined
 
   return (
     <section className="py-20 bg-slate-50">
@@ -72,7 +80,7 @@ export default function ComparisonSection({ data, detailHref }: Props) {
             <thead>
               <tr className="border-b border-slate-100">
                 <th className="w-48 py-4 pl-6 pr-4 text-left font-medium text-slate-400 text-xs uppercase tracking-wide">
-                  Feature
+                  {da ? 'Funktion' : 'Feature'}
                 </th>
                 {cols.map((id) => {
                   const isUs = id === 'pathpilo'
@@ -90,7 +98,7 @@ export default function ComparisonSection({ data, detailHref }: Props) {
                         <span className="flex flex-col items-center gap-0.5">
                           <span>PathPilo</span>
                           <span className="text-[10px] font-normal text-emerald-500 uppercase tracking-wide">
-                            Free · from £25/mo†
+                            {da ? 'Gratis · fra £25/md†' : 'Free · from £25/mo†'}
                           </span>
                         </span>
                       ) : (
@@ -137,7 +145,7 @@ export default function ComparisonSection({ data, detailHref }: Props) {
           <tfoot>
             <tr className="border-t border-slate-200 bg-slate-50">
               <td className="py-3.5 pl-6 pr-4 text-xs text-slate-400 uppercase tracking-wide font-semibold">
-                Starting price
+                {da ? 'Startpris' : 'Starting price'}
               </td>
               {cols.map((id) => {
                 const isUs = id === 'pathpilo'
@@ -151,9 +159,9 @@ export default function ComparisonSection({ data, detailHref }: Props) {
                   >
                     {isUs ? (
                       <span className="flex flex-col items-center gap-0.5">
-                        <span>Free</span>
+                        <span>{da ? 'Gratis' : 'Free'}</span>
                         <span className="text-[11px] font-normal text-emerald-600">
-                          Team: £25/mo†
+                          {da ? 'Team: £25/md†' : 'Team: £25/mo†'}
                         </span>
                       </span>
                     ) : comp.startingPrice}
@@ -169,13 +177,13 @@ export default function ComparisonSection({ data, detailHref }: Props) {
         <p className="mt-4 text-center text-xs text-slate-400">{data.disclaimer}</p>
 
         {/* Detail link */}
-        {detailHref && (
+        {localizedDetailHref && (
           <div className="mt-8 flex justify-center">
             <Link
-              href={detailHref}
+              href={localizedDetailHref}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:border-slate-300 transition-colors"
             >
-              Read the full comparison: PathPilo vs Jobber for window cleaners
+              {da ? 'Læs den fulde sammenligning' : 'Read the full comparison'}
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
                 <path
                   d="M3 7h8M8 4l3 3-3 3"
