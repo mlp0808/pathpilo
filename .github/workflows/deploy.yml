@@ -42,10 +42,16 @@ jobs:
             "NEXT_PUBLIC_CRISP_WEBSITE_ID=${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" \
             "NEXT_PUBLIC_API_URL=" > .env
           # Marketing is a separate Next.js app — it only reads env from marketing/
+          # NEXT_PUBLIC_* vars are inlined at build time, so Mapbox MUST be here
+          # or /tools/route-planner ships with a blank map.
           printf '%s\n' \
+            "NEXT_PUBLIC_MAPBOX_TOKEN=${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}" \
             "NEXT_PUBLIC_HOTJAR_ID=${{ vars.NEXT_PUBLIC_HOTJAR_ID }}" \
             "NEXT_PUBLIC_HOTJAR_SV=${{ vars.NEXT_PUBLIC_HOTJAR_SV }}" \
             "NEXT_PUBLIC_CRISP_WEBSITE_ID=${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" > marketing/.env
+          if [ -z "${{ vars.NEXT_PUBLIC_MAPBOX_TOKEN }}" ]; then
+            echo "::warning::NEXT_PUBLIC_MAPBOX_TOKEN is empty in GitHub Actions Variables — the marketing route planner map will be blank. Add it under Settings → Secrets and variables → Actions → Variables."
+          fi
           if [ -z "${{ vars.NEXT_PUBLIC_CRISP_WEBSITE_ID }}" ]; then
             echo "::warning::NEXT_PUBLIC_CRISP_WEBSITE_ID is empty in GitHub Actions Variables — Crisp will NOT be in the production build. Add it under Settings → Secrets and variables → Actions → Variables (Production environment)."
           fi
