@@ -61,7 +61,7 @@ const windowCleaning: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'Fewer wasted trips',
@@ -74,7 +74,7 @@ const windowCleaning: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid faster',
@@ -243,7 +243,7 @@ const domesticCleaning: Industry = {
     h1: 'Domestic cleaning software that schedules your clients and handles the admin for you',
     sub: 'PathPilo organises your weekly client list by area, reminds customers before every clean, and sends invoices the second you finish. Nothing slips through the cracks.',
     trustLine: 'Free to start · No card needed · Works on your phone',
-    image: '/images/industries/window-cleaning-person-app.png',
+    image: '/images/features/domestic-cleaning-person-app.png',
     imageAlt: 'A field service operator checking their schedule on the PathPilo app',
   },
 
@@ -277,7 +277,7 @@ const domesticCleaning: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'Fewer no-shows',
@@ -290,7 +290,7 @@ const domesticCleaning: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid on time',
@@ -316,7 +316,7 @@ const domesticCleaning: Industry = {
         'Quote and confirm in minutes from your phone',
       ],
       visual: 'booking',
-      image: '/images/industries/window-cleaning-person-van.png',
+      image: '/images/features/domestic-cleaning-person-app.png',
       imageAlt: 'A service operator standing by their van checking new customer enquiries on PathPilo',
       imagePlain: true,
     },
@@ -454,7 +454,7 @@ const lawnCare: Industry = {
     h1: 'Lawn care software that plans your weekly routes and takes care of the admin',
     sub: 'PathPilo orders your daily stops by area, texts clients before you arrive, and generates invoices the moment you finish. Focus on the work, not the paperwork.',
     trustLine: 'Free to start · No card needed · Set up in an afternoon',
-    image: '/images/industries/window-cleaning-person-app.png',
+    image: '/images/features/lawn-care-person-app.png',
     imageAlt: 'A field service operator checking their route schedule on the PathPilo app',
   },
 
@@ -488,7 +488,7 @@ const lawnCare: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'No more missed gates',
@@ -501,7 +501,7 @@ const lawnCare: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid the same day',
@@ -527,7 +527,7 @@ const lawnCare: Industry = {
         'Easy to hand off to a second team member when you scale',
       ],
       visual: 'booking',
-      image: '/images/industries/window-cleaning-person-van.png',
+      image: '/images/features/lawn-care-person-app.png',
       imageAlt: 'A service operator by their van checking new client enquiries on PathPilo',
       imagePlain: true,
     },
@@ -665,7 +665,7 @@ const gutterCleaning: Industry = {
     h1: 'Gutter cleaning software that keeps your schedule organised and your invoices paid',
     sub: 'PathPilo manages your recurring annual clients, orders your daily jobs by area, texts customers before you arrive, and sends invoices the moment you finish. All from your phone.',
     trustLine: 'Free to start · No card needed · Works on any phone',
-    image: '/images/industries/window-cleaning-person-app.png',
+    image: '/images/features/gutter-cleaning-person-app.png',
     imageAlt: 'A field service operator checking their job schedule on the PathPilo app',
   },
 
@@ -699,7 +699,7 @@ const gutterCleaning: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'Fewer wasted journeys',
@@ -712,7 +712,7 @@ const gutterCleaning: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid immediately',
@@ -738,7 +738,7 @@ const gutterCleaning: Industry = {
         'Your recurring revenue becomes truly predictable',
       ],
       visual: 'booking',
-      image: '/images/industries/window-cleaning-person-van.png',
+      image: '/images/features/gutter-cleaning-person-app.png',
       imageAlt: 'A service operator by their van managing recurring client bookings on PathPilo',
       imagePlain: true,
     },
@@ -876,7 +876,7 @@ const pressureWashing: Industry = {
     h1: 'Pressure washing software that organises your jobs and handles your invoicing automatically',
     sub: 'PathPilo schedules your jobs by area, sends reminders before every visit, and gets invoices out the second a job is done. Spend your time on the work, not chasing it.',
     trustLine: 'Free to start · No card needed · Set up in under an hour',
-    image: '/images/industries/window-cleaning-person-app.png',
+    image: '/images/features/pressure-washing-person-app.png',
     imageAlt: 'A field service operator checking their job schedule on the PathPilo app',
   },
 
@@ -910,7 +910,7 @@ const pressureWashing: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'Professional client experience',
@@ -923,7 +923,7 @@ const pressureWashing: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid without chasing',
@@ -949,7 +949,7 @@ const pressureWashing: Industry = {
         'New jobs added to your schedule without re-entering anything',
       ],
       visual: 'booking',
-      image: '/images/industries/window-cleaning-person-van.png',
+      image: '/images/features/pressure-washing-person-app.png',
       imageAlt: 'A service operator by their van managing new client enquiries on PathPilo',
       imagePlain: true,
     },
@@ -1087,7 +1087,7 @@ const binCleaning: Industry = {
     h1: 'Bin cleaning software built for route-based businesses that run on repeat visits',
     sub: 'PathPilo automatically orders your daily stops by street, manages your recurring clients, and collects payments without you lifting a finger. Focus on the cleaning.',
     trustLine: 'Free to start · No card needed · Built for route-based work',
-    image: '/images/industries/window-cleaning-person-app.png',
+    image: '/images/features/bin-cleaning-person-app.png',
     imageAlt: 'A field service operator managing their daily route on the PathPilo app',
   },
 
@@ -1121,7 +1121,7 @@ const binCleaning: Industry = {
       ],
       visual: 'route',
       video: '/images/features/routeplanning-weekplanner-placeholder.mp4',
-      videoPoster: '/images/features/routeplanning-weekplanner-placeholder.svg',
+      videoPoster: '/images/features/scheduling.png',
     },
     {
       eyebrow: 'Let clients know you are coming',
@@ -1134,7 +1134,7 @@ const binCleaning: Industry = {
       ],
       visual: 'sms',
       video: '/images/features/routeplanning-automations.mp4',
-      videoPoster: '/images/features/routeplanning-map-placeholder.svg',
+      videoPoster: '/images/features/routes.png',
     },
     {
       eyebrow: 'Get paid automatically',
@@ -1160,7 +1160,7 @@ const binCleaning: Industry = {
         'Scale to multiple vans without disproportionate admin',
       ],
       visual: 'booking',
-      image: '/images/industries/window-cleaning-person-van.png',
+      image: '/images/features/bin-cleaning-person-app.png',
       imageAlt: 'A service operator by their van managing new customer sign-ups on PathPilo',
       imagePlain: true,
     },

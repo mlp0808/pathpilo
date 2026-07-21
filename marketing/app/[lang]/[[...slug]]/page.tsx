@@ -11,6 +11,15 @@ import TeamManagementFeaturePage from '../../features/team/page'
 import { TermsContent } from '../../terms/TermsContent'
 import { PrivacyContent } from '../../privacy/PrivacyContent'
 import { isMarketingLocale } from '../../lib/i18n'
+import type { MarketingLocale } from '../../lib/i18n'
+import JsonLd from '../../components/JsonLd'
+import { getSiteFaqs } from '../../lib/faqData'
+import {
+  breadcrumbSchema,
+  faqPageSchema,
+  softwareApplicationSchema,
+} from '../../lib/schema'
+import { bilingualPageMetadata } from '../../lib/seo'
 
 const SEO_BY_ROUTE = {
   '': {
@@ -149,22 +158,94 @@ export async function generateMetadata({
   }
   const current = seo[lang]
   const routePath = route ? `/${route}` : ''
-  const canonical = `/${lang}${routePath}`
-  const enAlt = `/en${routePath}`
-  const daAlt = `/da${routePath}`
+  const ogByRoute: Record<string, string> = {
+    pricing: '/images/og/og-pricing.png',
+    'features/routeplanning': '/images/og/og-routeplanning.png',
+  }
 
-  return {
+  return bilingualPageMetadata({
+    lang,
+    path: routePath || '/',
     title: current.title,
     description: current.description,
-    alternates: {
-      canonical,
-      languages: {
-        en: enAlt,
-        da: daAlt,
-        'x-default': enAlt,
-      },
-    },
+    image: ogByRoute[route],
+  })
+}
+
+function pageSchemas(lang: MarketingLocale, route: string) {
+  const da = lang === 'da'
+  const graphs: Record<string, unknown>[] = []
+
+  if (route === '') {
+    graphs.push(
+      softwareApplicationSchema({
+        description: da
+          ? 'PathPilo samler planlægning, kunder, opgaver og fakturering ét sted. Bygget til mobile servicevirksomheder.'
+          : 'PathPilo helps service teams run scheduling, clients, jobs, and invoicing in one place. Built for mobile service businesses.',
+        url: `/${lang}`,
+        locale: lang,
+      }),
+    )
   }
+
+  if (route === 'faq') {
+    graphs.push(
+      faqPageSchema(getSiteFaqs(lang)),
+      breadcrumbSchema([
+        { name: da ? 'Hjem' : 'Home', path: `/${lang}` },
+        { name: 'FAQ', path: `/${lang}/faq` },
+      ]),
+    )
+  }
+
+  if (route === 'pricing') {
+    graphs.push(
+      softwareApplicationSchema({
+        description: da
+          ? 'Se PathPilo-priser. Kom i gang gratis uden kreditkort — betal først når du har brug for flere medarbejdere på samme dag.'
+          : 'See PathPilo pricing. Start free with no credit card — pay only when you need multiple employees on the same day.',
+        url: `/${lang}/pricing`,
+        locale: lang,
+        offerDescription: da
+          ? 'Gratis forever for ubegrænsede kunder og opgaver'
+          : 'Free forever for unlimited clients and jobs',
+      }),
+      breadcrumbSchema([
+        { name: da ? 'Hjem' : 'Home', path: `/${lang}` },
+        { name: da ? 'Priser' : 'Pricing', path: `/${lang}/pricing` },
+      ]),
+    )
+  }
+
+  if (route.startsWith('features/')) {
+    const featureLabel =
+      route === 'features/routeplanning'
+        ? da
+          ? 'Routeplanning'
+          : 'Route Planning'
+        : route === 'features/subscriptions'
+          ? da
+            ? 'Abonnementsopgaver'
+            : 'Subscriptions'
+          : da
+            ? 'Teamstyring'
+            : 'Team Management'
+    const seo = SEO_BY_ROUTE[route as keyof typeof SEO_BY_ROUTE]
+    graphs.push(
+      softwareApplicationSchema({
+        name: `PathPilo — ${featureLabel}`,
+        description: seo?.[lang].description ?? 'PathPilo',
+        url: `/${lang}/${route}`,
+        locale: lang,
+      }),
+      breadcrumbSchema([
+        { name: da ? 'Hjem' : 'Home', path: `/${lang}` },
+        { name: featureLabel, path: `/${lang}/${route}` },
+      ]),
+    )
+  }
+
+  return graphs
 }
 
 export default async function LocalizedMarketingPage({
@@ -179,17 +260,37 @@ export default async function LocalizedMarketingPage({
 
   const slug = resolved.slug ?? []
   const route = slug.join('/')
+  const schemas = pageSchemas(resolved.lang, route)
 
-  if (route === '') return <HomePage locale={resolved.lang} />
-  if (route === 'about') return <AboutPage locale={resolved.lang} />
-  if (route === 'contact') return <ContactPage locale={resolved.lang} />
-  if (route === 'faq') return <FAQContent locale={resolved.lang} />
-  if (route === 'pricing') return <PricingPage locale={resolved.lang} />
-  if (route === 'features/routeplanning') return <RoutePlanningFeaturePage locale={resolved.lang} />
-  if (route === 'features/subscriptions') return <SubscriptionsFeaturePage locale={resolved.lang} />
-  if (route === 'features/team') return <TeamManagementFeaturePage locale={resolved.lang} />
-  if (route === 'terms') return <TermsContent locale={resolved.lang} />
-  if (route === 'privacy') return <PrivacyContent locale={resolved.lang} />
+  const page =
+    route === '' ? (
+      <HomePage locale={resolved.lang} />
+    ) : route === 'about' ? (
+      <AboutPage locale={resolved.lang} />
+    ) : route === 'contact' ? (
+      <ContactPage locale={resolved.lang} />
+    ) : route === 'faq' ? (
+      <FAQContent locale={resolved.lang} />
+    ) : route === 'pricing' ? (
+      <PricingPage locale={resolved.lang} />
+    ) : route === 'features/routeplanning' ? (
+      <RoutePlanningFeaturePage locale={resolved.lang} />
+    ) : route === 'features/subscriptions' ? (
+      <SubscriptionsFeaturePage locale={resolved.lang} />
+    ) : route === 'features/team' ? (
+      <TeamManagementFeaturePage locale={resolved.lang} />
+    ) : route === 'terms' ? (
+      <TermsContent locale={resolved.lang} />
+    ) : route === 'privacy' ? (
+      <PrivacyContent locale={resolved.lang} />
+    ) : null
 
-  notFound()
+  if (!page) notFound()
+
+  return (
+    <>
+      {schemas.length > 0 && <JsonLd data={schemas} />}
+      {page}
+    </>
+  )
 }

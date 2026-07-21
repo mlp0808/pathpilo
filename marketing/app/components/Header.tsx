@@ -66,6 +66,13 @@ export default function Header() {
       href: navHref('/tools/route-planner'),
       badge: da ? 'Gratis' : 'Free',
     },
+    {
+      title: da ? 'Alle værktøjer' : 'All tools',
+      description: da
+        ? 'Se alle gratis PathPilo-værktøjer ét sted.'
+        : 'Browse all free PathPilo tools in one place.',
+      href: navHref('/tools'),
+    },
   ]
 
   const isHome = basePath === '/'
@@ -255,7 +262,7 @@ export default function Header() {
                           <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
                             {da ? 'Artikler' : 'Articles'}
                           </span>
-                          <Link href="/articles" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+                          <Link href={navHref('/articles')} className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
                             {da ? 'Se alle' : 'View all'}
                           </Link>
                         </div>
@@ -507,7 +514,7 @@ export default function Header() {
                       <p className={`text-[10px] font-semibold uppercase tracking-widest ${isDarkTop ? 'text-white/50' : 'text-gray-400'}`}>
                         {da ? 'Artikler' : 'Articles'}
                       </p>
-                      <Link href="/articles" className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
+                      <Link href={navHref('/articles')} className={`text-xs ${isDarkTop ? 'text-white/60' : 'text-gray-400'}`}>
                         {da ? 'Se alle' : 'View all'}
                       </Link>
                     </div>

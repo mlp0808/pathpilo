@@ -1,0 +1,58 @@
+import type { BreadcrumbItem } from '../components/Breadcrumbs'
+import type { MarketingLocale } from './i18n'
+
+/** Breadcrumb trails for common marketing routes (visible UI + JSON-LD). */
+export function breadcrumbsForRoute(lang: MarketingLocale, route: string): BreadcrumbItem[] {
+  const da = lang === 'da'
+  const home: BreadcrumbItem = { label: da ? 'Hjem' : 'Home', href: `/${lang}` }
+
+  const map: Record<string, BreadcrumbItem[]> = {
+    about: [home, { label: da ? 'Om os' : 'About' }],
+    contact: [home, { label: da ? 'Kontakt' : 'Contact' }],
+    faq: [home, { label: 'FAQ' }],
+    pricing: [home, { label: da ? 'Priser' : 'Pricing' }],
+    terms: [home, { label: da ? 'Servicevilkår' : 'Terms of Service' }],
+    privacy: [home, { label: da ? 'Privatlivspolitik' : 'Privacy Policy' }],
+    tools: [home, { label: da ? 'Værktøjer' : 'Tools' }],
+    'tools/route-planner': [
+      home,
+      { label: da ? 'Værktøjer' : 'Tools', href: `/${lang}/tools` },
+      { label: da ? 'Ruteplanlægger' : 'Route Planner' },
+    ],
+    'features/routeplanning': [
+      home,
+      { label: da ? 'Routeplanning' : 'Route Planning' },
+    ],
+    'features/subscriptions': [
+      home,
+      { label: da ? 'Abonnementsopgaver' : 'Subscriptions' },
+    ],
+    'features/team': [home, { label: da ? 'Teamstyring' : 'Team Management' }],
+  }
+
+  return map[route] ?? []
+}
+
+export function industryBreadcrumbs(
+  lang: MarketingLocale,
+  menuLabel: string,
+): BreadcrumbItem[] {
+  const da = lang === 'da'
+  return [
+    { label: da ? 'Hjem' : 'Home', href: `/${lang}` },
+    { label: da ? 'Brancher' : 'Industries', href: `/${lang}/industries` },
+    { label: menuLabel },
+  ]
+}
+
+export function comparisonBreadcrumbs(
+  lang: MarketingLocale,
+  headline: string,
+): BreadcrumbItem[] {
+  const da = lang === 'da'
+  return [
+    { label: da ? 'Hjem' : 'Home', href: `/${lang}` },
+    { label: da ? 'Sammenligninger' : 'Comparisons', href: `/${lang}/comparisons` },
+    { label: headline },
+  ]
+}

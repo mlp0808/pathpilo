@@ -1,11 +1,11 @@
 'use client'
 
+import Image from 'next/image'
 import { useState } from 'react'
 
 /**
- * Cover image with a graceful, branded gradient fallback. If `src` is missing
- * or fails to load, we render a category-coloured gradient instead of a broken
- * image — so authors can publish without always supplying artwork.
+ * Cover image with a graceful, branded gradient fallback. Uses next/image for
+ * local assets; falls back to gradient on missing src or load failure.
  */
 export default function CoverImage({
   src,
@@ -13,6 +13,7 @@ export default function CoverImage({
   color = '#193434',
   className = '',
   label,
+  sizes = '(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 720px',
 }: {
   src?: string
   alt?: string
@@ -20,6 +21,7 @@ export default function CoverImage({
   className?: string
   /** Short text shown on the gradient fallback (e.g. category label). */
   label?: string
+  sizes?: string
 }) {
   const [failed, setFailed] = useState(false)
   const showFallback = !src || failed
@@ -38,14 +40,19 @@ export default function CoverImage({
     )
   }
 
+  const isSvg = src.endsWith('.svg')
+
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={alt || ''}
-      className={`object-cover ${className}`}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
+    <div className={`relative overflow-hidden ${className}`}>
+      <Image
+        src={src}
+        alt={alt || ''}
+        fill
+        className="object-cover"
+        sizes={sizes}
+        unoptimized={isSvg}
+        onError={() => setFailed(true)}
+      />
+    </div>
   )
 }

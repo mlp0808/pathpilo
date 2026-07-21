@@ -66,6 +66,8 @@ interface RouteMapProps {
   isDirectionsLoading?: boolean
   /** When true, the map enters manual draw-route mode (white dots, click-to-assign). */
   drawMode?: boolean
+  /** Which route accepts draw picks. Defaults to focusUserId, then sole visible route. */
+  drawUserId?: number | null
   /** Job ids already assigned a number, in chosen order (only meaningful when drawMode). */
   drawOrder?: (number | string)[]
   /** Called when an un-numbered draw-mode pin is clicked. */
@@ -356,6 +358,7 @@ export default function RouteMap({
   isolatedLeg,
   isDirectionsLoading,
   drawMode,
+  drawUserId,
   drawOrder,
   onDrawAssign,
   onReassignJob,
@@ -382,6 +385,10 @@ export default function RouteMap({
   const mapClickHandlersRef = useRef<{ fn: (e: mapboxgl.MapMouseEvent) => void }[]>([])
   const onDrawAssignRef = useRef(onDrawAssign)
   onDrawAssignRef.current = onDrawAssign
+  const onJobClickRef = useRef(onJobClick)
+  onJobClickRef.current = onJobClick
+  const drawModeRef = useRef(!!drawMode)
+  drawModeRef.current = !!drawMode
   const onReassignJobRef = useRef(onReassignJob)
   onReassignJobRef.current = onReassignJob
   // Layer-bound mousedown handlers for pin dragging (cleaned up on each redraw).
@@ -390,6 +397,8 @@ export default function RouteMap({
   const homeLayersRef = useRef<string[]>([])
   // Set true briefly after a drag so the trailing click doesn't open the job.
   const suppressClickRef = useRef(false)
+  /** Swallow duplicate layer + map fallback picks on the same stop within one frame. */
+  const recentPickRef = useRef<{ key: string; at: number } | null>(null)
   /** Cancel stale moveend listener when draw() runs again before camera animation finishes. */
   const pendingMoveEndEnforceRef = useRef<(() => void) | null>(null)
   const hasFittedCameraRef = useRef(false)
@@ -587,7 +596,27 @@ export default function RouteMap({
     // Solo companies may show a route before dayFocusUserId is set — align draw mode
     // with the single visible route in that case.
     const drawTargetUserId =
-      focusUserId ?? (visibleRoutes.length === 1 ? visibleRoutes[0].userId : null)
+      drawUserId ?? focusUserId ?? (visibleRoutes.length === 1 ? visibleRoutes[0].userId : null)
+
+    const drawPickLayers: string[] = []
+
+    const handlePinPick = (props: { jobId?: unknown; isHome?: unknown }) => {
+      if (suppressClickRef.current) return
+      if (featIsHome(props)) return
+      const jobId = featJobId(props)
+      const pickKey = String(jobId)
+      const now = performance.now()
+      if (recentPickRef.current?.key === pickKey && now - recentPickRef.current.at < 150) return
+      recentPickRef.current = { key: pickKey, at: now }
+      if (clickPopupRef.current) { clickPopupRef.current.remove(); clickPopupRef.current = null }
+      // Refs — not the draw() closure — so the first click right after toggling
+      // draw mode never falls through to onJobClick while layers are swapping.
+      if (drawModeRef.current && onDrawAssignRef.current) {
+        onDrawAssignRef.current(jobId)
+        return
+      }
+      onJobClickRef.current(Number(jobId))
+    }
 
     // ── Pin drag-to-reassign machinery ──────────────────────────────────────
     // Begins a potential drag on pin mousedown. A real drag only starts once the
@@ -1010,16 +1039,15 @@ export default function RouteMap({
             ? [`${pId}-hit`]
             : [`${pId}-circle`]
 
-          const handlePinPick = (props: { jobId?: unknown; isHome?: unknown }) => {
-            if (suppressClickRef.current) return  // trailing click after a drag
-            if (featIsHome(props)) return
-            const jobId = featJobId(props)
-            if (clickPopupRef.current) { clickPopupRef.current.remove(); clickPopupRef.current = null }
-            if (isRouteInDrawMode && onDrawAssignRef.current) {
-              onDrawAssignRef.current(jobId)
-              return
+          const registerDrawPickLayer = (layerId: string) => {
+            if (!map.getLayer(layerId)) return
+            drawPickLayers.push(layerId)
+            const onPickClick = (e: mapboxgl.MapLayerMouseEvent) => {
+              if (!e.features?.[0]) return
+              handlePinPick(e.features[0].properties as { jobId?: unknown; isHome?: unknown })
             }
-            onJobClick(Number(jobId))
+            map.on('click', layerId, onPickClick)
+            clickHandlersRef.current.push({ layer: layerId, fn: onPickClick })
           }
 
           pickHoverLayers.forEach(layer => {
@@ -1032,15 +1060,9 @@ export default function RouteMap({
           })
 
           if (isRouteInDrawMode) {
-            // ${pId}-hit is the top-most layer so a direct layer click works and
-            // avoids the queryRenderedFeatures race where features are not yet in
-            // the WebGL buffer on the very first click after entering draw mode.
-            const onHitClick = (e: mapboxgl.MapLayerMouseEvent) => {
-              if (!e.features?.[0]) return
-              handlePinPick(e.features[0].properties as { jobId?: unknown; isHome?: unknown })
-            }
-            map.on('click', `${pId}-hit`, onHitClick)
-            clickHandlersRef.current.push({ layer: `${pId}-hit`, fn: onHitClick })
+            registerDrawPickLayer(`${pId}-hit`)
+            registerDrawPickLayer(`${pId}-circle`)
+            registerDrawPickLayer(`${pId}-center`)
           } else {
             const onPinClick = (e: mapboxgl.MapLayerMouseEvent) => {
               if (!e.features?.[0]) return
@@ -1127,8 +1149,28 @@ export default function RouteMap({
         } catch (e) { console.warn('cancelled pins add failed', e) }
       }
     })
+
+    // Fallback for the first click after entering draw mode — Mapbox can miss
+    // layer-bound handlers until the new pin geometry is uploaded to the GPU.
+    if (drawModeRef.current && drawTargetUserId != null && drawPickLayers.length > 0) {
+      const layers = drawPickLayers.filter((id) => map.getLayer(id))
+      const onMapDrawClick = (e: mapboxgl.MapMouseEvent) => {
+        if (!drawModeRef.current || suppressClickRef.current) return
+        const tryPick = () => {
+          const features = map.queryRenderedFeatures(e.point, { layers })
+          const feat = features.find((f) => !featIsHome(f.properties as { isHome?: unknown }))
+          if (feat?.properties) {
+            handlePinPick(feat.properties as { jobId?: unknown; isHome?: unknown })
+          }
+        }
+        tryPick()
+        requestAnimationFrame(tryPick)
+      }
+      map.on('click', onMapDrawClick)
+      mapClickHandlersRef.current.push({ fn: onMapDrawClick })
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routes, focusUserId, isolatedLeg, onJobClick, onPinHover, drawMode, drawOrder, onDrawAssign, onReassignJob, visibleUserIds?.join(',') ?? ''])
+  }, [routes, focusUserId, drawUserId, isolatedLeg, onJobClick, onPinHover, drawMode, drawOrder, onDrawAssign, onReassignJob, visibleUserIds?.join(',') ?? ''])
 
   const drawRef = useRef(draw)
   drawRef.current = draw
@@ -1150,7 +1192,7 @@ export default function RouteMap({
     if (!map?.isStyleLoaded()) return
     drawRef.current()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawMode, focusUserId, isolatedLeg, visibleUserIds?.join(',') ?? ''])
+  }, [drawMode, drawUserId, focusUserId, isolatedLeg, visibleUserIds?.join(',') ?? ''])
 
   return (
     <>

@@ -3483,6 +3483,7 @@ function JobsPageContent() {
                           !r.routeGeometry && r.jobs.filter(j => j.lat && j.lng && !j.is_cancelled).length >= 2
                         )}
                         drawMode={drawMode}
+                        drawUserId={dayDrawUserId}
                         drawOrder={drawOrder}
                         onDrawAssign={handleDrawAssign}
                         onReassignJob={handleReassignJob}

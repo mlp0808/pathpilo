@@ -1,9 +1,15 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import IndustryLanding from '../../../components/industry/IndustryLanding'
+import JsonLd from '../../../components/JsonLd'
 import { getLocalizedIndustry, getIndustrySlugs } from '../../../lib/industries/data'
 import { getMarketingSiteUrl } from '../../../lib/siteUrl'
 import { isMarketingLocale } from '../../../lib/i18n'
+import {
+  breadcrumbSchema,
+  faqPageSchema,
+  softwareApplicationSchema,
+} from '../../../lib/schema'
 
 export function generateStaticParams() {
   const locales = ['en', 'da']
@@ -63,51 +69,25 @@ export default async function LocalizedIndustryPage({
   const siteUrl = getMarketingSiteUrl()
   const pageUrl = `${siteUrl}/${lang}/industries/${data.slug}`
 
-  const faqLd = {
-    '@context': 'https://schema.org',
-    '@type': 'FAQPage',
-    mainEntity: data.faq.items.map((item) => ({
-      '@type': 'Question',
-      name: item.q,
-      acceptedAnswer: { '@type': 'Answer', text: item.a },
-    })),
-  }
-
-  const softwareLd = {
-    '@context': 'https://schema.org',
-    '@type': 'SoftwareApplication',
-    name: 'PathPilo',
-    applicationCategory: 'BusinessApplication',
-    operatingSystem: 'Web, iOS, Android',
-    description: data.seoDescription,
-    url: pageUrl,
-    offers: {
-      '@type': 'Offer',
-      price: '0',
-      priceCurrency: lang === 'da' ? 'DKK' : 'GBP',
-      description: lang === 'da' ? 'Gratis plan tilgængelig' : 'Free plan available',
-    },
-  }
-
-  const breadcrumbLd = {
-    '@context': 'https://schema.org',
-    '@type': 'BreadcrumbList',
-    itemListElement: [
-      {
-        '@type': 'ListItem',
-        position: 1,
-        name: lang === 'da' ? 'Brancher' : 'Industries',
-        item: `${siteUrl}/${lang}/industries`,
-      },
-      { '@type': 'ListItem', position: 2, name: data.menuLabel, item: pageUrl },
-    ],
-  }
-
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareLd) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd) }} />
+      <JsonLd
+        data={[
+          faqPageSchema(data.faq.items),
+          softwareApplicationSchema({
+            description: data.seoDescription,
+            url: pageUrl,
+            locale: lang,
+          }),
+          breadcrumbSchema([
+            {
+              name: lang === 'da' ? 'Brancher' : 'Industries',
+              path: `/${lang}/industries`,
+            },
+            { name: data.menuLabel, path: `/${lang}/industries/${data.slug}` },
+          ]),
+        ]}
+      />
       <IndustryLanding data={data} locale={lang} />
     </>
   )

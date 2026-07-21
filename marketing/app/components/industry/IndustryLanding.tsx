@@ -10,6 +10,8 @@ import RevenueCalculator from './RevenueCalculator'
 import TestimonialsCarousel from './TestimonialsCarousel'
 import IndustryFAQ from './IndustryFAQ'
 import ComparisonSection from './ComparisonSection'
+import Breadcrumbs from '../Breadcrumbs'
+import { industryBreadcrumbs } from '../../lib/breadcrumbs'
 import type { IconKey, Industry } from '../../lib/industries/types'
 import {
   MapIcon,
@@ -59,6 +61,10 @@ export default function IndustryLanding({ data, locale = 'en' }: { data: Industr
         <div className="pointer-events-none absolute -left-1/4 bottom-0 h-[380px] w-[380px] rounded-full bg-teal-600/5 blur-[100px]" aria-hidden />
 
         <div className="relative z-10 mx-auto max-w-7xl px-4 pt-14 pb-16 sm:px-6 md:pt-20 md:pb-24">
+          <Breadcrumbs
+            items={industryBreadcrumbs(locale === 'da' ? 'da' : 'en', data.menuLabel)}
+            className="mb-8 text-white/50 [&_a]:hover:text-white [&_span]:text-white/80"
+          />
           <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
             <div className="mx-auto max-w-xl text-center lg:mx-0 lg:text-left">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-widest text-accent-400">

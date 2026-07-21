@@ -25,21 +25,28 @@ import {
  */
 export default function MobileRouteSheet({
   children,
+  header,
   toolbar,
   footer,
   snapPoints = [0.16, 0.55, 0.94],
   initialSnap = 1,
+  topInset = 0,
 }: {
   children: ReactNode
+  /** Fixed chrome below the grab bar (toolbar, stats) — does not scroll away. */
+  header?: ReactNode
   /** Pinned above the footer — e.g. save route (slides in above day picker) */
   toolbar?: ReactNode
   /** Pinned to the bottom of the screen — e.g. week day picker */
   footer?: ReactNode
   snapPoints?: number[]
   initialSnap?: number
+  /** Keep the sheet top below floating UI (e.g. map search bar). */
+  topInset?: number
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const chromeRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [containerH, setContainerH] = useState(0)
   const [bottomChromeH, setBottomChromeH] = useState(0)
   const [snap, setSnap] = useState(
@@ -88,15 +95,23 @@ export default function MobileRouteSheet({
   )
 
   const minT = useMemo(
-    () => panelH * (1 - snapPoints[snapPoints.length - 1]),
-    [panelH, snapPoints],
+    () => Math.max(topInset, panelH * (1 - snapPoints[snapPoints.length - 1])),
+    [panelH, snapPoints, topInset],
   )
   const maxT = useMemo(
     () => panelH * (1 - snapPoints[0]),
     [panelH, snapPoints],
   )
 
-  const settledTranslate = translateForSnap(snap)
+  const clampedTranslateForSnap = useCallback(
+    (i: number) => {
+      const raw = translateForSnap(i)
+      return Math.min(maxT, Math.max(minT, raw))
+    },
+    [translateForSnap, minT, maxT],
+  )
+
+  const settledTranslate = clampedTranslateForSnap(snap)
   const currentTranslate = dragTranslate != null ? dragTranslate : settledTranslate
 
   const nearestSnap = useCallback(
@@ -104,7 +119,7 @@ export default function MobileRouteSheet({
       let best = 0
       let bestDist = Infinity
       for (let i = 0; i < snapPoints.length; i++) {
-        const d = Math.abs(t - translateForSnap(i))
+        const d = Math.abs(t - clampedTranslateForSnap(i))
         if (d < bestDist) {
           bestDist = d
           best = i
@@ -112,12 +127,12 @@ export default function MobileRouteSheet({
       }
       return best
     },
-    [snapPoints, translateForSnap],
+    [snapPoints, clampedTranslateForSnap],
   )
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (panelH === 0) return
-    const t = translateForSnap(snap)
+    const t = clampedTranslateForSnap(snap)
     drag.current = {
       startY: e.clientY,
       startT: t,
@@ -131,6 +146,24 @@ export default function MobileRouteSheet({
     } catch {
       /* ignore */
     }
+  }
+
+  /** Don't steal drags from buttons, links, inputs, or explicitly opted-out rows. */
+  const isInteractiveTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return false
+    return !!target.closest(
+      'button, a, input, textarea, select, [role="button"], [data-no-sheet-drag]',
+    )
+  }
+
+  /**
+   * When the list is scrolled to the top, pulling down anywhere in the scroll
+   * area (except buttons) should resize the sheet — not just the tiny grab bar.
+   */
+  const onScrollAreaPointerDown = (e: React.PointerEvent) => {
+    const el = scrollRef.current
+    if (!el || el.scrollTop > 2 || isInteractiveTarget(e.target)) return
+    onPointerDown(e)
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -181,20 +214,35 @@ export default function MobileRouteSheet({
           boxShadow: '0 -8px 40px rgba(15, 30, 22, 0.18), 0 -1px 0 rgba(255,255,255,0.6) inset',
         }}
       >
-        {/* Grab handle — the drag zone */}
+        {/* Grab handle + fixed header — always reachable for dragging */}
         <div
-          onPointerDown={onPointerDown}
+          onPointerDown={(e) => {
+            if (isInteractiveTarget(e.target)) return
+            onPointerDown(e)
+          }}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
-          className="flex-shrink-0 flex flex-col items-center pt-2 pb-1 cursor-grab active:cursor-grabbing select-none touch-none"
-          role="button"
-          aria-label="Drag to resize"
+          className="flex-shrink-0 select-none touch-none"
         >
-          <div className="h-1 w-9 rounded-full bg-gray-300/90 transition-colors" />
+          <div
+            className="flex flex-col items-center justify-center pt-3 pb-2 cursor-grab active:cursor-grabbing min-h-[52px]"
+            aria-label="Drag to resize"
+            role="button"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-gray-300/90 shadow-sm" />
+          </div>
+          {header ? <div className="pointer-events-auto">{header}</div> : null}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain">
+        <div
+          ref={scrollRef}
+          onPointerDown={onScrollAreaPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain touch-pan-y"
+        >
           {children}
         </div>
       </div>

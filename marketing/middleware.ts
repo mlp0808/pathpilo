@@ -29,7 +29,12 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Never locale-redirect metadata routes (would turn /sitemap.xml into /en/sitemap.xml → 404)
-  if (pathname === '/sitemap.xml' || pathname === '/robots.txt') {
+  if (
+    pathname === '/sitemap.xml' ||
+    pathname === '/robots.txt' ||
+    pathname === '/llms.txt' ||
+    pathname === '/articles/rss.xml'
+  ) {
     return NextResponse.next()
   }
 

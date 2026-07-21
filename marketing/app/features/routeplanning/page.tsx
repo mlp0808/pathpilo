@@ -7,7 +7,9 @@ import Header from '../../components/Header'
 import Footer from '../../components/Footer'
 import CTASection from '../../components/CTASection'
 import FeaturePageAnalytics from '../../components/FeaturePageAnalytics'
+import PageBreadcrumbBar from '../../components/PageBreadcrumbBar'
 import { resolveMarketingLocale, withAppLanguageParam } from '../../lib/i18n'
+import { breadcrumbsForRoute } from '../../lib/breadcrumbs'
 import { pushCtaClick } from '../../lib/dataLayer'
 import {
   ArrowRightIcon,
@@ -121,6 +123,7 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
     <>
       <FeaturePageAnalytics featureKey="routeplanning" />
       <Header />
+      <PageBreadcrumbBar items={breadcrumbsForRoute(locale, 'features/routeplanning')} />
 
       {/* ─── HERO (dark brand) ─── */}
       <section className="relative overflow-hidden bg-[#0a1414]">
@@ -411,7 +414,7 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-weekplanner-placeholder.svg"
+                  poster="/images/features/scheduling.png"
                 >
                   <source src="/images/features/routeplanning-weekplanner-placeholder.mp4" type="video/mp4" />
                 </video>
@@ -487,7 +490,7 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-map-placeholder.svg"
+                  poster="/images/features/routes.png"
                 >
                   <source src="/images/features/routeplanning-map-placeholder.mp4" type="video/mp4" />
                 </video>
@@ -586,9 +589,9 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-mobile-placeholder.svg"
+                  poster="/images/features/routeplanning-mobile.jpeg"
                 >
-                  <source src="/videos/features/routeplanning-mobile-loop.mp4" type="video/mp4" />
+                  <source src="/images/features/routeplanning-mobile-loop.mp4" type="video/mp4" />
                 </video>
               </div>
             </div>

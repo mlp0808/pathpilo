@@ -271,7 +271,7 @@ export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: 
                     muted
                     loop
                     playsInline
-                    poster="/images/features/routeplanning-weekplanner-placeholder.svg"
+                    poster="/images/features/scheduling.png"
                     aria-label={da ? 'Abonnementer og tilbagevendende opgaver i PathPilo' : 'Subscriptions and recurring tasks in PathPilo'}
                   >
                     <source src="/images/features/routeplanning-subscriptions.mp4" type="video/mp4" />
@@ -357,7 +357,7 @@ export default function SubscriptionsFeaturePage({ locale: localeProp = 'en' }: 
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-map-placeholder.svg"
+                  poster="/images/features/routes.png"
                   aria-label={da ? 'Automatiseringer og kunde-flow i PathPilo' : 'Automations and client flow in PathPilo'}
                 >
                   <source src="/images/features/routeplanning-automations.mp4" type="video/mp4" />

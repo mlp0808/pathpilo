@@ -71,6 +71,18 @@ export const BLOG_CATEGORIES: BlogCategory[] = [
   },
 ]
 
+const DA_CATEGORY_LABELS: Record<string, string> = {
+  'getting-started': 'Kom godt i gang',
+  'route-planning': 'Ruteplanlægning',
+  scheduling: 'Planlægning & opgaver',
+  invoicing: 'Fakturering & betaling',
+  'leads-marketing': 'Leads & marketing',
+  'team-management': 'Teamstyring',
+  'business-growth': 'Forretningsvækst',
+  'product-updates': 'Produktopdateringer',
+  ruteplanlægning: 'Ruteplanlægning',
+}
+
 const CATEGORY_BY_SLUG: Record<string, BlogCategory> = Object.fromEntries(
   BLOG_CATEGORIES.map((c) => [c.slug, c]),
 )
@@ -78,6 +90,11 @@ const CATEGORY_BY_SLUG: Record<string, BlogCategory> = Object.fromEntries(
 export function getCategory(slug: string | undefined | null): BlogCategory | undefined {
   if (!slug) return undefined
   return CATEGORY_BY_SLUG[slug]
+}
+
+export function getCategoryLabel(slug: string, locale: 'en' | 'da' = 'en'): string {
+  if (locale === 'da' && DA_CATEGORY_LABELS[slug]) return DA_CATEGORY_LABELS[slug]
+  return getCategory(slug)?.label ?? slug
 }
 
 /** Always returns a usable category (falls back to a neutral default). */

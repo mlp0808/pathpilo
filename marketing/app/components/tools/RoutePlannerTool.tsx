@@ -39,8 +39,8 @@ const RouteMap = dynamic(() => import('@pathpilo/route-planner-core/RouteMap'), 
 
 const ACCENT = '#3DD57A'
 // Fraction of the map container the mobile sheet covers, ascending — peek / half / full.
-const MOBILE_SHEET_SNAPS = [0.14, 0.5, 0.92]
-const MOBILE_SHEET_INITIAL_SNAP = 1
+const MOBILE_SHEET_SNAPS = [0.12, 0.46, 0.84]
+const MOBILE_SHEET_INITIAL_SNAP = 0
 
 type Variant = 'full' | 'compact'
 
@@ -175,6 +175,21 @@ export default function RoutePlannerTool({
       ]
     })
   }, [])
+
+  const handleDrawAssignStop = useCallback((id: number | string) => {
+    setDrawOrder((prev) => (prev.includes(Number(id)) ? prev : [...prev, Number(id)]))
+  }, [])
+
+  const handleStopClick = useCallback(
+    (id: number) => {
+      if (drawMode) {
+        handleDrawAssignStop(id)
+        return
+      }
+      setDetailId(id)
+    },
+    [drawMode, handleDrawAssignStop],
+  )
 
   const removeStop = (id: number) => {
     setStops((prev) => prev.filter((s) => s.id !== id))
@@ -413,7 +428,11 @@ export default function RoutePlannerTool({
         type="button"
         onClick={() => {
           setDrawOrder([])
-          setDrawMode((m) => !m)
+          setDrawMode((m) => {
+            const next = !m
+            if (next) setDetailId(null)
+            return next
+          })
         }}
         disabled={stops.length < 2}
         className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -492,7 +511,7 @@ export default function RoutePlannerTool({
                 onDragEnd={() => setDragId(null)}
                 onMouseEnter={() => setHoverId(s.id)}
                 onMouseLeave={() => setHoverId(null)}
-                onClick={() => setDetailId(s.id)}
+                onClick={() => handleStopClick(s.id)}
                 className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2.5 transition-colors ${
                   active ? 'bg-accent-500/8 ring-1 ring-accent-500/25' : 'hover:bg-gray-50'
                 } ${drawMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'}`}
@@ -655,13 +674,14 @@ export default function RoutePlannerTool({
           <RouteMap
             routes={routes}
             focusUserId={1}
-            onJobClick={(id) => setDetailId(Number(id))}
+            onJobClick={handleStopClick}
             onPinHover={(id) => setHoverId(id)}
             highlightedJobId={highlighted}
             isDirectionsLoading={directionsLoading}
             drawMode={drawMode}
+            drawUserId={1}
             drawOrder={drawOrder}
-            onDrawAssign={(id) => setDrawOrder((prev) => (prev.includes(Number(id)) ? prev : [...prev, Number(id)]))}
+            onDrawAssign={handleDrawAssignStop}
             className="h-full w-full"
             showZoomControl={isDesktop}
             fitInsets={
@@ -707,10 +727,15 @@ export default function RoutePlannerTool({
             <MobileRouteSheet
               snapPoints={MOBILE_SHEET_SNAPS}
               initialSnap={MOBILE_SHEET_INITIAL_SNAP}
+              topInset={92}
               toolbar={renderMobilePinnedBar()}
+              header={
+                <>
+                  {renderToolbar()}
+                  {renderStats()}
+                </>
+              }
             >
-              {renderToolbar()}
-              {renderStats()}
               {renderList()}
             </MobileRouteSheet>
           )}

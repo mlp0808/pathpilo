@@ -11,9 +11,18 @@ import {
 } from '@heroicons/react/24/outline'
 import Header from '../../../components/Header'
 import Footer from '../../../components/Footer'
+import Breadcrumbs from '../../../components/Breadcrumbs'
 import RoutePlannerTool from '../../../components/tools/RoutePlannerTool'
-import { getMarketingSiteUrl } from '../../../lib/siteUrl'
+import JsonLd from '../../../components/JsonLd'
 import { isMarketingLocale } from '../../../lib/i18n'
+import { bilingualPageMetadata } from '../../../lib/seo'
+import { breadcrumbsForRoute } from '../../../lib/breadcrumbs'
+import {
+  breadcrumbSchema,
+  faqPageSchema,
+  howToSchema,
+  webApplicationSchema,
+} from '../../../lib/schema'
 
 export function generateStaticParams() {
   return [{ lang: 'en' }, { lang: 'da' }]
@@ -27,33 +36,18 @@ export async function generateMetadata({
   const { lang } = await params
   if (!isMarketingLocale(lang)) return {}
   const da = lang === 'da'
-  const siteUrl = getMarketingSiteUrl()
 
-  const title = da
-    ? 'Gratis ruteplanlægger — ingen login | PathPilo'
-    : 'Free Route Planner — No Sign-Up Required | PathPilo'
-  const description = da
-    ? 'Planlæg og optimér din kørerute gratis i browseren. Tilføj stop, få den hurtigste rækkefølge på et kort, og gem den ved at oprette en gratis konto. Ingen login for at starte.'
-    : 'Plan and optimise your driving route free in your browser. Add stops, get the fastest order on a map, and save it by creating a free account. No login to start.'
-
-  return {
-    title,
-    description,
-    alternates: {
-      canonical: `/${lang}/tools/route-planner`,
-      languages: {
-        en: `${siteUrl}/en/tools/route-planner`,
-        da: `${siteUrl}/da/tools/route-planner`,
-        'x-default': `${siteUrl}/en/tools/route-planner`,
-      },
-    },
-    openGraph: {
-      title,
-      description,
-      url: `${siteUrl}/${lang}/tools/route-planner`,
-      type: 'website',
-    },
-  }
+  return bilingualPageMetadata({
+    lang,
+    path: '/tools/route-planner',
+    title: da
+      ? 'Gratis ruteplanlægger — ingen login | PathPilo'
+      : 'Free Route Planner — No Sign-Up Required | PathPilo',
+    description: da
+      ? 'Planlæg og optimér din kørerute gratis i browseren. Tilføj stop, få den hurtigste rækkefølge på et kort, og gem den ved at oprette en gratis konto. Ingen login for at starte.'
+      : 'Plan and optimise your driving route free in your browser. Add stops, get the fastest order on a map, and save it by creating a free account. No login to start.',
+    image: '/images/og/og-route-planner.png',
+  })
 }
 
 interface Faq {
@@ -284,11 +278,44 @@ export default async function RoutePlannerToolPage({
 
   return (
     <>
+      <JsonLd
+        data={[
+          webApplicationSchema({
+            name: da ? 'PathPilo Gratis Ruteplanlægger' : 'PathPilo Free Route Planner',
+            description: da
+              ? 'Planlæg og optimér din kørerute gratis i browseren — uden login.'
+              : 'Plan and optimise your driving route free in the browser — no login required.',
+            url: `/${lang}/tools/route-planner`,
+            locale: lang,
+          }),
+          faqPageSchema(faqs),
+          howToSchema({
+            name: da ? 'Sådan bruger du den gratis ruteplanlægger' : 'How to use the free route planner',
+            description: da
+              ? 'Tilføj stop, optimér ruten, og gem den til din telefon.'
+              : 'Add stops, optimise the route, and save it to your phone.',
+            url: `/${lang}/tools/route-planner`,
+            steps: steps.map((s) => ({ name: s.title, text: s.body })),
+          }),
+          breadcrumbSchema([
+            { name: da ? 'Hjem' : 'Home', path: `/${lang}` },
+            { name: da ? 'Værktøjer' : 'Tools', path: `/${lang}/tools` },
+            {
+              name: da ? 'Ruteplanlægger' : 'Route Planner',
+              path: `/${lang}/tools/route-planner`,
+            },
+          ]),
+        ]}
+      />
       <Header />
 
       {/* Hero: SEO title + description above the tool */}
       <section className="gradient-bg pt-8 pb-6 md:pt-12">
         <div className="mx-auto max-w-4xl px-4 text-center sm:px-6">
+          <Breadcrumbs
+            items={breadcrumbsForRoute(lang, 'tools/route-planner')}
+            className="mb-5 justify-center"
+          />
           <p className="mb-3 text-sm font-bold uppercase tracking-widest text-accent-600">
             {da ? 'Gratis værktøj · Ingen login' : 'Free tool · No sign-up'}
           </p>

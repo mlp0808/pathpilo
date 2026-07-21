@@ -1,9 +1,19 @@
 import type { Metadata } from 'next'
 import Script from 'next/script'
 import { headers } from 'next/headers'
+import { Inter } from 'next/font/google'
 import './globals.css'
 import { ShowInterestSignalTracker } from './components/ShowInterestSignalTracker'
 import { CrispChat } from '../components/CrispChat'
+import JsonLd from './components/JsonLd'
+import { organizationSchema, webSiteSchema } from './lib/schema'
+import type { MarketingLocale } from './lib/i18n'
+
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-inter',
+})
 
 export const metadata: Metadata = {
   title: {
@@ -38,10 +48,13 @@ export const metadata: Metadata = {
   },
   alternates: {
     canonical: '/',
+    types: {
+      'application/rss+xml': [{ url: '/articles/rss.xml', title: 'PathPilo Articles' }],
+    },
   },
   openGraph: {
     type: 'website',
-    locale: 'en_US',
+    locale: 'en_GB',
     url: 'https://pathpilo.com',
     siteName: 'PathPilo',
     title: 'PathPilo - Complete Service Management Platform',
@@ -80,15 +93,17 @@ export default async function RootLayout({
   children: React.ReactNode
 }) {
   const headersList = await headers()
-  const locale = headersList.get('x-locale') || 'en'
+  const locale = (headersList.get('x-locale') || 'en') as MarketingLocale
   const gtmId = 'GTM-5FLVBF65'
   const hotjarId = process.env.NEXT_PUBLIC_HOTJAR_ID
   const hotjarSv = process.env.NEXT_PUBLIC_HOTJAR_SV || '6'
   const shouldEnableHotjar = Boolean(hotjarId)
+  const schemaLocale = locale === 'da' ? 'da' : 'en'
 
   return (
-    <html lang={locale}>
-      <body className="antialiased">
+    <html lang={locale} className={inter.variable}>
+      <body className={`${inter.className} antialiased`}>
+        <JsonLd data={[organizationSchema(schemaLocale), webSiteSchema(schemaLocale)]} />
         {/* GTM — all pixels and tags are fired from GTM, not hardcoded here. */}
         <Script
           id="gtm-base"

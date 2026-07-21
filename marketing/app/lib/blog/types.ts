@@ -22,6 +22,8 @@ export interface ArticleFrontmatter {
   /** Overrides for the <title> and meta description (SEO). */
   seoTitle?: string
   seoDescription?: string
+  /** Content language — defaults to English. Danish posts use locale: "da". */
+  locale?: 'en' | 'da'
 }
 
 /** A fully-resolved article (frontmatter + body + computed fields). */
@@ -48,4 +50,5 @@ export interface ArticleSummary {
   imageAlt?: string
   featured: boolean
   readingMinutes: number
+  locale: 'en' | 'da'
 }

@@ -2,10 +2,12 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import Header from '../../../components/Header'
 import Footer from '../../../components/Footer'
+import JsonLd from '../../../components/JsonLd'
 import { getLocalizedComparison, getComparisonSlugs } from '../../../lib/comparisons/data'
 import ComparisonPageContent from '../../../components/comparisons/ComparisonPageContent'
 import { isMarketingLocale } from '../../../lib/i18n'
 import { getMarketingSiteUrl } from '../../../lib/siteUrl'
+import { breadcrumbSchema, faqPageSchema } from '../../../lib/schema'
 
 export function generateStaticParams() {
   const locales = ['en', 'da']
@@ -56,35 +58,31 @@ export default async function LocalizedComparisonPage({
 
   const siteUrl = getMarketingSiteUrl()
   const pageUrl = `${siteUrl}/${lang}/comparisons/${slug}`
+  const da = lang === 'da'
 
-  const jsonLd = {
+  const articleLd = {
     '@context': 'https://schema.org',
     '@type': 'Article',
     headline: data.headline,
     description: data.seoDescription,
     dateModified: data.lastUpdated,
-    publisher: { '@type': 'Organization', name: 'PathPilo', url: 'https://pathpilo.com' },
-    breadcrumb: {
-      '@type': 'BreadcrumbList',
-      itemListElement: [
-        { '@type': 'ListItem', position: 1, name: lang === 'da' ? 'Hjem' : 'Home', item: siteUrl },
-        {
-          '@type': 'ListItem',
-          position: 2,
-          name: lang === 'da' ? 'Sammenligninger' : 'Comparisons',
-          item: `${siteUrl}/${lang}/comparisons`,
-        },
-        { '@type': 'ListItem', position: 3, name: data.headline, item: pageUrl },
-      ],
-    },
+    mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
+    publisher: { '@type': 'Organization', name: 'PathPilo', url: siteUrl },
   }
+
+  const graphs: Record<string, unknown>[] = [
+    articleLd,
+    breadcrumbSchema([
+      { name: da ? 'Hjem' : 'Home', path: `/${lang}` },
+      { name: da ? 'Sammenligninger' : 'Comparisons', path: `/${lang}/comparisons` },
+      { name: data.headline, path: `/${lang}/comparisons/${slug}` },
+    ]),
+  ]
+  if (data.faq?.length) graphs.push(faqPageSchema(data.faq))
 
   return (
     <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <JsonLd data={graphs} />
       <Header />
       <ComparisonPageContent data={data} locale={lang} />
       <Footer />

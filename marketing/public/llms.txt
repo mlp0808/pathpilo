@@ -1,0 +1,24 @@
+# PathPilo
+
+> Field service management software for mobile service businesses — route planning, scheduling, clients, recurring jobs, team coordination, and invoicing.
+
+## Site
+- Home: https://pathpilo.com/en
+- Pricing: https://pathpilo.com/en/pricing
+- Free route planner tool: https://pathpilo.com/en/tools/route-planner
+- Features: https://pathpilo.com/en/features/routeplanning
+- Articles: https://pathpilo.com/articles
+- Articles RSS: https://pathpilo.com/articles/rss.xml
+- Industries: https://pathpilo.com/en/industries
+- Comparisons: https://pathpilo.com/en/comparisons
+- FAQ: https://pathpilo.com/en/faq
+- Help center: https://help.pathpilo.com/
+- App: https://app.pathpilo.com/
+
+## Locales
+- English: /en/...
+- Danish: /da/...
+- Articles are English-first at /articles (no locale prefix)
+
+## Product summary
+PathPilo is free for unlimited clients and jobs. Paid plans unlock multiple employees/routes on the same day. The free browser route planner at /tools/route-planner works without signup; creating an account saves the route to the full platform.

@@ -77,7 +77,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
 
   const jsonLd = {
     '@context': 'https://schema.org',
-    '@type': 'Article',
+    '@type': 'BlogPosting',
     headline: fm.title,
     description: fm.description,
     datePublished: fm.date,
@@ -92,6 +92,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
     mainEntityOfPage: { '@type': 'WebPage', '@id': `${siteUrl}/articles/${slug}` },
     articleSection: category.label,
     keywords: (fm.tags || []).map(tagLabel).join(', '),
+    inLanguage: 'en-GB',
   }
 
   const breadcrumbLd = {

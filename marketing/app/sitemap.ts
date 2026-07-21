@@ -14,7 +14,9 @@ const ROUTES = [
   '/features/routeplanning',
   '/features/subscriptions',
   '/features/team',
+  '/tools',
   '/tools/route-planner',
+  '/articles',
   '/terms',
   '/privacy',
 ] as const
@@ -109,17 +111,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     })),
   ])
 
-  // Legacy /industries (no prefix) — redirect handled by middleware; keep for crawlers.
-  const industryLegacy: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/industries'), lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
-    ...INDUSTRIES.map((i) => ({
-      url: absoluteUrl(`/industries/${i.slug}`),
-      lastModified: now,
-      changeFrequency: 'monthly' as const,
-      priority: 0.6,
-    })),
-  ]
-
   // Comparison pages — fully localised under /en/ and /da/.
   const comparisonEntries: MetadataRoute.Sitemap = LOCALES.flatMap((locale) => [
     {
@@ -150,17 +141,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     })),
   ])
 
-  // Legacy /comparisons (no prefix).
-  const comparisonLegacy: MetadataRoute.Sitemap = [
-    { url: absoluteUrl('/comparisons'), lastModified: now, changeFrequency: 'monthly', priority: 0.5 },
-    ...COMPARISON_PAGES.map((c) => ({
-      url: absoluteUrl(`/comparisons/${c.slug}`),
-      lastModified: new Date(c.lastUpdated),
-      changeFrequency: 'monthly' as const,
-      priority: 0.5,
-    })),
-  ]
-
+  // Localised URLs only — unprefixed /industries and /comparisons redirect via middleware.
   return [
     ...localizedEntries,
     ...blogIndex,
@@ -168,8 +149,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...tagEntries,
     ...articleEntries,
     ...industryEntries,
-    ...industryLegacy,
     ...comparisonEntries,
-    ...comparisonLegacy,
   ]
 }

@@ -57,6 +57,10 @@ function loadAll(): Article[] {
   return _cache
 }
 
+function articleLocale(fm: ArticleFrontmatter): 'en' | 'da' {
+  return fm.locale === 'da' ? 'da' : 'en'
+}
+
 function toSummary(a: Article): ArticleSummary {
   return {
     slug: a.slug,
@@ -72,6 +76,7 @@ function toSummary(a: Article): ArticleSummary {
     imageAlt: a.frontmatter.imageAlt,
     featured: Boolean(a.frontmatter.featured),
     readingMinutes: a.readingMinutes,
+    locale: articleLocale(a.frontmatter),
   }
 }
 
@@ -79,12 +84,14 @@ function byDateDesc(a: ArticleSummary, b: ArticleSummary): number {
   return new Date(b.date).getTime() - new Date(a.date).getTime()
 }
 
-/** Published (non-draft) articles, newest first. */
-export function getAllArticles(): ArticleSummary[] {
-  return loadAll()
+/** Published (non-draft) articles, newest first. Pass locale to filter by language. */
+export function getAllArticles(locale?: 'en' | 'da'): ArticleSummary[] {
+  const all = loadAll()
     .filter((a) => !a.frontmatter.draft)
     .map(toSummary)
     .sort(byDateDesc)
+  if (!locale) return all
+  return all.filter((a) => a.locale === locale)
 }
 
 export function getArticleSlugs(): string[] {
@@ -128,7 +135,7 @@ export function getRelatedArticles(slug: string, limit = 4): ArticleSummary[] {
   if (!current) return []
   const currentTags = new Set(current.tags)
 
-  return getAllArticles()
+  return getAllArticles(current.locale)
     .filter((a) => a.slug !== slug)
     .map((a) => {
       let score = 0
@@ -151,6 +158,6 @@ export function getMoreArticles(slug: string, limit = 8): ArticleSummary[] {
   const related = getRelatedArticles(slug, limit)
   if (related.length >= limit) return related
   const seen = new Set([slug, ...related.map((r) => r.slug)])
-  const backfill = getAllArticles().filter((a) => !seen.has(a.slug))
+  const backfill = getAllArticles(current.locale).filter((a) => !seen.has(a.slug))
   return [...related, ...backfill].slice(0, limit)
 }

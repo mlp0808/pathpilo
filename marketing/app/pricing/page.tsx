@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
+import PageBreadcrumbBar from '../components/PageBreadcrumbBar'
+import { breadcrumbsForRoute } from '../lib/breadcrumbs'
 import {
   getLocaleFromPathname,
   isMarketingLocale,
@@ -114,6 +116,7 @@ export default function PricingPage({ locale: localeProp }: { locale?: string })
   return (
     <>
       <Header />
+      <PageBreadcrumbBar items={breadcrumbsForRoute(locale, 'pricing')} />
 
       {/* ── HERO ──────────────────────────────────────────────────────── */}
       <section className="bg-gradient-to-b from-[#060f0f] to-[#0d2020] pb-20 pt-20 md:pt-28">

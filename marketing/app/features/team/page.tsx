@@ -266,7 +266,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
                     muted
                     loop
                     playsInline
-                    poster="/images/features/routeplanning-weekplanner-placeholder.svg"
+                    poster="/images/features/scheduling.png"
                     aria-label={da ? 'Opret medarbejder i PathPilo' : 'Create employee in PathPilo'}
                   >
                     <source src={TEAM_VIDEOS.employeeCreation} type="video/mp4" />
@@ -327,7 +327,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-map-placeholder.svg"
+                  poster="/images/features/routes.png"
                   aria-label={da ? 'Administrer opgaver og ruter i PathPilo' : 'Manage tasks and routes in PathPilo'}
                 >
                   <source src={TEAM_VIDEOS.taskManagement} type="video/mp4" />
@@ -347,7 +347,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
                   muted
                   loop
                   playsInline
-                  poster="/images/features/routeplanning-weekplanner-placeholder.svg"
+                  poster="/images/features/scheduling.png"
                   aria-label={da ? 'Anmod om fri i medarbejderkalender' : 'Request time off in employee calendar'}
                 >
                   <source src={TEAM_VIDEOS.timeOff} type="video/mp4" />
@@ -407,7 +407,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
                     muted
                     loop
                     playsInline
-                    poster="/images/features/routeplanning-mobile-placeholder.svg"
+                    poster="/images/features/routeplanning-mobile.jpeg"
                     aria-label={da ? 'Mobilapp til medarbejdere' : 'Mobile app for employees'}
                   >
                     <source src={TEAM_VIDEOS.mobileApp} type="video/mp4" />

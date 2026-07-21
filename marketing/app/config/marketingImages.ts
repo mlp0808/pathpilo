@@ -45,6 +45,9 @@ export const marketingImages = {
   /** Open Graph / social preview (recommended 1200×630) */
   og: {
     default: '/images/og/og-image.png',
+    routePlanner: '/images/og/og-route-planner.png',
+    pricing: '/images/og/og-pricing.png',
+    routePlanning: '/images/og/og-routeplanning.png',
   },
 } as const
 

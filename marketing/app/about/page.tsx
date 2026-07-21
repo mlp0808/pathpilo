@@ -3,6 +3,8 @@ import Link from 'next/link'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
 import CTASection from '../components/CTASection'
+import PageBreadcrumbBar from '../components/PageBreadcrumbBar'
+import { breadcrumbsForRoute } from '../lib/breadcrumbs'
 import {
   ClockIcon,
   ChartBarIcon,
@@ -21,6 +23,7 @@ export default function AboutPage({ locale = 'en' }: { locale?: string }) {
   return (
     <>
       <Header />
+      <PageBreadcrumbBar items={breadcrumbsForRoute(da ? 'da' : 'en', 'about')} />
       
       {/* Hero Section */}
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">

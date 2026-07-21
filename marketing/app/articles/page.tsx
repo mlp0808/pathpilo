@@ -22,7 +22,7 @@ export const metadata: Metadata = {
 }
 
 export default function ArticlesIndexPage() {
-  const all = getAllArticles()
+  const all = getAllArticles('en')
   const featured = getFeaturedArticle()
   const rest = featured ? all.filter((a) => a.slug !== featured.slug) : all
   const latest = all.slice(0, 8)
