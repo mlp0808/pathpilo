@@ -7,7 +7,7 @@ import Header from '../../components/Header'
 import Footer from '../../components/Footer'
 import CTASection from '../../components/CTASection'
 import FeaturePageAnalytics from '../../components/FeaturePageAnalytics'
-import PageBreadcrumbBar from '../../components/PageBreadcrumbBar'
+import Breadcrumbs, { BREADCRUMB_ON_DARK } from '../../components/Breadcrumbs'
 import { resolveMarketingLocale, withAppLanguageParam } from '../../lib/i18n'
 import { breadcrumbsForRoute } from '../../lib/breadcrumbs'
 import { pushCtaClick } from '../../lib/dataLayer'
@@ -123,7 +123,6 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
     <>
       <FeaturePageAnalytics featureKey="routeplanning" />
       <Header />
-      <PageBreadcrumbBar items={breadcrumbsForRoute(locale, 'features/routeplanning')} />
 
       {/* ─── HERO (dark brand) ─── */}
       <section className="relative overflow-hidden bg-[#0a1414]">
@@ -139,6 +138,10 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
         />
 
         <div className="relative z-10 mx-auto max-w-7xl px-4 pt-16 pb-20 sm:px-6 md:pt-20 md:pb-24 lg:pt-24 lg:pb-28 xl:pt-28 xl:pb-32">
+          <Breadcrumbs
+            items={breadcrumbsForRoute(locale, 'features/routeplanning')}
+            className={BREADCRUMB_ON_DARK}
+          />
           <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-16 xl:gap-20">
             <div className="order-1 mx-auto max-w-xl text-center lg:mx-0 lg:max-w-xl lg:text-left">
               <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-7xl">
@@ -201,7 +204,7 @@ export default function RoutePlanningFeaturePage({ locale: localeProp = 'en' }: 
                 alt={da ? 'PathPilo ruteplanlægning for feltservice' : 'PathPilo field service route planning software'}
                 width={1600}
                 height={1000}
-                className="h-auto w-full max-h-[min(42vh,380px)] max-w-xl object-contain lg:max-h-none lg:max-w-none"
+                className="h-auto w-full max-h-[min(42vh,380px)] max-w-xl rounded-xl border border-primary-200/80 bg-white object-contain shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_rgba(15,23,42,0.08)] md:rounded-2xl lg:max-h-none lg:max-w-none"
                 priority
                 sizes="(max-width: 1024px) 100vw, 50vw"
               />

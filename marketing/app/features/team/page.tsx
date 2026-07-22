@@ -109,7 +109,7 @@ export default function TeamManagementFeaturePage({ locale: localeProp = 'en' }:
                 alt={da ? 'PathPilo teamstyring' : 'PathPilo team management'}
                 width={1600}
                 height={1000}
-                className="h-auto w-full max-h-[min(42vh,380px)] max-w-xl object-contain lg:max-h-none lg:max-w-none"
+                className="h-auto w-full max-h-[min(42vh,380px)] max-w-xl rounded-xl border border-primary-200/80 bg-white object-contain shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_rgba(15,23,42,0.08)] md:rounded-2xl lg:max-h-none lg:max-w-none"
                 priority
                 sizes="(max-width: 1024px) 100vw, 50vw"
               />

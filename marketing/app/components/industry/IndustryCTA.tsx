@@ -18,14 +18,16 @@ export default function IndustryCTA({
 }: {
   label?: string
   location: string
-  variant?: 'primary' | 'light'
+  variant?: 'primary' | 'light' | 'pill'
   industry: string
   className?: string
 }) {
   const base =
     variant === 'light'
       ? 'inline-flex items-center justify-center rounded-xl bg-white px-7 py-3.5 text-base font-semibold text-primary-800 shadow-lg transition hover:bg-primary-50 hover:scale-[1.02]'
-      : 'btn-primary inline-flex items-center justify-center !px-7 !py-3.5 !text-base'
+      : variant === 'pill'
+        ? 'inline-flex items-center justify-center rounded-full bg-accent-500 px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-accent-500/25 transition hover:bg-accent-600 hover:scale-[1.02]'
+        : 'btn-primary inline-flex items-center justify-center !px-7 !py-3.5 !text-base'
 
   return (
     <a

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
-import PageBreadcrumbBar from '../components/PageBreadcrumbBar'
+import Breadcrumbs, { BREADCRUMB_ON_DARK } from '../components/Breadcrumbs'
 import { breadcrumbsForRoute } from '../lib/breadcrumbs'
 import {
   getLocaleFromPathname,
@@ -116,11 +116,14 @@ export default function PricingPage({ locale: localeProp }: { locale?: string })
   return (
     <>
       <Header />
-      <PageBreadcrumbBar items={breadcrumbsForRoute(locale, 'pricing')} />
 
       {/* ── HERO ──────────────────────────────────────────────────────── */}
       <section className="bg-gradient-to-b from-[#060f0f] to-[#0d2020] pb-20 pt-20 md:pt-28">
         <div className="mx-auto max-w-5xl px-6 text-center">
+          <Breadcrumbs
+            items={breadcrumbsForRoute(locale, 'pricing')}
+            className={`${BREADCRUMB_ON_DARK} mb-8 justify-center`}
+          />
           <h1 className="text-4xl font-bold tracking-tight text-white md:text-[3.25rem] md:leading-[1.1]">
             {da ? 'Enkel prissætning til servicevirksomheder' : 'Simple pricing for service businesses'}
           </h1>

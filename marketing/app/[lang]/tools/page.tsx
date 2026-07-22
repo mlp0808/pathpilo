@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation'
 import { ArrowRightIcon, MapIcon } from '@heroicons/react/24/outline'
 import Header from '../../components/Header'
 import Footer from '../../components/Footer'
-import Breadcrumbs from '../../components/Breadcrumbs'
+import Breadcrumbs, { BREADCRUMB_ON_LIGHT } from '../../components/Breadcrumbs'
 import JsonLd from '../../components/JsonLd'
 import { isMarketingLocale } from '../../lib/i18n'
 import { bilingualPageMetadata } from '../../lib/seo'
@@ -53,7 +53,7 @@ export default async function ToolsIndexPage({
       <Header />
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">
         <div className="mx-auto max-w-3xl px-6 text-center">
-          <Breadcrumbs items={breadcrumbsForRoute(lang, 'tools')} className="mb-6 justify-center" />
+          <Breadcrumbs items={breadcrumbsForRoute(lang, 'tools')} className={`${BREADCRUMB_ON_LIGHT} justify-center`} />
           <h1 className="text-4xl font-bold text-primary-800 md:text-5xl">
             {da ? 'Gratis værktøjer' : 'Free tools'}
           </h1>

@@ -3,7 +3,7 @@ import Link from 'next/link'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
 import CTASection from '../components/CTASection'
-import PageBreadcrumbBar from '../components/PageBreadcrumbBar'
+import Breadcrumbs, { BREADCRUMB_ON_LIGHT } from '../components/Breadcrumbs'
 import { breadcrumbsForRoute } from '../lib/breadcrumbs'
 import {
   ClockIcon,
@@ -23,11 +23,14 @@ export default function AboutPage({ locale = 'en' }: { locale?: string }) {
   return (
     <>
       <Header />
-      <PageBreadcrumbBar items={breadcrumbsForRoute(da ? 'da' : 'en', 'about')} />
-      
+
       {/* Hero Section */}
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">
         <div className="max-w-4xl mx-auto px-6 text-center">
+          <Breadcrumbs
+            items={breadcrumbsForRoute(da ? 'da' : 'en', 'about')}
+            className={`${BREADCRUMB_ON_LIGHT} justify-center`}
+          />
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-primary-800 mb-6">
             {da ? 'Bygget til servicevirksomheder af branchefolk' : 'Built for Service Businesses, by Service Industry Experts'}
           </h1>

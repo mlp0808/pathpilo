@@ -25,9 +25,23 @@ export function breadcrumbsForRoute(lang: MarketingLocale, route: string): Bread
     ],
     'features/subscriptions': [
       home,
-      { label: da ? 'Abonnementsopgaver' : 'Subscriptions' },
+      { label: da ? 'Abonnementsopgaver' : 'Recurring Jobs' },
     ],
     'features/team': [home, { label: da ? 'Teamstyring' : 'Team Management' }],
+    'features/scheduling': [
+      home,
+      { label: da ? 'Opgaveplanlægning' : 'Job Scheduling' },
+    ],
+    'features/leads': [home, { label: da ? 'Leadformularer' : 'Lead Forms' }],
+    'features/reminders': [
+      home,
+      { label: da ? 'Kundepåmindelser' : 'Client Reminders' },
+    ],
+    'features/analytics': [
+      home,
+      { label: da ? 'Dashboard & statistik' : 'Analytics' },
+    ],
+    'features/services': [home, { label: da ? 'Ydelser' : 'Service Catalog' }],
   }
 
   return map[route] ?? []

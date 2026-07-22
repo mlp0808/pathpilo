@@ -4,15 +4,21 @@
  * Feature/brand files live under `public/images/` and hero collage files under
  * `public/hero/` — replace using the same filenames (no code changes needed).
  *
+ * Prefer WebP for lifestyle/photos (smaller, sharp enough). PNG is fine for
+ * crisp UI screenshots. Missing files render as grey boxes via MarketingImage
+ * showing filename + pixel size so you can upload without more code.
+ *
  * Regenerate empty placeholders: `npm run placeholders`
  */
 
 export const marketingImages = {
   brand: {
-    /** Header logo on light bar */
+    /** Header logo on light bar — green pin + dark wordmark */
     logoHeader: '/images/brand/logo-header.png',
-    /** Header logo on dark/transparent bar (true white asset; do not CSS-invert) */
+    /** Header logo on dark surfaces — green pin + white wordmark */
     logoHeaderWhite: '/images/brand/logo-header-white.png',
+    /** Mono dark logo (optional) */
+    logoHeaderMono: '/images/brand/logo-header-mono.png',
     /** White footer logo for dark background footer */
     logoFooterWhite: '/images/brand/logo-footer-white.png',
   },
@@ -41,6 +47,10 @@ export const marketingImages = {
     analytics: '/images/features/analytics.png',
     routes: '/images/features/routes.png',
     team: '/images/features/team.png',
+    /** Prefer WebP for new uploads — grey placeholder until file exists */
+    remindersHero: '/images/features/reminders-hero.webp',
+    servicesHero: '/images/features/services-hero.webp',
+    leadsDetail: '/images/features/leads-detail.webp',
   },
   /** Open Graph / social preview (recommended 1200×630) */
   og: {

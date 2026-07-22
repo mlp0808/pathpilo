@@ -85,13 +85,38 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href={navHref('/features/scheduling')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Opgaveplanlægning' : 'Job Scheduling'}
+                </Link>
+              </li>
+              <li>
                 <Link href={navHref('/features/subscriptions')} className="text-gray-300 hover:text-white transition-colors">
-                  {da ? 'Abonnementsopgaver' : 'Subscription tasks'}
+                  {da ? 'Abonnementsopgaver' : 'Recurring Jobs'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/leads')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Leadformularer' : 'Lead Forms'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/reminders')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Kundepåmindelser' : 'Client Reminders'}
                 </Link>
               </li>
               <li>
                 <Link href={navHref('/features/team')} className="text-gray-300 hover:text-white transition-colors">
-                  {da ? 'Teamstyring' : 'Team management'}
+                  {da ? 'Teamstyring' : 'Team Management'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/services')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Ydelser' : 'Service Catalog'}
+                </Link>
+              </li>
+              <li>
+                <Link href={navHref('/features/analytics')} className="text-gray-300 hover:text-white transition-colors">
+                  {da ? 'Dashboard & statistik' : 'Analytics'}
                 </Link>
               </li>
               <li>

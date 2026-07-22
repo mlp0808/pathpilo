@@ -1,6 +1,6 @@
 # Article index (auto-generated — do not edit by hand)
 
-> Regenerate with `npm run articles:index`. Last built: 2026-07-21T10:16:25.360Z.
+> Regenerate with `npm run articles:index`. Last built: 2026-07-22T10:33:57.961Z.
 > Total published articles: **23**
 
 When writing a new article, scan this list and link to **2–4** genuinely relevant existing articles using their URL below (e.g. `[smart route planning](/articles/cut-drive-time-route-planning)`). Do not invent URLs that are not in this list.

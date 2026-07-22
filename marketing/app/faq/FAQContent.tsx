@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Header from '../components/Header'
 import Footer from '../components/Footer'
-import PageBreadcrumbBar from '../components/PageBreadcrumbBar'
+import Breadcrumbs, { BREADCRUMB_ON_LIGHT } from '../components/Breadcrumbs'
 import { breadcrumbsForRoute } from '../lib/breadcrumbs'
 import CTASection from '../components/CTASection'
 import { ChevronDownIcon } from '@heroicons/react/24/outline'
@@ -23,9 +23,12 @@ export default function FAQContent({ locale }: { locale: MarketingLocale }) {
   return (
     <>
       <Header />
-      <PageBreadcrumbBar items={breadcrumbsForRoute(locale, 'faq')} />
       <section className="gradient-bg pt-16 pb-12 md:pt-24 md:pb-16">
         <div className="max-w-4xl mx-auto px-6 text-center">
+          <Breadcrumbs
+            items={breadcrumbsForRoute(locale, 'faq')}
+            className={`${BREADCRUMB_ON_LIGHT} justify-center`}
+          />
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-primary-800 mb-6">
             {da ? 'Ofte stillede spørgsmål' : 'Frequently Asked Questions'}
           </h1>

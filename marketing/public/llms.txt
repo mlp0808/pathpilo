@@ -6,7 +6,15 @@
 - Home: https://pathpilo.com/en
 - Pricing: https://pathpilo.com/en/pricing
 - Free route planner tool: https://pathpilo.com/en/tools/route-planner
-- Features: https://pathpilo.com/en/features/routeplanning
+- Features:
+  - Route planning: https://pathpilo.com/en/features/routeplanning
+  - Job scheduling: https://pathpilo.com/en/features/scheduling
+  - Recurring jobs: https://pathpilo.com/en/features/subscriptions
+  - Lead forms: https://pathpilo.com/en/features/leads
+  - Client reminders: https://pathpilo.com/en/features/reminders
+  - Team management: https://pathpilo.com/en/features/team
+  - Service catalog: https://pathpilo.com/en/features/services
+  - Analytics dashboard: https://pathpilo.com/en/features/analytics
 - Articles: https://pathpilo.com/articles
 - Articles RSS: https://pathpilo.com/articles/rss.xml
 - Industries: https://pathpilo.com/en/industries

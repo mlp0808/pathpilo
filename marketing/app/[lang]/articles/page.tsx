@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Header from '../../components/Header'
 import Footer from '../../components/Footer'
-import Breadcrumbs from '../../components/Breadcrumbs'
+import Breadcrumbs, { BREADCRUMB_ON_LIGHT } from '../../components/Breadcrumbs'
 import ArticleCard from '../../components/blog/ArticleCard'
 import ArticleCarousel from '../../components/blog/ArticleCarousel'
 import CategoryPills from '../../components/blog/CategoryPills'
@@ -57,7 +57,7 @@ export default async function LocalizedArticlesPage({
       <section className="gradient-bg pt-16 pb-10 md:pt-24 md:pb-14">
         <div className="mx-auto max-w-7xl px-6">
           <Breadcrumbs
-            className="mb-6"
+            className={BREADCRUMB_ON_LIGHT}
             items={[
               { label: da ? 'Hjem' : 'Home', href: `/${locale}` },
               { label: da ? 'Artikler' : 'Articles' },

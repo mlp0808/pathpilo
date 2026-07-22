@@ -11,7 +11,7 @@ import {
 } from '@heroicons/react/24/outline'
 import Header from '../../../components/Header'
 import Footer from '../../../components/Footer'
-import Breadcrumbs from '../../../components/Breadcrumbs'
+import Breadcrumbs, { BREADCRUMB_ON_LIGHT } from '../../../components/Breadcrumbs'
 import RoutePlannerTool from '../../../components/tools/RoutePlannerTool'
 import JsonLd from '../../../components/JsonLd'
 import { isMarketingLocale } from '../../../lib/i18n'
@@ -314,7 +314,7 @@ export default async function RoutePlannerToolPage({
         <div className="mx-auto max-w-4xl px-4 text-center sm:px-6">
           <Breadcrumbs
             items={breadcrumbsForRoute(lang, 'tools/route-planner')}
-            className="mb-5 justify-center"
+            className={`${BREADCRUMB_ON_LIGHT} justify-center`}
           />
           <p className="mb-3 text-sm font-bold uppercase tracking-widest text-accent-600">
             {da ? 'Gratis værktøj · Ingen login' : 'Free tool · No sign-up'}

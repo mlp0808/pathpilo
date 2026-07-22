@@ -23,12 +23,22 @@ const windowCleaning: Industry = {
     'Free window cleaning software with automatic route planning, customer reminders, and same-day invoicing. Fit in more jobs and spend less time on admin.',
 
   hero: {
-    eyebrow: 'Window cleaning software',
-    h1: 'Window cleaning software that plans your routes and gets you paid the same day',
-    sub: 'PathPilo automatically orders your stops by area, texts customers before you arrive, and sends invoices the moment you finish. Fit in more jobs without working late.',
+    h1: 'Window cleaning software',
+    h2: 'Plan smarter routes. Get paid the same day.',
+    sub: 'Automatic routing, customer reminders, and same-day invoices — built for window cleaners.',
     trustLine: 'Free to start · No card needed · Set up in an afternoon',
     image: '/images/industries/window-cleaning-person-app.png',
     imageAlt: 'A window cleaner checking his route schedule on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Routes ordered by area automatically',
+      'Customers reminded before you arrive',
+      'Invoice sent the moment you finish',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -239,12 +249,22 @@ const domesticCleaning: Industry = {
     'Free domestic cleaning software that schedules your regular clients, sends automatic reminders, and invoices the moment a job is done. Spend less time on admin and more time cleaning.',
 
   hero: {
-    eyebrow: 'Domestic cleaning software',
-    h1: 'Domestic cleaning software that schedules your clients and handles the admin for you',
-    sub: 'PathPilo organises your weekly client list by area, reminds customers before every clean, and sends invoices the second you finish. Nothing slips through the cracks.',
+    h1: 'Domestic cleaning software',
+    h2: 'Schedule clients. Let the admin run itself.',
+    sub: 'Weekly client lists, visit reminders, and invoices that send themselves.',
     trustLine: 'Free to start · No card needed · Works on your phone',
     image: '/images/features/domestic-cleaning-person-app.png',
     imageAlt: 'A field service operator checking their schedule on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Weekly clients organised by area',
+      'Automatic visit reminders',
+      'Invoices that send themselves',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -450,12 +470,22 @@ const lawnCare: Industry = {
     'Free lawn care and gardening software with weekly route planning, automatic client reminders, and same-day invoicing. Run more jobs without the admin overhead.',
 
   hero: {
-    eyebrow: 'Lawn care & gardening software',
-    h1: 'Lawn care software that plans your weekly routes and takes care of the admin',
-    sub: 'PathPilo orders your daily stops by area, texts clients before you arrive, and generates invoices the moment you finish. Focus on the work, not the paperwork.',
+    h1: 'Lawn care software',
+    h2: 'Weekly routes planned. Admin handled.',
+    sub: 'Stops ordered by area, client texts before you arrive, invoices the moment you finish.',
     trustLine: 'Free to start · No card needed · Set up in an afternoon',
     image: '/images/features/lawn-care-person-app.png',
     imageAlt: 'A field service operator checking their route schedule on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Daily stops ordered by area',
+      'Clients texted before you arrive',
+      'Invoices generated when you finish',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -661,12 +691,22 @@ const gutterCleaning: Industry = {
     'Free gutter cleaning software for managing seasonal and recurring jobs. Route planning, automatic reminders, and invoicing all from your phone. Free forever for solo operators.',
 
   hero: {
-    eyebrow: 'Gutter cleaning software',
-    h1: 'Gutter cleaning software that keeps your schedule organised and your invoices paid',
-    sub: 'PathPilo manages your recurring annual clients, orders your daily jobs by area, texts customers before you arrive, and sends invoices the moment you finish. All from your phone.',
+    h1: 'Gutter cleaning software',
+    h2: 'Organised schedules. Invoices that get paid.',
+    sub: 'Manage seasonal rushes, recurring clients, and invoicing from your phone.',
     trustLine: 'Free to start · No card needed · Works on any phone',
     image: '/images/features/gutter-cleaning-person-app.png',
     imageAlt: 'A field service operator checking their job schedule on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Seasonal and recurring jobs in one place',
+      'Routes planned by area',
+      'Invoice from the van when you finish',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -872,12 +912,22 @@ const pressureWashing: Industry = {
     'Free pressure washing software with job scheduling, route planning, customer reminders, and instant invoicing. Manage residential and commercial clients from your phone.',
 
   hero: {
-    eyebrow: 'Pressure washing software',
-    h1: 'Pressure washing software that organises your jobs and handles your invoicing automatically',
-    sub: 'PathPilo schedules your jobs by area, sends reminders before every visit, and gets invoices out the second a job is done. Spend your time on the work, not chasing it.',
+    h1: 'Pressure washing software',
+    h2: 'Jobs organised. Invoicing automatic.',
+    sub: 'Route by area, remind before every visit, and send invoices the second a job is done.',
     trustLine: 'Free to start · No card needed · Set up in under an hour',
     image: '/images/features/pressure-washing-person-app.png',
     imageAlt: 'A field service operator checking their job schedule on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Jobs scheduled by area',
+      'Reminders before every visit',
+      'Invoices out the second you finish',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -1083,12 +1133,22 @@ const binCleaning: Industry = {
     'Free bin cleaning software with automatic route planning, recurring client management, and same-day invoicing. Built for mobile bin cleaning businesses. Free to get started.',
 
   hero: {
-    eyebrow: 'Bin cleaning software',
-    h1: 'Bin cleaning software built for route-based businesses that run on repeat visits',
-    sub: 'PathPilo automatically orders your daily stops by street, manages your recurring clients, and collects payments without you lifting a finger. Focus on the cleaning.',
+    h1: 'Bin cleaning software',
+    h2: 'Built for routes that run on repeat.',
+    sub: 'Street-by-street routing, recurring clients, and payments without the chase.',
     trustLine: 'Free to start · No card needed · Built for route-based work',
     image: '/images/features/bin-cleaning-person-app.png',
     imageAlt: 'A field service operator managing their daily route on the PathPilo app',
+  },
+
+  midpagePhoto: {
+    title: 'How PathPilo does it',
+    usps: [
+      'Stops ordered street by street',
+      'Recurring clients on autopilot',
+      'Payments collected without chasing',
+    ],
+    ctaLabel: 'No trial. Try for free now',
   },
 
   trustBar: {
@@ -1322,6 +1382,7 @@ export function getLocalizedIndustry(slug: string | undefined | null, locale: st
     seoDescription: da.seoDescription ?? base.seoDescription,
     hero: { ...base.hero, ...da.hero },
     trustBar: da.trustBar ?? base.trustBar,
+    midpagePhoto: { ...base.midpagePhoto, ...da.midpagePhoto },
     pain: da.pain ?? base.pain,
     outcomes: da.outcomes ?? base.outcomes,
     stats: da.stats ?? base.stats,

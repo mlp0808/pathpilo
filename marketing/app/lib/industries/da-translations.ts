@@ -19,10 +19,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til vinduespolering med automatisk ruteplanlægning, kundepåmindelser og fakturering samme dag. Pres flere jobs ind og brug mindre tid på kontorarbejde.',
 
     hero: {
-      eyebrow: 'Software til vinduespolering',
-      h1: 'Software til vinduespolering der planlægger dine ruter og sikrer betaling samme dag',
-      sub: 'PathPilo sorterer automatisk dine stop efter område, sender SMS til kunder inden du ankommer og sender fakturaer i det øjeblik du er færdig. Pas flere jobs ind uden at arbejde mere.',
+      h1: 'Software til vinduespolering',
+      h2: 'Planlæg smartere ruter. Bliv betalt samme dag.',
+      sub: 'Automatisk ruteplanlægning, kundepåmindelser og fakturaer samme dag — bygget til vinduespolerere.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Klar på en eftermiddag',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Ruter sorteret efter område automatisk',
+        'Kunder mindes før du ankommer',
+        'Faktura sendt i det øjeblik du er færdig',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {
@@ -226,10 +236,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til privat rengøring der planlægger dine faste kunder, sender automatiske påmindelser og fakturerer i det øjeblik et job er færdigt. Brug mindre tid på administration og mere tid på at rengøre.',
 
     hero: {
-      eyebrow: 'Software til privat rengøring',
-      h1: 'Software til rengøring der planlægger dine kunder og klarer administrationen for dig',
-      sub: 'PathPilo organiserer din ugentlige kundeliste efter område, minder kunder om hvert besøg og sender fakturaer i sekundet du er færdig. Intet falder igennem sprækkerne.',
+      h1: 'Software til privat rengøring',
+      h2: 'Planlæg kunder. Lad administrationen køre selv.',
+      sub: 'Ugentlige kundelister, besøgspåmindelser og fakturaer der sender sig selv.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Virker på din telefon',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Ugentlige kunder organiseret efter område',
+        'Automatiske besøgspåmindelser',
+        'Fakturaer der sender sig selv',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {
@@ -433,10 +453,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til haveservice og plæneklipning med ugentlig ruteplanlægning, automatiske kundepåmindelser og fakturering samme dag. Klare flere jobs uden administrations-overhead.',
 
     hero: {
-      eyebrow: 'Software til haveservice og plæneklipning',
-      h1: 'Software til haveservice der planlægger dine ugentlige ruter og klarer administrationen',
-      sub: 'PathPilo sorterer dine daglige stop efter område, sender SMS til kunder inden du ankommer og genererer fakturaer i det øjeblik du er færdig. Fokus på arbejdet, ikke papirarbejdet.',
+      h1: 'Software til haveservice',
+      h2: 'Ugentlige ruter planlagt. Admin klarer sig selv.',
+      sub: 'Stop sorteret efter område, SMS inden ankomst og faktura i det øjeblik du er færdig.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Sat op på en eftermiddag',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Daglige stop sorteret efter område',
+        'Kunder får SMS før du ankommer',
+        'Faktura genereret når du er færdig',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {
@@ -636,10 +666,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til tagrenserensning der styrer dine årsrunder, sender påmindelser og fakturerer automatisk. Stop med at miste faste kunder og forgæves ture til lukkede låger.',
 
     hero: {
-      eyebrow: 'Software til tagrenserensning',
-      h1: 'Software til tagrenserensning der styrer dine årsrunder og sikrer du aldrig mister en kunde',
-      sub: 'PathPilo tilføjer automatisk tilbagevendende kunder til dit skema, sender påmindelser inden hvert besøg og sender fakturaen i det sekund du er færdig. Aldrig mere glemte kunder eller forgæves ture.',
+      h1: 'Software til tagrenserensning',
+      h2: 'Styr dine årsrunder. Mist aldrig en kunde.',
+      sub: 'Håndter sæsontravlhed, faste kunder og fakturering direkte fra telefonen.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Sat op på en eftermiddag',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Sæson- og fast jobs samlet ét sted',
+        'Ruter planlagt efter område',
+        'Faktura fra bilen når du er færdig',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {
@@ -835,10 +875,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til højtryksrensning med automatisk ruteplanlægning, kundepåmindelser og fakturering fra telefonen. Pas flere jobs ind og stop med at jagte betalinger.',
 
     hero: {
-      eyebrow: 'Software til højtryksrensning',
-      h1: 'Software til højtryksrensning der organiserer din dag og betaler dig hurtigt',
-      sub: 'PathPilo sorterer dine daglige stop efter område, sender påmindelser inden hvert job og genererer fakturaen i det sekund du pakker udstyr ned. Mindre administrations-tid, mere rensearbejde.',
+      h1: 'Software til højtryksrensning',
+      h2: 'Organiser dagen. Bliv betalt hurtigt.',
+      sub: 'Rute efter område, påmind før hvert besøg, og send faktura i sekundet jobbet er færdigt.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Mobilvenlig',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Jobs planlagt efter område',
+        'Påmindelser før hvert besøg',
+        'Faktura ude i sekundet du er færdig',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {
@@ -1034,10 +1084,20 @@ export const DA_INDUSTRY_TRANSLATIONS: Record<string, IndustryTranslation> = {
       'Gratis software til skraldesspandsrensning med ugentlig ruteplanlægning, abonnementsstyring og automatisk fakturering. Pas flere hjem ind og reducer spildt kørsel.',
 
     hero: {
-      eyebrow: 'Software til skraldesspandsrensning',
-      h1: 'Software til skraldesspandsrensning der planlægger dine ugentlige ruter og håndterer abonnementerne',
-      sub: 'PathPilo organiserer dine daglige stop efter område, styrer faste abonnenter og sender fakturaer automatisk. Pas flere hjem ind og brug mindre tid på kontorarbejde.',
+      h1: 'Software til skraldesspandsrensning',
+      h2: 'Bygget til ruter der kører på gentagelse.',
+      sub: 'Gade-for-gade ruter, faste kunder og betaling uden at skulle jagte.',
       trustLine: 'Gratis at starte · Intet kort nødvendigt · Mobilvenlig',
+    },
+
+    midpagePhoto: {
+      title: 'Sådan gør PathPilo det',
+      usps: [
+        'Stop sorteret gade for gade',
+        'Faste kunder på autopilot',
+        'Betaling uden at skulle jagte',
+      ],
+      ctaLabel: 'Ingen prøveperiode. Prøv gratis nu',
     },
 
     trustBar: {

@@ -8,6 +8,11 @@ import PricingPage from '../../pricing/page'
 import RoutePlanningFeaturePage from '../../features/routeplanning/page'
 import SubscriptionsFeaturePage from '../../features/subscriptions/page'
 import TeamManagementFeaturePage from '../../features/team/page'
+import JobSchedulingFeaturePage from '../../features/scheduling/page'
+import LeadFormsFeaturePage from '../../features/leads/page'
+import ClientRemindersFeaturePage from '../../features/reminders/page'
+import AnalyticsDashboardFeaturePage from '../../features/analytics/page'
+import ServiceCatalogFeaturePage from '../../features/services/page'
 import { TermsContent } from '../../terms/TermsContent'
 import { PrivacyContent } from '../../privacy/PrivacyContent'
 import { isMarketingLocale } from '../../lib/i18n'
@@ -115,7 +120,67 @@ const SEO_BY_ROUTE = {
     da: {
       title: 'Teamstyring til servicevirksomheder | PathPilo',
       description:
-        'Styr ubegraenset antal medarbejdere, tildel jobs og ruter, haandter fri-anmodninger og foelg mobil-fremskridt i realtid med PathPilo.',
+        'Styr ubegrænset antal medarbejdere, tildel jobs og ruter, håndter fri-anmodninger og følg mobil-fremskridt i realtid med PathPilo.',
+    },
+  },
+  'features/scheduling': {
+    en: {
+      title: 'Job Scheduling Software for Service Teams | PathPilo',
+      description:
+        'Plan jobs in week and month views, drag-and-drop between days and employees, then open day view for full route planning with PathPilo.',
+    },
+    da: {
+      title: 'Opgaveplanlægning til serviceteams | PathPilo',
+      description:
+        'Planlæg jobs i uge- og månedsvisning, træk mellem dage og medarbejdere, og åbn dagsvisning for fuld ruteplanlægning med PathPilo.',
+    },
+  },
+  'features/leads': {
+    en: {
+      title: 'Lead Forms for Service Businesses | PathPilo',
+      description:
+        'Build a branded website lead form, capture quote requests, track your pipeline, and convert leads into clients and jobs with PathPilo.',
+    },
+    da: {
+      title: 'Leadformularer til servicevirksomheder | PathPilo',
+      description:
+        'Byg en branded leadformular til din hjemmeside, fang tilbudsanmodninger, følg pipeline og konvertér leads til kunder og jobs med PathPilo.',
+    },
+  },
+  'features/reminders': {
+    en: {
+      title: 'Client Reminders & Appointment Notifications | PathPilo',
+      description:
+        'Send automated booking confirmations, before-job reminders, and on-my-way SMS to cut no-shows and wasted trips with PathPilo.',
+    },
+    da: {
+      title: 'Kundepåmindelser og aftalebeskeder | PathPilo',
+      description:
+        'Send automatiske bookingbekræftelser, påmindelser før jobs og “på vej”-SMS, så du undgår no-shows og spildte ture med PathPilo.',
+    },
+  },
+  'features/analytics': {
+    en: {
+      title: 'Analytics Dashboard for Service Businesses | PathPilo',
+      description:
+        'Track revenue, job volume, scheduled vs completed work, and team performance in one simple dashboard with PathPilo.',
+    },
+    da: {
+      title: 'Statistik-dashboard til servicevirksomheder | PathPilo',
+      description:
+        'Følg omsætning, jobvolumen, planlagt vs. afsluttet og teampræstation i ét enkelt dashboard med PathPilo.',
+    },
+  },
+  'features/services': {
+    en: {
+      title: 'Service Catalog for Field Service Businesses | PathPilo',
+      description:
+        'Create reusable services with default price and duration, then use them when scheduling jobs and recurring work in PathPilo.',
+    },
+    da: {
+      title: 'Ydelseskatalog til servicevirksomheder | PathPilo',
+      description:
+        'Opret genbrugelige ydelser med standardpris og varighed, og brug dem når du planlægger jobs og abonnementer i PathPilo.',
     },
   },
   terms: {
@@ -218,18 +283,18 @@ function pageSchemas(lang: MarketingLocale, route: string) {
   }
 
   if (route.startsWith('features/')) {
-    const featureLabel =
-      route === 'features/routeplanning'
-        ? da
-          ? 'Routeplanning'
-          : 'Route Planning'
-        : route === 'features/subscriptions'
-          ? da
-            ? 'Abonnementsopgaver'
-            : 'Subscriptions'
-          : da
-            ? 'Teamstyring'
-            : 'Team Management'
+    const featureLabels: Record<string, { en: string; da: string }> = {
+      'features/routeplanning': { en: 'Route Planning', da: 'Routeplanning' },
+      'features/subscriptions': { en: 'Recurring Jobs', da: 'Abonnementsopgaver' },
+      'features/team': { en: 'Team Management', da: 'Teamstyring' },
+      'features/scheduling': { en: 'Job Scheduling', da: 'Opgaveplanlægning' },
+      'features/leads': { en: 'Lead Forms', da: 'Leadformularer' },
+      'features/reminders': { en: 'Client Reminders', da: 'Kundepåmindelser' },
+      'features/analytics': { en: 'Analytics', da: 'Dashboard & statistik' },
+      'features/services': { en: 'Service Catalog', da: 'Ydelser' },
+    }
+    const labels = featureLabels[route]
+    const featureLabel = labels ? (da ? labels.da : labels.en) : da ? 'Funktion' : 'Feature'
     const seo = SEO_BY_ROUTE[route as keyof typeof SEO_BY_ROUTE]
     graphs.push(
       softwareApplicationSchema({
@@ -279,6 +344,16 @@ export default async function LocalizedMarketingPage({
       <SubscriptionsFeaturePage locale={resolved.lang} />
     ) : route === 'features/team' ? (
       <TeamManagementFeaturePage locale={resolved.lang} />
+    ) : route === 'features/scheduling' ? (
+      <JobSchedulingFeaturePage locale={resolved.lang} />
+    ) : route === 'features/leads' ? (
+      <LeadFormsFeaturePage locale={resolved.lang} />
+    ) : route === 'features/reminders' ? (
+      <ClientRemindersFeaturePage locale={resolved.lang} />
+    ) : route === 'features/analytics' ? (
+      <AnalyticsDashboardFeaturePage locale={resolved.lang} />
+    ) : route === 'features/services' ? (
+      <ServiceCatalogFeaturePage locale={resolved.lang} />
     ) : route === 'terms' ? (
       <TermsContent locale={resolved.lang} />
     ) : route === 'privacy' ? (

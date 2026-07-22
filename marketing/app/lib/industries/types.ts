@@ -110,11 +110,12 @@ export interface IndustryTranslation {
   seoTitle?: string
   seoDescription?: string
   hero?: Partial<{
-    eyebrow: string
     h1: string
+    h2: string
     sub: string
     trustLine: string
     imageAlt: string
+    eyebrow: string
   }>
   trustBar?: { label: string; points: string[] }
   pain?: { title: string; sub: string; items: string[] }
@@ -126,6 +127,12 @@ export interface IndustryTranslation {
   faq?: { title: string; sub: string; items: IndustryFaq[] }
   finalCta?: { title: string; sub: string }
   calculator?: IndustryCalculator
+  midpagePhoto?: {
+    title?: string
+    usps?: string[]
+    ctaLabel?: string
+    alt?: string
+  }
 }
 
 export interface Industry {
@@ -142,13 +149,18 @@ export interface Industry {
   seoDescription: string
 
   hero: {
-    eyebrow: string
+    /** Short keyword H1 shown over the hero image, e.g. "Window cleaning software". */
     h1: string
+    /** Punchy supporting line under the H1 (rendered as H2). */
+    h2: string
+    /** Short supporting sentence under the H2. */
     sub: string
     trustLine: string
-    /** Optional hero image path; falls back to a built-in illustration. */
+    /** Optional hero image path; missing files show a grey upload placeholder. */
     image?: string
     imageAlt?: string
+    /** @deprecated kept optional for older translations — unused in the overlay hero */
+    eyebrow?: string
   }
 
   trustBar: {
@@ -202,13 +214,19 @@ export interface Industry {
   }
 
   /**
-   * Optional full-width photo break inserted between the Pain and Outcomes
-   * sections. Use a real photo of the trade to add authenticity.
+   * Full-bleed mid-page photo with left gradient + USP overlay
+   * (between Pain and Outcomes). Image content should sit on the right.
    */
   midpagePhoto?: {
-    src: string
-    alt: string
-    /** Optional short caption shown beneath the image. */
+    src?: string
+    alt?: string
+    /** Section heading over the image, e.g. "How PathPilo does it". */
+    title?: string
+    /** Three short USPs shown as a compact list. */
+    usps?: string[]
+    /** CTA label, e.g. "No trial. Try for free now". */
+    ctaLabel?: string
+    /** @deprecated unused when overlay is present */
     caption?: string
   }
 
