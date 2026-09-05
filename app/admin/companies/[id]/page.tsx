@@ -6,6 +6,7 @@ import { useRouter, useParams } from 'next/navigation'
 import { apiUrl } from '../../../utils/api'
 import AdminNav from '../../components/AdminNav'
 import BillingPanel from './BillingPanel'
+import { industryLabel, usageGoalLabel } from '../../../config/companyOnboarding'
 
 interface User {
   id: number
@@ -24,6 +25,9 @@ interface Company {
   address: string
   zipCode: string
   city: string
+  industry: string | null
+  website: string | null
+  usageGoals: string[]
   createdAt: string
   updatedAt: string
   suspendedAt: string | null
@@ -250,7 +254,26 @@ export default function CompanyDetailPage() {
                     <div><dt className="text-xs text-gray-500">CVR</dt><dd className="text-sm font-medium text-gray-900">{company.cvrNumber || '—'}</dd></div>
                     <div><dt className="text-xs text-gray-500">Address</dt><dd className="text-sm font-medium text-gray-900">{[company.address, company.zipCode, company.city].filter(Boolean).join(', ') || '—'}</dd></div>
                     <div><dt className="text-xs text-gray-500">Country</dt><dd className="text-sm font-medium text-gray-900">{company.country || '—'}</dd></div>
+                    <div><dt className="text-xs text-gray-500">Industry</dt><dd className="text-sm font-medium text-gray-900">{industryLabel(company.industry) || '—'}</dd></div>
+                    <div><dt className="text-xs text-gray-500">Website</dt><dd className="text-sm font-medium text-gray-900">{company.website || '—'}</dd></div>
                   </dl>
+                </div>
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Wants PathPilo for</h3>
+                  {company.usageGoals?.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {company.usageGoals.map((goal) => (
+                        <span
+                          key={goal}
+                          className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700"
+                        >
+                          {usageGoalLabel(goal)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-400">Not answered</p>
+                  )}
                 </div>
                 <div>
                   <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Owner</h3>

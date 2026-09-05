@@ -381,22 +381,20 @@ function emailContent(nudgeId, firstName, resumeLink) {
 // ─── onboarding_step → nudge fromStep mapping ────────────────────────────────
 //
 // fromStep 1 and 2 are handled directly in runFunnelNudgeTick (pre-account).
-// fromStep 3–5 target account-holders at specific onboarding_step values:
+// fromStep 3–4 target account-holders at specific onboarding_step values:
 //
-//   fromStep 3 → emails in gap 3→4 → targets onboarding_step IN ('clients', ...)
-//                (email verified, logged in, hasn't added a customer yet)
-//   fromStep 4 → emails in gap 4→5 → targets onboarding_step = 'jobs'
-//                (has a customer, hasn't added a job yet)
-//   fromStep 5 → emails in gap 5→6 → targets onboarding_step IN ('route', 'business')
-//                (added job + saw route, hasn't completed business setup)
+//   fromStep 3 → emails in gap 3→4 → targets onboarding_step = 'company'
+//                (email verified, hasn't answered the company question yet)
+//   fromStep 4 → emails in gap 4→5 → targets onboarding_step = 'goals'
+//                (named the company, hasn't picked what they want to use it for)
 //
-// Legacy values 'company', 'services', 'plan' all resolve to 'clients' behaviour.
+// Once onboarding_step is 'done' the owner leaves the series: the remaining
+// activation actions live in the dashboard checklist, which has no nudges yet.
 
 function stepToOnboardingValues(fromStep) {
   switch (fromStep) {
-    case 3: return ['clients', 'company', 'services', 'plan'];
-    case 4: return ['jobs'];
-    case 5: return ['route', 'business'];
+    case 3: return ['company'];
+    case 4: return ['goals'];
     default: return [];
   }
 }

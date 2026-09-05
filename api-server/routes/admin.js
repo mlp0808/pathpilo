@@ -10,6 +10,7 @@ const {
   normalizeVideoGuideTopic,
 } = require('../utils/videoGuideTopics');
 const { getStripeBillingSnapshot } = require('../utils/stripeBilling');
+const { ensureCompanyOnboardingSchema } = require('../utils/companyOnboardingSchema');
 const {
   initSmsSchema,
   setSmsPlan,
@@ -220,6 +221,7 @@ initAdminSchema();
 // GET /api/admin/companies - List all companies
 router.get('/companies', async (req, res) => {
   try {
+    await ensureCompanyOnboardingSchema(pool);
     const result = await pool.query(`
       SELECT
         c.id,
@@ -230,6 +232,9 @@ router.get('/companies', async (req, res) => {
         c.address,
         c.city,
         c.zip_code,
+        c.industry,
+        c.website,
+        COALESCE(c.usage_goals, '[]'::jsonb) AS usage_goals,
         c.created_at,
         c.suspended_at,
         c.expires_at,
@@ -260,6 +265,9 @@ router.get('/companies', async (req, res) => {
         address:     c.address,
         city:        c.city,
         zipCode:     c.zip_code,
+        industry:    c.industry || null,
+        website:     c.website || null,
+        usageGoals:  Array.isArray(c.usage_goals) ? c.usage_goals : [],
         createdAt:   c.created_at,
         suspendedAt: c.suspended_at || null,
         expiresAt:   c.expires_at || null,
@@ -682,10 +690,7 @@ router.get('/users', async (req, res) => {
     `);
 
     const ownerWizardRows = ownerWizardRes.rows.map((r) => {
-      let step = 'wizard_company';
-      if (r.onboarding_step === 'services') step = 'wizard_services';
-      else if (r.onboarding_step === 'clients') step = 'wizard_clients';
-      else if (r.onboarding_step === 'plan') step = 'wizard_completed';
+      const step = r.onboarding_step === 'goals' ? 'wizard_goals' : 'wizard_company';
       return {
         kind: 'owner_wizard',
         email: r.email,
@@ -769,7 +774,7 @@ router.get('/funnel', requireAdmin, async (req, res) => {
         u.email,
         c.id AS company_id,
         c.name AS company_name,
-        COALESCE(c.onboarding_step, 'clients') AS onboarding_step,
+        COALESCE(c.onboarding_step, 'company') AS onboarding_step,
         false AS onboarding_completed,
         c.updated_at
       FROM companies c
@@ -803,25 +808,21 @@ router.get('/funnel', requireAdmin, async (req, res) => {
     // Step meanings (matches nudgeEmails.ts STEP_LABELS):
     //   1 = Enter Email (draft, only typed email — no name/password yet)
     //   2 = Create Account (submitted registration form, email verification pending)
-    //   3 = Add Client (email verified, logged in, hasn't added a customer)
-    //   4 = Add Job (has customer, no job yet)
-    //   5 = Setup Business (added job, saw route, hasn't filled business name)
-    //   6 = Complete
+    //   3 = Company Details (email verified, hasn't named the company / picked industry)
+    //   4 = Usage Goals (company answered, hasn't picked what they want PathPilo for)
+    //   5 = Complete
     const STEP_NAMES = {
       1: 'Enter Email',
       2: 'Create Account',
-      3: 'Add Client',
-      4: 'Add Job',
-      5: 'Setup Business',
-      6: 'Complete',
+      3: 'Company Details',
+      4: 'Usage Goals',
+      5: 'Complete',
     };
 
     function calcStep(entry) {
-      if (entry.onboarding_completed) return 6;
-      if (entry.onboarding_step === 'business' || entry.onboarding_step === 'route') return 5;
-      if (entry.onboarding_step === 'jobs') return 4;
-      if (entry.onboarding_step === 'clients' || entry.onboarding_step === 'company' ||
-          entry.onboarding_step === 'services' || entry.onboarding_step === 'plan') return 3;
+      if (entry.onboarding_completed) return 5;
+      if (entry.onboarding_step === 'goals') return 4;
+      if (entry.onboarding_step != null && entry.onboarding_step !== 'done') return 3;
       if (entry.draft_step === 'code_sent' || entry.kind === 'verification') return 2;
       return 1;
     }
@@ -1096,6 +1097,7 @@ router.delete('/pending-signups', async (req, res) => {
 router.get('/companies/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
+    await ensureCompanyOnboardingSchema(pool);
 
     const result = await pool.query(`
       SELECT 
@@ -1106,6 +1108,9 @@ router.get('/companies/:companyId', async (req, res) => {
         c.address,
         c.zip_code,
         c.city,
+        c.industry,
+        c.website,
+        COALESCE(c.usage_goals, '[]'::jsonb) AS usage_goals,
         c.created_at,
         c.updated_at,
         c.suspended_at,
@@ -1137,6 +1142,9 @@ router.get('/companies/:companyId', async (req, res) => {
         address: company.address,
         zipCode: company.zip_code,
         city: company.city,
+        industry: company.industry || null,
+        website: company.website || null,
+        usageGoals: Array.isArray(company.usage_goals) ? company.usage_goals : [],
         createdAt: company.created_at,
         updatedAt: company.updated_at,
         suspendedAt: company.suspended_at || null,

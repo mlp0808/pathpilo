@@ -1,6 +1,10 @@
 const { pool } = require('./database');
 
-/** Pre-account + post-account funnel stages shown in superadmin. */
+/**
+ * Pre-account + post-account funnel stages shown in superadmin.
+ * `wizard_services` / `wizard_clients` are retired but kept so historical
+ * signup_progress_drafts rows still validate.
+ */
 const SIGNUP_FUNNEL_STEPS = new Set([
   'name_entered',
   'email_entered',
@@ -9,6 +13,7 @@ const SIGNUP_FUNNEL_STEPS = new Set([
   'email_verified',
   'account_created',
   'wizard_company',
+  'wizard_goals',
   'wizard_services',
   'wizard_clients',
   'wizard_completed',
@@ -16,7 +21,15 @@ const SIGNUP_FUNNEL_STEPS = new Set([
   'plan_company',
 ]);
 
-const ONBOARDING_WIZARD_STEPS = ['company', 'services', 'clients', 'jobs', 'route', 'business', 'plan', 'done'];
+/**
+ * Owner onboarding is two short questions — company details, then what they
+ * want to use PathPilo for. Everything after that is optional and lives in the
+ * dashboard getting-started checklist instead of a forced wizard.
+ */
+const ONBOARDING_WIZARD_STEPS = ['company', 'goals', 'done'];
+
+/** Steps from the removed forced wizard, remapped on read/migration. */
+const LEGACY_WIZARD_STEPS = ['services', 'clients', 'jobs', 'route', 'business', 'plan'];
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -45,24 +58,15 @@ async function ensureSignupFunnelSchema() {
     WHERE COALESCE(onboarding_completed, true) = true
       AND onboarding_step IS DISTINCT FROM 'done'
   `);
-  // Legacy in-progress signups: skip removed wizard steps.
-  await pool.query(`
-    UPDATE companies SET onboarding_step = 'clients'
-    WHERE COALESCE(onboarding_completed, false) = false
-      AND onboarding_step IN ('company', 'services')
-  `);
-  await pool.query(`
-    UPDATE companies
-    SET onboarding_step = 'done', onboarding_completed = true, updated_at = NOW()
-    WHERE COALESCE(onboarding_completed, false) = false
-      AND onboarding_step = 'plan'
-      AND onboarding_step != 'business'
-  `);
-  await pool.query(`
-    UPDATE companies SET onboarding_step = 'company'
-    WHERE COALESCE(onboarding_completed, false) = false
-      AND (onboarding_step IS NULL OR onboarding_step = 'done')
-  `);
+  // The forced wizard (services → clients → jobs → route → business → plan) is
+  // gone. Anyone still mid-flight restarts at the company question; their
+  // clients/jobs/routes are untouched and the rest is now optional.
+  await pool.query(
+    `UPDATE companies SET onboarding_step = 'company'
+     WHERE COALESCE(onboarding_completed, false) = false
+       AND (onboarding_step IS NULL OR onboarding_step = 'done' OR onboarding_step = ANY($1))`,
+    [LEGACY_WIZARD_STEPS]
+  );
 }
 
 /**
@@ -167,33 +171,24 @@ function funnelStepForCompanyRow(row) {
   if (row.onboarding_completed) {
     return row.plan === 'pro' ? 'plan_company' : 'plan_solo';
   }
-  const step = row.onboarding_step || 'company';
-  if (step === 'jobs') return 'wizard_clients';
-  if (step === 'route') return 'wizard_clients';
-  if (step === 'business') return 'wizard_business';
-  if (step === 'plan') return 'wizard_completed';
-  if (step === 'services') return 'wizard_services';
-  if (step === 'clients') return 'wizard_clients';
-  return 'wizard_company';
+  return (row.onboarding_step || 'company') === 'goals' ? 'wizard_goals' : 'wizard_company';
 }
 
 /**
- * Maps a combined funnel entry to a numeric funnel step (1–6) for the admin
+ * Maps a combined funnel entry to a numeric funnel step (1–5) for the admin
  * Lead Funnel page.
  *
  * Step definitions:
- *   1 – Create Account  (email entered, verification code sent)
- *   2 – Verify Email    (code pending)
- *   3 – Add Client      (companies.onboarding_step = 'clients')
- *   4 – Add Job         (onboarding_step = 'jobs' | 'route')
- *   5 – Setup Business  (onboarding_step = 'business')
- *   6 – Complete        (onboarding_completed = true)
+ *   1 – Enter Email       (email entered, no account yet)
+ *   2 – Create Account    (code sent / pending verification)
+ *   3 – Company Details   (companies.onboarding_step = 'company')
+ *   4 – Usage Goals       (onboarding_step = 'goals')
+ *   5 – Complete          (onboarding_completed = true)
  */
 function leadFunnelStep(entry) {
-  if (entry.onboarding_completed) return 6;
-  if (entry.onboarding_step === 'business') return 5;
-  if (entry.onboarding_step === 'route' || entry.onboarding_step === 'jobs') return 4;
-  if (entry.onboarding_step === 'clients') return 3;
+  if (entry.onboarding_completed) return 5;
+  if (entry.onboarding_step === 'goals') return 4;
+  if (entry.onboarding_step === 'company') return 3;
   // Pre-account
   if (entry.draft_step === 'code_sent') return 2;
   if (entry.kind === 'verification') return 2;
@@ -203,6 +198,7 @@ function leadFunnelStep(entry) {
 module.exports = {
   SIGNUP_FUNNEL_STEPS,
   ONBOARDING_WIZARD_STEPS,
+  LEGACY_WIZARD_STEPS,
   ensureSignupFunnelSchema,
   upsertSignupDraft,
   upsertSignupDraftByEmail,

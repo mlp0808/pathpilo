@@ -1,10 +1,9 @@
 import { getOwnerSetupResumePath, ownerMustCompleteSetup } from './onboardingClient'
 
 /**
- * Client-only session helpers (localStorage). Used for auth redirects and setup wizard gating.
+ * Client-only session helpers (localStorage). Used for auth redirects and
+ * gating the two owner onboarding questions.
  */
-
-const SETUP_WIZARD_COMPLETE_KEY = 'vevago_setup_wizard_complete'
 
 export function getStoredUser(): Record<string, unknown> | null {
   if (typeof window === 'undefined') return null
@@ -122,34 +121,10 @@ export function markActiveCompanyOnboardedInSession(): void {
   } catch { /* ignore */ }
 }
 
-/** Persisted when the user finishes the wizard or reaches the company dashboard. */
-export function markSetupWizardComplete(): void {
-  if (typeof window === 'undefined') return
-  try {
-    localStorage.setItem(SETUP_WIZARD_COMPLETE_KEY, 'true')
-  } catch {
-    /* ignore quota / private mode */
-  }
-}
-
-/** Clear the wizard-complete flag — called after a fresh registration so the new
- *  account always starts at step 1 even if a previous session had completed it. */
-export function resetSetupWizard(): void {
-  if (typeof window === 'undefined') return
-  try {
-    localStorage.removeItem(SETUP_WIZARD_COMPLETE_KEY)
-  } catch { /* ignore */ }
-}
-
-export function isSetupWizardMarkedComplete(): boolean {
-  if (typeof window === 'undefined') return false
-  return localStorage.getItem(SETUP_WIZARD_COMPLETE_KEY) === 'true'
-}
-
 /**
  * If true, visiting /setup/* should send the user to the app dashboard instead.
- * - Owners doing the first-time wizard (step 1–3) are NOT redirected until the flag is set or they're non-owner.
- * - Non-owners (invited team) skip the owner onboarding wizard.
+ * - Owners are kept on the onboarding questions until the company is marked onboarded.
+ * - Non-owners (invited team) never see them.
  */
 export function shouldRedirectAwayFromSetupWizard(user: Record<string, unknown> | null): boolean {
   if (!user) return false

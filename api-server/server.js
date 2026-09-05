@@ -196,6 +196,7 @@ const { ensureFunnelNudgeSchema, runFunnelNudgeTick } = require('./utils/funnelN
 const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
 const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
 const { ensureWorkHoursSchema } = require('./utils/workHoursSchema');
+const { ensureCompanyOnboardingSchema } = require('./utils/companyOnboardingSchema');
 const {
   ensureSecureNotesSchema,
   ensureSecureNotesMultiNoteSupport,
@@ -362,6 +363,11 @@ process.on('SIGINT', () => {
 
     ensureSchedulingSchema().catch((e) =>
       console.warn('[routePlanner] scheduling schema migration failed:', e.message || e)
+    );
+
+    // Company onboarding answers (industry, usage goals) + dashboard checklist flag.
+    ensureCompanyOnboardingSchema(pool).catch((e) =>
+      console.warn('[companyOnboardingSchema] migration failed:', e.message || e)
     );
   });
 })();

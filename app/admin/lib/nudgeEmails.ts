@@ -163,6 +163,14 @@ function mediaBlock(caption: string, sub: string, asset: string): string {
 }
 
 // ─── Emails ────────────────────────────────────────────────────────────────────
+//
+// NOTE: the copy below still describes the retired forced wizard (add a client →
+// add a job → see a route → name your business). Onboarding is now two questions
+// (company details = step 3, usage goals = step 4) and owners reach step 5
+// "Complete" within minutes, so only the gap 1→2 and 2→3 emails still match what
+// the lead is actually being asked to do. The activation actions this copy talks
+// about now live in the dashboard getting-started checklist, which has no nudge
+// automation — retargeting this series off that checklist is a follow-up.
 
 export const NUDGE_EMAILS: NudgeEmail[] = [
   // ═══ Gap 1 → 2 : Finish signing up ══════════════════════════════════════════
@@ -535,10 +543,9 @@ for (const email of NUDGE_EMAILS) {
 export const STEP_LABELS: Record<number, string> = {
   1: 'Enter Email',
   2: 'Create Account',
-  3: 'Add Client',
-  4: 'Add Job',
-  5: 'Setup Business',
-  6: 'Complete',
+  3: 'Company Details',
+  4: 'Usage Goals',
+  5: 'Complete',
 }
 
 /** Display metadata for email types — used by the admin emails page. */

@@ -44,12 +44,10 @@ function startedSignupLabel(row: StartedSignup): string {
   }
   if (row.kind === 'owner_wizard') {
     const map: Record<string, string> = {
-      wizard_company: '3 · Setup — company',
-      wizard_services: '3 · Setup — services',
-      wizard_clients: '3 · Setup — clients',
-      wizard_completed: '4 · Choose plan',
+      wizard_company: '3 · Company details',
+      wizard_goals: '4 · Usage goals',
     }
-    const base = map[row.step || ''] || '3 · Setup wizard'
+    const base = map[row.step || ''] || '3 · Company details'
     return row.companyName ? `${base} (${row.companyName})` : base
   }
   const map: Record<string, string> = {
@@ -59,13 +57,11 @@ function startedSignupLabel(row: StartedSignup): string {
     details_ready: 'Form ready (before code)',
     code_sent: '1 · Entered email (code sent)',
     code_verified: '2 · Verified email (no account yet)',
-    account_created: '3 · Account created — setup',
-    wizard_company: '3 · Setup — company',
-    wizard_services: '3 · Setup — services',
-    wizard_clients: '3 · Setup — clients',
-    wizard_completed: '4 · Choose plan',
-    plan_solo: '5 · Solo plan',
-    plan_company: '5 · Company plan',
+    account_created: '3 · Account created',
+    wizard_company: '3 · Company details',
+    wizard_goals: '4 · Usage goals',
+    plan_solo: '5 · Complete (solo)',
+    plan_company: '5 · Complete (company)',
   }
   return map[row.step || ''] || (row.step || 'In progress')
 }

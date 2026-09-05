@@ -31,7 +31,7 @@ interface ConfirmTarget {
   y: number
 }
 
-const TOTAL_STEPS = 6
+const TOTAL_STEPS = 5
 
 function EmailNudgeIcon({
   email,
@@ -197,8 +197,7 @@ const STEP_COLORS: Record<number, string> = {
   2: 'bg-amber-50 text-amber-700 ring-amber-200',
   3: 'bg-amber-50 text-amber-700 ring-amber-200',
   4: 'bg-amber-50 text-amber-700 ring-amber-200',
-  5: 'bg-amber-50 text-amber-700 ring-amber-200',
-  6: 'bg-green-50 text-green-700 ring-green-200',
+  5: 'bg-green-50 text-green-700 ring-green-200',
 }
 
 export default function AdminFunnelPage() {

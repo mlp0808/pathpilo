@@ -18,13 +18,8 @@ import RouteAddSearch, {
   type RouteSearchClient,
   type RouteLocationPick,
 } from '@/app/components/RouteAddSearch'
-import OnboardingCompletePopup from '@/app/components/OnboardingCompletePopup'
 import WeekPlanPanel from '@/app/components/WeekPlanPanel'
 import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
-import {
-  advanceOnboardingProgress,
-  getOwnerOnboardingStep,
-} from '@/app/utils/onboardingClient'
 import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
 import { apiUrl } from '@/app/utils/api'
 import { forceReLogin, refreshSession } from '@/app/utils/sessionRefresh'
@@ -309,11 +304,6 @@ function JobsPageContent() {
   const { user, loading: userLoading } = useUser()
   const companyCountryCode = useCompanyCountryCode(user)
   const companySlug = (params?.company as string) || ''
-  const ownerOnboardingStep = user
-    ? getOwnerOnboardingStep(user as unknown as Record<string, unknown>)
-    : 'done'
-  const inJobsWizard = ownerOnboardingStep === 'jobs'
-  const inRouteWizard = ownerOnboardingStep === 'route'
   
   // Format a Date as YYYY-MM-DD in local time (avoids timezone shifting from toISOString)
   const toLocalDateString = (d: Date) => {
@@ -699,9 +689,6 @@ function JobsPageContent() {
       if (raw) setPlannedDays(new Set(JSON.parse(raw)))
     } catch { /* ignore */ }
   }, [])
-
-  // Wizard: show company-name popup when user clicks "Save and complete setup"
-  const [showBusinessPopup, setShowBusinessPopup] = useState(false)
 
   // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
   const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
@@ -1684,20 +1671,6 @@ function JobsPageContent() {
             dayFocusUserId ?? (selectedUserId === 'all' ? null : selectedUserId),
         )
         setIsCreateModalOpen(true)
-    }
-
-    const handleWizardAfterJobCreated = async (info?: { scheduledDate?: string | null }) => {
-        if (ownerOnboardingStep !== 'jobs') return
-        await advanceOnboardingProgress('route')
-        const dateStr = info?.scheduledDate || createJobPrefillDate || toLocalDateString(new Date())
-        const [y, m, d] = dateStr.split('-').map(Number)
-        if (y && m && d) setCurrentWeek(new Date(y, m - 1, d))
-        if (selectedUserId !== 'all') {
-            const uid = typeof selectedUserId === 'string' ? parseInt(selectedUserId, 10) : selectedUserId
-            openMapPlanner(dateStr, uid)
-        } else {
-            openMapPlanner(dateStr, null)
-        }
     }
 
     // Get a specific user's scheduled work hours for a day-of-week.
@@ -3071,21 +3044,6 @@ function JobsPageContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayRoutes, unsavedUserIds, currentWeek, fetchDirections, pendingAssigneeChanges, buildUserFingerprint, dailyRoutesByDate])
 
-  // Wizard "Save and complete setup" button handler
-  const handleCompleteSetupFromWizard = useCallback(async () => {
-    // Save all unsaved routes for the day
-    await handleSaveRoute()
-    // Advance the onboarding step to 'business' (company name entry)
-    await advanceOnboardingProgress('business')
-    // Fire GTM conversion event
-    if (typeof window !== 'undefined') {
-      window.dataLayer = window.dataLayer || []
-      window.dataLayer.push({ event: 'onboarding_complete' })
-    }
-    // Show the company name popup immediately
-    setShowBusinessPopup(true)
-  }, [handleSaveRoute])
-
   // Auto-optimize the day's route: fastest visiting order via Mapbox drive matrix + 2-opt.
   // Runs entirely in the browser so it works regardless of API server state, and keeps
   // every located stop (including string-id subscription/projected jobs).
@@ -3727,8 +3685,6 @@ function JobsPageContent() {
                         drawRouteComparison={drawRouteComparison}
                         optimizeNotice={optimizeNotice}
                         onAddJob={() => openCreateJobForDate(toLocalDateString(currentWeek))}
-                        isWizardMode={inRouteWizard}
-                        onCompleteSetup={handleCompleteSetupFromWizard}
                         mobileSheet={!isDesktopRoute}
                         hasUnsavedChanges={hasUnsavedRouteChanges}
                         date={toLocalDateString(currentWeek)}
@@ -4828,20 +4784,10 @@ function JobsPageContent() {
                                                             />
                                                         )}
                                                         <div className="relative mt-2">
-                                                            {inJobsWizard && (
-                                                                <span
-                                                                    aria-hidden
-                                                                    className="absolute inset-0 rounded-xl animate-ping bg-accent-400/40 pointer-events-none"
-                                                                />
-                                                            )}
                                                             <button
                                                                 type="button"
                                                                 onClick={() => openCreateJobForDate(dateString)}
-                                                                className={`relative w-full flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium transition-colors ${
-                                                                    inJobsWizard
-                                                                        ? 'border border-accent-500 bg-accent-50 text-accent-600 font-semibold hover:bg-accent-100 hover:border-accent-600'
-                                                                        : 'border border-dashed border-gray-300 text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/50'
-                                                                }`}
+                                                                className="relative w-full flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-medium transition-colors border border-dashed border-gray-300 text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/50"
                                                             >
                                                                 <PlusIcon className="w-3.5 h-3.5" />
                                                                 Add a job
@@ -4884,7 +4830,7 @@ function JobsPageContent() {
                     setCreateJobLockClient(false)
                     setCreateJobNewClient(null)
                 }}
-                onJobCreated={(info) => {
+                onJobCreated={() => {
                     setIsCreateModalOpen(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
@@ -4892,7 +4838,6 @@ function JobsPageContent() {
                     setCreateJobLockClient(false)
                     setCreateJobNewClient(null)
                     fetchJobsForWeek()
-                    void handleWizardAfterJobCreated(info)
                 }}
                 initialDate={createJobPrefillDate || undefined}
                 initialAssignedUserId={createJobPrefillUserId}
@@ -5217,8 +5162,6 @@ function JobsPageContent() {
                 </div>
               </div>
             )}
-            {/* Setup wizard: company-name popup triggered by "Save and complete setup" */}
-            {showBusinessPopup && <OnboardingCompletePopup forceShow={showBusinessPopup} />}
         </AppLayout>
     )
 }

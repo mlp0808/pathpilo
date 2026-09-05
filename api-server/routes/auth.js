@@ -450,10 +450,11 @@ router.post('/register', async (req, res) => {
       // Determine final plan: trial invites always start on pro; otherwise use what was requested
       const finalPlan = trialRecord ? 'pro' : requestedPlan;
 
-      // Create guest company — owner completes client + job wizard before using the app.
+      // Placeholder company — the owner names it and picks an industry on the
+      // company onboarding step, which is what turns this into a real workspace.
       const companyResult = await client.query(
         `INSERT INTO companies (name, slug, owner_id, country_code, timezone, plan, onboarding_completed, onboarding_step)
-         VALUES ($1, $2, $3, $4, $5, $6, false, 'clients')
+         VALUES ($1, $2, $3, $4, $5, $6, false, 'company')
          RETURNING id, name, slug, country_code, plan`,
         [guestCompany.name, guestCompany.slug, user.id, countryCode, timezone, finalPlan]
       );
@@ -543,7 +544,7 @@ router.post('/register', async (req, res) => {
       role: userRole,
       // Invited users join an existing (onboarded) company; brand-new owners must onboard.
       onboardingCompleted: !!invitationToken,
-      onboardingStep: invitationToken ? 'done' : 'clients',
+      onboardingStep: invitationToken ? 'done' : 'company',
     };
 
     res.status(201).json({

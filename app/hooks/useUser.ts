@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '@/app/utils/api'
-import { getDashboardHref, hasAppWorkspace } from '@/app/utils/sessionClient'
+import { hasAppWorkspace } from '@/app/utils/sessionClient'
 import {
   getOwnerSetupResumePath,
   mergeOnboardingStep,
@@ -179,28 +179,19 @@ export function useUser() {
           // Keep existing local session payload if sync fails.
         })
       
-      // Owners must finish setup wizard; employees skip it.
+      // Owners answer the two company questions before entering the app;
+      // employees skip them entirely.
       if (!hasAppWorkspace(user as Record<string, unknown>)) {
         router.push(getOwnerSetupResumePath(user as Record<string, unknown>))
         return
       }
 
-      const href = getDashboardHref(user as Record<string, unknown>)
-      const resumePath = ownerMustCompleteSetup(user as Record<string, unknown>)
-        ? getOwnerSetupResumePath(user as Record<string, unknown>)
-        : href
-      const resumeBase = resumePath.split('?')[0]
-      const onWizardAppPage =
-        typeof window !== 'undefined' &&
-        !resumePath.startsWith('/setup/') &&
-        window.location.pathname.startsWith(resumeBase)
       if (
-        resumePath.startsWith('/setup/') &&
+        ownerMustCompleteSetup(user as Record<string, unknown>) &&
         typeof window !== 'undefined' &&
-        !window.location.pathname.startsWith('/setup') &&
-        !onWizardAppPage
+        !window.location.pathname.startsWith('/setup')
       ) {
-        router.push(resumePath)
+        router.push(getOwnerSetupResumePath(user as Record<string, unknown>))
         return
       }
 

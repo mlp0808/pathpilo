@@ -298,7 +298,7 @@ function RegisterForm() {
         if (!inviteToken && session.activeCompany) {
           (session.activeCompany as Record<string, unknown>).onboardingCompleted = false
           ;(session.activeCompany as Record<string, unknown>).onboardingStep =
-            regData.user.activeCompany?.onboardingStep || 'clients'
+            regData.user.activeCompany?.onboardingStep || 'company'
         }
         localStorage.setItem('user', JSON.stringify(session))
         if (inviteToken) { router.push(getDashboardHref(session)); return }
@@ -316,7 +316,7 @@ function RegisterForm() {
         } catch { /* best-effort */ }
       }
 
-      router.push('/setup/clients')
+      router.push('/setup/company')
     } catch {
       setCodeError('Network error. Please try again.')
     } finally {

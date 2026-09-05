@@ -7,6 +7,8 @@ const {
   upsertSignupDraftByEmail,
 } = require('../utils/signupFunnel');
 const { getDefaultPaymentTerms } = require('../utils/companyInvoiceEmailLocale');
+const { ensureCompanyOnboardingSchema } = require('../utils/companyOnboardingSchema');
+const { normalizeIndustry, normalizeUsageGoals } = require('../utils/companyOnboardingOptions');
 
 const router = express.Router();
 const DEFAULT_COUNTRY_CODE = 'DK';
@@ -464,13 +466,12 @@ router.post('/onboarding/progress', authenticateToken, async (req, res) => {
     }
 
     const target = String(req.body?.step || '').trim();
-    const allowed = new Set(['services', 'clients', 'jobs', 'route', 'plan', 'wizard_completed']);
+    const allowed = new Set(['company', 'goals']);
     if (!allowed.has(target)) {
       return res.status(400).json({ error: 'Invalid onboarding step' });
     }
 
-    const mapped = target === 'wizard_completed' ? 'plan' : target;
-    const nextStep = await advanceCompanyOnboardingStep(companyId, mapped);
+    const nextStep = await advanceCompanyOnboardingStep(companyId, target);
     if (!nextStep) {
       return res.status(500).json({ error: 'Failed to advance onboarding step' });
     }
@@ -484,17 +485,11 @@ router.post('/onboarding/progress', authenticateToken, async (req, res) => {
     );
     const o = owner.rows[0];
     if (o?.email) {
-      const funnelStep =
-        mapped === 'services'
-          ? 'wizard_services'
-          : mapped === 'clients' || mapped === 'jobs' || mapped === 'route'
-            ? 'wizard_clients'
-            : 'wizard_completed';
       await upsertSignupDraftByEmail({
         email: o.email,
         firstName: o.first_name,
         lastName: o.last_name,
-        step: funnelStep,
+        step: target === 'goals' ? 'wizard_goals' : 'wizard_company',
         userId,
         companyId,
       });
@@ -625,14 +620,20 @@ router.post('/onboarding/complete', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Only the company owner can complete setup' });
     }
 
+    await ensureCompanyOnboardingSchema(pool);
+
+    // The goals question is the last onboarding step, so its answers arrive here.
+    const usageGoals = normalizeUsageGoals(req.body?.usageGoals);
+
     await pool.query(
       `UPDATE companies
        SET onboarding_completed = true,
            onboarding_step = 'done',
            plan = COALESCE(NULLIF(plan, ''), 'standard'),
+           usage_goals = COALESCE($2::jsonb, usage_goals),
            updated_at = NOW()
        WHERE id = $1`,
-      [companyId]
+      [companyId, usageGoals ? JSON.stringify(usageGoals) : null]
     );
 
     const ownerRow = await pool.query(
@@ -654,10 +655,106 @@ router.post('/onboarding/complete', authenticateToken, async (req, res) => {
       });
     }
 
-    res.json({ success: true, onboardingCompleted: true, onboardingStep: 'done' });
+    res.json({
+      success: true,
+      onboardingCompleted: true,
+      onboardingStep: 'done',
+      ...(usageGoals ? { usageGoals } : {}),
+    });
   } catch (error) {
     console.error('Error completing onboarding:', error);
     res.status(500).json({ error: 'Failed to complete onboarding' });
+  }
+});
+
+/**
+ * The dashboard getting-started actions. Nothing here is enforced — each flag
+ * is derived from whether the company already has the underlying record, so the
+ * list ticks itself off as the owner uses the app.
+ */
+const GETTING_STARTED_ACTIONS = [
+  { id: 'client', queries: [`SELECT 1 FROM clients WHERE company_id = $1 LIMIT 1`] },
+  { id: 'services', queries: [`SELECT 1 FROM services WHERE company_id = $1 LIMIT 1`] },
+  { id: 'job', queries: [`SELECT 1 FROM jobs WHERE company_id = $1 LIMIT 1`] },
+  {
+    id: 'route',
+    queries: [
+      `SELECT 1 FROM daily_routes WHERE company_id = $1 LIMIT 1`,
+      `SELECT 1 FROM rounds WHERE company_id = $1 LIMIT 1`,
+    ],
+  },
+  {
+    id: 'completed_job',
+    queries: [`SELECT 1 FROM jobs WHERE company_id = $1 AND status = 'completed' LIMIT 1`],
+  },
+  { id: 'invoice', queries: [`SELECT 1 FROM invoices WHERE company_id = $1 LIMIT 1` ]},
+];
+
+/** Treats a missing table (fresh install) as "not done" rather than a 500. */
+async function actionIsDone(queries, companyId) {
+  for (const sql of queries) {
+    try {
+      const r = await pool.query(sql, [companyId]);
+      if (r.rows.length > 0) return true;
+    } catch (e) {
+      if (e?.code !== '42P01') {
+        console.warn('[gettingStarted] check failed:', e?.message || e);
+      }
+    }
+  }
+  return false;
+}
+
+// GET /api/companies/getting-started — optional onboarding checklist for the dashboard
+router.get('/getting-started', authenticateToken, async (req, res) => {
+  try {
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.query?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    await ensureCompanyOnboardingSchema(pool);
+
+    const results = await Promise.all(
+      GETTING_STARTED_ACTIONS.map(async (a) => [a.id, await actionIsDone(a.queries, companyId)])
+    );
+
+    const row = await pool.query(
+      `SELECT getting_started_dismissed FROM companies WHERE id = $1`,
+      [companyId]
+    );
+
+    res.json({
+      dismissed: row.rows[0]?.getting_started_dismissed === true,
+      actions: Object.fromEntries(results),
+    });
+  } catch (error) {
+    console.error('Error loading getting-started checklist:', error);
+    res.status(500).json({ error: 'Failed to load getting started checklist' });
+  }
+});
+
+// PUT /api/companies/getting-started/dismissed — hide/show the checklist
+router.put('/getting-started/dismissed', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can change this' });
+    }
+
+    await ensureCompanyOnboardingSchema(pool);
+    const dismissed = req.body?.dismissed !== false;
+    await pool.query(
+      `UPDATE companies SET getting_started_dismissed = $1, updated_at = NOW() WHERE id = $2`,
+      [dismissed, companyId]
+    );
+
+    res.json({ success: true, dismissed });
+  } catch (error) {
+    console.error('Error updating getting-started visibility:', error);
+    res.status(500).json({ error: 'Failed to update checklist visibility' });
   }
 });
 
@@ -974,6 +1071,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       // VAT registration number — separate from cvr_number (trade register / Companies House).
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
+    await ensureCompanyOnboardingSchema(pool);
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
 
@@ -1009,6 +1107,8 @@ router.get('/profile', authenticateToken, async (req, res) => {
         phone: company.phone || '',
         website: company.website || '',
         logoUrl: company.logo_url || '',
+        industry: company.industry || '',
+        usageGoals: Array.isArray(company.usage_goals) ? company.usage_goals : [],
         defaultStartAddress: company.default_start_address ?? '',
         defaultEndAddress: company.default_end_address ?? '',
         routeLocationsEnabled: company.route_locations_enabled !== false,
@@ -1067,6 +1167,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
       defaultEndAddress,
       routeLocationsEnabled,
       dailyCapacityEnabled,
+      industry,
+      usageGoals,
     } = req.body;
 
     const { isValidIanaTimeZone } = require('../utils/companyTimezone');
@@ -1085,6 +1187,16 @@ router.put('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT true');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
+    await ensureCompanyOnboardingSchema(pool);
+
+    let nextIndustry = null;
+    if (industry != null && String(industry).trim() !== '') {
+      nextIndustry = normalizeIndustry(industry);
+      if (!nextIndustry) {
+        return res.status(400).json({ error: 'Unknown industry' });
+      }
+    }
+    const nextUsageGoals = normalizeUsageGoals(usageGoals);
 
     const hasTimezoneKey = Object.prototype.hasOwnProperty.call(req.body, 'timezone');
     let timezoneParam = null;
@@ -1133,6 +1245,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
         phone          = COALESCE($15, phone),
         website        = COALESCE($16, website),
         vat_number     = COALESCE($18, vat_number),
+        industry       = COALESCE($19, industry),
+        usage_goals    = COALESCE($20::jsonb, usage_goals),
         updated_at     = CURRENT_TIMESTAMP
       WHERE id = $13`,
       [
@@ -1154,6 +1268,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
         website != null ? String(website).trim() : null,
         capacityEnabled,
         vatNumber != null ? String(vatNumber).trim() : null,
+        nextIndustry,
+        nextUsageGoals ? JSON.stringify(nextUsageGoals) : null,
       ]
     );
 
@@ -1736,16 +1852,29 @@ router.post('/:companyId/invitations/:invitationId/resend', authenticateToken, a
   }
 });
 
-// PUT /api/companies/:companyId - Update company (setup wizard; owner only)
+// PUT /api/companies/:companyId - Update company (onboarding company step; owner only)
 router.put('/:companyId', authenticateToken, async (req, res) => {
   try {
     const { companyId } = req.params;
-    const { name, country, countryCode, cvrNumber, address, city, zipCode, slug: requestedSlug, timezone } = req.body;
+    const {
+      name,
+      country,
+      countryCode,
+      cvrNumber,
+      address,
+      city,
+      zipCode,
+      slug: requestedSlug,
+      timezone,
+      industry,
+      website,
+    } = req.body;
     const userId = req.user.userId;
 
     try {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
     } catch (e) { /* ignore */ }
+    await ensureCompanyOnboardingSchema(pool);
 
     const { isValidIanaTimeZone } = require('../utils/companyTimezone');
 
@@ -1813,12 +1942,22 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       wizardCountry = countryNameFromCode(normalizeCountryCode(countryCode));
     }
 
+    let nextIndustry = null;
+    if (industry != null && String(industry).trim() !== '') {
+      nextIndustry = normalizeIndustry(industry);
+      if (!nextIndustry) {
+        return res.status(400).json({ error: 'Unknown industry' });
+      }
+    }
+
     const result = await pool.query(`
       UPDATE companies
       SET name = $1, slug = $2, country = $3, country_code = COALESCE($4, country_code, '${DEFAULT_COUNTRY_CODE}'),
-          cvr_number = $5, address = $6, city = $7, zip_code = $8, timezone = $9, updated_at = NOW()
+          cvr_number = $5, address = $6, city = $7, zip_code = $8, timezone = $9,
+          industry = COALESCE($11, industry), website = COALESCE($12, website), updated_at = NOW()
       WHERE id = $10
-      RETURNING id, name, slug, country, country_code, timezone, cvr_number as "cvrNumber", address, city, zip_code as "zipCode"
+      RETURNING id, name, slug, country, country_code, timezone, cvr_number as "cvrNumber",
+                address, city, zip_code as "zipCode", industry, website
     `, [
       newName,
       slug,
@@ -1829,7 +1968,9 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       city != null ? String(city).trim() : null,
       zipCode != null ? String(zipCode).trim() : null,
       nextTimezone,
-      companyId
+      companyId,
+      nextIndustry,
+      website != null ? String(website).trim() : null,
     ]);
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
@@ -1848,7 +1989,9 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
         cvrNumber: company.cvrNumber,
         address: company.address,
         city: company.city,
-        zipCode: company.zipCode
+        zipCode: company.zipCode,
+        industry: company.industry || '',
+        website: company.website || ''
       }
     });
   } catch (error) {

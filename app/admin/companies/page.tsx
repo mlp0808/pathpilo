@@ -7,6 +7,7 @@ import { apiUrl } from '../../utils/api'
 import AdminNav from '../components/AdminNav'
 import { startOverwatchSession } from '../../utils/overwatch'
 import { ArrowRightCircleIcon } from '@heroicons/react/24/outline'
+import { industryLabel } from '../../config/companyOnboarding'
 
 type CompanyPlan = 'standard' | 'pro'
 
@@ -17,6 +18,9 @@ interface Company {
   address: string
   zipCode: string
   city: string
+  industry: string | null
+  website: string | null
+  usageGoals: string[]
   createdAt: string
   suspendedAt: string | null
   expiresAt: string | null
@@ -301,6 +305,7 @@ export default function AdminCompaniesPage() {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Industry</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Owner</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Plan</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Users</th>
@@ -324,6 +329,15 @@ export default function AdminCompaniesPage() {
                             <div className="text-xs text-gray-400">ID: {company.id}</div>
                           </div>
                         </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {company.industry ? (
+                          <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-200">
+                            {industryLabel(company.industry)}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">{company.owner.firstName} {company.owner.lastName}</div>

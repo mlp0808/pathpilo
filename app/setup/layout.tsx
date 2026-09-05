@@ -16,12 +16,8 @@ import {
   setupStepIndex,
 } from '@/app/utils/onboardingClient'
 
-function pathToWizardStep(pathname: string): string {
-  if (pathname.includes('/setup/clients')) return 'clients'
-  if (pathname.includes('/setup/plan')) return 'plan'
-  if (pathname.includes('/setup/services')) return 'services'
-  if (pathname.includes('/setup/company')) return 'company'
-  return 'clients'
+function pathToOnboardingStep(pathname: string): string {
+  return pathname.includes('/setup/goals') ? 'goals' : 'company'
 }
 
 export default function SetupLayout({ children }: { children: React.ReactNode }) {
@@ -46,17 +42,13 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
       return
     }
 
+    // Owners answer the two questions in order — no jumping ahead to /setup/goals
+    // before the company exists, since the goals step needs its slug.
     if (isOwnerUser(user) && ownerMustCompleteSetup(user)) {
       const required = getOwnerOnboardingStep(user)
-      const current = pathToWizardStep(pathname)
-      if (required !== 'done' && required !== 'jobs' && required !== 'route') {
-        if (setupStepIndex(current) > setupStepIndex(required)) {
-          router.replace(setupPathForStep(required, user))
-          return
-        }
-      }
-      if (required === 'jobs' || required === 'route') {
-        router.replace(setupPathForStep(required, user))
+      const current = pathToOnboardingStep(pathname)
+      if (setupStepIndex(current) > setupStepIndex(required)) {
+        router.replace(setupPathForStep(required))
         return
       }
     }

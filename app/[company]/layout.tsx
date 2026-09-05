@@ -7,11 +7,8 @@ import { apiUrl } from '@/app/utils/api'
 import { clearClientLocaleStorage } from '@/app/i18n'
 import { isOverwatchActive, stopOverwatchSession } from '@/app/utils/overwatch'
 import WorkspaceAccessGuard from '@/app/components/WorkspaceAccessGuard'
-import OnboardingCompletePopup from '@/app/components/OnboardingCompletePopup'
 import {
-  getOwnerOnboardingStep,
   getOwnerSetupResumePath,
-  isAppWizardStep,
   isOwnerUser,
   mergeSessionUserPreservingOnboarding,
   ownerMustCompleteSetup,
@@ -249,18 +246,9 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     if (userLoading || isResolving || !user) return
     const u = user as unknown as Record<string, unknown>
     if (isOwnerUser(u) && ownerMustCompleteSetup(u)) {
-      const step = getOwnerOnboardingStep(u)
-      if (isAppWizardStep(step)) {
-        const onJobs = pathname?.includes(`/${companySlug}/jobs`) ?? false
-        const onComplete = pathname?.includes('/onboarding-complete') ?? false
-        if (!onJobs && !onComplete) {
-          router.replace(getOwnerSetupResumePath(u))
-        }
-        return
-      }
       router.replace(getOwnerSetupResumePath(u))
     }
-  }, [user, userLoading, isResolving, router, pathname, companySlug])
+  }, [user, userLoading, isResolving, router])
 
   if (userLoading || isResolving) {
     return (
@@ -276,8 +264,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   if (
     user &&
     isOwnerUser(user as unknown as Record<string, unknown>) &&
-    ownerMustCompleteSetup(user as unknown as Record<string, unknown>) &&
-    !isAppWizardStep(getOwnerOnboardingStep(user as unknown as Record<string, unknown>))
+    ownerMustCompleteSetup(user as unknown as Record<string, unknown>)
   ) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -289,13 +276,6 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
   if (suspendedCompanyName) {
     return <SuspendedWall companyName={suspendedCompanyName} />
   }
-
-  // Show the post-onboarding celebration popup on any page *except* the route
-  // planner (where it was just triggered) and the completion page itself.
-  const showCelebration =
-    !pathname?.includes('/jobs') &&
-    !pathname?.includes('/onboarding-complete') &&
-    !pathname?.includes('/setup')
 
   return (
     <>
@@ -316,7 +296,6 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
         </div>
       )}
       {children}
-      {showCelebration && <OnboardingCompletePopup />}
     </>
   )
 }

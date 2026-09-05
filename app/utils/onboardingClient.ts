@@ -1,42 +1,41 @@
 import { apiUrl } from './api'
 import { markActiveCompanyOnboardedInSession } from './sessionClient'
 
-export const SETUP_WIZARD_STEPS = ['clients'] as const
+/**
+ * Owner onboarding is two questions: company details, then what they want to
+ * use PathPilo for. Everything else is optional and lives in the dashboard
+ * getting-started checklist, so nothing past 'goals' is ever enforced.
+ */
+export const SETUP_WIZARD_STEPS = ['company', 'goals'] as const
 export type SetupWizardStep = (typeof SETUP_WIZARD_STEPS)[number]
-export type OwnerOnboardingStep =
-  | SetupWizardStep
-  | 'jobs'
-  | 'route'
-  | 'business'
-  | 'done'
-  | 'company'
-  | 'services'
-  | 'plan'
+export type OwnerOnboardingStep = SetupWizardStep | 'done'
 
-const ONBOARDING_STEP_ORDER: OwnerOnboardingStep[] = [
-  'company',
-  'services',
-  'clients',
-  'jobs',
-  'route',
-  'business',
-  'plan',
-  'done',
-]
+const ONBOARDING_STEP_ORDER: OwnerOnboardingStep[] = ['company', 'goals', 'done']
+
+/** Steps from the removed forced wizard — treated as "company" if we ever see one. */
+const LEGACY_STEPS = new Set(['services', 'clients', 'jobs', 'route', 'business', 'plan'])
 
 export function onboardingStepRank(step: string | undefined): number {
   if (!step) return 0
   if (step === 'done') return ONBOARDING_STEP_ORDER.length
-  const normalized = step === 'wizard_completed' ? 'plan' : step
-  const i = ONBOARDING_STEP_ORDER.indexOf(normalized as OwnerOnboardingStep)
+  const i = ONBOARDING_STEP_ORDER.indexOf(normalizeOnboardingStep(step))
   return i < 0 ? 0 : i
 }
 
-/** Keep the furthest wizard progress when merging local session with server payload. */
+/** Collapses any stored value (including retired wizard steps) onto the current model. */
+export function normalizeOnboardingStep(step: string | undefined | null): OwnerOnboardingStep {
+  if (!step) return 'company'
+  if (step === 'done') return 'done'
+  if (step === 'goals') return 'goals'
+  if (LEGACY_STEPS.has(step)) return 'company'
+  return 'company'
+}
+
+/** Keep the furthest onboarding progress when merging local session with server payload. */
 export function mergeOnboardingStep(local?: string, server?: string): string {
   if (local === 'done' || server === 'done') return 'done'
-  const l = local || 'clients'
-  const s = server || 'clients'
+  const l = local || 'company'
+  const s = server || 'company'
   return onboardingStepRank(l) >= onboardingStepRank(s) ? l : s
 }
 
@@ -101,30 +100,12 @@ export function getCompanySlug(user: Record<string, unknown> | null): string | n
   return match?.slug ?? null
 }
 
-export function setupPathForStep(step: string, user?: Record<string, unknown> | null): string {
-  const slug = user ? getCompanySlug(user) : null
-  if (step === 'clients') return '/setup/clients'
-  if (step === 'jobs' && slug) return `/${slug}/jobs`
-  // Map-first route step: land in the planner so "Save & apply" / Save as Round
-  // are the natural next actions (jobs day view remains as a fallback via Jobs).
-  if (step === 'route' && slug) {
-    const today = new Date()
-    const y = today.getFullYear()
-    const m = String(today.getMonth() + 1).padStart(2, '0')
-    const d = String(today.getDate()).padStart(2, '0')
-    return `/${slug}/map?focus=day&date=${y}-${m}-${d}`
-  }
-  if (['company', 'services', 'plan'].includes(step)) return '/setup/clients'
-  if (slug) return `/${slug}/jobs`
-  return '/setup/clients'
+export function setupPathForStep(step: string): string {
+  return normalizeOnboardingStep(step) === 'goals' ? '/setup/goals' : '/setup/company'
 }
 
 export function setupStepIndex(step: string): number {
-  if (step === 'clients') return 0
-  if (step === 'jobs' || step === 'route') return 1
-  if (step === 'done') return 2
-  if (step === 'company' || step === 'services') return 0
-  return 0
+  return onboardingStepRank(step)
 }
 
 export function isOwnerUser(user: Record<string, unknown> | null): boolean {
@@ -139,15 +120,7 @@ export function getOwnerOnboardingStep(user: Record<string, unknown> | null): Ow
   if (!user || !isOwnerUser(user)) return 'done'
   const ac = user.activeCompany as { onboardingCompleted?: boolean; onboardingStep?: string } | undefined
   if (ac?.onboardingCompleted) return 'done'
-  const step = ac?.onboardingStep || 'clients'
-  if (step === 'done') return 'done'
-  if (step === 'clients' || step === 'jobs' || step === 'route' || step === 'business') return step
-  if (step === 'company' || step === 'services' || step === 'plan') return 'clients'
-  return 'clients'
-}
-
-export function isAppWizardStep(step: string): step is 'jobs' | 'route' | 'business' {
-  return step === 'jobs' || step === 'route' || step === 'business'
+  return normalizeOnboardingStep(ac?.onboardingStep)
 }
 
 export function ownerMustCompleteSetup(user: Record<string, unknown> | null): boolean {
@@ -157,10 +130,10 @@ export function ownerMustCompleteSetup(user: Record<string, unknown> | null): bo
 export function getOwnerSetupResumePath(user: Record<string, unknown> | null): string {
   const step = getOwnerOnboardingStep(user)
   if (step === 'done') return '/select-company'
-  return setupPathForStep(step, user)
+  return setupPathForStep(step)
 }
 
-export function patchSessionOnboardingStep(step: OwnerOnboardingStep | 'done', completed = false) {
+export function patchSessionOnboardingStep(step: OwnerOnboardingStep, completed = false) {
   if (typeof window === 'undefined') return
   try {
     const raw = localStorage.getItem('user')
@@ -198,7 +171,7 @@ export function getActiveCompanyId(user: Record<string, unknown> | null): number
 }
 
 export async function advanceOnboardingProgress(
-  step: 'services' | 'clients' | 'jobs' | 'route' | 'business' | 'plan' | 'wizard_completed',
+  step: SetupWizardStep,
   companyId?: number
 ): Promise<{ onboardingStep?: string; error?: string } | null> {
   const token = localStorage.getItem('token')
@@ -222,14 +195,17 @@ export async function advanceOnboardingProgress(
   })
   const data = await res.json().catch(() => ({} as { onboardingStep?: string; error?: string }))
   if (res.ok && data.onboardingStep) {
-    const mapped = data.onboardingStep === 'done' ? 'done' : data.onboardingStep
-    patchSessionOnboardingStep(mapped as OwnerOnboardingStep | 'done', false)
+    patchSessionOnboardingStep(normalizeOnboardingStep(data.onboardingStep), false)
     return data
   }
   return { error: data.error || `Request failed (${res.status})` }
 }
 
-export async function completeOnboardingWizard(companyId?: number) {
+/** Final onboarding call: stores the usage goals and unlocks the whole app. */
+export async function completeOnboardingWizard(opts?: {
+  companyId?: number
+  usageGoals?: string[]
+}) {
   const token = localStorage.getItem('token')
   if (!token) return null
   const res = await fetch(apiUrl('/companies/onboarding/complete'), {
@@ -238,7 +214,10 @@ export async function completeOnboardingWizard(companyId?: number) {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ companyId }),
+    body: JSON.stringify({
+      companyId: opts?.companyId,
+      ...(opts?.usageGoals ? { usageGoals: opts.usageGoals } : {}),
+    }),
   })
   const data = await res.json().catch(() => ({}))
   if (res.ok) {

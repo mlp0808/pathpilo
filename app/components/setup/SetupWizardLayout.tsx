@@ -6,10 +6,11 @@ import { ArrowLeftIcon } from '@heroicons/react/24/solid'
 import DarkAuthShell from '@/app/components/DarkAuthShell'
 
 export const SETUP_WIZARD_STEPS = [
-  { id: 1, label: 'Add clients', short: 'Clients' },
+  { id: 1, label: 'Your company', short: 'Company' },
+  { id: 2, label: 'Your goals', short: 'Goals' },
 ] as const
 
-export type SetupWizardStep = 1
+export type SetupWizardStep = 1 | 2
 
 /** Shared field styles for forms inside the white glass panel */
 export const setupFieldInputClass =
@@ -78,11 +79,39 @@ export default function SetupWizardLayout({
           <div className="lg:w-[220px] xl:w-[240px] flex-none mb-6 lg:mb-0">
             {heading}
 
+            <ol className="mt-7 space-y-2.5">
+              {SETUP_WIZARD_STEPS.map((s) => {
+                const isCurrent = s.id === step
+                const isDone = s.id < step
+                return (
+                  <li key={s.id} className="flex items-center gap-2.5">
+                    <span
+                      className={[
+                        'flex h-5 w-5 flex-none items-center justify-center rounded-full text-[10px] font-bold',
+                        isCurrent
+                          ? 'bg-accent-500 text-white'
+                          : isDone
+                            ? 'bg-accent-500/20 text-accent-300'
+                            : 'bg-white/10 text-white/40',
+                      ].join(' ')}
+                    >
+                      {isDone ? '✓' : s.id}
+                    </span>
+                    <span
+                      className={`text-[13px] ${isCurrent ? 'font-semibold text-white/90' : 'text-white/40'}`}
+                    >
+                      {s.label}
+                    </span>
+                  </li>
+                )
+              })}
+            </ol>
+
             {onBack && (
               <button
                 type="button"
                 onClick={onBack}
-                className="mt-8 flex items-center gap-2 text-sm text-white/35 hover:text-white/65 transition-colors"
+                className="mt-7 flex items-center gap-2 text-sm text-white/35 hover:text-white/65 transition-colors"
               >
                 <ArrowLeftIcon className="h-3.5 w-3.5" />
                 {backLabel}
