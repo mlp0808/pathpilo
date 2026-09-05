@@ -21,6 +21,10 @@ const {
   formatJobDate,
   timePart,
 } = require('../utils/manualJobEmailTemplate');
+const {
+  ensureItemCatalogSchema,
+  createCancellationFeeJob,
+} = require('../utils/itemCatalogSchema');
 
 const router = express.Router();
 
@@ -135,6 +139,10 @@ const getActiveCompanyId = (req) => {
 // - Any service still without status
 //   (scheduled / null / anything else)-> scheduled
 async function computeAndUpdateJobStatus(jobId) {
+  const current = await pool.query(`SELECT status FROM jobs WHERE id = $1`, [jobId]);
+  // Soft-deleted jobs stay deleted — task status flips must not revive them.
+  if (current.rows[0]?.status === 'deleted') return 'deleted';
+
   const r = await pool.query(
     `SELECT status FROM job_services WHERE job_id = $1`,
     [jobId]
@@ -142,7 +150,7 @@ async function computeAndUpdateJobStatus(jobId) {
   const statuses = (r.rows || []).map((row) => row.status);
   if (statuses.length === 0) {
     await pool.query(
-      `UPDATE jobs SET status = 'scheduled', updated_at = NOW() WHERE id = $1`,
+      `UPDATE jobs SET status = 'scheduled', updated_at = NOW() WHERE id = $1 AND status <> 'deleted'`,
       [jobId]
     );
     return 'scheduled';
@@ -170,10 +178,58 @@ async function computeAndUpdateJobStatus(jobId) {
     jobStatus = 'scheduled';
   }
   await pool.query(
-    `UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2`,
+    `UPDATE jobs SET status = $1, updated_at = NOW() WHERE id = $2 AND status <> 'deleted'`,
     [jobStatus, jobId]
   );
   return jobStatus;
+}
+
+/** Soft-delete a real job: keep the row, mark deleted, pull it out of day packages. */
+async function softDeleteJob(db, companyId, jobId) {
+  await db.query(
+    `UPDATE jobs SET status = 'deleted', updated_at = NOW()
+     WHERE id = $1 AND company_id = $2`,
+    [jobId, companyId]
+  );
+  try {
+    await cancelPendingForJob(companyId, jobId);
+  } catch { /* best-effort */ }
+
+  // Drop from any planned day packages so the unit no longer routes through it.
+  try {
+    const routes = await db.query(
+      `SELECT id, job_ids, round_job_ids
+       FROM daily_routes
+       WHERE company_id = $1
+         AND (
+           (job_ids IS NOT NULL AND $2 = ANY(job_ids))
+           OR (round_job_ids IS NOT NULL AND $2 = ANY(round_job_ids))
+         )`,
+      [companyId, jobId]
+    );
+    for (const row of routes.rows) {
+      const jobIds = Array.isArray(row.job_ids)
+        ? row.job_ids.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== Number(jobId))
+        : [];
+      const roundJobIds = Array.isArray(row.round_job_ids)
+        ? row.round_job_ids.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== Number(jobId))
+        : [];
+      if (jobIds.length === 0) {
+        await db.query(`DELETE FROM daily_routes WHERE id = $1`, [row.id]);
+      } else {
+        await db.query(
+          `UPDATE daily_routes SET
+             job_ids = $2::int[],
+             round_job_ids = $3::int[],
+             updated_at = NOW()
+           WHERE id = $1`,
+          [row.id, jobIds, roundJobIds.length > 0 ? roundJobIds : null]
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[softDeleteJob] daily_routes cleanup:', err?.message || err);
+  }
 }
 
 // DELETE /api/jobs/:jobId/automation-cancel/:automationKey — cancel a pending scheduled send
@@ -299,6 +355,7 @@ router.get('/:jobId', async (req, res) => {
             rjs.service_id,
             rjs.custom_price,
             rjs.custom_duration_minutes,
+            COALESCE(rjs.quantity, 1) as quantity,
             COALESCE(rjs.custom_price, s.price) as price,
             COALESCE(rjs.custom_duration_minutes, s.duration_minutes) as duration_minutes,
             s.title as service_name,
@@ -319,6 +376,7 @@ router.get('/:jobId', async (req, res) => {
           custom_title: null,
           custom_price: row.custom_price,
           custom_duration_minutes: row.custom_duration_minutes,
+          quantity: row.quantity,
           status: row.status,
           completed_at: row.completed_at,
           service_name: row.service_name || (row.service_id ? `Service #${row.service_id}` : 'Service'),
@@ -434,6 +492,7 @@ router.get('/:jobId', async (req, res) => {
         js.custom_title,
         js.custom_price,
         js.custom_duration_minutes,
+        COALESCE(js.quantity, 1) as quantity,
         COALESCE(js.status, 'scheduled') as status,
         js.completed_at,
         js.custom_title as service_name,
@@ -473,11 +532,32 @@ router.get('/:jobId', async (req, res) => {
       }
     }
 
-    // Calculate totals
-    const totalPrice = services.reduce((sum, s) => sum + (parseFloat(s.price) || 0), 0);
-    const totalDuration = services.reduce((sum, s) => sum + (parseInt(s.duration_minutes) || 0), 0);
+    // Calculate totals (unit price × quantity)
+    let totalPrice = services.reduce((sum, s) => {
+      const unit = parseFloat(s.price) || 0
+      const qty = parseFloat(String(s.quantity ?? 1)) || 1
+      return sum + unit * qty
+    }, 0);
+    let totalDuration = services.reduce((sum, s) => sum + (parseInt(s.duration_minutes) || 0), 0);
     const completedCount = services.filter((s) => s.status === 'completed').length;
     const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed';
+
+    let cancellationFeeAmount = 0;
+    let cancellationFeeJobId = job.cancellation_fee_job_id || null;
+    if (job.status === 'cancelled' && job.cancellation_fee_job_id) {
+      try {
+        const feeRes = await pool.query(
+          `SELECT COALESCE(SUM(COALESCE(js.custom_price, s.price, 0)), 0) as amount
+           FROM job_services js
+           LEFT JOIN services s ON js.service_id = s.id
+           WHERE js.job_id = $1 AND js.status = 'completed'`,
+          [job.cancellation_fee_job_id],
+        );
+        cancellationFeeAmount = parseFloat(String(feeRes.rows[0]?.amount ?? 0)) || 0;
+        totalPrice = cancellationFeeAmount;
+        totalDuration = 0;
+      } catch (_) { /* ignore */ }
+    }
 
     // Get timeline (job_logs) for this job
     let timeline = [];
@@ -518,6 +598,9 @@ router.get('/:jobId', async (req, res) => {
         services,
         timeline,
         total_price: totalPrice,
+        estimated_price: job.status === 'cancelled' ? cancellationFeeAmount : totalPrice,
+        cancellation_fee_amount: cancellationFeeAmount,
+        cancellation_fee_job_id: cancellationFeeJobId,
         total_duration: totalDuration,
         completed_tasks: completedCount,
         total_tasks: services.length
@@ -549,6 +632,8 @@ router.get('/', async (req, res) => {
 
     // js_totals: completed services only (for invoice/price totals)
     // js_all:    all services regardless of status (for time planning bar)
+    // fee_amt:   cancellation fee charged for cancelled visits (display value)
+    await ensureItemCatalogSchema(pool);
     let query = `
       SELECT
         j.*,
@@ -567,14 +652,16 @@ router.get('/', async (req, res) => {
         COALESCE(js_totals.calculated_price, 0) as total_price,
         COALESCE(js_totals.calculated_duration, 0) as total_duration,
         COALESCE(js_all.estimated_duration, 0) as estimated_duration,
-        COALESCE(js_all.estimated_price, 0) as estimated_price
+        COALESCE(js_all.estimated_price, 0) as estimated_price,
+        COALESCE(fee_amt.amount, 0) as cancellation_fee_amount,
+        fee_job.invoice_id as cancellation_fee_invoice_id
       FROM jobs j
       LEFT JOIN clients c ON j.client_id = c.id
       LEFT JOIN (
         SELECT 
           js.job_id,
           COUNT(js.id) as service_count,
-          SUM(COALESCE(js.custom_price, s.price, 0)) as calculated_price,
+          SUM(COALESCE(js.custom_price, s.price, 0) * COALESCE(js.quantity, 1)) as calculated_price,
           SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as calculated_duration
         FROM job_services js
         LEFT JOIN services s ON js.service_id = s.id
@@ -586,11 +673,21 @@ router.get('/', async (req, res) => {
           js.job_id,
           COUNT(js.id) as all_service_count,
           SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)) as estimated_duration,
-          SUM(COALESCE(js.custom_price, s.price, 0)) as estimated_price
+          SUM(COALESCE(js.custom_price, s.price, 0) * COALESCE(js.quantity, 1)) as estimated_price
         FROM job_services js
         LEFT JOIN services s ON js.service_id = s.id
         GROUP BY js.job_id
       ) js_all ON j.id = js_all.job_id
+      LEFT JOIN jobs fee_job ON fee_job.id = j.cancellation_fee_job_id
+      LEFT JOIN (
+        SELECT
+          js.job_id,
+          SUM(COALESCE(js.custom_price, s.price, 0) * COALESCE(js.quantity, 1)) as amount
+        FROM job_services js
+        LEFT JOIN services s ON js.service_id = s.id
+        WHERE js.status = 'completed'
+        GROUP BY js.job_id
+      ) fee_amt ON fee_amt.job_id = j.cancellation_fee_job_id
       LEFT JOIN (
         SELECT
           jn.job_id,
@@ -600,11 +697,16 @@ router.get('/', async (req, res) => {
       ) jn ON j.id = jn.job_id
       WHERE j.company_id = $1
     `;
+    // Fee jobs are billing artifacts — hide from the calendar/planner list,
+    // but keep them in the completed/uninvoiced list so they can be invoiced.
+    if (!onlyCompleted) {
+      query += ` AND COALESCE(j.job_kind, 'standard') <> 'cancellation_fee'`;
+    }
 
     const params = [companyId];
 
     if (onlyCompleted) {
-      query += " AND (j.status = 'completed' OR j.status = 'sub_completed' OR j.status = 'cancelled')";
+      query += " AND (j.status = 'completed' OR j.status = 'sub_completed' OR j.status = 'cancelled' OR j.status = 'deleted')";
     }
 
     if (start_date && end_date && !onlyCompleted) {
@@ -623,7 +725,26 @@ router.get('/', async (req, res) => {
     }
 
     const realJobsResult = await pool.query(query, params);
-    let realJobs = realJobsResult.rows;
+    let realJobs = realJobsResult.rows.map((job) => {
+      // Cancelled visits show the fee as their value (not the original services).
+      if (job.status === 'cancelled') {
+        const fee = parseFloat(String(job.cancellation_fee_amount ?? 0)) || 0
+        return {
+          ...job,
+          estimated_price: fee,
+          total_price: fee,
+          estimated_duration: 0,
+        }
+      }
+      // Fee jobs themselves: expose a clear kind for invoice UI.
+      if (job.job_kind === 'cancellation_fee') {
+        return {
+          ...job,
+          is_cancellation_fee: true,
+        }
+      }
+      return job
+    });
     
     // Debug: Log cancelled jobs count
     const cancelledCount = realJobs.filter(j => j.status === 'cancelled').length
@@ -646,7 +767,9 @@ router.get('/', async (req, res) => {
             c.last_name,
             c.address,
             c.zip_code,
-            c.city
+            c.city,
+            c.lat as client_lat,
+            c.lng as client_lng
           FROM recurring_jobs rj
           LEFT JOIN clients c ON rj.client_id = c.id
           WHERE rj.company_id = $1 AND rj.is_active = true`,
@@ -1014,11 +1137,15 @@ router.get('/', async (req, res) => {
             address: p.subscription.address,
             zip_code: p.subscription.zip_code,
             city: p.subscription.city,
+            // Same field names as real jobs — route planner / map multitool read these for pins.
+            client_lat: p.subscription.client_lat,
+            client_lng: p.subscription.client_lng,
             service_count: p.subscriptionServices.length,
             all_service_count: p.subscriptionServices.length,
             total_price: p.totalPrice,
             estimated_price: p.totalPrice,
             total_duration: p.totalDuration,
+            estimated_duration: p.totalDuration,
             is_projected: true
           })
         }
@@ -1045,6 +1172,108 @@ router.get('/', async (req, res) => {
 
     await jobEncryptedNotes.attachJobNotesToRows(realJobs, companyId);
 
+    // Visit merge: several jobs for the same client on the same day for the
+    // same employee are one *visit* on the board. Tag each row with a shared
+    // visit_key so the UI can render a single card and show the individual
+    // sources (subscription / round / one-off) when the visit is opened.
+    const dateOnly = (v) => {
+      if (v == null) return '';
+      const s = v instanceof Date
+        ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
+        : String(v);
+      return s.length >= 10 ? s.slice(0, 10) : s;
+    };
+    const visitCounts = new Map();
+    for (const job of allJobs) {
+      if (job.client_id == null || job.status === 'cancelled') continue;
+      const key = `${job.client_id}:${dateOnly(job.scheduled_date)}:${job.assigned_user_id ?? 'none'}`;
+      job.visit_key = key;
+      visitCounts.set(key, (visitCounts.get(key) || 0) + 1);
+    }
+    for (const job of allJobs) {
+      if (job.visit_key) job.visit_size = visitCounts.get(job.visit_key) || 1;
+    }
+
+    // Attach round membership for visit source labels (subscription → round stop).
+    try {
+      const recurringIds = [...new Set(
+        allJobs
+          .map((j) => (j.recurring_job_id != null ? Number(j.recurring_job_id) : null))
+          .filter((id) => id != null && Number.isFinite(id))
+      )];
+      if (recurringIds.length > 0) {
+        const roundRows = await pool.query(
+          `
+            SELECT DISTINCT ON (rts.recurring_job_id)
+              rts.recurring_job_id,
+              rt.id AS round_template_id,
+              rt.name AS round_template_name
+            FROM round_template_stops rts
+            JOIN round_templates rt ON rt.id = rts.round_template_id
+            WHERE rt.company_id = $1
+              AND rts.recurring_job_id = ANY($2::int[])
+            ORDER BY rts.recurring_job_id, rts.position ASC, rt.id ASC
+          `,
+          [companyId, recurringIds]
+        );
+        const byRecurring = new Map(
+          roundRows.rows.map((r) => [
+            Number(r.recurring_job_id),
+            {
+              round_template_id: Number(r.round_template_id),
+              round_template_name: r.round_template_name || null,
+            },
+          ])
+        );
+        for (const job of allJobs) {
+          if (job.recurring_job_id == null) continue;
+          const meta = byRecurring.get(Number(job.recurring_job_id));
+          if (!meta) continue;
+          job.round_template_id = meta.round_template_id;
+          job.round_template_name = meta.round_template_name;
+        }
+
+        // Library rounds (reusable packages): expose round_id so the jobs board
+        // can group stops even if a daily_routes row is briefly missing.
+        try {
+          const libRows = await pool.query(
+            `SELECT rj.id AS recurring_job_id, rj.round_id, r.name AS round_name
+             FROM recurring_jobs rj
+             JOIN rounds r ON r.id = rj.round_id AND r.company_id = rj.company_id
+             WHERE rj.company_id = $1
+               AND rj.round_id IS NOT NULL
+               AND rj.id = ANY($2::int[])`,
+            [companyId, recurringIds]
+          );
+          const byLib = new Map(
+            libRows.rows.map((r) => [
+              Number(r.recurring_job_id),
+              {
+                library_round_id: Number(r.round_id),
+                library_round_name: r.round_name || null,
+              },
+            ])
+          );
+          for (const job of allJobs) {
+            if (job.recurring_job_id == null) continue;
+            const meta = byLib.get(Number(job.recurring_job_id));
+            if (!meta) continue;
+            job.library_round_id = meta.library_round_id;
+            job.library_round_name = meta.library_round_name;
+          }
+        } catch (libErr) {
+          if (libErr.code !== '42P01' && !String(libErr.message || '').includes('round_id')) {
+            console.warn('library round enrich skipped:', libErr.message);
+          }
+        }
+      }
+    } catch (roundErr) {
+      // round_templates may not exist yet on older DBs — visit merge still works.
+      if (roundErr.code !== '42P01') {
+        console.warn('visit round enrich skipped:', roundErr.message);
+      }
+    }
+
     res.json({
       jobs: allJobs,
       total: allJobs.length,
@@ -1060,6 +1289,9 @@ router.get('/', async (req, res) => {
 // POST /api/jobs - Create new job
 router.post('/', async (req, res) => {
   try {
+    const { ensureSchedulingSchema } = require('../services/routePlanner/ensureSchedulingSchema');
+    await ensureSchedulingSchema();
+
     const {
       title,
       client_id,
@@ -1072,21 +1304,34 @@ router.post('/', async (req, res) => {
     } = req.body;
     const userId = req.user.userId;
 
+    // "Any" = null date and/or null assignee (unscheduled until placed).
+    const assignedUserId =
+      assigned_user_id == null || assigned_user_id === ''
+        ? null
+        : Number(assigned_user_id);
+    const scheduledDate =
+      scheduled_date == null || scheduled_date === ''
+        ? null
+        : String(scheduled_date).split('T')[0];
+
     console.log('Creating job:', {
       title,
       client_id,
-      assigned_user_id,
+      assigned_user_id: assignedUserId,
       services,
       note,
-      scheduled_date,
+      scheduled_date: scheduledDate,
       scheduled_time_from,
       scheduled_time_to,
       userId
     });
 
-    // Validate input
-    if (!client_id || !assigned_user_id || !services || !Array.isArray(services) || !scheduled_date) {
-      return res.status(400).json({ error: 'Client, assigned user, services, and scheduled date are required' });
+    // Validate input — client + services required; date/employee optional ("Any")
+    if (!client_id || !services || !Array.isArray(services)) {
+      return res.status(400).json({
+        error: 'Client and services are required',
+        code: 'JOB_CLIENT_SERVICES_REQUIRED',
+      });
     }
 
     // Get user's company
@@ -1106,14 +1351,19 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
-    // Verify assigned user belongs to user's company
-    const assignedUserCheck = await pool.query(
-      'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
-      [assigned_user_id, companyId]
-    );
+    // Verify assigned user belongs to user's company (when not "Any")
+    if (assignedUserId != null) {
+      if (!Number.isFinite(assignedUserId)) {
+        return res.status(400).json({ error: 'Invalid assigned user' });
+      }
+      const assignedUserCheck = await pool.query(
+        'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [assignedUserId, companyId]
+      );
 
-    if (assignedUserCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Assigned user not found or access denied' });
+      if (assignedUserCheck.rows.length === 0) {
+        return res.status(404).json({ error: 'Assigned user not found or access denied' });
+      }
     }
 
     // Start transaction
@@ -1121,11 +1371,13 @@ router.post('/', async (req, res) => {
     try {
       await dbClient.query('BEGIN');
 
-      // Get the max sort_order for this day and user to place new job at the end
+      // Get the max sort_order for this day and user (IS NOT DISTINCT FROM handles null "Any")
       const maxSortResult = await dbClient.query(
         `SELECT COALESCE(MAX(sort_order), 0) as max_sort FROM jobs 
-         WHERE company_id = $1 AND scheduled_date = $2 AND assigned_user_id = $3`,
-        [companyId, scheduled_date, assigned_user_id]
+         WHERE company_id = $1
+           AND scheduled_date IS NOT DISTINCT FROM $2
+           AND assigned_user_id IS NOT DISTINCT FROM $3`,
+        [companyId, scheduledDate, assignedUserId]
       );
       const nextSortOrder = (maxSortResult.rows[0]?.max_sort || 0) + 1;
       const notePlain = note != null ? String(note).trim() : '';
@@ -1137,7 +1389,7 @@ router.post('/', async (req, res) => {
           scheduled_time_from, scheduled_time_to, recurring_job_id, is_generated, sort_order)
          VALUES ($1, $2, $3, $4, NULL::text, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
-        [companyId, client_id, assigned_user_id, title || '', scheduled_date,
+        [companyId, client_id, assignedUserId, title || '', scheduledDate,
          scheduled_time_from, scheduled_time_to, null, false, nextSortOrder]
       );
 
@@ -1158,20 +1410,25 @@ router.post('/', async (req, res) => {
 
       // Add services to job_services table
       if (services.length > 0) {
+        await ensureItemCatalogSchema(pool);
         for (const service of services) {
+          const qty = service.quantity != null && service.quantity !== ''
+            ? Number(service.quantity)
+            : 1;
+          const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
           if (service.service_id) {
             // Existing service
             await dbClient.query(
-              `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
-               VALUES ($1, $2, $3, $4, 'scheduled')`,
-              [job.id, service.service_id, service.custom_price, service.custom_duration]
+              `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, quantity, status)
+               VALUES ($1, $2, $3, $4, $5, 'scheduled')`,
+              [job.id, service.service_id, service.custom_price, service.custom_duration, safeQty]
             );
           } else if (service.custom_title) {
             // Custom/ad-hoc service
             await dbClient.query(
-              `INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, status)
-               VALUES ($1, $2, $3, $4, 'scheduled')`,
-              [job.id, service.custom_title, service.custom_price, service.custom_duration]
+              `INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, quantity, status)
+               VALUES ($1, $2, $3, $4, $5, 'scheduled')`,
+              [job.id, service.custom_title, service.custom_price, service.custom_duration, safeQty]
             );
           }
         }
@@ -1184,8 +1441,10 @@ router.post('/', async (req, res) => {
 
       await dbClient.query('COMMIT');
 
-      // Schedule automation sends before responding so the badge is immediately visible.
-      await scheduleAutomationSendsForJob(pool, companyId, job.id);
+      // Don't block job creation on automation scheduling
+      scheduleAutomationSendsForJob(pool, companyId, job.id).catch((err) =>
+        console.error('scheduleAutomationSendsForJob after job create:', err?.message || err)
+      );
 
       // Return job with client and service info
       const jobWithDetails = await pool.query(`
@@ -1482,6 +1741,311 @@ router.put('/:jobId', async (req, res) => {
   }
 });
 
+// ── Job service line CRUD (add / edit price·duration·qty / remove) ──────────
+
+async function assertJobServicesEditable(companyId, jobId) {
+  const jobCheck = await pool.query(
+    `SELECT id, invoice_id, title FROM jobs WHERE id = $1 AND company_id = $2`,
+    [jobId, companyId],
+  );
+  if (jobCheck.rows.length === 0) {
+    return { error: 'Job not found or access denied', status: 404 };
+  }
+  if (jobCheck.rows[0].invoice_id) {
+    return { error: 'This job is on an invoice and cannot be edited', status: 400 };
+  }
+  return { job: jobCheck.rows[0] };
+}
+
+async function loadJobServiceLines(jobId) {
+  const servicesResult = await pool.query(
+    `SELECT
+       js.id,
+       js.job_id,
+       js.service_id,
+       js.custom_title,
+       js.custom_price,
+       js.custom_duration_minutes,
+       COALESCE(js.quantity, 1) as quantity,
+       COALESCE(js.status, 'scheduled') as status,
+       js.completed_at,
+       COALESCE(js.custom_title, s.title) as service_name,
+       COALESCE(js.custom_title, s.title) as title,
+       NULL as service_description,
+       COALESCE(js.custom_price, s.price) as price,
+       COALESCE(js.custom_duration_minutes, s.duration_minutes) as duration_minutes,
+       (COALESCE(js.status, 'scheduled') = 'completed') as is_completed
+     FROM job_services js
+     LEFT JOIN services s ON js.service_id = s.id
+     WHERE js.job_id = $1
+     ORDER BY js.id ASC`,
+    [jobId],
+  );
+  const services = servicesResult.rows;
+  const total_price = services.reduce((sum, s) => {
+    const unit = parseFloat(s.price) || 0;
+    const qty = parseFloat(String(s.quantity ?? 1)) || 1;
+    return sum + unit * qty;
+  }, 0);
+  const total_duration = services.reduce(
+    (sum, s) => sum + (parseInt(s.duration_minutes, 10) || 0),
+    0,
+  );
+  return { services, total_price, total_duration };
+}
+
+// POST /api/jobs/:jobId/services — add a catalog or custom line
+router.post('/:jobId/services', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const {
+      service_id,
+      custom_title,
+      custom_price,
+      custom_duration,
+      custom_duration_minutes,
+      quantity,
+    } = req.body || {};
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const gate = await assertJobServicesEditable(companyId, jobId);
+    if (gate.error) return res.status(gate.status).json({ error: gate.error });
+
+    await ensureItemCatalogSchema(pool);
+
+    const duration =
+      custom_duration_minutes != null && custom_duration_minutes !== ''
+        ? Number(custom_duration_minutes)
+        : custom_duration != null && custom_duration !== ''
+          ? Number(custom_duration)
+          : 0;
+    const price =
+      custom_price != null && custom_price !== '' ? Number(custom_price) : 0;
+    const qtyRaw = quantity != null && quantity !== '' ? Number(quantity) : 1;
+    const safeQty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+    const safeDuration = Number.isFinite(duration) && duration >= 0 ? duration : 0;
+    const safePrice = Number.isFinite(price) ? price : 0;
+
+    let inserted;
+    if (service_id) {
+      const svcCheck = await pool.query(
+        `SELECT id, title, price, duration_minutes FROM services
+         WHERE id = $1 AND company_id = $2 AND archived_at IS NULL`,
+        [service_id, companyId],
+      );
+      if (svcCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Service not found' });
+      }
+      const catalog = svcCheck.rows[0];
+      inserted = await pool.query(
+        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, quantity, status)
+         VALUES ($1, $2, $3, $4, $5, 'scheduled')
+         RETURNING *`,
+        [
+          jobId,
+          service_id,
+          custom_price != null && custom_price !== '' ? safePrice : catalog.price,
+          custom_duration != null || custom_duration_minutes != null
+            ? safeDuration
+            : catalog.duration_minutes,
+          safeQty,
+        ],
+      );
+    } else if (custom_title && String(custom_title).trim()) {
+      inserted = await pool.query(
+        `INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, quantity, status)
+         VALUES ($1, $2, $3, $4, $5, 'scheduled')
+         RETURNING *`,
+        [jobId, String(custom_title).trim(), safePrice, safeDuration, safeQty],
+      );
+    } else {
+      return res.status(400).json({ error: 'service_id or custom_title is required' });
+    }
+
+    try {
+      await setJobAutoTitleIfEmpty(pool, Number(jobId));
+    } catch { /* ignore */ }
+
+    try {
+      const userId = req.user?.userId || null;
+      const title =
+        inserted.rows[0].custom_title
+        || (await pool.query('SELECT title FROM services WHERE id = $1', [inserted.rows[0].service_id])).rows[0]?.title
+        || 'Service';
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [jobId, userId, 'service-added', `Added ${title}`],
+      );
+    } catch { /* ignore */ }
+
+    const payload = await loadJobServiceLines(jobId);
+    res.json({
+      message: 'Service added',
+      service: inserted.rows[0],
+      ...payload,
+    });
+  } catch (error) {
+    console.error('Error adding job service:', error);
+    res.status(500).json({ error: 'Failed to add service: ' + error.message });
+  }
+});
+
+// PATCH /api/jobs/:jobId/services/:serviceId — edit price / duration / quantity
+router.patch('/:jobId/services/:serviceId', async (req, res) => {
+  try {
+    const { jobId, serviceId } = req.params;
+    const { custom_price, custom_duration, custom_duration_minutes, quantity, custom_title } = req.body || {};
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const gate = await assertJobServicesEditable(companyId, jobId);
+    if (gate.error) return res.status(gate.status).json({ error: gate.error });
+
+    const existing = await pool.query(
+      'SELECT * FROM job_services WHERE id = $1 AND job_id = $2',
+      [serviceId, jobId],
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Job service not found' });
+    }
+
+    const fields = [];
+    const values = [];
+    let n = 1;
+
+    if (custom_price !== undefined) {
+      const price = custom_price === null || custom_price === '' ? null : Number(custom_price);
+      if (price != null && !Number.isFinite(price)) {
+        return res.status(400).json({ error: 'Invalid price' });
+      }
+      fields.push(`custom_price = $${n++}`);
+      values.push(price);
+    }
+    if (custom_duration_minutes !== undefined || custom_duration !== undefined) {
+      const raw = custom_duration_minutes !== undefined ? custom_duration_minutes : custom_duration;
+      const duration = raw === null || raw === '' ? null : Number(raw);
+      if (duration != null && (!Number.isFinite(duration) || duration < 0)) {
+        return res.status(400).json({ error: 'Invalid duration' });
+      }
+      fields.push(`custom_duration_minutes = $${n++}`);
+      values.push(duration);
+    }
+    if (quantity !== undefined) {
+      const qty = Number(quantity);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ error: 'Quantity must be a positive number' });
+      }
+      fields.push(`quantity = $${n++}`);
+      values.push(qty);
+    }
+    if (custom_title !== undefined && existing.rows[0].service_id == null) {
+      const title = String(custom_title || '').trim();
+      if (!title) return res.status(400).json({ error: 'Title is required' });
+      fields.push(`custom_title = $${n++}`);
+      values.push(title);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    values.push(serviceId, jobId);
+    const updated = await pool.query(
+      `UPDATE job_services SET ${fields.join(', ')}
+       WHERE id = $${n++} AND job_id = $${n}
+       RETURNING *`,
+      values,
+    );
+
+    try {
+      const userId = req.user?.userId || null;
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [jobId, userId, 'service-updated', 'Updated task details'],
+      );
+    } catch { /* ignore */ }
+
+    const payload = await loadJobServiceLines(jobId);
+    res.json({
+      message: 'Service updated',
+      service: updated.rows[0],
+      ...payload,
+    });
+  } catch (error) {
+    console.error('Error updating job service:', error);
+    res.status(500).json({ error: 'Failed to update service: ' + error.message });
+  }
+});
+
+// DELETE /api/jobs/:jobId/services/:serviceId — remove a line
+router.delete('/:jobId/services/:serviceId', async (req, res) => {
+  try {
+    const { jobId, serviceId } = req.params;
+
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+
+    const gate = await assertJobServicesEditable(companyId, jobId);
+    if (gate.error) return res.status(gate.status).json({ error: gate.error });
+
+    const existing = await pool.query(
+      `SELECT js.id, COALESCE(js.custom_title, s.title) as title
+       FROM job_services js
+       LEFT JOIN services s ON js.service_id = s.id
+       WHERE js.id = $1 AND js.job_id = $2`,
+      [serviceId, jobId],
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Job service not found' });
+    }
+
+    await pool.query('DELETE FROM job_services WHERE id = $1 AND job_id = $2', [serviceId, jobId]);
+
+    try {
+      await setJobAutoTitleIfEmpty(pool, Number(jobId));
+    } catch { /* ignore */ }
+
+    try {
+      const userId = req.user?.userId || null;
+      await pool.query(
+        'INSERT INTO job_logs (job_id, user_id, action, description) VALUES ($1, $2, $3, $4)',
+        [jobId, userId, 'service-removed', `Removed ${existing.rows[0].title || 'task'}`],
+      );
+    } catch { /* ignore */ }
+
+    // Recompute job status if we removed the last incomplete line etc.
+    let job = null;
+    try {
+      const newStatus = await computeAndUpdateJobStatus(parseInt(jobId, 10));
+      const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+      job = jobResult.rows[0] || null;
+      if (job && newStatus) job.status = newStatus;
+    } catch { /* ignore */ }
+
+    const payload = await loadJobServiceLines(jobId);
+    res.json({
+      message: 'Service removed',
+      job,
+      ...payload,
+    });
+  } catch (error) {
+    console.error('Error removing job service:', error);
+    res.status(500).json({ error: 'Failed to remove service: ' + error.message });
+  }
+});
+
 // PUT /api/jobs/:jobId/services/:serviceId/status - Update a single job service status (scheduled | completed | cancelled). Job status is then recomputed.
 router.put('/:jobId/services/:serviceId/status', async (req, res) => {
   try {
@@ -1582,7 +2146,7 @@ router.put('/:jobId/services/:serviceId/status', async (req, res) => {
 router.put('/:jobId/status', async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { status, notify_customer, notification_subject, notification_message } = req.body;
+    const { status, notify_customer, notification_subject, notification_message, charge_cancellation_fee } = req.body;
     const userId = req.user.userId;
 
     if (!status) {
@@ -1598,12 +2162,16 @@ router.put('/:jobId/status', async (req, res) => {
 
     // Verify job belongs to user's company
     const jobCheck = await pool.query(
-      'SELECT id FROM jobs WHERE id = $1 AND company_id = $2',
+      'SELECT * FROM jobs WHERE id = $1 AND company_id = $2',
       [jobId, companyId]
     );
 
     if (jobCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Job not found or access denied' });
+    }
+    const existingJob = jobCheck.rows[0];
+    if (existingJob.job_kind === 'cancellation_fee') {
+      return res.status(400).json({ error: 'Cannot change status of a cancellation fee job' });
     }
 
     const validStatuses = ['scheduled', 'completed', 'cancelled'];
@@ -1631,13 +2199,29 @@ router.put('/:jobId/status', async (req, res) => {
 
     await computeAndUpdateJobStatus(jobId);
 
-    // If cancelled, remove any pending scheduled emails
+    let feeJob = null;
+    // If cancelled, remove any pending scheduled emails and optionally charge a fee.
     if (status === 'cancelled') {
       setImmediate(() =>
         cancelPendingForJob(pool, companyId, parseInt(jobId, 10)).catch((err) =>
           console.error('cancelPendingForJob after cancel:', err.message || err)
         )
       );
+
+      const shouldCharge =
+        charge_cancellation_fee === undefined
+          ? true
+          : !!charge_cancellation_fee;
+      try {
+        const fresh = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [jobId]);
+        feeJob = await createCancellationFeeJob(pool, {
+          companyId,
+          cancelledJob: fresh.rows[0] || existingJob,
+          chargeFee: shouldCharge,
+        });
+      } catch (feeErr) {
+        console.error('createCancellationFeeJob failed:', feeErr?.message || feeErr);
+      }
     }
 
     if (
@@ -1673,7 +2257,8 @@ router.put('/:jobId/status', async (req, res) => {
 
     res.json({
       message: 'Job status updated successfully',
-      job: result.rows[0]
+      job: result.rows[0],
+      cancellation_fee_job: feeJob || null,
     });
 
   } catch (error) {
@@ -2203,7 +2788,7 @@ router.post('/:jobId/notes', async (req, res) => {
   }
 });
 
-// DELETE /api/jobs/:jobId - Delete job
+// DELETE /api/jobs/:jobId — soft-delete (status=deleted). Row stays for history.
 router.delete('/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
@@ -2252,8 +2837,8 @@ router.delete('/:jobId', async (req, res) => {
       );
 
       if (existingMat.rows.length > 0) {
-        await pool.query('DELETE FROM jobs WHERE id = $1', [existingMat.rows[0].id]);
-        return res.json({ message: 'Job deleted successfully' });
+        await softDeleteJob(pool, companyId, Number(existingMat.rows[0].id));
+        return res.json({ message: 'Job deleted successfully', soft: true });
       }
 
       const subServicesRes = await pool.query(
@@ -2282,6 +2867,7 @@ router.delete('/:jobId', async (req, res) => {
         const subNotePlain =
           subRow.note != null ? String(subRow.note).trim() : '';
 
+        // Placeholder so this occurrence does not reappear as a ghost visit.
         const jobRes = await dbClient.query(
           `INSERT INTO jobs (
             company_id, client_id, assigned_user_id, title, note,
@@ -2297,7 +2883,7 @@ router.delete('/:jobId', async (req, res) => {
             jobDate,
             subRow.scheduled_time_from || null,
             subRow.scheduled_time_to || null,
-            'cancelled',
+            'deleted',
             virtualParts.recurringJobId,
             virtualParts.occurrence,
             true,
@@ -2335,7 +2921,7 @@ router.delete('/:jobId', async (req, res) => {
         dbClient.release();
       }
 
-      return res.json({ message: 'Job deleted successfully' });
+      return res.json({ message: 'Job deleted successfully', soft: true });
     }
 
     const numericId = parseInt(jobId, 10);
@@ -2353,17 +2939,11 @@ router.delete('/:jobId', async (req, res) => {
       return res.status(404).json({ error: 'Job not found or access denied' });
     }
 
-    await jobEncryptedNotes.deleteJobEncryptedNotes(
-      companyId,
-      numericId,
-      jobEncryptedNotes.secureNoteUserId(req),
-    );
-
-    // Delete job (cascade will handle related records)
-    await pool.query('DELETE FROM jobs WHERE id = $1', [numericId]);
+    await softDeleteJob(pool, companyId, numericId);
 
     res.json({
-      message: 'Job deleted successfully'
+      message: 'Job deleted successfully',
+      soft: true,
     });
 
   } catch (error) {

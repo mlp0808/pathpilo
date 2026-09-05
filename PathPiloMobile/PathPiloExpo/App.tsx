@@ -6522,6 +6522,7 @@ function JobDetailSlideout({ job, date, company, user, onClose, onCopy, isExpand
               
               await apiClient.put(`/jobs/${job.id}/status`, {
                 status: 'cancelled',
+                charge_cancellation_fee: true,
               });
               
               if (onJobUpdate) {

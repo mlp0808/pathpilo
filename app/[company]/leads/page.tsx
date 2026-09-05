@@ -17,6 +17,7 @@ import {
   BriefcaseIcon,
   CheckBadgeIcon,
   InboxIcon,
+  MapPinIcon,
 } from '@heroicons/react/24/outline'
 
 const LEADS_HELP_URL = 'https://help.pathpilo.com/category/leads-forms/'
@@ -432,6 +433,18 @@ export default function LeadsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    {selected.address && (
+                      <Link
+                        href={`/${companySlug}/map?q=${encodeURIComponent(
+                          [selected.address, selected.zip_code, selected.city].filter(Boolean).join(', ')
+                        )}`}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                        title={t('app.leads.findDates', 'Find dates on the map — see which routes pass by and propose visit dates')}
+                      >
+                        <MapPinIcon className="h-4 w-4" />
+                        <span className="hidden sm:inline">{t('app.leads.findDates', 'Find dates on map')}</span>
+                      </Link>
+                    )}
                     {!selected.client_id && (
                       <button
                         onClick={() => convertLead(selected)}

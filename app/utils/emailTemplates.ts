@@ -56,9 +56,9 @@ const templateTypeToId: Partial<Record<TemplateType, string>> = {
 // Hardcoded English fallbacks for types not covered by the translations utility (e.g. send_invoice)
 const STATIC_FALLBACK: Record<string, EmailTemplate> = {
   send_invoice: {
-    subject: 'Your invoice from {Company name}',
+    subject: 'Invoice {invoice_number} from {Company name}',
     message:
-      'Hi {Client first name},\n\nPlease find your invoice attached.\n\nIf you have any questions, feel free to reply.\n\nBest regards,\n{Company name}',
+      'Hi {Client first name},\n\nYour invoice is ready. Open the e-invoice using the button in the email to view details and payment options.\n\nBest regards,\n{Company name}',
   },
 }
 

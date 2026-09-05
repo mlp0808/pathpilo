@@ -565,7 +565,7 @@ $headers = @{
 **Validation Error:**
 ```json
 {
-  "error": "Client, assigned user, services, and scheduled date are required"
+  "error": "Client and services are required"
 }
 ```
 

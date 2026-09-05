@@ -75,9 +75,10 @@ type SavableInvoiceDefaults = Pick<
 
 type ActivationFieldErrors = {
   nextNumber: boolean
-  dueDays: boolean
   bankTransfer: boolean
 }
+
+const DEFAULT_DUE_DAYS = 14
 
 const INPUT_ERROR_CLASS = 'border-red-400 ring-1 ring-red-400'
 const ROW_ERROR_CLASS = 'rounded-lg ring-2 ring-red-400/80 ring-inset'
@@ -87,7 +88,7 @@ function isPositiveInt(value: number | ''): value is number {
 }
 
 function validateActivationRequirements(
-  form: Pick<InvoiceDefaults, 'invoiceNextNumber' | 'invoiceDefaultDueDays'>,
+  form: Pick<InvoiceDefaults, 'invoiceNextNumber'>,
   paymentDrafts: Record<string, PaymentDraft>,
   countryCode: string,
 ): ActivationFieldErrors {
@@ -98,13 +99,12 @@ function validateActivationRequirements(
 
   return {
     nextNumber: !isPositiveInt(form.invoiceNextNumber),
-    dueDays: !isPositiveInt(form.invoiceDefaultDueDays),
     bankTransfer: !bankOk,
   }
 }
 
 function hasActivationErrors(errors: ActivationFieldErrors) {
-  return errors.nextNumber || errors.dueDays || errors.bankTransfer
+  return errors.nextNumber || errors.bankTransfer
 }
 
 export default function InvoiceOptionsPage() {
@@ -116,14 +116,14 @@ export default function InvoiceOptionsPage() {
   const [defaultsError, setDefaultsError] = useState('')
   const [activationSaving, setActivationSaving] = useState(false)
   const savedDefaultsRef = useRef<SavableInvoiceDefaults>({
-    invoiceDefaultDueDays: '',
+    invoiceDefaultDueDays: DEFAULT_DUE_DAYS,
     invoiceDefaultPaymentTerms: '',
     invoiceNextNumber: '',
     invoiceVatEnabled: null,
     invoiceDefaultTaxRate: null,
   })
   const [form, setForm] = useState<InvoiceDefaults>({
-    invoiceDefaultDueDays: '',
+    invoiceDefaultDueDays: DEFAULT_DUE_DAYS,
     invoiceDefaultPaymentTerms: '',
     invoiceNextNumber: '',
     maxNumericInvoice: 0,
@@ -134,7 +134,6 @@ export default function InvoiceOptionsPage() {
   })
   const [activationFieldErrors, setActivationFieldErrors] = useState<ActivationFieldErrors>({
     nextNumber: false,
-    dueDays: false,
     bankTransfer: false,
   })
   const [expandBankTransfer, setExpandBankTransfer] = useState(false)
@@ -199,12 +198,17 @@ export default function InvoiceOptionsPage() {
             ? data.defaults.invoiceNumberingConfigured
             : false
         const nextNumber = nextNumberRaw != null ? Number(nextNumberRaw) : ''
-        const dueDays = dueDaysRaw != null ? Number(dueDaysRaw) : ''
+        const dueDays =
+          dueDaysRaw != null && Number.isFinite(Number(dueDaysRaw))
+            ? Number(dueDaysRaw)
+            : DEFAULT_DUE_DAYS
         const vatEnabled = data.defaults.invoiceVatEnabled ?? null
         const taxRate = data.defaults.invoiceDefaultTaxRate ?? null
+        // API already fills empty DB terms with the standard starter template.
+        const terms = String(data.defaults.invoiceDefaultPaymentTerms ?? '')
         setForm({
           invoiceDefaultDueDays: dueDays,
-          invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
+          invoiceDefaultPaymentTerms: terms,
           invoiceNextNumber: nextNumber,
           maxNumericInvoice: maxIssued,
           invoiceNumberingConfigured: configured,
@@ -214,7 +218,7 @@ export default function InvoiceOptionsPage() {
         })
         savedDefaultsRef.current = {
           invoiceDefaultDueDays: dueDays,
-          invoiceDefaultPaymentTerms: data.defaults.invoiceDefaultPaymentTerms ?? '',
+          invoiceDefaultPaymentTerms: terms,
           invoiceNextNumber: nextNumber,
           invoiceVatEnabled: vatEnabled,
           invoiceDefaultTaxRate: taxRate,
@@ -268,7 +272,7 @@ export default function InvoiceOptionsPage() {
 
   const handleToggleInvoicing = async (next: boolean) => {
     if (!next) {
-      setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
+      setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
       setForm((f) => ({ ...f, invoicingEnabled: false }))
       setActivationSaving(true)
       setDefaultsError('')
@@ -298,16 +302,37 @@ export default function InvoiceOptionsPage() {
     if (hasActivationErrors(errors)) {
       setActivationFieldErrors(errors)
       if (errors.bankTransfer) setExpandBankTransfer(true)
-      setDefaultsError(
-        t(
-          'settings.invoices.activate.missingRequired',
-          'Fill in the required settings highlighted below before turning invoicing on.',
-        ),
-      )
+      if (errors.bankTransfer) {
+        const bank = paymentDrafts.bank_transfer
+        if (bank?.enabled) {
+          const bankErr = validateBankTransferForEnable(bank.config || {}, countryCode)
+          setDefaultsError(
+            bankErr ||
+              t(
+                'settings.invoices.activate.missingRequired',
+                'Fill in the required settings highlighted below before turning invoicing on.',
+              ),
+          )
+        } else {
+          setDefaultsError(
+            t(
+              'settings.invoices.activate.bankRequired',
+              'Enable bank transfer and fill your account details before turning invoicing on.',
+            ),
+          )
+        }
+      } else {
+        setDefaultsError(
+          t(
+            'settings.invoices.activate.missingRequired',
+            'Fill in the required settings highlighted below before turning invoicing on.',
+          ),
+        )
+      }
       return
     }
 
-    setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
+    setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
     setDefaultsError('')
     setActivationSaving(true)
 
@@ -344,11 +369,11 @@ export default function InvoiceOptionsPage() {
       if (!token) return false
 
       if (defaultsDirty) {
+        const dueDaysToSave =
+          form.invoiceDefaultDueDays === '' ? DEFAULT_DUE_DAYS : form.invoiceDefaultDueDays
         const payload: Record<string, unknown> = {
           invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
-        }
-        if (form.invoiceDefaultDueDays !== '') {
-          payload.invoiceDefaultDueDays = form.invoiceDefaultDueDays
+          invoiceDefaultDueDays: dueDaysToSave,
         }
         if (form.invoiceNextNumber !== '') {
           payload.invoiceNextNumber = form.invoiceNextNumber
@@ -371,7 +396,7 @@ export default function InvoiceOptionsPage() {
           return false
         }
         const nextSaved: SavableInvoiceDefaults = {
-          invoiceDefaultDueDays: form.invoiceDefaultDueDays,
+          invoiceDefaultDueDays: dueDaysToSave,
           invoiceDefaultPaymentTerms: form.invoiceDefaultPaymentTerms,
           invoiceNextNumber: form.invoiceNextNumber,
           invoiceVatEnabled: form.invoiceVatEnabled,
@@ -421,17 +446,8 @@ export default function InvoiceOptionsPage() {
         if (opt.provider === 'bank_transfer' && draft.enabled) {
           const bankErr = validateBankTransferForEnable(draft.config || {}, countryCode)
           if (bankErr) {
-            setPaymentError(
-              usesUkBankFields(countryCode)
-                ? t(
-                    'settings.invoices.payment.fillToActivateErrorUk',
-                    'Fill account holder, sort code, and account number before activating.',
-                  )
-                : t(
-                    'settings.invoices.payment.fillToActivateError',
-                    'Fill account holder and IBAN before activating.',
-                  ),
-            )
+            setExpandBankTransfer(true)
+            setPaymentError(bankErr)
             return false
           }
         }
@@ -475,7 +491,7 @@ export default function InvoiceOptionsPage() {
     )
     setDefaultsError('')
     setPaymentError('')
-    setActivationFieldErrors({ nextNumber: false, dueDays: false, bankTransfer: false })
+    setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
   }
 
   const updatePaymentDraft = (provider: string, patch: Partial<PaymentDraft>) => {
@@ -606,40 +622,37 @@ export default function InvoiceOptionsPage() {
               'Set how long clients have to pay and the standard wording that appears on every invoice. You can still override the text on individual invoices when needed.',
             )}
           >
-            <div className={activationFieldErrors.dueDays ? ROW_ERROR_CLASS : undefined}>
-              <SettingsRow
-                htmlFor="due-days"
-                title={t('settings.invoices.due.title', 'Default due day')}
-                description={t(
-                  'settings.invoices.due.subtitle',
-                  'How many days after the invoice date the client has to pay. This date is used in your payment terms and on the invoice itself.',
-                )}
-                control={
-                  <SettingsInput
-                    id="due-days"
-                    type="number"
-                    min={1}
-                    max={3650}
-                    className={`w-24 text-right ${activationFieldErrors.dueDays ? INPUT_ERROR_CLASS : ''}`}
-                    value={form.invoiceDefaultDueDays}
-                    placeholder="—"
-                    onChange={(e) => {
-                      setActivationFieldErrors((prev) => ({ ...prev, dueDays: false }))
-                      const raw = e.target.value
-                      if (!raw) {
-                        setForm((f) => ({ ...f, invoiceDefaultDueDays: '' }))
-                        return
-                      }
-                      const parsed = parseInt(raw, 10)
-                      setForm((f) => ({
-                        ...f,
-                        invoiceDefaultDueDays: Number.isFinite(parsed) && parsed >= 1 ? parsed : '',
-                      }))
-                    }}
-                  />
-                }
-              />
-            </div>
+            <SettingsRow
+              htmlFor="due-days"
+              title={t('settings.invoices.due.title', 'Default due day')}
+              description={t(
+                'settings.invoices.due.subtitle',
+                'How many days after the invoice date the client has to pay. Defaults to 14 days if left unchanged. This date is used in your payment terms and on the invoice itself.',
+              )}
+              control={
+                <SettingsInput
+                  id="due-days"
+                  type="number"
+                  min={1}
+                  max={3650}
+                  className="w-24 text-right"
+                  value={form.invoiceDefaultDueDays}
+                  placeholder={String(DEFAULT_DUE_DAYS)}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    if (!raw) {
+                      setForm((f) => ({ ...f, invoiceDefaultDueDays: '' }))
+                      return
+                    }
+                    const parsed = parseInt(raw, 10)
+                    setForm((f) => ({
+                      ...f,
+                      invoiceDefaultDueDays: Number.isFinite(parsed) && parsed >= 1 ? parsed : '',
+                    }))
+                  }}
+                />
+              }
+            />
             <SettingsField
               title={t('settings.invoices.terms.title', 'Default payment terms')}
               description={t(
@@ -648,12 +661,12 @@ export default function InvoiceOptionsPage() {
               )}
             >
               <SettingsTextarea
-                rows={5}
+                rows={6}
                 value={form.invoiceDefaultPaymentTerms}
                 onChange={(e) => setForm((f) => ({ ...f, invoiceDefaultPaymentTerms: e.target.value }))}
                 placeholder={t(
                   'settings.invoices.terms.placeholder',
-                  'e.g. Payment due within {due_date}. After the due date, interest of 1% per month is charged.',
+                  'Payment is due no later than {due_date}. Please use invoice number {invoice_number} as the payment reference.\n\nIf payment is not received by the due date, we reserve the right to charge interest on overdue amounts in accordance with applicable law, and to recover reasonable costs of collection.',
                 )}
               />
               <SettingsHint>
@@ -867,6 +880,11 @@ function PaymentOptionRow({
     return isBankTransferConfigComplete(draft.config || {}, countryCode)
   }, [isBankTransfer, draft.config, countryCode])
 
+  const bankEnableHint = useMemo(() => {
+    if (!isBankTransfer || !draft.enabled || canEnable) return null
+    return validateBankTransferForEnable(draft.config || {}, countryCode)
+  }, [isBankTransfer, draft.enabled, canEnable, draft.config, countryCode])
+
   const ProviderIcon = providerIconFor(option.provider)
 
   return (
@@ -916,7 +934,7 @@ function PaymentOptionRow({
                 {isUkBank
                   ? t(
                       'settings.invoices.payment.ukHelp',
-                      'UK bank transfers use sort code and account number. IBAN is optional.',
+                      'UK bank transfers use a 6-digit sort code (e.g. 12-34-56) and a 6–10 digit account number. IBAN is optional.',
                     )
                   : t(
                       'settings.invoices.payment.euHelp',
@@ -976,19 +994,7 @@ function PaymentOptionRow({
             </>
           )}
 
-          {draft.enabled && !canEnable && (
-            <SettingsHint>
-              {isUkBank
-                ? t(
-                    'settings.invoices.payment.fillToActivateUk',
-                    'Fill account holder, sort code, and account number to activate.',
-                  )
-                : t(
-                    'settings.invoices.payment.fillToActivate',
-                    'Fill account holder and IBAN to activate.',
-                  )}
-            </SettingsHint>
-          )}
+          {bankEnableHint && <SettingsHint>{bankEnableHint}</SettingsHint>}
         </div>
       )}
     </div>

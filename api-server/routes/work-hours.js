@@ -13,6 +13,7 @@ const { pool } = require('../utils/database');
 const {
   ensureWorkHoursSchema,
   companyDefaultRowOrFallback,
+  addHoursToTime,
   DAYS,
 } = require('../utils/workHoursSchema');
 
@@ -69,9 +70,10 @@ function normaliseTime(value) {
   return m ? `${m[1]}:${m[2]}` : null;
 }
 
-function normaliseMode(value, fallback = 'flexible') {
-  const v = String(value || '').trim().toLowerCase();
-  return v === 'fixed' || v === 'flexible' ? v : fallback;
+function normaliseHours(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(24, Math.round(num * 10) / 10));
 }
 
 // Shape a raw DB row into the JSON response the frontend expects. Converts
@@ -217,19 +219,15 @@ router.put('/:userId', async (req, res) => {
     const current = existing.rows[0] || (await loadCompanyDefault(companyId));
 
     const workHours = req.body && req.body.workHours;
-    const bodyMode = normaliseMode(
-      (workHours && workHours.work_hours_mode) || req.body.work_hours_mode,
-      current.work_hours_mode || 'flexible',
-    );
-
     const valueFor = (key, fallback) => {
       if (workHours && workHours[key] !== undefined) return workHours[key];
       if (req.body[key] !== undefined) return req.body[key];
       return fallback;
     };
 
+    // Start time + daily hours. End is derived for legacy readers; breaks stay 0 for now.
     const fields = {
-      work_hours_mode: bodyMode,
+      work_hours_mode: 'flexible',
     };
     for (const d of DAYS) {
       const sKey = `${d}_start`;
@@ -237,30 +235,18 @@ router.put('/:userId', async (req, res) => {
       const bKey = `${d}_break_minutes`;
       const hKey = `${d}_hours`;
 
-      fields[sKey] = normaliseTime(valueFor(sKey, current[sKey]));
-      fields[eKey] = normaliseTime(valueFor(eKey, current[eKey]));
+      const hours = normaliseHours(valueFor(hKey, current[hKey]));
+      const start = hours > 0
+        ? (normaliseTime(valueFor(sKey, current[sKey])) || '08:00')
+        : null;
+      const end = hours > 0
+        ? (normaliseTime(valueFor(eKey, null)) || addHoursToTime(start, hours))
+        : null;
 
-      const breakVal = valueFor(bKey, current[bKey]);
-      fields[bKey] = Number.isFinite(Number(breakVal))
-        ? Math.max(0, Math.min(480, Math.round(Number(breakVal))))
-        : 0;
-
-      // For flexible mode trust the number the client sent; for fixed mode
-      // derive from start/end - break so the two stay consistent.
-      let hoursVal;
-      if (bodyMode === 'fixed' && fields[sKey] && fields[eKey]) {
-        const [sh, sm] = fields[sKey].split(':').map((n) => parseInt(n, 10));
-        const [eh, em] = fields[eKey].split(':').map((n) => parseInt(n, 10));
-        const minutes = eh * 60 + em - (sh * 60 + sm) - fields[bKey];
-        hoursVal = Math.max(0, Math.round((minutes / 60) * 10) / 10);
-      } else if (bodyMode === 'fixed') {
-        hoursVal = 0;
-      } else {
-        const raw = valueFor(hKey, current[hKey]);
-        const num = Number(raw);
-        hoursVal = Number.isFinite(num) ? Math.max(0, Math.min(24, Math.round(num * 10) / 10)) : 0;
-      }
-      fields[hKey] = hoursVal;
+      fields[sKey] = start;
+      fields[eKey] = end;
+      fields[bKey] = 0;
+      fields[hKey] = hours;
     }
 
     const startAddress = req.body.start_address !== undefined ? req.body.start_address : (current.start_address ?? null);

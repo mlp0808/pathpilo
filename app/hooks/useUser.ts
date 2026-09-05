@@ -10,6 +10,9 @@ import {
   mergeSessionUserPreservingOnboarding,
   ownerMustCompleteSetup,
 } from '@/app/utils/onboardingClient'
+import { SESSION_UPDATED_EVENT } from '@/app/utils/sessionEvents'
+import { forceReLogin, maybeRefreshSession, refreshSession } from '@/app/utils/sessionRefresh'
+import { installAuthFetchRecovery } from '@/app/utils/authFetchGuard'
 
 interface User {
   id: number
@@ -50,7 +53,7 @@ interface User {
   } | null
 }
 
-export const SESSION_UPDATED_EVENT = 'vevago:session-updated'
+export { SESSION_UPDATED_EVENT }
 
 function readStoredUser(): User | null {
   if (typeof window === 'undefined') return null
@@ -77,6 +80,25 @@ export function useUser() {
     return () => window.removeEventListener(SESSION_UPDATED_EVENT, onSessionUpdated)
   }, [])
 
+  // Recover globally from a stale token on any /api/* call, one time per tab.
+  useEffect(() => {
+    installAuthFetchRecovery()
+  }, [])
+
+  // Coming back to a tab that's been away for a while is exactly when a
+  // long-lived token is most likely to have gone quiet — renew it then too.
+  useEffect(() => {
+    const onFocusLike = () => {
+      if (document.visibilityState === 'visible') maybeRefreshSession()
+    }
+    document.addEventListener('visibilitychange', onFocusLike)
+    window.addEventListener('focus', onFocusLike)
+    return () => {
+      document.removeEventListener('visibilitychange', onFocusLike)
+      window.removeEventListener('focus', onFocusLike)
+    }
+  }, [])
+
   useEffect(() => {
     // Check if user is logged in
     const token = localStorage.getItem('token')
@@ -91,12 +113,23 @@ export function useUser() {
       const user = JSON.parse(userData)
       setUser(user)
 
+      // Renew the token in the background before it's anywhere near expiry —
+      // see sessionRefresh.ts. Keeps an open/idle tab from ever hitting a
+      // hard "Invalid or expired token" wall on its next request.
+      maybeRefreshSession()
+
       // Keep desktop session user in sync with backend profile so edits made
       // from mobile are reflected after a web refresh.
       fetch(apiUrl('/user/profile'), {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(async (res) => {
+          if (res.status === 401 || res.status === 403) {
+            // The token didn't survive the trip (e.g. a laptop asleep past
+            // the proactive-renew window) — one more attempt before giving up.
+            if ((await refreshSession()) === 'expired') forceReLogin()
+            return null
+          }
           if (!res.ok) return null
           return res.json()
         })

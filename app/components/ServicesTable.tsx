@@ -11,6 +11,7 @@ interface Service {
   title: string
   price: number
   duration_minutes: number
+  default_quantity?: number
   created_at: string
 }
 
@@ -18,6 +19,8 @@ interface ServicesTableProps {
   services: Service[]
   searchTerm: string
   onServiceUpdated?: () => void
+  /** Which columns to show for this group. */
+  metaFields?: string[]
 }
 
 const formatDate = (dateString: string) => {
@@ -46,7 +49,14 @@ const formatDuration = (minutes: number) => {
   return durationString.trim()
 }
 
-export default function ServicesTable({ services, searchTerm, onServiceUpdated }: ServicesTableProps) {
+export default function ServicesTable({
+  services,
+  searchTerm,
+  onServiceUpdated,
+  metaFields = ['price', 'duration'],
+}: ServicesTableProps) {
+  const hasDuration = metaFields.includes('duration')
+  const hasQuantity = metaFields.includes('quantity')
   const companyCountryCode = useCompanyCountryCode()
   const formatPrice = (price: number | string) => {
     const numPrice = typeof price === 'string' ? parseFloat(price) : price
@@ -161,14 +171,21 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
         <thead className="bg-gray-50">
           <tr>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Service
+              Item
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Price
+              {hasQuantity ? 'Unit price' : 'Price'}
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Duration
-            </th>
+            {hasQuantity && (
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Qty
+              </th>
+            )}
+            {hasDuration && (
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Duration
+              </th>
+            )}
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Created
             </th>
@@ -190,11 +207,18 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
                   {formatPrice(service.price)}
                 </div>
               </td>
-              <td className="px-6 py-4 whitespace-nowrap">
-                <div className="text-sm text-gray-900">
-                  {formatDuration(service.duration_minutes)}
-                </div>
-              </td>
+              {hasQuantity && (
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {service.default_quantity ?? 1}
+                </td>
+              )}
+              {hasDuration && (
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="text-sm text-gray-900">
+                    {formatDuration(service.duration_minutes)}
+                  </div>
+                </td>
+              )}
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {formatDate(service.created_at)}
               </td>
@@ -227,6 +251,7 @@ export default function ServicesTable({ services, searchTerm, onServiceUpdated }
         onClose={handleCloseEditModal}
         onServiceUpdated={handleServiceUpdated}
         service={editingService}
+        metaFields={metaFields}
       />
     </div>
   )

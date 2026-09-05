@@ -10,3 +10,4 @@ config.resolver.extraNodeModules = {
 };
 
 module.exports = config;
+

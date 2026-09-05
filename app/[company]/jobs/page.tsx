@@ -27,19 +27,27 @@ import {
 } from '@/app/utils/onboardingClient'
 import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
 import { apiUrl } from '@/app/utils/api'
+import { forceReLogin, refreshSession } from '@/app/utils/sessionRefresh'
+import { groupJobsIntoVisits, visitSiblingsFor } from '@/app/utils/visitMerge'
 import { formatMoney } from '@/app/config/countryRules'
 import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { useAppI18n } from '@/app/components/I18nProvider'
-import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon } from '@heroicons/react/24/outline'
+import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon, ArchiveBoxArrowDownIcon } from '@heroicons/react/24/outline'
 import type { UserRoute, RouteJob, IsolatedRouteSeg } from '@/app/components/RouteMap'
 import {
   buildDayJobsFingerprint,
   formatRouteTime,
   routesHaveDirections,
 } from '@/app/utils/routeDirections'
+import { buildDayRoutesFromJobs, fetchRouteDirections } from '@/app/utils/dayRouteShared'
 import { optimizeMiddleJobsClient } from '@/app/utils/clientRouteOptimize'
+import {
+  PLANNER_ARCHIVED_JOBS_EVENT,
+  archivePlannerJobId,
+  getArchivedPlannerJobIds,
+} from '@/app/utils/plannerArchivedJobs'
 
 // RouteMap uses mapbox-gl which cannot be server-rendered
 const RouteMap = dynamic(() => import('@/app/components/RouteMap'), { ssr: false })
@@ -51,7 +59,7 @@ const USER_COLORS = [
   '#2196F3', '#FF9800',
 ]
 
-/** Mobile route planner bottom sheet — keep in sync with RouteMap fitInsets. */
+/** Mobile route planner bottom sheet â keep in sync with RouteMap fitInsets. */
 const MOBILE_ROUTE_SHEET_SNAPS = [0.3, 0.58, 0.85] as const
 const MOBILE_ROUTE_SHEET_INITIAL_SNAP = 1
 const MOBILE_ROUTE_MAP_FIT_INSETS = {
@@ -62,13 +70,7 @@ const MOBILE_ROUTE_MAP_FIT_INSETS = {
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
-function coordOrNull(v: unknown): number | null {
-  if (v == null || v === '') return null
-  const n = typeof v === 'number' ? v : Number(v)
-  return Number.isFinite(n) ? n : null
-}
-
-/** Task count for job cards — list API exposes all_service_count, not job_services[]. */
+/** Task count for job cards â list API exposes all_service_count, not job_services[]. */
 function getJobTaskCount(job: any): number {
   const fromApi = Number(job.all_service_count ?? job.service_count ?? 0)
   if (fromApi > 0) return fromApi
@@ -76,8 +78,13 @@ function getJobTaskCount(job: any): number {
   return fromArrays > 0 ? fromArrays : 1
 }
 
-/** Planned job value (all tasks); total_price on list API is completed tasks only. */
+/** Planned job value (all tasks); total_price on list API is completed tasks only.
+ *  Cancelled jobs show the cancellation fee (not the original service total). */
 function getJobDisplayPrice(job: any): number {
+  if (String(job?.status || '') === 'cancelled') {
+    const fee = parseFloat(String(job.cancellation_fee_amount ?? job.estimated_price ?? job.total_price ?? 0))
+    return Number.isFinite(fee) ? Math.max(0, fee) : 0
+  }
   const estimated = parseFloat(String(job.estimated_price ?? ''))
   if (!Number.isNaN(estimated) && estimated > 0) return estimated
   const total = parseFloat(String(job.total_price ?? ''))
@@ -165,6 +172,132 @@ interface WorkHours {
     friday_hours: number
     saturday_hours: number
     sunday_hours: number
+    monday_start?: string | null
+    tuesday_start?: string | null
+    wednesday_start?: string | null
+    thursday_start?: string | null
+    friday_start?: string | null
+    saturday_start?: string | null
+    sunday_start?: string | null
+}
+
+/** Standard 37h week — used while hours are still loading so days never flash as 0h. */
+const DEFAULT_WORK_HOURS: WorkHours = {
+    monday_hours: 7.5,
+    tuesday_hours: 7.5,
+    wednesday_hours: 7.5,
+    thursday_hours: 7.5,
+    friday_hours: 7.0,
+    saturday_hours: 0,
+    sunday_hours: 0,
+    monday_start: '08:00',
+    tuesday_start: '08:00',
+    wednesday_start: '08:00',
+    thursday_start: '08:00',
+    friday_start: '08:00',
+    saturday_start: null,
+    sunday_start: null,
+}
+
+const WORK_HOUR_KEYS: (keyof WorkHours)[] = [
+    'monday_hours',
+    'tuesday_hours',
+    'wednesday_hours',
+    'thursday_hours',
+    'friday_hours',
+    'saturday_hours',
+    'sunday_hours',
+]
+
+const WORK_START_KEYS = [
+    'monday_start',
+    'tuesday_start',
+    'wednesday_start',
+    'thursday_start',
+    'friday_start',
+    'saturday_start',
+    'sunday_start',
+] as const
+
+function parseWorkHoursRow(raw: Record<string, unknown> | null | undefined): WorkHours {
+    const src = raw || {}
+    const num = (key: keyof WorkHours, fallback: number) => {
+        const n = parseFloat(String(src[key] ?? fallback))
+        return Number.isFinite(n) ? n : fallback
+    }
+    const start = (key: typeof WORK_START_KEYS[number], hours: number) => {
+        const rawStart = src[key]
+        if (rawStart == null || rawStart === '') return hours > 0 ? '08:00' : null
+        return String(rawStart).slice(0, 5)
+    }
+    const monday_hours = num('monday_hours', 7.5)
+    const tuesday_hours = num('tuesday_hours', 7.5)
+    const wednesday_hours = num('wednesday_hours', 7.5)
+    const thursday_hours = num('thursday_hours', 7.5)
+    const friday_hours = num('friday_hours', 7.0)
+    const saturday_hours = num('saturday_hours', 0)
+    const sunday_hours = num('sunday_hours', 0)
+    return {
+        monday_hours,
+        tuesday_hours,
+        wednesday_hours,
+        thursday_hours,
+        friday_hours,
+        saturday_hours,
+        sunday_hours,
+        monday_start: start('monday_start', monday_hours),
+        tuesday_start: start('tuesday_start', tuesday_hours),
+        wednesday_start: start('wednesday_start', wednesday_hours),
+        thursday_start: start('thursday_start', thursday_hours),
+        friday_start: start('friday_start', friday_hours),
+        saturday_start: start('saturday_start', saturday_hours),
+        sunday_start: start('sunday_start', sunday_hours),
+    }
+}
+
+function hoursForDayIndex(hours: WorkHours | null | undefined, dayIndex: number): number {
+    const src = hours || DEFAULT_WORK_HOURS
+    const raw = src[WORK_HOUR_KEYS[dayIndex]]
+    const n = typeof raw === 'string' ? parseFloat(raw) : Number(raw)
+    return Number.isFinite(n) ? n : (DEFAULT_WORK_HOURS[WORK_HOUR_KEYS[dayIndex]] as number)
+}
+
+function startForDayIndex(hours: WorkHours | null | undefined, dayIndex: number): string | null {
+    const src = hours || DEFAULT_WORK_HOURS
+    const start = src[WORK_START_KEYS[dayIndex]]
+    if (start) return String(start).slice(0, 5)
+    return hoursForDayIndex(src, dayIndex) > 0 ? '08:00' : null
+}
+
+/** Add minutes to HH:MM; returns HH:MM (wraps past midnight). */
+function addMinutesToClock(hhmm: string, minutes: number): string {
+    const m = String(hhmm).match(/^(\d{1,2}):(\d{2})/)
+    if (!m) return hhmm
+    const total = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + Math.round(minutes)
+    const wrapped = ((total % (24 * 60)) + 24 * 60) % (24 * 60)
+    const h = Math.floor(wrapped / 60)
+    const min = wrapped % 60
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+}
+
+function DayClockDivider({
+    label,
+    hint,
+}: {
+    label: string
+    hint?: string | null
+}) {
+    return (
+        <div className="flex items-center gap-2 py-1" title={hint || undefined}>
+            <span className="flex-shrink-0 text-[10px] font-semibold tabular-nums tracking-wide text-gray-500">
+                {label}
+                {hint ? (
+                    <span className="ml-1.5 font-medium text-gray-400">{hint}</span>
+                ) : null}
+            </span>
+            <div className="h-px min-w-0 flex-1 bg-gray-200/90" />
+        </div>
+    )
 }
 
 function JobsPageContent() {
@@ -172,6 +305,7 @@ function JobsPageContent() {
   const dateLocale = locale === 'da' ? 'da-DK' : 'en-US'
   const params = useParams()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const { user, loading: userLoading } = useUser()
   const companyCountryCode = useCompanyCountryCode(user)
   const companySlug = (params?.company as string) || ''
@@ -189,6 +323,26 @@ function JobsPageContent() {
     return `${year}-${month}-${day}`
   }
 
+  /** Route planning lives on the map multitool — Jobs only deep-links into it. */
+  const openMapPlanner = useCallback((date: string, userId?: number | null) => {
+    if (!companySlug) return
+    const uid = userId != null && Number.isFinite(Number(userId)) ? Number(userId) : null
+    const back = encodeURIComponent(`/${companySlug}/jobs`)
+    const href = uid != null
+      ? `/${companySlug}/map?focus=route&date=${date}&userId=${uid}&back=${back}`
+      : `/${companySlug}/map?focus=day&date=${date}&back=${back}`
+    router.push(href)
+  }, [companySlug, router])
+
+  // Old jobs?view=day bookmarks → map planner (same date / optional user).
+  useEffect(() => {
+    if (searchParams.get('view') !== 'day') return
+    const date = searchParams.get('date') || toLocalDateString(new Date())
+    const userParam = searchParams.get('user') || searchParams.get('userId')
+    const uid = userParam && userParam !== 'all' ? Number(userParam) : null
+    openMapPlanner(date, Number.isFinite(uid as number) ? uid : null)
+  }, [searchParams, openMapPlanner])
+
   // Normalize any date-ish value (YYYY-MM-DD, ISO string, Date) to YYYY-MM-DD
   const toDateOnlyString = (v: any) => {
     if (!v) return ''
@@ -202,7 +356,7 @@ function JobsPageContent() {
   // Load saved state from localStorage
   // Initialise currentWeek from URL ?date= param if present (used by day-view
   // shareable links / refreshes), otherwise always start on today. We intentionally
-  // do NOT restore from localStorage — opening the jobs page should always land
+  // do NOT restore from localStorage â opening the jobs page should always land
   // on the current week/month, regardless of where the user was last time.
   const [currentWeek, setCurrentWeek] = useState(() => {
     const dateStr = searchParams.get('date')
@@ -224,10 +378,9 @@ function JobsPageContent() {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isCreateClientModalOpen, setIsCreateClientModalOpen] = useState(false)
-  const [showCreateMenu, setShowCreateMenu] = useState(false)
   const [createJobPrefillDate, setCreateJobPrefillDate] = useState<string | null>(null)
   const [createJobPrefillUserId, setCreateJobPrefillUserId] = useState<number | null>(null)
-  // Route planner "add a job" search → prefill the create-job modal
+  // Route planner "add a job" search â prefill the create-job modal
   const [createJobClientId, setCreateJobClientId] = useState<number | undefined>(undefined)
   const [createJobLockClient, setCreateJobLockClient] = useState(false)
   const [createJobNewClient, setCreateJobNewClient] = useState<{ name?: string; address?: string; zip_code?: string; city?: string } | null>(null)
@@ -237,18 +390,22 @@ function JobsPageContent() {
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
-  const [workHours, setWorkHours] = useState<WorkHours | null>(null)
+  const [workHours, setWorkHours] = useState<WorkHours | null>(DEFAULT_WORK_HOURS)
   const [allUsersWorkHours, setAllUsersWorkHours] = useState<WorkHours | null>(null)
   const [workHoursByUser, setWorkHoursByUser] = useState<Record<number, WorkHours>>({})
-  // Per-user schedule hours keyed by user id. Populated whenever we fetch the
-  // all-team aggregate so the all-team week view can show individual employees
-  // as "off" on days where *they* have zero scheduled hours (weekend, day off,
-  // part-time schedule) even when other team members are working.
-  const [dailyCapacityEnabled, setDailyCapacityEnabled] = useState(false)
-  // Initialise viewMode from URL ?view= param
-  const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() =>
-    searchParams.get('view') === 'day' ? 'day' : 'week'
-  )
+  /** Which employee `workHours` belongs to — never show another person's capacity. */
+  const [workHoursOwnerId, setWorkHoursOwnerId] = useState<number | 'all' | null>(null)
+  const workHoursFetchSeq = useRef(0)
+  const selectedUserIdRef = useRef(selectedUserId)
+  selectedUserIdRef.current = selectedUserId
+  // Capacity bars always follow work-hours (weekends / 0h days stay closed).
+  const dailyCapacityEnabled = true
+  // Initialise viewMode from URL ?view= param (day planning moved to the map)
+  const [viewMode, setViewMode] = useState<'day'|'week'|'month'|'year'>(() => {
+    const v = searchParams.get('view')
+    if (v === 'month' || v === 'year' || v === 'week') return v
+    return 'week'
+  })
   
   // Drag and drop state
   const [draggedJob, setDraggedJob] = useState<any>(null)
@@ -263,7 +420,7 @@ function JobsPageContent() {
   const weekScrollContainerRef = useRef<HTMLDivElement>(null)
   const [weekScrollPosition, setWeekScrollPosition] = useState(0)
 
-  // ── Day view / route planner ──────────────────────────────────────────────
+  // ââ Day view / route planner ââââââââââââââââââââââââââââââââââââââââââââââ
   const [dayRoutes, setDayRoutes] = useState<UserRoute[]>([])
   const [dayFocusUserId, setDayFocusUserId] = useState<number | null>(null)
   // AllEmployees panel: hover-to-preview and checkbox-select isolation
@@ -276,7 +433,7 @@ function JobsPageContent() {
       setAllPanelSelectedIds([])
     }
   }, [dayFocusUserId])
-  // lg breakpoint (1024px) — drives the mobile bottom-sheet vs desktop split layout
+  // lg breakpoint (1024px) â drives the mobile bottom-sheet vs desktop split layout
   const [isDesktopRoute, setIsDesktopRoute] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches,
   )
@@ -362,7 +519,7 @@ function JobsPageContent() {
       setIsolatedLeg(seg)
     }
   }, [])
-  // Manual draw-route mode (per focused user — only one drawable at a time)
+  // Manual draw-route mode (per focused user â only one drawable at a time)
   const [drawMode, setDrawMode] = useState(false)
   const [drawOrder, setDrawOrder] = useState<(number | string)[]>([])
   /** After finishing a drawn route: driving time vs order before draw (+ = saved). */
@@ -390,15 +547,69 @@ function JobsPageContent() {
   // Date strings (YYYY-MM-DD) where a route has been explicitly saved via Save & Apply
   const [plannedDays, setPlannedDays] = useState<Set<string>>(new Set())
 
-  /** Fingerprint for a single user's job order — used to detect per-user unsaved changes. */
+  /** Saved daily_routes rows for the visible week, keyed by date. The server is
+   *  the source of truth for planned packages; localStorage is only a cache. */
+  type DailyRouteMeta = {
+    id: number
+    user_id: number
+    scheduled_date: string
+    status: string | null
+    name: string | null
+    round_template_id: number | null
+    round_id: number | null
+    is_occurrence_override: boolean | null
+    job_ids: number[]
+  }
+  const [dailyRoutesByDate, setDailyRoutesByDate] = useState<Record<string, DailyRouteMeta[]>>({})
+  /** Bumped to re-fetch daily routes after a package move / save-as-round. */
+  const [dailyRoutesTick, setDailyRoutesTick] = useState(0)
+  /** Popover for "Move package" on a planned-route container. */
+  const [movePackageMenu, setMovePackageMenu] = useState<
+    | { routeIds: number[]; date: string; userId: number; x: number; y: number }
+    | null
+  >(null)
+  const [movePackageDate, setMovePackageDate] = useState('')
+  const [movePackageUserId, setMovePackageUserId] = useState<number | ''>('')
+  const [movePackageBusy, setMovePackageBusy] = useState(false)
+  const [movePackageError, setMovePackageError] = useState<string | null>(null)
+  /** Cancelled/deleted cards hidden from the jobs board (frontend only). */
+  const [archivedJobIds, setArchivedJobIds] = useState<Set<string>>(() => getArchivedPlannerJobIds())
+  const [exitingJobIds, setExitingJobIds] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    const sync = () => setArchivedJobIds(getArchivedPlannerJobIds())
+    sync()
+    window.addEventListener(PLANNER_ARCHIVED_JOBS_EVENT, sync)
+    return () => window.removeEventListener(PLANNER_ARCHIVED_JOBS_EVENT, sync)
+  }, [])
+
+  const dismissInactiveJobs = useCallback((ids: Array<string | number>) => {
+    const keys = ids.map((id) => String(id)).filter(Boolean)
+    if (keys.length === 0) return
+    setExitingJobIds((prev) => {
+      const next = new Set(prev)
+      keys.forEach((k) => next.add(k))
+      return next
+    })
+    window.setTimeout(() => {
+      keys.forEach((k) => archivePlannerJobId(k))
+      setExitingJobIds((prev) => {
+        const next = new Set(prev)
+        keys.forEach((k) => next.delete(k))
+        return next
+      })
+    }, 280)
+  }, [])
+
+  /** Fingerprint for a single user's job order â used to detect per-user unsaved changes. */
   const buildUserFingerprint = useCallback(
     (route: UserRoute) => JSON.stringify(route.jobs.filter(j => !j.is_home).map(j => j.id)),
     [],
   )
 
-  /** Per-user saved fingerprints — null entry means "not yet initialised for this user". */
+  /** Per-user saved fingerprints â null entry means "not yet initialised for this user". */
   const [savedFingerprintsByUser, setSavedFingerprintsByUser] = useState<Record<number, string>>({})
-  /** Per-user discard snapshots — kept fresh whenever a user's route is clean. */
+  /** Per-user discard snapshots â kept fresh whenever a user's route is clean. */
   const discardSnapshotsByUserRef = useRef<Record<number, UserRoute>>({})
 
   /** IDs of users whose current route order differs from the last saved state. */
@@ -494,7 +705,7 @@ function JobsPageContent() {
 
   // Saved total travel time per day. Key: "YYYY-MM-DD:userId", value: minutes
   const [travelMinutes, setTravelMinutes] = useState<Record<string, number>>({})
-  // Leave entries for the currently selected employee: date → { leave_type, hours_off }
+  // Leave entries for the currently selected employee: date â { leave_type, hours_off }
   const [employeeLeaveByDate, setEmployeeLeaveByDate] = useState<Record<string, { leave_type: string; hours_off: number | null }>>({})
 
   // Appointments (unified time off + blocks). Keyed by date for O(1) render
@@ -522,7 +733,7 @@ function JobsPageContent() {
   const [editingAppointment, setEditingAppointment] = useState<AppointmentPayload | null>(null)
   const [appointmentPrefillDate, setAppointmentPrefillDate] = useState<string | null>(null)
   const [appointmentPrefillUserId, setAppointmentPrefillUserId] = useState<number | null>(null)
-  // Per-cell "+ Add" popover — two choices (Job / Appointment).
+  // Per-cell "+ Add" popover â two choices (Job / Appointment).
   const [cellAddMenu, setCellAddMenu] = useState<
     | { date: string; x: number; y: number }
     | null
@@ -534,24 +745,11 @@ function JobsPageContent() {
   >(null)
 
 
+  // Fetch saved travel times + planned-package metadata from daily_routes
+  // whenever the visible week changes (or a package was moved/saved). Runs in
+  // day view too so the planner can show the planned/round badge.
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (!token) return
-    fetch(apiUrl('/companies/profile'), {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.company) {
-          setDailyCapacityEnabled(data.company.dailyCapacityEnabled === true)
-        }
-      })
-      .catch(() => {})
-  }, [])
-
-  // Fetch saved travel times from daily_routes whenever the visible week changes
-  useEffect(() => {
-    if (viewMode !== 'week') return
+    if (viewMode !== 'week' && viewMode !== 'day') return
     const startDate = toLocalDateString(weekDays[0])
     const endDate = toLocalDateString(weekDays[6])
     const token = localStorage.getItem('token')
@@ -560,27 +758,111 @@ function JobsPageContent() {
     })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (!data?.routes?.length) return
+        if (!data?.routes) return
+        const metaByDate: Record<string, DailyRouteMeta[]> = {}
+        const serverPlanned: string[] = []
         setTravelMinutes(prev => {
           const next = { ...prev }
           for (const row of data.routes) {
-            if (row.total_minutes == null) continue
             // scheduled_date may be a plain "YYYY-MM-DD" string (from to_char on server)
             // or a JS Date serialized as "YYYY-MM-DDT23:00:00.000Z" (UTC, server in UTC+1).
-            // Plain string → use directly.
-            // ISO timestamp → convert to LOCAL date so the day matches the browser timezone.
+            // Plain string â use directly.
+            // ISO timestamp â convert to LOCAL date so the day matches the browser timezone.
             const raw = String(row.scheduled_date)
             const dateStr = raw.includes('T')
               ? toLocalDateString(new Date(raw))
               : raw
-            next[`${dateStr}:${row.user_id}`] = row.total_minutes
+            if (row.total_minutes != null) {
+              next[`${dateStr}:${row.user_id}`] = row.total_minutes
+            }
+            const meta: DailyRouteMeta = {
+              id: Number(row.id),
+              user_id: Number(row.user_id),
+              scheduled_date: dateStr,
+              // Library round placements always count as a planned package.
+              status: (row.status === 'planned' || row.round_id != null) ? 'planned' : (row.status ?? null),
+              name: row.name ?? null,
+              round_template_id: row.round_template_id != null ? Number(row.round_template_id) : null,
+              round_id: row.round_id != null ? Number(row.round_id) : null,
+              is_occurrence_override: row.is_occurrence_override ?? null,
+              job_ids: (() => {
+                const raw = row.job_ids
+                if (Array.isArray(raw)) return raw.map((n: unknown) => Number(n)).filter((n) => Number.isFinite(n))
+                if (typeof raw === 'string') {
+                  return raw
+                    .replace(/[{}]/g, '')
+                    .split(',')
+                    .map((s) => Number(s.trim()))
+                    .filter((n) => Number.isFinite(n))
+                }
+                return []
+              })(),
+            }
+            ;(metaByDate[dateStr] ??= []).push(meta)
+            if (meta.status === 'planned') serverPlanned.push(dateStr)
           }
           return next
         })
+        setDailyRoutesByDate(prev => {
+          // Replace the visible week's entries; keep other cached dates.
+          const next = { ...prev }
+          for (const d of weekDays) delete next[toLocalDateString(d)]
+          return { ...next, ...metaByDate }
+        })
+        if (serverPlanned.length > 0) {
+          // Server-planned days are the source of truth â merge into the local
+          // cache so the UI reflects saves made on other devices too.
+          setPlannedDays(prev => {
+            const next = new Set(prev)
+            serverPlanned.forEach(d => next.add(d))
+            return next
+          })
+        }
       })
       .catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, currentWeek])
+  }, [viewMode, currentWeek, dailyRoutesTick])
+
+  // Move a whole planned package (route row + all its jobs) to another day
+  // and/or employee in one server call per route row.
+  const handleMovePackage = useCallback(async () => {
+    if (!movePackageMenu) return
+    const toDate = movePackageDate && movePackageDate !== movePackageMenu.date ? movePackageDate : null
+    const toUser = movePackageUserId !== '' && Number(movePackageUserId) !== movePackageMenu.userId
+      ? Number(movePackageUserId)
+      : null
+    if (!toDate && !toUser) {
+      setMovePackageError(t('app.jobsPage.movePackagePick', 'Pick a new date or employee first'))
+      return
+    }
+    setMovePackageBusy(true)
+    setMovePackageError(null)
+    const token = localStorage.getItem('token')
+    try {
+      for (const routeId of movePackageMenu.routeIds) {
+        const res = await fetch(apiUrl(`/daily-routes/${routeId}/move`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            ...(toDate ? { to_date: toDate } : {}),
+            ...(toUser ? { to_user_id: toUser } : {}),
+          }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => null)
+          throw new Error(body?.error || t('app.jobsPage.movePackageFailed', 'Could not move the route'))
+        }
+      }
+      setMovePackageMenu(null)
+      setDailyRoutesTick(tick => tick + 1)
+      fetchJobsForWeek()
+    } catch (err) {
+      setMovePackageError(err instanceof Error ? err.message : t('app.jobsPage.movePackageFailed', 'Could not move the route'))
+    } finally {
+      setMovePackageBusy(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movePackageMenu, movePackageDate, movePackageUserId])
 
 
     // Get the start of the week (Monday)
@@ -710,7 +992,7 @@ function JobsPageContent() {
     return days
   }
   
-  // (We intentionally don't persist currentWeek anywhere — see the initializer
+  // (We intentionally don't persist currentWeek anywhere â see the initializer
   //  comment above. The URL `?date=` is only set in day view by the effect below.)
 
   // Clean up any legacy persisted week so old installs also reset to "today".
@@ -719,8 +1001,8 @@ function JobsPageContent() {
   }, [])
 
   // Keep the browser URL in sync with the current view so that:
-  //  • Refreshing the page returns you to the same day view
-  //  • The URL can be copied and shared
+  //  â¢ Refreshing the page returns you to the same day view
+  //  â¢ The URL can be copied and shared
   // Uses replaceState (no new history entry) so the back button works naturally.
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -737,16 +1019,46 @@ function JobsPageContent() {
     window.history.replaceState(null, '', newUrl)
   }, [viewMode, currentWeek])
 
+  // Tell AppLayout to step the global header aside â the day route planner is
+  // a full-bleed tool, same as the map multitool.
+  useEffect(() => {
+    if (viewMode === 'day') {
+      document.documentElement.dataset.fullBleedTool = '1'
+    } else {
+      delete document.documentElement.dataset.fullBleedTool
+    }
+    window.dispatchEvent(new Event('pathpilo:full-bleed'))
+    return () => {
+      delete document.documentElement.dataset.fullBleedTool
+      window.dispatchEvent(new Event('pathpilo:full-bleed'))
+    }
+  }, [viewMode])
+
   // Fetch users for employee selector
   const fetchUsers = async () => {
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(apiUrl('/users'), {
+      let token = localStorage.getItem('token')
+      let response = await fetch(apiUrl('/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       })
-      
+
+      if (response.status === 401 || response.status === 403) {
+        // Token may have simply gone stale while the tab was away â try a
+        // silent renew and retry once before giving up.
+        const result = await refreshSession()
+        if (result === 'ok') {
+          token = localStorage.getItem('token')
+          response = await fetch(apiUrl('/users'), {
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
+        } else if (result === 'expired') {
+          forceReLogin()
+          return
+        }
+      }
+
       const data = await response.json()
       
       if (response.ok) {
@@ -763,14 +1075,15 @@ function JobsPageContent() {
     }
   }
 
-    // Fetch work hours for selected user
+    // Fetch work hours for selected user. Guarded against out-of-order responses
+    // so switching Alex → Sam never briefly applies Sam's old leave / Alex's hours.
     const fetchWorkHours = async () => {
         const token = localStorage.getItem('token')
+        const seq = ++workHoursFetchSeq.current
+        const target = selectedUserId
+        const alive = () => workHoursFetchSeq.current === seq
         
-        if (selectedUserId === 'all') {
-            // Fetch work hours for all users, sum them into the aggregate, AND
-            // keep a per-user map so per-employee day-off styling works in the
-            // all-team week view.
+        if (target === 'all') {
             try {
                 const workHoursPromises = users.map(user =>
                     fetch(apiUrl(`/work-hours/${user.id}`), {
@@ -783,6 +1096,7 @@ function JobsPageContent() {
                 )
 
                 const allWorkHoursData = await Promise.all(workHoursPromises)
+                if (!alive()) return
 
                 const aggregatedWorkHours: WorkHours = {
                     monday_hours: 0,
@@ -791,32 +1105,13 @@ function JobsPageContent() {
                     thursday_hours: 0,
                     friday_hours: 0,
                     saturday_hours: 0,
-                    sunday_hours: 0
+                    sunday_hours: 0,
                 }
 
                 const perUser: Record<number, WorkHours> = {}
 
                 allWorkHoursData.forEach(({ userId, data }) => {
-                    const rawWorkHours = data.workHours || {
-                        monday_hours: 7.5,
-                        tuesday_hours: 7.5,
-                        wednesday_hours: 7.5,
-                        thursday_hours: 7.5,
-                        friday_hours: 7.0,
-                        saturday_hours: 0,
-                        sunday_hours: 0
-                    }
-
-                    const parsed: WorkHours = {
-                        monday_hours: parseFloat(rawWorkHours.monday_hours) || 0,
-                        tuesday_hours: parseFloat(rawWorkHours.tuesday_hours) || 0,
-                        wednesday_hours: parseFloat(rawWorkHours.wednesday_hours) || 0,
-                        thursday_hours: parseFloat(rawWorkHours.thursday_hours) || 0,
-                        friday_hours: parseFloat(rawWorkHours.friday_hours) || 0,
-                        saturday_hours: parseFloat(rawWorkHours.saturday_hours) || 0,
-                        sunday_hours: parseFloat(rawWorkHours.sunday_hours) || 0,
-                    }
-
+                    const parsed = parseWorkHoursRow(data.workHours)
                     perUser[userId] = parsed
 
                     aggregatedWorkHours.monday_hours    += parsed.monday_hours
@@ -830,49 +1125,35 @@ function JobsPageContent() {
 
                 setAllUsersWorkHours(aggregatedWorkHours)
                 setWorkHoursByUser(perUser)
-                setWorkHours(null) // Clear individual work hours
+                setWorkHoursOwnerId('all')
             } catch (error) {
                 console.error('Error fetching work hours for all users:', error)
             }
             return
         }
 
+        // Prefer a cached row for this employee immediately (avoid another user's hours).
+        const cached = workHoursByUser[Number(target)]
+        setWorkHours(cached || DEFAULT_WORK_HOURS)
+        setWorkHoursOwnerId(Number(target))
+        setAllUsersWorkHours(null)
+
         try {
-            const response = await fetch(apiUrl(`/work-hours/${selectedUserId}`), {
+            const response = await fetch(apiUrl(`/work-hours/${target}`), {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             })
 
             const data = await response.json()
+            if (!alive()) return
 
             if (response.ok) {
-                const rawWorkHours = data.workHours || {
-                    monday_hours: 7.5,
-                    tuesday_hours: 7.5,
-                    wednesday_hours: 7.5,
-                    thursday_hours: 7.5,
-                    friday_hours: 7.0,
-                    saturday_hours: 0,
-                    sunday_hours: 0
-                }
-
-                // Ensure all values are numbers (parse strings if needed)
-                const parsedWorkHours: WorkHours = {
-                    monday_hours: parseFloat(rawWorkHours.monday_hours) || 0,
-                    tuesday_hours: parseFloat(rawWorkHours.tuesday_hours) || 0,
-                    wednesday_hours: parseFloat(rawWorkHours.wednesday_hours) || 0,
-                    thursday_hours: parseFloat(rawWorkHours.thursday_hours) || 0,
-                    friday_hours: parseFloat(rawWorkHours.friday_hours) || 0,
-                    saturday_hours: parseFloat(rawWorkHours.saturday_hours) || 0,
-                    sunday_hours: parseFloat(rawWorkHours.sunday_hours) || 0
-                }
-
+                const parsedWorkHours = parseWorkHoursRow(data.workHours)
                 setWorkHours(parsedWorkHours)
-                setAllUsersWorkHours(null) // Clear aggregated work hours
-                // Also remember this user's hours in the per-user map so any
-                // per-employee UI can read it even while in single-user view.
-                setWorkHoursByUser(prev => ({ ...prev, [Number(selectedUserId)]: parsedWorkHours }))
+                setWorkHoursOwnerId(Number(target))
+                setAllUsersWorkHours(null)
+                setWorkHoursByUser(prev => ({ ...prev, [Number(target)]: parsedWorkHours }))
             }
         } catch (error) {
             console.error('Error fetching work hours:', error)
@@ -884,7 +1165,7 @@ function JobsPageContent() {
         try {
             setLoading(true)
             setApiError('')
-            const token = localStorage.getItem('token')
+            let token = localStorage.getItem('token')
 
             let startDate: string
             let endDate: string
@@ -898,21 +1179,36 @@ function JobsPageContent() {
                 endDate = toLocalDateString(weekDays[6])
             }
             
-            console.log(`📅 Fetching jobs for date range: ${startDate} to ${endDate}`)
+            console.log(`ð Fetching jobs for date range: ${startDate} to ${endDate}`)
 
-            const response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
+            let response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             })
 
+            if (response.status === 401 || response.status === 403) {
+                // Token may have simply gone stale while the tab was away â
+                // try a silent renew and retry once before giving up.
+                const result = await refreshSession()
+                if (result === 'ok') {
+                    token = localStorage.getItem('token')
+                    response = await fetch(apiUrl(`/jobs?start_date=${startDate}&end_date=${endDate}`), {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    })
+                } else if (result === 'expired') {
+                    forceReLogin()
+                    return
+                }
+            }
+
             const data = await response.json().catch((err) => {
-                console.error('❌ JSON parse error:', err)
+                console.error('â JSON parse error:', err)
                 return {}
             })
 
             if (!response.ok) {
-                console.error('❌ API Error:', response.status, data)
+                console.error('â API Error:', response.status, data)
                 setApiError(data?.error || 'Failed to fetch jobs')
                 // Don't clear jobs on error - keep existing jobs visible
                 // setJobs([])
@@ -921,11 +1217,11 @@ function JobsPageContent() {
 
             if (response.ok) {
                 const allJobs = (data.jobs || [])
-                console.log(`📋 Frontend received ${allJobs.length} total job(s)`)
+                console.log(`ð Frontend received ${allJobs.length} total job(s)`)
                 
                 // Log projected jobs
                 const projectedJobs = allJobs.filter((job: any) => job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-')))
-                console.log(`👻 Found ${projectedJobs.length} projected job(s):`, projectedJobs.map(j => ({ 
+                console.log(`ð» Found ${projectedJobs.length} projected job(s):`, projectedJobs.map(j => ({ 
                   id: j.id, 
                   assigned_user_id: j.assigned_user_id, 
                   scheduled_date: j.scheduled_date,
@@ -937,21 +1233,21 @@ function JobsPageContent() {
                   acc[job.status || 'undefined'] = (acc[job.status || 'undefined'] || 0) + 1
                   return acc
                 }, {})
-                console.log('📊 Jobs by status:', statusCounts)
+                console.log('ð Jobs by status:', statusCounts)
                 
                 const cancelledJobs = allJobs.filter((job: any) => job.status === 'cancelled')
                 if (cancelledJobs.length > 0) {
-                  console.log(`📋 Found ${cancelledJobs.length} cancelled job(s):`, cancelledJobs.map(j => ({ id: j.id, status: j.status, assigned_user_id: j.assigned_user_id, scheduled_date: j.scheduled_date })))
+                  console.log(`ð Found ${cancelledJobs.length} cancelled job(s):`, cancelledJobs.map(j => ({ id: j.id, status: j.status, assigned_user_id: j.assigned_user_id, scheduled_date: j.scheduled_date })))
                 }
                 
-                console.log(`🔍 Current selectedUserId: ${selectedUserId} (type: ${typeof selectedUserId})`)
+                console.log(`ð Current selectedUserId: ${selectedUserId} (type: ${typeof selectedUserId})`)
                 
                 // Always keep the full dataset for the route planner
                 setAllJobs(allJobs)
 
                 if (selectedUserId === 'all') {
                   setJobs(allJobs)
-                  console.log(`✅ Set ${allJobs.length} jobs (all users)`)
+                  console.log(`â Set ${allJobs.length} jobs (all users)`)
                 } else {
                   // Convert selectedUserId to number for comparison
                   const userIdNum = typeof selectedUserId === 'string' ? parseInt(selectedUserId, 10) : selectedUserId
@@ -962,7 +1258,7 @@ function JobsPageContent() {
                     return Number(jobUserId) === Number(userIdNum)
                   })
                   const projectedCount = filteredJobs.filter((job: any) => job.is_projected).length
-                  console.log(`🔍 Filtered to ${filteredJobs.length} jobs for user ${selectedUserId} (${projectedCount} projected)`)
+                  console.log(`ð Filtered to ${filteredJobs.length} jobs for user ${selectedUserId} (${projectedCount} projected)`)
                   setJobs(filteredJobs)
                 }
             } else {
@@ -981,8 +1277,10 @@ function JobsPageContent() {
 
         // Fetch appointments for the same date range so the calendar can
         // render them alongside jobs and deduct approved time from
-        // capacity. Failures here are logged but do not block the jobs
-        // fetch — they just leave the appointments map empty.
+        // capacity. Clear first so a previous employee's all-day appt can't
+        // briefly zero this employee's available hours.
+        const apptTarget = selectedUserId
+        setAppointmentsByDate({})
         try {
             const token = localStorage.getItem('token')
             let startDate: string
@@ -995,13 +1293,15 @@ function JobsPageContent() {
                 startDate = toLocalDateString(weekDays[0])
                 endDate = toLocalDateString(weekDays[6])
             }
-            const userParam = selectedUserId === 'all' ? 'all' : String(selectedUserId)
+            const userParam = apptTarget === 'all' ? 'all' : String(apptTarget)
             const apptRes = await fetch(
                 apiUrl(`/appointments?from=${startDate}&to=${endDate}&user_id=${userParam}&status=all`),
                 { headers: { Authorization: `Bearer ${token}` } }
             )
             if (apptRes.ok) {
                 const apptData = await apptRes.json()
+                // Ignore if the selected employee changed while this request was in flight
+                if (selectedUserIdRef.current !== apptTarget) return
                 const list: AppointmentItem[] = apptData.appointments || []
                 // Declined appointments are kept on the server so the employee's
                 // mobile status page can show the outcome, but they're irrelevant
@@ -1045,7 +1345,7 @@ function JobsPageContent() {
   useEffect(() => {
     if (!users || users.length === 0 || initializedFromUrl) return
 
-    // Solo company: only one user → always pin to that user, ignore "all"/URL/localStorage.
+    // Solo company: only one user â always pin to that user, ignore "all"/URL/localStorage.
     if (users.length === 1) {
       setSelectedUserId(users[0].id)
       setInitializedFromUrl(true)
@@ -1078,8 +1378,8 @@ function JobsPageContent() {
         } catch (e) {}
         return
       }
-      const normalized = u.toLowerCase()
-      const byName = users.find(x => `${x.first_name} ${x.last_name}`.trim().toLowerCase() === normalized)
+      const normalized = u.replace(/\+/g, ' ').trim().toLowerCase().replace(/\s+/g, ' ')
+      const byName = users.find(x => `${x.first_name} ${x.last_name}`.trim().toLowerCase().replace(/\s+/g, ' ') === normalized)
       if (byName) {
         setSelectedUserId(byName.id)
         setInitializedFromUrl(true)
@@ -1182,15 +1482,15 @@ function JobsPageContent() {
     // Fetch jobs when week or selected user changes
     useEffect(() => {
         if (user && !userLoading && selectedUserId !== null && selectedUserId !== undefined) {
-            console.log(`🔄 useEffect triggered: fetching jobs for ${viewMode} ${currentWeek}, user ${selectedUserId}`)
+            console.log(`ð useEffect triggered: fetching jobs for ${viewMode} ${currentWeek}, user ${selectedUserId}`)
             fetchJobsForWeek()
         } else {
-            console.log(`⏸️ useEffect skipped: user=${!!user}, userLoading=${userLoading}, selectedUserId=${selectedUserId}`)
+            console.log(`â¸ï¸ useEffect skipped: user=${!!user}, userLoading=${userLoading}, selectedUserId=${selectedUserId}`)
         }
     }, [currentWeek, selectedUserId, user, userLoading, viewMode])
 
     // Mobile week row: align today as the leftmost visible column.
-    // Sunday is the exception — scroll as far right as possible.
+    // Sunday is the exception â scroll as far right as possible.
     useEffect(() => {
         if (viewMode !== 'week') return
 
@@ -1238,24 +1538,33 @@ function JobsPageContent() {
     }, [currentWeek, viewMode, loading, jobs.length])
 
 
-    // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch)
+    // Fetch leave for the selected employee (whole year so week navigation needs no re-fetch).
+    // Clear immediately on user change so the previous employee's leave can't zero Alex's days.
     useEffect(() => {
-        if (selectedUserId === 'all' || !user) { setEmployeeLeaveByDate({}); return }
+        if (selectedUserId === 'all' || !user) {
+            setEmployeeLeaveByDate({})
+            return
+        }
+        setEmployeeLeaveByDate({})
         const token = localStorage.getItem('token')
         const year = currentWeek.getFullYear()
-        fetch(apiUrl(`/employee-leave/${selectedUserId}?from=${year}-01-01&to=${year + 1}-12-31`), {
+        const targetUserId = selectedUserId
+        let cancelled = false
+        fetch(apiUrl(`/employee-leave/${targetUserId}?from=${year}-01-01&to=${year + 1}-12-31`), {
             headers: { Authorization: `Bearer ${token}` },
         })
             .then(r => r.ok ? r.json() : { leave: [] })
             .then(d => {
+                if (cancelled) return
                 const byDate: Record<string, { leave_type: string; hours_off: number | null }> = {}
                 for (const e of (d.leave || [])) byDate[e.leave_date] = { leave_type: e.leave_type, hours_off: e.hours_off }
                 setEmployeeLeaveByDate(byDate)
             })
             .catch(() => {})
+        return () => { cancelled = true }
     }, [selectedUserId, currentWeek, user])
 
-    // "HH:MM" (or "HH:MM:SS") → minutes since midnight. Missing/invalid → Infinity
+    // "HH:MM" (or "HH:MM:SS") â minutes since midnight. Missing/invalid â Infinity
     // so time-less jobs fall to the bottom of the default sort.
     const parseTimeToMinutes = (t?: string | null): number => {
         if (!t) return Infinity
@@ -1270,17 +1579,26 @@ function JobsPageContent() {
 
     // Filter jobs by day. Sort priority:
     //   1) localStorage route-order (route planner, most recent admin intent)
-    //   2) DB route_order (set only when an admin has arranged the day — route
+    //   2) DB route_order (set only when an admin has arranged the day â route
     //      planner run, or a drag-drop on the calendar)
     //   3) Default: scheduled_time_from ascending (earliest first). Time-less
     //      jobs sink to the bottom where creation order decides.
     //
     // Note: we intentionally do NOT use sort_order as a day-level order signal
-    // anymore — it's set at creation for every job, so it doesn't distinguish
+    // anymore â it's set at creation for every job, so it doesn't distinguish
     // "admin arranged this day" from "nothing has been done here yet".
     const getJobsForDay = (date: Date) => {
         const dateString = toLocalDateString(date)
-        const dayJobs = jobs.filter(job => toDateOnlyString(job.scheduled_date) === dateString)
+        const dayJobs = jobs.filter(job => {
+          if (toDateOnlyString(job.scheduled_date) !== dateString) return false
+          if (
+            (job.status === 'cancelled' || job.status === 'deleted')
+            && archivedJobIds.has(String(job.id))
+          ) {
+            return false
+          }
+          return true
+        })
 
         // Build a per-user position map from the route planner's saved localStorage order
         const savedOrderMap: Record<number, Record<string, number>> = {}
@@ -1310,7 +1628,7 @@ function JobsPageContent() {
                 }
             }
 
-            // 2) DB route_order — only set after admin has arranged the day.
+            // 2) DB route_order â only set after admin has arranged the day.
             //    If either job has one, respect that explicit arrangement.
             if (a.route_order != null || b.route_order != null) {
                 const aOrder = a.route_order ?? 999999
@@ -1337,11 +1655,10 @@ function JobsPageContent() {
         setCreateJobNewClient(null)
         setCreateJobPrefillDate(dateString)
         setCreateJobPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
-        setShowCreateMenu(false)
         setIsCreateModalOpen(true)
     }
 
-    // Route planner search → start a job for an existing client
+    // Route planner search â start a job for an existing client
     const openCreateJobForClient = (clientId: number) => {
         setCreateJobNewClient(null)
         setCreateJobClientId(clientId)
@@ -1350,11 +1667,10 @@ function JobsPageContent() {
         setCreateJobPrefillUserId(
             dayFocusUserId ?? (selectedUserId === 'all' ? null : selectedUserId),
         )
-        setShowCreateMenu(false)
         setIsCreateModalOpen(true)
     }
 
-    // Route planner search → start a job at a picked map location (new client)
+    // Route planner search â start a job at a picked map location (new client)
     const openCreateJobForLocation = (loc: RouteLocationPick) => {
         setCreateJobClientId(undefined)
         setCreateJobLockClient(false)
@@ -1367,7 +1683,6 @@ function JobsPageContent() {
         setCreateJobPrefillUserId(
             dayFocusUserId ?? (selectedUserId === 'all' ? null : selectedUserId),
         )
-        setShowCreateMenu(false)
         setIsCreateModalOpen(true)
     }
 
@@ -1379,52 +1694,44 @@ function JobsPageContent() {
         if (y && m && d) setCurrentWeek(new Date(y, m - 1, d))
         if (selectedUserId !== 'all') {
             const uid = typeof selectedUserId === 'string' ? parseInt(selectedUserId, 10) : selectedUserId
-            setDayFocusUserId(uid)
+            openMapPlanner(dateStr, uid)
+        } else {
+            openMapPlanner(dateStr, null)
         }
-        setViewMode('day')
     }
 
     // Get a specific user's scheduled work hours for a day-of-week.
-    // Returns 0 when the user has no schedule on file yet (safe default –
-    // callers treat 0 as "off").
+    // Falls back to the standard week while that user's row is still loading.
     const getWorkHoursForUserDay = (userId: number, dayIndex: number): number => {
-        const hours = workHoursByUser[userId]
-        if (!hours) return 0
-        const dayMap: (keyof WorkHours)[] = [
-            'monday_hours',
-            'tuesday_hours',
-            'wednesday_hours',
-            'thursday_hours',
-            'friday_hours',
-            'saturday_hours',
-            'sunday_hours',
-        ]
-        const raw = hours[dayMap[dayIndex]]
-        const n = typeof raw === 'string' ? parseFloat(raw) : (raw || 0)
-        return isNaN(n) ? 0 : n
+        return hoursForDayIndex(workHoursByUser[userId], dayIndex)
     }
 
-    // Get work hours for a specific day (dayIndex: 0=Monday, 1=Tuesday, etc.)
+    // Get work hours for a specific day (dayIndex: 0=Monday … 6=Sunday).
+    // Only trust `workHours` when it belongs to the currently selected employee
+    // (or the all-team aggregate). Otherwise use that user's cache / defaults —
+    // never another employee's schedule.
     const getWorkHoursForDay = (dayIndex: number) => {
-        // Use aggregated work hours if "all teams" is selected, otherwise use individual work hours
-        const hoursToUse = selectedUserId === 'all' ? allUsersWorkHours : workHours
-        if (!hoursToUse) return 0
-        
-        // Convert day index (0=Monday) to work hours day mapping (1=Monday)
-        // workHours uses: monday_hours, tuesday_hours, etc. (1=Monday, 0=Sunday)
-        const dayMap: (keyof WorkHours)[] = [
-            'monday_hours',    // 0 = Monday
-            'tuesday_hours',   // 1 = Tuesday
-            'wednesday_hours', // 2 = Wednesday
-            'thursday_hours',  // 3 = Thursday
-            'friday_hours',    // 4 = Friday
-            'saturday_hours',  // 5 = Saturday
-            'sunday_hours'     // 6 = Sunday
-        ]
-        const hours = hoursToUse[dayMap[dayIndex]]
-        // Ensure we return a number, parse if it's a string
-        const numHours = typeof hours === 'string' ? parseFloat(hours) : (hours || 0)
-        return isNaN(numHours) ? 0 : numHours
+        if (selectedUserId === 'all') {
+            return hoursForDayIndex(allUsersWorkHours || DEFAULT_WORK_HOURS, dayIndex)
+        }
+        const uid = Number(selectedUserId)
+        if (workHoursOwnerId === uid && workHours) {
+            return hoursForDayIndex(workHours, dayIndex)
+        }
+        if (workHoursByUser[uid]) {
+            return hoursForDayIndex(workHoursByUser[uid], dayIndex)
+        }
+        return hoursForDayIndex(DEFAULT_WORK_HOURS, dayIndex)
+    }
+
+    const getStartTimeForDay = (dayIndex: number): string | null => {
+        if (selectedUserId === 'all') return null
+        const uid = Number(selectedUserId)
+        const src =
+            (workHoursOwnerId === uid && workHours)
+                ? workHours
+                : (workHoursByUser[uid] || DEFAULT_WORK_HOURS)
+        return startForDayIndex(src, dayIndex)
     }
 
     // Returns how many hours are unavailable due to leave on a given date string.
@@ -1442,9 +1749,9 @@ function JobsPageContent() {
     }
 
     // Convert a single approved appointment into the hours it consumes.
-    // - all_day  → full base-hours for the day
-    // - hours    → the declared hours_off (capped to the day's capacity)
-    // - span     → end - start (in hours, capped to the day's capacity)
+    // - all_day  â full base-hours for the day
+    // - hours    â the declared hours_off (capped to the day's capacity)
+    // - span     â end - start (in hours, capped to the day's capacity)
     const hoursForAppointment = (a: AppointmentItem, baseHoursForDay: number): number => {
         if (a.time_mode === 'all_day') return baseHoursForDay
         if (a.time_mode === 'hours') return Math.min(baseHoursForDay, a.hours_off ?? 0)
@@ -1460,10 +1767,15 @@ function JobsPageContent() {
     // Total approved-appointment hours to deduct from a day's capacity.
     // In "all employees" view we sum approved appointments across users
     // (since the capacity bar itself sums work hours across users).
+    // Always scope to the selected employee so a previous user's stale
+    // appointments can't zero out someone else's available hours.
     const getApprovedAppointmentHoursForDate = (dateStr: string, baseHoursForDay: number): number => {
         const list = appointmentsByDate[dateStr]
         if (!list || list.length === 0) return 0
-        const approved = list.filter((a) => a.status === 'approved')
+        const scoped = selectedUserId === 'all'
+            ? list
+            : list.filter((a) => Number(a.user_id) === Number(selectedUserId))
+        const approved = scoped.filter((a) => a.status === 'approved')
         if (approved.length === 0) return 0
         return approved.reduce((sum, a) => sum + hoursForAppointment(a, baseHoursForDay), 0)
     }
@@ -1479,7 +1791,7 @@ function JobsPageContent() {
         return seen.size
     })()
 
-    // Role check — admins can approve/decline requests and edit anyone's
+    // Role check â admins can approve/decline requests and edit anyone's
     // appointments. Company-scoped role is preferred (it's what the JWT
     // already carries); we fall back to the platform role for safety.
     const isAdmin = (() => {
@@ -1512,7 +1824,7 @@ function JobsPageContent() {
     }
 
     const handleDeclineAppointment = async (id: number) => {
-        // Optional reason — shown verbatim on the employee's mobile status
+        // Optional reason â shown verbatim on the employee's mobile status
         // page. Empty / cancelled prompt still declines (API allows null).
         const reason = window.prompt(
             t(
@@ -1562,7 +1874,6 @@ function JobsPageContent() {
         setEditingAppointment(null)
         setAppointmentPrefillDate(dateString)
         setAppointmentPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
-        setShowCreateMenu(false)
         setCellAddMenu(null)
         setIsCreateAppointmentOpen(true)
     }
@@ -1646,7 +1957,7 @@ function JobsPageContent() {
                             {t('app.appointments.requestBadge', 'Request')}
                         </span>
                     )}
-                    {/* 3-dot actions menu — only meaningful when the user has some action
+                    {/* 3-dot actions menu â only meaningful when the user has some action
                         available (admin on any, or owner on their own request/draft). */}
                     {(isAdmin || appt.user_id === (user?.id || -1)) && (
                         <button
@@ -1677,7 +1988,7 @@ function JobsPageContent() {
                 {!compact && (timeLabel || (selectedUserId === 'all' && assignedName)) && (
                     <div className="flex items-center gap-1 mt-0.5 text-[10px] opacity-80" style={{ color: cat.text }}>
                         {timeLabel && <span>{timeLabel}</span>}
-                        {timeLabel && selectedUserId === 'all' && assignedName && <span>·</span>}
+                        {timeLabel && selectedUserId === 'all' && assignedName && <span>Â·</span>}
                         {selectedUserId === 'all' && assignedName && <span className="truncate">{assignedName}</span>}
                     </div>
                 )}
@@ -1685,10 +1996,11 @@ function JobsPageContent() {
         )
     }
 
-    // Calculate occupied time for a day (in hours) — use estimated_duration (all services)
+    // Calculate occupied time for a day (in hours) â use estimated_duration (all services)
     const getOccupiedTime = (date: Date) => {
         const dayJobs = getJobsForDay(date)
         const totalMinutes = dayJobs.reduce((total, job) => {
+            if (job.status === 'cancelled' || job.status === 'deleted') return total
             // Prefer estimated_duration (all services), fall back to total_duration (completed only)
             const raw = job.estimated_duration ?? job.total_duration
             const minutes = raw != null && raw !== '' ? parseFloat(String(raw)) : 0
@@ -1765,7 +2077,7 @@ function JobsPageContent() {
         
         const isSameDay = draggedJob.scheduled_date === dateString
         
-        // Same-day drops do nothing — job order is set exclusively via the route planner
+        // Same-day drops do nothing â job order is set exclusively via the route planner
         if (isSameDay) {
             setDraggedJob(null)
             setDragOverDate(null)
@@ -1910,7 +2222,7 @@ function JobsPageContent() {
             // Refresh jobs
             await fetchJobsForWeek()
 
-            // Auto-update the source column's saved route — remove the moved job from it
+            // Auto-update the source column's saved route â remove the moved job from it
             // so remaining jobs stay "planned" and drive time can be recalculated.
             try {
                 const sourceDateStr = String(jobToMove.scheduled_date).substring(0, 10)
@@ -1954,19 +2266,19 @@ function JobsPageContent() {
         }
     }
 
-    // Format price (compact) — company currency
+    // Format price (compact) â company currency
     const formatPrice = (price: number) => {
         if (!price) return ''
         return formatMoney(price, companyCountryCode)
     }
 
-    // Get address string for display (address • zip city) to match design e.g. "Tyttebærvej 2 • 2400 København"
+    // Get address string for display (address â¢ zip city) to match design e.g. "TyttebÃ¦rvej 2 â¢ 2400 KÃ¸benhavn"
     const getAddressDisplay = (job: any) => {
         const parts: string[] = []
         if (job.address) parts.push(job.address)
         const zipCity = [job.zip_code, job.city].filter(Boolean).join(' ')
         if (zipCity) parts.push(zipCity)
-        return parts.join(' • ')
+        return parts.join(' â¢ ')
     }
 
     // Handle job click
@@ -2010,80 +2322,14 @@ function JobsPageContent() {
     }
   }
 
-    // Close create menu when clicking outside
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            const target = event.target as HTMLElement
-            // Check if click is outside the create button and menu
-            const createButtonArea = target.closest('[data-create-menu]')
-            if (showCreateMenu && !createButtonArea) {
-                setShowCreateMenu(false)
-            }
-        }
-
-        if (showCreateMenu) {
-            document.addEventListener('mousedown', handleClickOutside)
-            return () => {
-                document.removeEventListener('mousedown', handleClickOutside)
-            }
-        }
-    }, [showCreateMenu])
-
-  // ── Day view helpers ────────────────────────────────────────────────────────
-
-  // Build routes from loaded jobs every time viewMode=day, jobs, or users change
+  // Build routes from loaded jobs every time viewMode=day, jobs, or users change.
+  // Canonical implementation lives in app/utils/dayRouteShared.ts (shared with the map multitool).
   const buildDayRoutes = useCallback((dayJobs: any[]): UserRoute[] => {
-    const byUser: Record<number, any[]> = {}
-    dayJobs.forEach(job => {
-      const uid = Number(job.assigned_user_id)
-      if (!byUser[uid]) byUser[uid] = []
-      byUser[uid].push(job)
-    })
-    return Object.entries(byUser).map(([uid, userJobs], idx) => {
-      const user = users.find(u => u.id === Number(uid))
-      const sorted = [...userJobs].sort((a, b) => {
-        // Explicit route_order (admin arranged) always wins.
-        if (a.route_order != null && b.route_order != null) return a.route_order - b.route_order
-        if (a.route_order != null) return -1
-        if (b.route_order != null) return 1
-        // Default: earliest scheduled time first, time-less jobs at the bottom.
-        const aMin = parseTimeToMinutes(a.scheduled_time_from)
-        const bMin = parseTimeToMinutes(b.scheduled_time_from)
-        if (aMin !== bMin) return aMin - bMin
-        return (a.sort_order ?? 0) - (b.sort_order ?? 0)
-      })
-      return {
-        userId: Number(uid),
-        userName: user ? `${user.first_name} ${user.last_name}` : `User ${uid}`,
-        color: USER_COLORS[idx % USER_COLORS.length],
-        jobs: sorted.map(job => ({
-          id: job.id,
-          lat: coordOrNull(job.lat ?? job.client_lat),
-          lng: coordOrNull(job.lng ?? job.client_lng),
-          label: job.name
-            ? (job.last_name ? `${job.name} ${job.last_name}` : job.name)
-            : (job.title || 'Untitled'),
-          address: [job.address, job.zip_code, job.city].filter(Boolean).join(', '),
-          time: job.scheduled_time_from
-            ? job.scheduled_time_to
-              ? `${formatRouteTime(job.scheduled_time_from)} – ${formatRouteTime(job.scheduled_time_to)}`
-              : formatRouteTime(job.scheduled_time_from)
-            : undefined,
-          is_projected: !!(job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))),
-          is_cancelled: job.status === 'cancelled',
-          // True only when the job row itself has coords — NOT the client fallback.
-          // Used to decide whether geocoding should run to get a more accurate pin position.
-          has_own_coords: coordOrNull(job.lat) != null && coordOrNull(job.lng) != null,
-          estimated_duration_minutes: typeof job.estimated_duration === 'number'
-            ? job.estimated_duration
-            : parseFloat(String(job.estimated_duration)) || 0,
-        } as RouteJob)),
-      }
-    })
+    return buildDayRoutesFromJobs(dayJobs, users)
   }, [users])
 
   // Geocode addresses that don't have lat/lng yet (Mapbox Geocoding API).
-  // Includes home (start/end) pins — they are not written to DB (isReal false).
+  // Includes home (start/end) pins â they are not written to DB (isReal false).
   const geocodeMissingAddresses = useCallback(async (routes: UserRoute[]) => {
     if (!MAPBOX_TOKEN) return
     const token = localStorage.getItem('token')
@@ -2115,7 +2361,7 @@ function JobsPageContent() {
       try {
         const encoded = encodeURIComponent(item.address)
         const res = await fetch(
-          // types=address,place — broader than just "address" so partial/unnumbered addresses also match
+          // types=address,place â broader than just "address" so partial/unnumbered addresses also match
           `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}`
         )
         const data = await res.json()
@@ -2150,41 +2396,13 @@ function JobsPageContent() {
     setDayGeocodingCount(0)
   }, [])
 
-  // Fetch driving times + road geometry from Mapbox Directions API
+  // Fetch driving times + road geometry from Mapbox Directions API.
+  // Canonical implementation lives in app/utils/dayRouteShared.ts (shared with the map multitool).
   const fetchDirections = useCallback(async (route: UserRoute): Promise<Partial<UserRoute>> => {
-    if (!MAPBOX_TOKEN) return {}
-    // Exclude cancelled jobs — they appear as grey unconnected pins and must not affect
-    // the road geometry or leg-minute calculations for active stops.
-    const pts = route.jobs.filter(j => j.lat != null && j.lng != null && !j.is_cancelled)
-    if (pts.length < 2) return {}
-    // Mapbox Directions supports up to 25 waypoints
-    const waypointPts = pts.slice(0, 25)
-    const coords = waypointPts.map(j => `${j.lng},${j.lat}`).join(';')
-    try {
-      const res = await fetch(
-        `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full`
-      )
-      const data = await res.json()
-      if (!data.routes?.[0]) return {}
-      const r = data.routes[0]
-      const totalMinutes = r.duration / 60
-      const totalKm = r.distance / 1000
-      const routeGeometry = r.geometry as { type: string; coordinates: [number, number][] }
-      let cumulative = 0
-      const updatedJobs = route.jobs.map((job) => {
-        if (job.lat == null || job.lng == null || job.is_cancelled) return job
-        const ptIdx = waypointPts.findIndex(p => p.id === job.id)
-        if (ptIdx <= 0) return { ...job, legMinutes: 0, etaMinutes: 0 }
-        const legSec = r.legs[ptIdx - 1]?.duration ?? 0
-        const legMin = legSec / 60
-        cumulative += legMin
-        return { ...job, legMinutes: legMin, etaMinutes: cumulative }
-      })
-      return { totalMinutes, totalKm, jobs: updatedJobs, routeGeometry }
-    } catch { return {} }
+    return fetchRouteDirections(route)
   }, [])
 
-  // Debounced directions refresh — runs when job order OR coordinates change
+  // Debounced directions refresh â runs when job order OR coordinates change
   useEffect(() => {
     if (viewMode !== 'day') return
     if (directionsFetchTimeoutRef.current) clearTimeout(directionsFetchTimeoutRef.current)
@@ -2194,7 +2412,7 @@ function JobsPageContent() {
 
       const patches = new Map<number, Partial<UserRoute>>()
       // Only re-fetch routes whose geometry was cleared (e.g. the 2 affected by a reassign).
-      // Routes that still have geometry keep their existing lines — no wasted API calls.
+      // Routes that still have geometry keep their existing lines â no wasted API calls.
       await Promise.all(
         routeSnapshot
           .filter(route => route.routeGeometry == null)
@@ -2217,7 +2435,7 @@ function JobsPageContent() {
         setDayBaselineDate(dateStr)
         return next
       })
-      // Apply patches onto the CURRENT state (prev) — not the stale snapshot —
+      // Apply patches onto the CURRENT state (prev) â not the stale snapshot â
       // so any coordinates that geocoding wrote between snapshot and now are preserved.
       setDayRoutes(prev => {
         const next = prev.map(prevRoute => {
@@ -2370,12 +2588,12 @@ function JobsPageContent() {
       setDayRoutesVersion(v => v + 1)
       geocodeMissingAddresses(enhancedRoutes)
     })()
-  // pendingAssigneeChanges intentionally omitted — changes are read via ref to avoid
+  // pendingAssigneeChanges intentionally omitted â changes are read via ref to avoid
   // rebuilding routes from scratch every time a job is drag-reassigned.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, currentWeek, allJobs, users, buildDayRoutes, geocodeMissingAddresses])
 
-  // Reorder handler — updates local state only (save via Save & apply button)
+  // Reorder handler â updates local state only (save via Save & apply button)
   const handleDayReorder = useCallback((userId: number, newJobs: RouteJob[]) => {
     setDayRoutes(prev => {
       const next = prev.map(r =>
@@ -2469,7 +2687,7 @@ function JobsPageContent() {
     }
   }, [currentWeek])
 
-  // ── Manual "Draw route" mode ─────────────────────────────────────────────────
+  // ââ Manual "Draw route" mode âââââââââââââââââââââââââââââââââââââââââââââââââ
   //   The user clicks middle stops (in the focused user's route) one by one to
   //   assign them order numbers. When every middle stop has a number we apply
   //   the order via handleDayReorder and exit draw mode.
@@ -2607,24 +2825,48 @@ function JobsPageContent() {
   // Save the current route order to DB and update local job state.
   // Pass userId to save only that employee; omit to save all with unsaved changes.
   const handleSaveRoute = useCallback(async (userId?: number) => {
-    const routesToSave = userId != null
+    const routesToSaveBase = userId != null
       ? dayRoutes.filter(r => r.userId === userId)
       : dayRoutes.filter(r => unsavedUserIds.includes(r.userId))
-    if (routesToSave.length === 0) return
+    if (routesToSaveBase.length === 0) return
 
-    // Only include real (non-projected) jobs with integer IDs.
-    // Projected/subscription jobs have string IDs like 'subscription-42' which cause
-    // a PostgreSQL type error in the UPDATE query and silently kill the whole save.
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    const dateStrEarly = toLocalDateString(currentWeek)
+
+    // Ghost/subscription fillers must become real jobs before they can join the round.
+    let routesToSave = routesToSaveBase
+    try {
+      const { materializeProjectedJobsInList } = await import('@/app/utils/materializeRouteJobs')
+      const results = await Promise.all(routesToSaveBase.map(async (route) => {
+        const { jobs, changed } = await materializeProjectedJobsInList(route.jobs, {
+          token,
+          scheduledDate: dateStrEarly,
+        })
+        return { route: { ...route, jobs }, changed }
+      }))
+      routesToSave = results.map(r => r.route)
+      if (results.some(r => r.changed)) {
+        setDayRoutes(prev => prev.map(r => {
+          const next = routesToSave.find(m => m.userId === r.userId)
+          return next ?? r
+        }))
+      }
+    } catch (err) {
+      console.error('[Save & Apply] materialize-before-save failed', err)
+      return
+    }
+
     const allJobIds = routesToSave.flatMap(r =>
       r.jobs.filter(j => !j.is_projected && Number.isInteger(Number(j.id))).map(j => Number(j.id))
     )
     console.log('[Save & Apply] allJobIds:', allJobIds.length, allJobIds)
     if (allJobIds.length === 0) {
-      console.warn('[Save & Apply] No real job IDs found — all jobs may be subscription/projected. Route order not saved.')
+      console.warn('[Save & Apply] No real job IDs found after materialize. Route order not saved.')
       return
     }
 
-    const token = localStorage.getItem('token')
     let res: Response
     try {
       res = await fetch(apiUrl('/jobs/route-order'), {
@@ -2633,7 +2875,7 @@ function JobsPageContent() {
         body: JSON.stringify({ orderedIds: allJobIds }),
       })
     } catch (err) {
-      console.error('[route-order] Network error — is the API server running?', err)
+      console.error('[route-order] Network error â is the API server running?', err)
       return
     }
     if (!res.ok) {
@@ -2647,7 +2889,7 @@ function JobsPageContent() {
     setDrawRouteComparison(null)
     drawCompareBaselineRef.current = null
 
-    // Baseline becomes the saved route — deltas only count from the next edit
+    // Baseline becomes the saved route â deltas only count from the next edit
     const dateStrForBaseline = toLocalDateString(currentWeek)
     setDayBaselineMinutes(prev => {
       const next = { ...prev }
@@ -2703,46 +2945,41 @@ function JobsPageContent() {
       fetchJobsForWeek()
     }
 
-    // Fetch fresh Mapbox directions for each saved route (including start/end home if present).
+    // Persist each saved route as a planned package (and Round) even when Mapbox
+    // directions can't run yet — job order + status=planned is the hard requirement.
     await Promise.all(routesToSave.map(async route => {
-      const realJobs = route.jobs.filter(j => !j.is_projected && !j.is_cancelled && Number.isInteger(Number(j.id)))
-      // All stops with coords for directions (include home start/end so drive time is correct)
-      const waypointJobs = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
-      if (waypointJobs.length < 2) return
+      const realJobs = route.jobs.filter(j => !j.is_projected && !j.is_cancelled && !j.is_home && Number.isInteger(Number(j.id)))
+      if (realJobs.length === 0) return
 
+      const waypointJobs = route.jobs.filter(j => j.lat && j.lng && !j.is_cancelled)
       const totalJobMins = realJobs.reduce((sum, j) => sum + (j.estimated_duration_minutes ?? 0), 0)
 
-      try {
-        let totalDriveMins: number
-        let totalKm: number | null = route.totalKm != null ? Math.round(route.totalKm * 10) / 10 : null
-        let legMins: (number | null)[] = []
+      let totalDriveMins: number | null = route.totalMinutes != null ? Math.round(route.totalMinutes) : null
+      let totalKm: number | null = route.totalKm != null ? Math.round(route.totalKm * 10) / 10 : null
+      let legMins: (number | null)[] = []
+      let routeGeometry: string | null = route.routeGeometry?.coordinates
+        ? JSON.stringify(route.routeGeometry.coordinates)
+        : null
 
-        if (route.totalMinutes != null && waypointJobs.length >= 2) {
-          totalDriveMins = Math.round(route.totalMinutes)
-          const dirRoute = { ...route, jobs: waypointJobs }
-          const legDirections = await fetchDirections(dirRoute)
-          if (legDirections.jobs) {
-            if (totalKm == null && legDirections.totalKm != null) totalKm = Math.round(legDirections.totalKm * 10) / 10
-            // Save leg minutes only for real jobs (same order as realJobs)
-            legMins = realJobs.map(real => {
-              const idx = legDirections.jobs!.findIndex(j => j.id === real.id)
-              const j = idx >= 0 ? legDirections.jobs![idx] : null
-              return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
-            })
-          }
-        } else {
+      try {
+        if (waypointJobs.length >= 2) {
           const dirRoute = { ...route, jobs: waypointJobs }
           const directions = await fetchDirections(dirRoute)
-          if (directions.totalMinutes == null) return
-          totalDriveMins = Math.round(directions.totalMinutes)
-          totalKm = directions.totalKm != null ? Math.round(directions.totalKm * 10) / 10 : null
+          if (totalDriveMins == null && directions.totalMinutes != null) {
+            totalDriveMins = Math.round(directions.totalMinutes)
+          }
+          if (totalKm == null && directions.totalKm != null) {
+            totalKm = Math.round(directions.totalKm * 10) / 10
+          }
           legMins = realJobs.map(real => {
             const idx = (directions.jobs ?? []).findIndex(j => j.id === real.id)
             const j = idx >= 0 ? (directions.jobs ?? [])[idx] : null
             return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
           })
         }
+      } catch { /* directions best-effort */ }
 
+      try {
         console.log('[Save & Apply]', dateStr, {
           user: route.userId,
           jobCount: realJobs.length,
@@ -2758,24 +2995,33 @@ function JobsPageContent() {
             user_id: route.userId,
             scheduled_date: dateStr,
             job_ids: realJobs.map(j => Number(j.id)),
-            leg_minutes: legMins,
+            leg_minutes: legMins.length > 0 ? legMins : null,
             total_minutes: totalDriveMins,
             total_job_minutes: Math.round(totalJobMins),
             total_km: totalKm,
-            // Road-following GeoJSON coordinates from Directions API — used by the
-            // mobile app to draw the actual route on the overview map image.
-            route_geometry: route.routeGeometry?.coordinates
-              ? JSON.stringify(route.routeGeometry.coordinates)
-              : null,
+            route_geometry: routeGeometry,
+            status: 'planned',
+            ...(() => {
+              const prior = (dailyRoutesByDate[dateStr] || []).find(m => m.user_id === route.userId)
+              if (!(prior?.round_template_id || prior?.name)) return {}
+              const base = (prior?.name || route.userName || 'Round').trim()
+              const name = /\(modified\)\s*$/i.test(base) ? base : `${base} (modified)`
+              return { name }
+            })(),
           }),
         })
         if (!saveRes.ok) {
           console.error('[Save & Apply] daily-routes save failed:', saveRes.status, await saveRes.text())
         } else {
-          console.log('[Save & Apply] ✅ saved to DB')
+          const body = await saveRes.json().catch(() => null)
+          console.log('[Save & Apply] saved to DB', { round_id: body?.round_id })
+          if (totalDriveMins != null) {
+            setTravelMinutes(prev => ({ ...prev, [`${dateStr}:${route.userId}`]: totalDriveMins! }))
+          }
         }
-        setTravelMinutes(prev => ({ ...prev, [`${dateStr}:${route.userId}`]: totalDriveMins }))
-      } catch { /* best-effort */ }
+      } catch (err) {
+        console.error('[Save & Apply] daily-routes network error', err)
+      }
     }))
 
     // Mark saved users as clean
@@ -2785,8 +3031,45 @@ function JobsPageContent() {
       return next
     })
     dayRouteCacheRef.current.set(toLocalDateString(currentWeek), dayRoutes)
+
+    // Optimistically mark each saved employee day as a planned round package so the
+    // week board can show the connected container immediately (server sync follows).
+    setDailyRoutesByDate(prev => {
+      const next = { ...prev }
+      const list = [...(next[dateStr] || [])]
+      for (const route of routesToSave) {
+        const jobIds = route.jobs
+          .filter(j => !j.is_projected && !j.is_home && Number.isInteger(Number(j.id)))
+          .map(j => Number(j.id))
+        const idx = list.findIndex(m => m.user_id === route.userId)
+        const prior = idx >= 0 ? list[idx] : null
+        const priorName = (prior?.name || '').trim()
+        const nextName = (prior?.round_template_id || priorName)
+          ? (/\(modified\)\s*$/i.test(priorName || 'Round')
+              ? (priorName || 'Round (modified)')
+              : `${priorName || 'Round'} (modified)`)
+          : (prior?.name ?? null)
+        const base = {
+          user_id: route.userId,
+          scheduled_date: dateStr,
+          status: 'planned' as const,
+          name: nextName,
+          round_template_id: prior?.round_template_id ?? null,
+          round_id: prior?.round_id ?? null,
+          is_occurrence_override: prior?.round_template_id != null ? true : (prior?.is_occurrence_override ?? null),
+          job_ids: jobIds,
+        }
+        if (idx >= 0) list[idx] = { ...list[idx], ...base, id: list[idx].id }
+        else list.push({ id: -route.userId, ...base })
+      }
+      next[dateStr] = list
+      return next
+    })
+    setDailyRoutesTick(tick => tick + 1)
+    // Refresh week jobs so materialized subscription rows replace ghosts in the board.
+    try { fetchJobsForWeek() } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayRoutes, unsavedUserIds, currentWeek, fetchDirections, pendingAssigneeChanges, buildUserFingerprint])
+  }, [dayRoutes, unsavedUserIds, currentWeek, fetchDirections, pendingAssigneeChanges, buildUserFingerprint, dailyRoutesByDate])
 
   // Wizard "Save and complete setup" button handler
   const handleCompleteSetupFromWizard = useCallback(async () => {
@@ -2886,7 +3169,7 @@ function JobsPageContent() {
     setDayOptimizing(false)
   }, [dayRoutes, handleDayReorder, t])
 
-  // ── Bulk / multi-employee route optimisation ──────────────────────────────
+  // ââ Bulk / multi-employee route optimisation ââââââââââââââââââââââââââââââ
 
   const handleBulkOptimize = useCallback(async (
     userIds: number[],
@@ -2896,13 +3179,13 @@ function JobsPageContent() {
     if (userIds.length === 0) return
 
     if (!allowReassign) {
-      // ── Simple mode: run existing single-employee optimizer in sequence ──
+      // ââ Simple mode: run existing single-employee optimizer in sequence ââ
       const total = userIds.length
       for (let i = 0; i < userIds.length; i++) {
         const uid = userIds[i]
         const route = dayRoutes.find(r => r.userId === uid)
         const name = route?.userName ?? `Employee ${i + 1}`
-        onProgress({ step: i, total, message: `Optimising route for ${name}…` })
+        onProgress({ step: i, total, message: `Optimising route for ${name}â¦` })
         await handleDayOptimize(uid)
         await new Promise(r => setTimeout(r, 80))
       }
@@ -2910,13 +3193,13 @@ function JobsPageContent() {
       return
     }
 
-    // ── Reassign mode: adaptive geo-first territory assignment ──────────────
+    // ââ Reassign mode: adaptive geo-first territory assignment ââââââââââââââ
     //
     // Goal: each employee owns a tight, contiguous area. We anchor every
     // employee at their home/start location and give each job to the nearest
     // anchor (a Voronoi partition). Employees who share an anchor (e.g. one
     // shared company depot) are split apart with compact k-means so nobody
-    // ends up with two disjoint blobs. Workload is NOT balanced — geography
+    // ends up with two disjoint blobs. Workload is NOT balanced â geography
     // decides everything, which is what produces sensible, local routes.
 
     const routes = dayRoutes.filter(r => userIds.includes(r.userId))
@@ -2925,7 +3208,7 @@ function JobsPageContent() {
     let step = 0
 
     // 1. Pool all locatable, non-cancelled, non-home jobs
-    onProgress({ step: step++, total: totalSteps, message: 'Pooling jobs…' })
+    onProgress({ step: step++, total: totalSteps, message: 'Pooling jobsâ¦' })
     await new Promise(r => setTimeout(r, 30))
 
     type PooledJob = RouteJob & { _origUserId: number }
@@ -2940,7 +3223,7 @@ function JobsPageContent() {
       return
     }
 
-    // Longitude shrinks toward the poles — scale it by cos(latitude) so that
+    // Longitude shrinks toward the poles â scale it by cos(latitude) so that
     // squared distances reflect real ground distance (critical this far north).
     const refLat = pooled.reduce((s, j) => s + (j.lat as number), 0) / pooled.length
     const LNG_SCALE = Math.cos((refLat * Math.PI) / 180)
@@ -2992,7 +3275,7 @@ function JobsPageContent() {
 
     // 2. Anchor each employee. Prefer their geocoded home/start, else the
     //    centroid of their current jobs, else the global centroid.
-    onProgress({ step: step++, total: totalSteps, message: 'Mapping territories…' })
+    onProgress({ step: step++, total: totalSteps, message: 'Mapping territoriesâ¦' })
     await new Promise(r => setTimeout(r, 30))
 
     const globalCentroid: [number, number] = [
@@ -3016,7 +3299,7 @@ function JobsPageContent() {
     const anchors: [number, number][] = routes.map(anchorOf)
 
     // Group employees that share (almost) the same anchor. 3-decimal rounding
-    // ≈ 100 m, so everyone on a single shared depot lands in one group.
+    // â 100 m, so everyone on a single shared depot lands in one group.
     const keyOf = (a: [number, number]) => `${a[0].toFixed(3)},${a[1].toFixed(3)}`
     const groupByKey = new Map<string, number[]>()
     anchors.forEach((a, ei) => {
@@ -3068,7 +3351,7 @@ function JobsPageContent() {
       onProgress({
         step: step++,
         total: totalSteps,
-        message: `Optimising ${route.userName} (${middleJobs.length} stop${middleJobs.length !== 1 ? 's' : ''})…`,
+        message: `Optimising ${route.userName} (${middleJobs.length} stop${middleJobs.length !== 1 ? 's' : ''})â¦`,
       })
 
       const startJob = route.jobs.find(j => j.is_home && String(j.id).startsWith('start-'))
@@ -3146,7 +3429,7 @@ function JobsPageContent() {
                     <div className="text-xs text-red-700 mt-2">{t('app.jobsPage.errorHint')}</div>
                   </div>
                 )}
-                {/* Top Bar — hidden in day view (calendar nav lives on the map overlay).
+                {/* Top Bar â hidden in day view (calendar nav lives on the map overlay).
                     Mobile-first: arrows + label form the first row; the user pill and
                     view switcher are full-width on a second row so they breathe. */}
                 {viewMode !== 'day' && <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-4">
@@ -3233,7 +3516,15 @@ function JobsPageContent() {
                             {(['day','week','month','year'] as const).map((m) => (
                                 <button
                                     key={m}
-                                    onClick={() => setViewMode(m)}
+                                    onClick={() => {
+                                      if (m === 'day') {
+                                        const date = toLocalDateString(currentWeek)
+                                        const uid = selectedUserId !== 'all' ? Number(selectedUserId) : null
+                                        openMapPlanner(date, Number.isFinite(uid as number) ? uid : null)
+                                        return
+                                      }
+                                      setViewMode(m)
+                                    }}
                                     className={`px-2.5 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm font-medium rounded-md transition-colors ${viewMode === m ? 'bg-accent-500 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
                                 >
                                     {m === 'day' ? t('app.jobsPage.viewDay') : m === 'week' ? t('app.jobsPage.viewWeek') : m === 'month' ? t('app.jobsPage.viewMonth') : t('app.jobsPage.viewYear')}
@@ -3253,11 +3544,11 @@ function JobsPageContent() {
                     </div>
                 </div>}
 
-                {/* ── Day view: full-screen overlay.
+                {/* ââ Day view: full-screen overlay.
                     Desktop (lg+):  fixed, offset by the 200px sidebar, side-by-side.
                     Mobile/tablet:  takes over below the sticky top bar; we stack
                     the route panel on top of the map so both are reachable.
-                    The hardcoded `left: 200` is gone — we use Tailwind so it can
+                    The hardcoded `left: 200` is gone â we use Tailwind so it can
                     flex with the new responsive shell. */}
                 {viewMode === 'day' && (() => {
                   const handleBackToWeek = () => {
@@ -3440,6 +3731,25 @@ function JobsPageContent() {
                         onCompleteSetup={handleCompleteSetupFromWizard}
                         mobileSheet={!isDesktopRoute}
                         hasUnsavedChanges={hasUnsavedRouteChanges}
+                        date={toLocalDateString(currentWeek)}
+                        plannedMetaByUser={Object.fromEntries(
+                          (dailyRoutesByDate[toLocalDateString(currentWeek)] || [])
+                            .filter((m) => m.status === 'planned')
+                            .map((m) => [
+                              m.user_id,
+                              {
+                                id: m.id,
+                                name: m.name,
+                                status: m.status,
+                                round_template_id: m.round_template_id,
+                                is_occurrence_override: m.is_occurrence_override,
+                              },
+                            ])
+                        )}
+                        onRoundSaved={() => {
+                          setDailyRoutesTick((tick) => tick + 1)
+                          fetchJobsForWeek()
+                        }}
 
                         wrapMobileSheet={
                           !isDesktopRoute
@@ -3574,7 +3884,7 @@ function JobsPageContent() {
                   )
                 })()}
 
-                {/* ── Month / Week views ────────────────────────────────── */}
+                {/* ÔöÇÔöÇ Month / Week views ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ */}
                 {viewMode !== 'day' && (
                 <div className="bg-[#fff] rounded-xl p-2 sm:p-[10px] flex flex-col overflow-hidden max-w-full flex-1 min-h-0">
                 {viewMode === 'month' ? (
@@ -3637,7 +3947,7 @@ function JobsPageContent() {
                                     : (workHoursNum > 0 ? (occupiedHours / workHoursNum) * 100 : 0)
                                 
                                 // Cap at 100% - if over 100%, show all red (don't extend beyond container).
-                                // Color tiers: green ≤80%, amber 80-100%, red >100% or jobs with 0 hours.
+                                // Color tiers: green Ôëñ80%, amber 80-100%, red >100% or jobs with 0 hours.
                                 const barPercent = Math.min(100, utilizationPercent)
                                 const barColor = hasJobsButNoHours || utilizationPercent > 100
                                     ? '#EF4444'
@@ -3646,16 +3956,16 @@ function JobsPageContent() {
                                         : utilizationPercent > 0
                                             ? '#3DD57A'
                                             : 'transparent'
-                                // Build a compact breakdown tooltip: jobs · appointments · capacity · over.
+                                // Build a compact breakdown tooltip: jobs -À appointments -À capacity -À over.
                                 const apptCountToday = (appointmentsByDate[dateString] || [])
                                     .filter((a) => a.status === 'approved' && (selectedUserId === 'all' || Number(a.user_id) === Number(selectedUserId)))
                                     .length
                                 const overHours = Math.max(0, occupiedHours - workHoursNum)
                                 const barTooltip =
-                                    `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} · ` +
-                                    `${apptCountToday} ${t('app.appointments.label', 'appointments')} · ` +
+                                    `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} -À ` +
+                                    `${apptCountToday} ${t('app.appointments.label', 'appointments')} -À ` +
                                     `${workHoursNum.toFixed(1)}h ${t('app.jobsPage.capacity', 'capacity')}` +
-                                    (overHours > 0 ? ` · ${overHours.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
+                                    (overHours > 0 ? ` -À ${overHours.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
                                 
                                 return (
                                     <div
@@ -3744,16 +4054,28 @@ function JobsPageContent() {
                                                 dayJobs.slice(0, 3).map((job) => {
                                                     const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                     const isJobCancelled = job.status === 'cancelled'
+                                                    const isJobDeleted = job.status === 'deleted'
+                                                    const isJobInactive = isJobCancelled || isJobDeleted
+                                                    const isExiting = exitingJobIds.has(String(job.id))
                                                     
                                                     return (
                                                         <div
                                                             key={job.id}
-                                                            draggable={!isJobCancelled}
-                                                            onDragStart={(e) => !isJobCancelled && handleDragStart(e, job)}
+                                                            className={`overflow-hidden transition-all duration-300 ease-out ${
+                                                              isExiting
+                                                                ? '-translate-x-[120%] opacity-0 max-h-0'
+                                                                : 'translate-x-0 max-h-40'
+                                                            }`}
+                                                        >
+                                                        <div
+                                                            draggable={!isJobInactive}
+                                                            onDragStart={(e) => !isJobInactive && handleDragStart(e, job)}
                                                             onDragEnd={handleDragEnd}
                                                             onClick={() => handleJobClick(job)}
                                                             className={`rounded-lg p-2 text-xs transition-all border ${
-                                                                isJobCancelled
+                                                                isJobDeleted
+                                                                    ? 'bg-gray-50 border-gray-200 opacity-35 cursor-pointer'
+                                                                    : isJobCancelled
                                                                     ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
                                                                     : isDayBlocked
                                                                         ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
@@ -3761,16 +4083,44 @@ function JobsPageContent() {
                                                             } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
                                                         >
                                                             <div className="font-semibold text-gray-800 truncate flex items-center gap-1">
-                                                                {isJobCompleted && !isJobCancelled && (
+                                                                {job.invoice_id != null && (
+                                                                    <span
+                                                                      className="inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded bg-primary-500/10 text-primary-700"
+                                                                      title={t('app.jobsPage.invoiced', 'Invoiced')}
+                                                                    >
+                                                                      <DocumentTextIcon className="h-2.5 w-2.5" strokeWidth={2.5} />
+                                                                    </span>
+                                                                )}
+                                                                {isJobCompleted && !isJobInactive && (
                                                                     <CheckIcon className="w-3 h-3 text-accent-500 flex-shrink-0" strokeWidth={3} />
                                                                 )}
                                                                 <span className="truncate">
                                                                     {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || t('app.jobsPage.client')}
                                                                 </span>
                                                             </div>
-                                                            {isJobCancelled && (
-                                                                <span className="text-[9px] font-medium text-red-600">{t('app.jobsPage.cancelled')}</span>
+                                                            {(isJobDeleted || isJobCancelled) && (
+                                                                <div className="flex items-center gap-1 mt-0.5">
+                                                                  <button
+                                                                    type="button"
+                                                                    onClick={(e) => {
+                                                                      e.stopPropagation()
+                                                                      dismissInactiveJobs([job.id])
+                                                                    }}
+                                                                    className="p-0.5 rounded text-gray-400 hover:text-gray-700"
+                                                                    title={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                                                                    aria-label={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                                                                  >
+                                                                    <ArchiveBoxArrowDownIcon className="w-3 h-3" />
+                                                                  </button>
+                                                                  {isJobDeleted && (
+                                                                      <span className="text-[9px] font-medium text-gray-600">{t('app.jobsPage.deleted', 'Deleted')}</span>
+                                                                  )}
+                                                                  {isJobCancelled && (
+                                                                      <span className="text-[9px] font-medium text-red-600">{t('app.jobsPage.cancelled')}</span>
+                                                                  )}
+                                                                </div>
                                                             )}
+                                                        </div>
                                                         </div>
                                                     )
                                                 })
@@ -3809,7 +4159,7 @@ function JobsPageContent() {
                         </div>
                     </div>
                 ) : (
-                    /* Weekly Calendar — horizontal slider showing 5 days by default, scrollable to show all 7 days */
+                    /* Weekly Calendar ÔÇö horizontal slider showing 5 days by default, scrollable to show all 7 days */
                     <div className="flex flex-col flex-1 min-h-0 w-full overflow-hidden">
                         {/* Scrollable columns container */}
                         <div 
@@ -3839,7 +4189,7 @@ function JobsPageContent() {
                                     const isDragOver = dragOverDate === dateString
                                     const isTodayBanner = isToday(day)
 
-                                    // Leave deduction — only applies when a single employee is selected
+                                    // Leave deduction ÔÇö only applies when a single employee is selected
                                     const dayLeaveEntry = selectedUserId !== 'all' ? employeeLeaveByDate[dateString] ?? null : null
                                     const leaveHoursOff = getLeaveHoursOff(dateString, baseHours)
                                     const apptHoursOff = getApprovedAppointmentHoursForDate(dateString, baseHours)
@@ -3850,9 +4200,61 @@ function JobsPageContent() {
                                     // on the column and the muted styling on any jobs still here.
                                     const isDayBlocked = isCalendarDayBlocked(workHoursNum, dateString)
 
-                                    // Parse saved route for this day once — drives both the button colour
-                                    // and the planned/unplanned divider in the job list.
+                                    // Planned round packages for this day (server is source of truth).
+                                    // Fallback: if daily_routes is missing but jobs carry library_round_id
+                                    // (round-owned subscriptions), synthesize one package so stops stay a unit.
+                                    const dayPlannedMetas = (() => {
+                                      const fromServer = (dailyRoutesByDate[dateString] || []).filter(
+                                        (m) => m.status === 'planned' && (
+                                          selectedUserId === 'all' || Number(m.user_id) === Number(selectedUserId)
+                                        )
+                                      )
+                                      if (fromServer.length > 0) return fromServer
+
+                                      const groups = new Map<string, {
+                                        user_id: number
+                                        round_id: number
+                                        name: string | null
+                                        job_ids: number[]
+                                      }>()
+                                      for (const j of dayJobs as any[]) {
+                                        if (j?.is_projected || j?.status === 'cancelled' || j?.status === 'deleted') continue
+                                        const rid = j?.library_round_id != null ? Number(j.library_round_id) : null
+                                        const uid = j?.assigned_user_id != null ? Number(j.assigned_user_id) : null
+                                        const jid = Number(j?.id)
+                                        if (rid == null || !Number.isInteger(rid) || rid <= 0) continue
+                                        if (uid == null || !Number.isInteger(uid) || uid <= 0) continue
+                                        if (!Number.isInteger(jid) || jid <= 0) continue
+                                        if (selectedUserId !== 'all' && uid !== Number(selectedUserId)) continue
+                                        const key = `${uid}:${rid}`
+                                        const g = groups.get(key) || {
+                                          user_id: uid,
+                                          round_id: rid,
+                                          name: (j.library_round_name && String(j.library_round_name).trim()) || null,
+                                          job_ids: [] as number[],
+                                        }
+                                        if (!g.job_ids.includes(jid)) g.job_ids.push(jid)
+                                        groups.set(key, g)
+                                      }
+                                      return [...groups.values()].map((g) => ({
+                                        id: 0,
+                                        user_id: g.user_id,
+                                        scheduled_date: dateString,
+                                        status: 'planned',
+                                        name: g.name,
+                                        round_template_id: null,
+                                        round_id: g.round_id,
+                                        is_occurrence_override: null,
+                                        job_ids: g.job_ids,
+                                      }))
+                                    })()
                                     const dayRouteIds = (() => {
+                                        const fromServer = new Set<string>()
+                                        for (const m of dayPlannedMetas) {
+                                          for (const id of m.job_ids) fromServer.add(String(id))
+                                        }
+                                        if (fromServer.size > 0) return fromServer
+                                        // Fallback: warm localStorage cache until the first server fetch lands.
                                         try {
                                             const co = window.location.pathname.split('/')[1]
                                             const stored = localStorage.getItem(`route-order-${co}-${dateString}`)
@@ -3866,12 +4268,21 @@ function JobsPageContent() {
 
                                     // Green = route exists and every real job on this day is in it.
                                     // Amber = route exists but at least one job is missing from it.
-                                    const routeIsIntact = plannedDays.has(dateString) && dayRouteIds.size > 0 &&
+                                    const routeIsIntact = dayRouteIds.size > 0 &&
                                         dayJobs.every((j: any) => j.is_projected || !Number.isInteger(Number(j.id)) || dayRouteIds.has(String(j.id)))
 
-                                    // Index of the first job not in the saved route — divider goes here.
-                                    const firstUnplannedIndex = dayRouteIds.size === 0 ? -1 :
-                                        dayJobs.findIndex((j: any) => !j.is_projected && Number.isInteger(Number(j.id)) && !dayRouteIds.has(String(j.id)))
+                                    // Visit merge: same client + day + employee → one card.
+                                    const dayVisits = groupJobsIntoVisits(dayJobs as any)
+
+                                    const visitInPlanned = (v: ReturnType<typeof groupJobsIntoVisits>[number]) =>
+                                      v.jobs.some((j: any) =>
+                                        !j.is_projected && Number.isInteger(Number(j.id)) && dayRouteIds.has(String(j.id))
+                                      )
+                                    const plannedVisits = dayRouteIds.size > 0 ? dayVisits.filter(visitInPlanned) : []
+                                    const unplannedVisits = dayRouteIds.size > 0
+                                      ? dayVisits.filter(v => !visitInPlanned(v))
+                                      : dayVisits
+                                    const primaryPlannedMeta = dayPlannedMetas[0] || null
 
                                     // Travel time for this day from saved routes
                                     const dayTravelMins = (() => {
@@ -3891,6 +4302,32 @@ function JobsPageContent() {
                                     const amberWithTravel = Math.max(0, utilizationWithTravel - 100)
                                     const overflowColorTravel = amberWithTravel > 50 ? '#EF4444' : '#F59E0B'
 
+                                    const dayStart = selectedUserId !== 'all' ? getStartTimeForDay(dayOfWeekIndex) : null
+                                    const showClocks = dayStart != null && workHoursNum > 0
+                                    const usedMinutes = Math.round(totalHoursWithTravel * 60)
+                                    const capacityMinutes = Math.round(workHoursNum * 60)
+                                    const freeMinutes = Math.max(0, capacityMinutes - usedMinutes)
+                                    const currentEnd = showClocks && dayStart
+                                        ? addMinutesToClock(dayStart, usedMinutes)
+                                        : null
+                                    const capacityEnd = showClocks && dayStart
+                                        ? addMinutesToClock(dayStart, capacityMinutes)
+                                        : null
+                                    const freeHint = freeMinutes > 0
+                                        ? `${freeMinutes >= 60
+                                            ? `${(freeMinutes / 60).toFixed(freeMinutes % 60 === 0 ? 0 : 1)}h free`
+                                            : `${freeMinutes}m free`}`
+                                        : freeMinutes === 0 && usedMinutes > 0
+                                            ? 'full'
+                                            : null
+                                    const dayValue = dayJobs.reduce(
+                                        (sum: number, j: any) => sum + getJobDisplayPrice(j),
+                                        0,
+                                    )
+                                    const driveSharePct = totalHoursWithTravel > 0.05
+                                        ? Math.round(((dayTravelMins / 60) / totalHoursWithTravel) * 100)
+                                        : 0
+
                                     return (
                                         <div
                                             key={originalIndex}
@@ -3907,7 +4344,7 @@ function JobsPageContent() {
                                             onDragLeave={handleDragLeave}
                                             onDrop={(e) => handleDrop(e, dateString)}
                                         >
-                                            {/* Stripes at z-0; content at z-[1] — negative z-index was painting
+                                            {/* Stripes at z-0; content at z-[1] ÔÇö negative z-index was painting
                                                 the pattern UNDER the column bg-[#FCFCFC], so it never showed. */}
                                             {isDayBlocked && (
                                                 <div
@@ -4004,10 +4441,10 @@ function JobsPageContent() {
                                                         .length
                                                     const overHoursW = Math.max(0, totalHoursWithTravel - workHoursNum)
                                                     const weekBarTooltip =
-                                                        `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} · ` +
-                                                        `${apptCountToday} ${t('app.appointments.label', 'appointments')} · ` +
+                                                        `${dayJobs.length} ${t('app.jobsPage.jobs', 'jobs')} -À ` +
+                                                        `${apptCountToday} ${t('app.appointments.label', 'appointments')} -À ` +
                                                         `${workHoursNum.toFixed(1)}h ${t('app.jobsPage.capacity', 'capacity')}` +
-                                                        (overHoursW > 0 ? ` · ${overHoursW.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
+                                                        (overHoursW > 0 ? ` -À ${overHoursW.toFixed(1)}h ${t('app.jobsPage.over', 'over')}` : '')
                                                     return (
                                                         <div className="w-full h-2 bg-primary-500/30 rounded-full relative" title={weekBarTooltip} style={{ overflow: 'visible' }}>
                                                     {greenWithTravel > 0 && (
@@ -4030,59 +4467,52 @@ function JobsPageContent() {
                                                 })() : (
                                                     <WorkDriveDayBar jobMinutes={getJobMinutesForDay(day)} driveMinutes={dayTravelMins} />
                                                 )}
-                                                {/* Action buttons: Add job (left) + Plan route (right) */}
-                                                <div className="flex items-center justify-between mt-2 gap-1">
+                                                {/* Plan route (compact, left) + day value / drive share */}
+                                                <div className="mt-2 flex items-center gap-2 min-w-0">
                                                     <button
                                                         type="button"
                                                         onClick={(e) => {
                                                             e.stopPropagation()
-                                                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
-                                                            setCellAddMenu({
-                                                                date: dateString,
-                                                                x: rect.left,
-                                                                y: rect.bottom + 4,
-                                                            })
-                                                        }}
-                                                        className="flex items-center gap-1 text-[11px] font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-1.5 py-0.5 rounded-md transition-colors"
-                                                        title="Add a job"
-                                                    >
-                                                        <PlusIcon className="w-3 h-3" />
-                                                        Add a job
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            // If a single employee is selected in the jobs list, open the route planner
-                                                            // directly on that employee's route. Otherwise show all employees overview.
-                                                            if (selectedUserId !== 'all') {
-                                                              const userIdNum = typeof selectedUserId === 'string'
+                                                            const uid = selectedUserId !== 'all'
+                                                              ? (typeof selectedUserId === 'string'
                                                                 ? parseInt(selectedUserId, 10)
-                                                                : selectedUserId
-                                                              setDayFocusUserId(userIdNum)
-                                                            } else {
-                                                              setDayFocusUserId(null)
-                                                            }
-                                                            setCurrentWeek(new Date(day))
-                                                            setViewMode('day')
+                                                                : selectedUserId)
+                                                              : null
+                                                            openMapPlanner(dateString, Number.isFinite(uid as number) ? uid : null)
                                                         }}
-                                                        className={`flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md transition-colors ${
-                                                            routeIsIntact
-                                                                ? 'text-accent-600 hover:text-accent-700 hover:bg-accent-50'
-                                                                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                                                        }`}
+                                                        className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold bg-white text-[#193434] hover:bg-black/[0.03] transition-colors"
                                                         title={routeIsIntact ? t('app.jobsPage.planRouteTitlePlanned') : t('app.jobsPage.planRouteTitle')}
                                                     >
-                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <svg className="w-3 h-3 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                                                         </svg>
-                                                        {t('app.jobsPage.planRoute')}
+                                                        {t('app.jobsPage.planRoute', 'Plan route')}
                                                     </button>
+                                                    <div className="min-w-0 flex-1 flex items-center justify-end gap-2 text-[10px] tabular-nums text-gray-500">
+                                                        {dayValue > 0 && (
+                                                            <span className="font-semibold text-gray-700 truncate">
+                                                                {formatMoney(dayValue, companyCountryCode)}
+                                                            </span>
+                                                        )}
+                                                        {dayTravelMins > 0 && (
+                                                            <span className="flex-shrink-0 text-gray-400">
+                                                                {driveSharePct}% {t('app.jobsPage.driveShort', 'drive')}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
+                                                {showClocks && dayStart && (
+                                                    <div className="mt-1.5">
+                                                        <DayClockDivider
+                                                            label={dayStart}
+                                                            hint={t('app.jobsPage.dayStart', 'start')}
+                                                        />
+                                                    </div>
+                                                )}
                                             </div>
 
-                                            {/* Job cards — items bg #fff, border #F1F8F4; column has p-[10px] so no extra padding here */}
-                                            <div className="flex-1 overflow-y-auto">
+                                            {/* Job cards — scrollable middle */}
+                                            <div className="flex-1 overflow-y-auto min-h-0">
                                                 {loading ? (
                                                     <div className="flex items-center justify-center h-32">
                                                         <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-500 border-t-transparent" />
@@ -4104,7 +4534,6 @@ function JobsPageContent() {
                                                                 </div>
                                                             )
                                                         })()}
-                                                        <div className="min-h-[4px]" />
                                                         {dayJobs.length > 0 ? (
                                                         <>
                                                         {selectedUserId === 'all'
@@ -4129,6 +4558,7 @@ function JobsPageContent() {
                                                                   // only fires when the whole team is off.
                                                                   const userScheduledHours = getWorkHoursForUserDay(Number(u.id), dayOfWeekIndex)
                                                                   const isUserDayBlocked = dailyCapacityEnabled && (isDayBlocked || userScheduledHours === 0)
+                                                                  const userPackage = dayPlannedMetas.find((m) => Number(m.user_id) === Number(u.id))
                                                                   return (
                                                                     <button
                                                                       key={u.id}
@@ -4140,7 +4570,9 @@ function JobsPageContent() {
                                                                       className={`w-full text-left rounded-xl p-3 transition-all border cursor-pointer ${
                                                                         isUserDayBlocked
                                                                             ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400'
-                                                                            : 'bg-white border-[#F1F8F4] hover:border-[#E0EDE4]'
+                                                                            : userPackage
+                                                                              ? 'bg-accent-50/50 border-accent-200 hover:border-accent-300'
+                                                                              : 'bg-white border-[#F1F8F4] hover:border-[#E0EDE4]'
                                                                       }`}
                                                                     >
                                                                       <div className="flex items-center justify-between mb-1.5">
@@ -4151,6 +4583,19 @@ function JobsPageContent() {
                                                                           {totalHours.toFixed(1)} h
                                                                         </span>
                                                                       </div>
+                                                                      {userPackage && (
+                                                                        <div className="mb-1.5 min-w-0">
+                                                                          <span className="text-[11px] text-gray-600 truncate block">
+                                                                            {userPackage.name?.trim()
+                                                                              || t('app.jobsPage.plannedRound', 'Planned route')}
+                                                                            {' · '}
+                                                                            {t('app.rounds.stopCount', '{{n}} stops').replace(
+                                                                              '{{n}}',
+                                                                              String(userPackage.job_ids?.length || userJobsForDay.length),
+                                                                            )}
+                                                                          </span>
+                                                                        </div>
+                                                                      )}
                                                                       <div className="w-full h-1.5 bg-primary-500/10 rounded-full overflow-hidden">
                                                                         {percent > 0 && (
                                                                           <div
@@ -4164,44 +4609,66 @@ function JobsPageContent() {
                                                                 })}
                                                             </>
                                                           )
-                                                          : dayJobs.map((job, jobIndex) => {
+                                                          : (() => {
+                                                            const renderVisitCard = (visit: ReturnType<typeof groupJobsIntoVisits>[number], opts?: { stopIndex?: number; inRound?: boolean }) => {
+                                                            const job = visit.primary as any
                                                             const hasTime = job.scheduled_time_from || job.scheduled_time_to
                                                             const addressDisplay = getAddressDisplay(job)
                                                             const isJobCompleted = job.status === 'completed' || job.status === 'sub_completed'
                                                             const isJobCancelled = job.status === 'cancelled'
-                                                            const taskCount = getJobTaskCount(job)
-                                                            const jobDisplayPrice = getJobDisplayPrice(job)
-                                                            const noteCount = (job as any).note_count ?? 0
+                                                            const isJobDeleted = job.status === 'deleted'
+                                                            const isJobInactive = isJobCancelled || isJobDeleted
+                                                            const taskCount = visit.totalTaskCount || getJobTaskCount(job)
+                                                            const jobDisplayPrice = visit.jobs.reduce((sum, j) => sum + getJobDisplayPrice(j as any), 0)
+                                                            const noteCount = visit.jobs.reduce((sum, j) => sum + Number((j as any).note_count ?? 0), 0)
+                                                            const mins = visit.totalDurationMinutes
+                                                            const isExiting = exitingJobIds.has(String(job.id))
+                                                            const stopIndex = opts?.stopIndex
+                                                            const inRound = !!opts?.inRound
 
                                                             return (
-                                                                <div key={job.id}>
-                                                                    {/* Divider before the first job that isn't part of the saved route */}
-                                                                    {jobIndex === firstUnplannedIndex && firstUnplannedIndex > 0 && (
-                                                                        <div className="flex items-center gap-2 my-2">
-                                                                            <div className="flex-1 border-t border-dashed border-gray-200" />
-                                                                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">{t('app.jobsPage.notPlanned')}</span>
-                                                                            <div className="flex-1 border-t border-dashed border-gray-200" />
-                                                                        </div>
-                                                                    )}
+                                                                <div
+                                                                  key={visit.key}
+                                                                  className={`overflow-hidden transition-all duration-300 ease-out ${
+                                                                    inRound ? 'relative' : ''
+                                                                  } ${
+                                                                    isExiting
+                                                                      ? '-translate-x-[120%] opacity-0 max-h-0 mb-0'
+                                                                      : 'translate-x-0 max-h-[480px]'
+                                                                  }`}
+                                                                >
                                                                     <div
-                                                                        draggable={!isJobCancelled}
-                                                                        onDragStart={(e) => !isJobCancelled && handleDragStart(e, job)}
+                                                                        draggable={!isJobInactive}
+                                                                        onDragStart={(e) => !isJobInactive && handleDragStart(e, job)}
                                                                         onDragEnd={handleDragEnd}
                                                                         onClick={() => handleJobClick(job)}
                                                                         className={`rounded-xl p-3 transition-all border ${
-                                                                            isJobCancelled
+                                                                            isJobDeleted
+                                                                                ? 'bg-gray-50 border-gray-200 opacity-35 cursor-pointer'
+                                                                                : isJobCancelled
                                                                                 ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
                                                                                 : isDayBlocked
                                                                                     ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
-                                                                                    : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
+                                                                                    : inRound
+                                                                                      ? 'bg-white border-accent-100 hover:border-accent-200 cursor-pointer shadow-sm'
+                                                                                      : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
                                                                         } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
                                                                     >
-                                                                    {/* Row 1: Client (left) + notes badge (right) */}
                                                                     <div className="flex items-start justify-between gap-2 mb-1">
-                                                                        <div className="flex items-center min-w-0 flex-1">
+                                                                        <div className="flex items-center min-w-0 flex-1 gap-1.5">
+                                                                            {inRound && stopIndex != null && (
+                                                                              <span className="w-5 h-5 rounded-full bg-[#193434] text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">
+                                                                                {stopIndex + 1}
+                                                                              </span>
+                                                                            )}
                                                                             <span className="font-semibold text-sm text-gray-800 truncate min-w-0 flex-1">
                                                                                 {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || t('app.jobsPage.client')}
                                                                             </span>
+                                                                            {visit.visitSize > 1 && (
+                                                                                <span className="flex-shrink-0 inline-flex items-center rounded-full bg-accent-50 text-accent-700 border border-accent-200 px-1.5 py-0.5 text-[10px] font-semibold">
+                                                                                    {t('app.jobsPage.mergedVisit', '{{n}} jobs').replace('{{n}}', String(visit.visitSize))}
+                                                                                </span>
+                                                                            )}
                                                                         </div>
                                                                         {noteCount > 0 && (
                                                                             <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full text-[10px] font-bold text-white bg-orange-500 gap-0.5">
@@ -4217,7 +4684,6 @@ function JobsPageContent() {
                                                                         </div>
                                                                     )}
 
-                                                                    {/* Clock icon + time (e.g. 12:00 - 14:00) */}
                                                                     {hasTime && (
                                                                         <div className="flex items-center gap-1.5 text-xs text-gray-600 mb-1.5">
                                                                             <ClockIcon className="w-3.5 h-3.5 flex-shrink-0" />
@@ -4227,47 +4693,140 @@ function JobsPageContent() {
                                                                         </div>
                                                                     )}
 
-                                                                    {/* Under border: tasks, time, price (left, same style) | completed button (right) */}
                                                                     <div className="mt-1.5 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2">
                                                                         <div className="flex items-center gap-3 text-[11px] text-gray-500 min-w-0">
                                                                             <span className="flex items-center gap-1 flex-shrink-0">
                                                                                 <DocumentTextIcon className="w-3.5 h-3.5" />
                                                                                 {taskCount} task{taskCount !== 1 ? 's' : ''}
                                                                             </span>
-                                                                            {(() => {
-                                                                                const mins = parseFloat(String(job.estimated_duration ?? job.total_duration ?? 0))
-                                                                                return mins > 0 ? (
+                                                                            {mins > 0 ? (
                                                                                     <span className="flex items-center gap-1 flex-shrink-0">
                                                                                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/></svg>
                                                                                         {formatDuration(mins)}
                                                                                     </span>
-                                                                                ) : null
-                                                                            })()}
+                                                                            ) : null}
                                                                             {jobDisplayPrice > 0 && (
                                                                                 <span className="text-[11px] text-gray-500 flex-shrink-0">{formatPrice(jobDisplayPrice)}</span>
                                                                             )}
                                                                         </div>
-                                                                        {isJobCancelled ? (
-                                                                            <span className="text-[10px] font-medium text-red-600 px-1.5 py-0.5 rounded bg-red-100 flex-shrink-0">{t('app.jobsPage.cancelled')}</span>
+                                                                        {isJobDeleted || isJobCancelled ? (
+                                                                            <div className="flex items-center gap-1 flex-shrink-0">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation()
+                                                                                        dismissInactiveJobs(visit.jobs.map((j) => j.id))
+                                                                                    }}
+                                                                                    className="p-0.5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-200/80 transition-colors"
+                                                                                    title={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                                                                                    aria-label={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                                                                                >
+                                                                                    <ArchiveBoxArrowDownIcon className="w-3.5 h-3.5" />
+                                                                                </button>
+                                                                                {isJobDeleted ? (
+                                                                                    <span className="text-[10px] font-medium text-gray-600 px-1.5 py-0.5 rounded bg-gray-200">
+                                                                                        {t('app.jobsPage.deleted', 'Deleted')}
+                                                                                    </span>
+                                                                                ) : (
+                                                                                    <span className="text-[10px] font-medium text-red-600 px-1.5 py-0.5 rounded bg-red-100">
+                                                                                        {t('app.jobsPage.cancelled')}
+                                                                                    </span>
+                                                                                )}
+                                                                            </div>
                                                                         ) : typeof job.status !== 'undefined' && (
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={(e) => { e.stopPropagation(); handleToggleJobCompletion(job) }}
-                                                                                className={`w-5 h-5 rounded-full flex items-center justify-center border-2 flex-shrink-0 ${
-                                                                                    isJobCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white'
-                                                                                }`}
-                                                                                title={isJobCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
-                                                                            >
-                                                                                <CheckIcon className={`w-3 h-3 ${isJobCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
-                                                                            </button>
+                                                                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                                                                                {job.invoice_id != null && (
+                                                                                    <span
+                                                                                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-600"
+                                                                                        title={t('app.jobsPage.invoiced', 'Invoiced')}
+                                                                                    >
+                                                                                        <DocumentTextIcon className="h-3 w-3" strokeWidth={2} />
+                                                                                    </span>
+                                                                                )}
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={(e) => { e.stopPropagation(); handleToggleJobCompletion(job) }}
+                                                                                    className={`w-5 h-5 rounded-full flex items-center justify-center border-2 flex-shrink-0 ${
+                                                                                        isJobCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white'
+                                                                                    }`}
+                                                                                    title={isJobCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
+                                                                                >
+                                                                                    <CheckIcon className={`w-3 h-3 ${isJobCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
+                                                                                </button>
+                                                                            </div>
                                                                         )}
                                                                     </div>
                                                                     </div>
                                                                 </div>
                                                             )
-                                                        })}
+                                                            }
+
+                                                            return (
+                                                              <>
+                                                                {plannedVisits.length > 0 && (
+                                                                  <div className="rounded-2xl border-2 border-accent-200/80 bg-accent-50/40 overflow-hidden mb-2">
+                                                                    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-accent-100 bg-white/70">
+                                                                      <div className="min-w-0">
+                                                                        <p className="text-[12.5px] font-semibold text-gray-900 truncate">
+                                                                          {primaryPlannedMeta?.name?.trim()
+                                                                            || t('app.jobsPage.plannedRound', 'Planned route')}
+                                                                          {' · '}
+                                                                          {t('app.rounds.stopCount', '{{n}} stops').replace('{{n}}', String(plannedVisits.length))}
+                                                                        </p>
+                                                                      </div>
+                                                                      {primaryPlannedMeta && primaryPlannedMeta.id > 0 && (
+                                                                        <button
+                                                                          type="button"
+                                                                          onClick={(e) => {
+                                                                            e.stopPropagation()
+                                                                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                                                                            setMovePackageDate(dateString)
+                                                                            setMovePackageUserId('')
+                                                                            setMovePackageError(null)
+                                                                            setMovePackageMenu({
+                                                                              routeIds: dayPlannedMetas.map(m => m.id).filter(id => id > 0),
+                                                                              date: dateString,
+                                                                              userId: primaryPlannedMeta.user_id,
+                                                                              x: rect.left,
+                                                                              y: rect.bottom + 4,
+                                                                            })
+                                                                          }}
+                                                                          className="flex-shrink-0 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 px-2 py-1 text-[11px] font-semibold text-gray-700"
+                                                                        >
+                                                                          {t('app.jobsPage.movePackage', 'Move')}
+                                                                        </button>
+                                                                      )}
+                                                                    </div>
+                                                                    <div className="p-2 space-y-2">
+                                                                      {plannedVisits.map((visit, i) => renderVisitCard(visit, { stopIndex: i, inRound: true }))}
+                                                                    </div>
+                                                                  </div>
+                                                                )}
+                                                                {unplannedVisits.length > 0 && (
+                                                                  <>
+                                                                    {plannedVisits.length > 0 && (
+                                                                      <div className="flex items-center gap-2 my-2">
+                                                                        <div className="flex-1 border-t border-dashed border-gray-200" />
+                                                                        <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider whitespace-nowrap">{t('app.jobsPage.notPlanned')}</span>
+                                                                        <div className="flex-1 border-t border-dashed border-gray-200" />
+                                                                      </div>
+                                                                    )}
+                                                                    <div className="space-y-2">
+                                                                      {unplannedVisits.map((visit) => renderVisitCard(visit))}
+                                                                    </div>
+                                                                  </>
+                                                                )}
+                                                              </>
+                                                            )
+                                                          })()}
                                                         </>
                                                         ) : null}
+                                                        {showClocks && currentEnd && usedMinutes > 0 && (
+                                                            <DayClockDivider
+                                                                label={currentEnd}
+                                                                hint={freeHint ? `· ${freeHint}` : t('app.jobsPage.currentEnd', 'now')}
+                                                            />
+                                                        )}
                                                         <div className="relative mt-2">
                                                             {inJobsWizard && (
                                                                 <span
@@ -4292,6 +4851,15 @@ function JobsPageContent() {
                                                 )}
                                             </div>
 
+                                            {showClocks && capacityEnd && (
+                                                <div className="flex-shrink-0 pt-1.5">
+                                                    <DayClockDivider
+                                                        label={capacityEnd}
+                                                        hint={t('app.jobsPage.dayEnd', 'day end')}
+                                                    />
+                                                </div>
+                                            )}
+
                                             </div>
                                         </div>
                                     )
@@ -4304,45 +4872,6 @@ function JobsPageContent() {
 
             </div>
 
-
-            <div className="fixed bottom-6 right-6 z-40" data-create-menu>
-                {/* Dropdown Menu */}
-                {showCreateMenu && (
-                    <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 min-w-[200px]">
-                        <button onClick={() => { setShowCreateMenu(false); setIsCreateModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            {t('app.jobsPage.createJob', 'Create job')}
-                        </button>
-                        <button onClick={() => { setShowCreateMenu(false); openCreateAppointmentForDate(null) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            {isAdmin
-                                ? t('app.appointments.createMenuItem', 'Create appointment')
-                                : t('app.appointments.requestMenuItem', 'Request appointment')}
-                        </button>
-                        <button onClick={() => { setShowCreateMenu(false); setIsSubscriptionModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            {t('app.jobsPage.createSubscription', 'Create subscription')}
-                        </button>
-                        <button onClick={() => { setShowCreateMenu(false); setIsCreateClientModalOpen(true) }} className="w-full text-left px-4 py-2.5 text-sm text-primary-500 hover:bg-gray-50 transition-colors rounded-lg mx-1">
-                            {t('app.jobsPage.createClient', 'Create client')}
-                        </button>
-                    </div>
-                )}
-
-                {/* Create Button */}
-                <div className="relative">
-                    {inJobsWizard && (
-                        <span
-                            aria-hidden
-                            className="absolute inset-0 rounded-xl animate-ping bg-accent-400/50 pointer-events-none"
-                        />
-                    )}
-                    <button
-                        onClick={() => setShowCreateMenu(!showCreateMenu)}
-                        className="relative bg-accent-500 text-white px-4 py-2.5 rounded-xl shadow-md hover:shadow-lg hover:bg-accent-600 transition-all flex items-center space-x-2 font-medium"
-                        title={t('app.jobsPage.createFab')}
-                    >
-                        <span>create +</span>
-                    </button>
-                </div>
-            </div>
 
             {/* Create Job Modal */}
             <CreateJob
@@ -4357,7 +4886,6 @@ function JobsPageContent() {
                 }}
                 onJobCreated={(info) => {
                     setIsCreateModalOpen(false)
-                    setShowCreateMenu(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
                     setCreateJobClientId(undefined)
@@ -4384,7 +4912,6 @@ function JobsPageContent() {
                 }}
                 onSubscriptionCreated={() => {
                     setIsSubscriptionModalOpen(false)
-                    setShowCreateMenu(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
                     fetchJobsForWeek()
@@ -4396,11 +4923,9 @@ function JobsPageContent() {
                 isOpen={isCreateClientModalOpen}
                 onClose={() => {
                     setIsCreateClientModalOpen(false)
-                    setShowCreateMenu(false)
                 }}
                 onClientAdded={() => {
                     setIsCreateClientModalOpen(false)
-                    setShowCreateMenu(false)
                     // Optionally refresh any client-related data
                 }}
             />
@@ -4545,6 +5070,8 @@ function JobsPageContent() {
                 }}
                 deferAssigneeToParent={viewMode === 'day'}
                 onAssigneeChange={handlePlannerAssigneeChange}
+                visitSiblings={visitSiblingsFor(viewingJob, allJobs as any)}
+                onOpenSibling={(sib) => setViewingJob(sib)}
             />
             
             {/* Move Job Confirmation Modal */}
@@ -4625,6 +5152,71 @@ function JobsPageContent() {
               selectedUserId={selectedUserId}
               onApplied={() => { fetchJobsForWeek() }}
             />
+            {/* Move planned round package */}
+            {movePackageMenu && (
+              <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+                <div
+                  className="absolute inset-0 bg-black/40"
+                  onClick={() => !movePackageBusy && setMovePackageMenu(null)}
+                  aria-hidden
+                />
+                <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6">
+                  <h2 className="text-lg font-bold text-gray-900 mb-1">
+                    {t('app.jobsPage.movePackageTitle', 'Move round')}
+                  </h2>
+                  <p className="text-[12.5px] text-gray-500 mb-4">
+                    {t('app.jobsPage.movePackageBody', 'Move this planned route as one unit to another day or employee.')}
+                  </p>
+                  <label className="block text-[12px] font-semibold text-gray-700 mb-1">
+                    {t('app.jobsPage.movePackageDate', 'Date')}
+                  </label>
+                  <input
+                    type="date"
+                    value={movePackageDate}
+                    onChange={(e) => setMovePackageDate(e.target.value)}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-accent-400"
+                  />
+                  <label className="block text-[12px] font-semibold text-gray-700 mb-1">
+                    {t('app.jobsPage.movePackageEmployee', 'Employee')}
+                  </label>
+                  <select
+                    value={movePackageUserId === '' ? '' : String(movePackageUserId)}
+                    onChange={(e) => setMovePackageUserId(e.target.value ? Number(e.target.value) : '')}
+                    className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-accent-400"
+                  >
+                    <option value="">{t('app.jobsPage.movePackageKeepEmployee', 'Keep current employee')}</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {[u.first_name, u.last_name].filter(Boolean).join(' ') || `User #${u.id}`}
+                      </option>
+                    ))}
+                  </select>
+                  {movePackageError && (
+                    <p className="text-[12px] text-red-600 mb-3">{movePackageError}</p>
+                  )}
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={movePackageBusy}
+                      onClick={() => setMovePackageMenu(null)}
+                      className="rounded-xl px-4 py-2.5 text-[13px] font-medium text-gray-500 hover:bg-gray-100"
+                    >
+                      {t('app.common.cancel', 'Cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={movePackageBusy}
+                      onClick={() => void handleMovePackage()}
+                      className="rounded-xl bg-accent-500 hover:bg-accent-600 px-4 py-2.5 text-[13px] font-semibold text-white disabled:opacity-50"
+                    >
+                      {movePackageBusy
+                        ? t('app.jobsPage.movingPackage', 'Moving…')
+                        : t('app.jobsPage.movePackageConfirm', 'Move round')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             {/* Setup wizard: company-name popup triggered by "Save and complete setup" */}
             {showBusinessPopup && <OnboardingCompletePopup forceShow={showBusinessPopup} />}
         </AppLayout>

@@ -238,6 +238,7 @@ function buildPublicInvoicePayload(invoice, bankRow) {
       address: billTo.addressLine || null,
       email: billTo.email || null,
       phone: billTo.phone || null,
+      ean: invoice.bill_to_ean || invoice.client_ean || null,
     },
     // Sender block. Each field is null when empty so the digital invoice can
     // hide it cleanly — per product spec ("information that is not filled out
@@ -245,6 +246,9 @@ function buildPublicInvoicePayload(invoice, bankRow) {
     // so DK invoices say "CVR no.", DE invoices say "USt-IdNr.", etc.
     company: {
       name: invoice.company_name || null,
+      address: invoice.company_address || null,
+      zipCity:
+        [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ') || null,
       addressLine: [invoice.company_address, invoice.company_zip_code, invoice.company_city]
         .filter(Boolean)
         .join(' \u00b7 ') || null,

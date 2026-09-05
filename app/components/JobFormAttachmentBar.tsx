@@ -7,6 +7,7 @@ import {
   DocumentTextIcon,
   XMarkIcon,
   PlusIcon,
+  LockClosedIcon,
 } from '@heroicons/react/24/outline'
 
 type UserRow = { id: number; first_name?: string; last_name?: string }
@@ -15,6 +16,8 @@ const PILL_EMPTY =
   'inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-sm font-semibold text-gray-600 hover:text-primary-800 hover:border-accent-300 hover:bg-accent-50/30 shadow-sm hover:shadow-md transition-all whitespace-nowrap'
 const PILL_FILLED =
   'inline-flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-accent-50 to-accent-50/50 border border-accent-200/60 rounded-full shadow-sm hover:shadow-md transition-all group max-w-[200px] sm:max-w-xs'
+const PILL_LOCKED =
+  'inline-flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-full shadow-sm max-w-[200px] sm:max-w-xs cursor-default'
 
 export default function JobFormAttachmentBar({
   users,
@@ -22,6 +25,8 @@ export default function JobFormAttachmentBar({
   onEmployeeClick,
   onClearEmployee,
   userTriggerRef,
+  lockEmployee = false,
+  anyEmployeeLabel = 'Any',
   jobTimeFrom,
   jobTimeTo,
   onTimeClick,
@@ -38,6 +43,9 @@ export default function JobFormAttachmentBar({
   onEmployeeClick: () => void
   onClearEmployee: () => void
   userTriggerRef: RefObject<HTMLDivElement | null>
+  /** When true, employee is fixed (route placement) — including "Any". */
+  lockEmployee?: boolean
+  anyEmployeeLabel?: string
   jobTimeFrom: string
   jobTimeTo: string
   onTimeClick: () => void
@@ -61,7 +69,26 @@ export default function JobFormAttachmentBar({
     <div className="flex flex-wrap items-center gap-2 min-w-0" role="toolbar" aria-label="Job attachments">
       {/* Employee */}
       <div ref={userTriggerRef} className="relative dropdown-container flex-shrink-0">
-        {selectedUserId && selectedUser ? (
+        {lockEmployee ? (
+          <div className={PILL_LOCKED} title={anyEmployeeLabel}>
+            {selectedUserId && selectedUser ? (
+              <>
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm ring-2 ring-white/50 flex-shrink-0">
+                  {selectedUser.first_name?.[0]}{selectedUser.last_name?.[0]}
+                </div>
+                <span className="text-sm font-semibold text-primary-800 truncate">
+                  {selectedUser.first_name} {selectedUser.last_name}
+                </span>
+              </>
+            ) : (
+              <>
+                <UserIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <span className="text-sm font-semibold text-gray-500">{anyEmployeeLabel}</span>
+              </>
+            )}
+            <LockClosedIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+          </div>
+        ) : selectedUserId && selectedUser ? (
           <div className={PILL_FILLED}>
             <button type="button" onClick={onEmployeeClick} className="flex items-center gap-2 min-w-0">
               <div className="w-6 h-6 rounded-full bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm ring-2 ring-white/50 flex-shrink-0">

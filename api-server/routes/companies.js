@@ -6,6 +6,7 @@ const {
   advanceCompanyOnboardingStep,
   upsertSignupDraftByEmail,
 } = require('../utils/signupFunnel');
+const { getDefaultPaymentTerms } = require('../utils/companyInvoiceEmailLocale');
 
 const router = express.Router();
 const DEFAULT_COUNTRY_CODE = 'DK';
@@ -969,7 +970,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
-      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT true');
       // VAT registration number — separate from cvr_number (trade register / Companies House).
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
@@ -1011,7 +1012,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         defaultStartAddress: company.default_start_address ?? '',
         defaultEndAddress: company.default_end_address ?? '',
         routeLocationsEnabled: company.route_locations_enabled !== false,
-        dailyCapacityEnabled: company.daily_capacity_enabled === true,
+        dailyCapacityEnabled: true,
       }
     });
   } catch (error) {
@@ -1081,7 +1082,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_url TEXT');
-      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT false');
+      await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT true');
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT');
     } catch (e) { /* ignore */ }
 
@@ -1169,7 +1170,17 @@ const DEFAULT_INVOICE_EMAIL_SUBJECT = 'Invoice {invoice_number}';
 const DEFAULT_INVOICE_REMINDER_SUBJECT = 'Reminder: Invoice {invoice_number}';
 
 async function ensureCompanyInvoiceSettingsColumns() {
-  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_due_days INTEGER DEFAULT 30');
+  await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_due_days INTEGER DEFAULT 14');
+  await pool.query('ALTER TABLE companies ALTER COLUMN invoice_default_due_days SET DEFAULT 14').catch(() => {});
+  // Companies that never activated invoicing still have the old 30-day column default —
+  // move them to the new product default of 14.
+  await pool.query(`
+    UPDATE companies
+    SET invoice_default_due_days = 14
+    WHERE COALESCE(invoicing_enabled, FALSE) = FALSE
+      AND COALESCE(invoice_numbering_configured, FALSE) = FALSE
+      AND invoice_default_due_days = 30
+  `).catch(() => {});
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_payment_terms TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_email_default_subject TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_email_default_body TEXT');
@@ -1257,7 +1268,8 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_numbering_configured,
         invoicing_enabled,
         invoice_vat_enabled,
-        invoice_default_tax_rate
+        invoice_default_tax_rate,
+        country_code
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -1279,17 +1291,13 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
     const numberingConfigured = Boolean(row.invoice_numbering_configured);
     const invoicingOn = Boolean(row.invoicing_enabled);
     const dueDaysRaw = row.invoice_default_due_days;
+    const savedTerms = String(row.invoice_default_payment_terms || '').trim();
+    const paymentTerms =
+      savedTerms || getDefaultPaymentTerms(row.country_code || DEFAULT_COUNTRY_CODE);
 
     const defaults = {
-      invoiceDefaultDueDays:
-        invoicingOn || numberingConfigured
-          ? dueDaysRaw != null
-            ? Number(dueDaysRaw)
-            : null
-          : dueDaysRaw != null && Number(dueDaysRaw) !== 30
-            ? Number(dueDaysRaw)
-            : null,
-      invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
+      invoiceDefaultDueDays: dueDaysRaw != null ? Number(dueDaysRaw) : 14,
+      invoiceDefaultPaymentTerms: paymentTerms,
       invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
       invoiceEmailDefaultBody: row.invoice_email_default_body || '',
       invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
@@ -1436,7 +1444,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_numbering_configured,
         invoicing_enabled,
         invoice_vat_enabled,
-        invoice_default_tax_rate
+        invoice_default_tax_rate,
+        country_code
       FROM companies WHERE id = $1
     `,
         [companyId]
@@ -1454,18 +1463,14 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       [companyId]
     );
     const maxNumericInvoice = Number(maxRow.rows[0].max_num) || 0;
+    const savedTermsPut = String(row.invoice_default_payment_terms || '').trim();
 
     res.json({
       defaults: {
         invoiceDefaultDueDays:
-          row.invoice_numbering_configured || row.invoicing_enabled
-            ? row.invoice_default_due_days != null
-              ? Number(row.invoice_default_due_days)
-              : null
-            : row.invoice_default_due_days != null && Number(row.invoice_default_due_days) !== 30
-              ? Number(row.invoice_default_due_days)
-              : null,
-        invoiceDefaultPaymentTerms: row.invoice_default_payment_terms || '',
+          row.invoice_default_due_days != null ? Number(row.invoice_default_due_days) : 14,
+        invoiceDefaultPaymentTerms:
+          savedTermsPut || getDefaultPaymentTerms(row.country_code || DEFAULT_COUNTRY_CODE),
         invoiceEmailDefaultSubject: row.invoice_email_default_subject || DEFAULT_INVOICE_EMAIL_SUBJECT,
         invoiceEmailDefaultBody: row.invoice_email_default_body || '',
         invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,

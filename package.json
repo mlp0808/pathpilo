@@ -13,7 +13,7 @@
     "dev:marketing": "cd marketing && npm run dev",
     "build:marketing": "cd marketing && npm run build",
     "dev:fullstack": "concurrently \"npm run dev:api-server\" \"npm run dev\" \"npm run dev:marketing\"",
-    "dev:api-server": "cd api-server && node server.js",
+    "dev:api-server": "cd api-server && npx nodemon server.js",
     "clean": "node -e \"const fs=require('fs'); const path=require('path'); const rm=(p)=>fs.rmSync(p,{recursive:true,force:true}); ['.next'].forEach(d=>{const p=path.join(process.cwd(),d); if(fs.existsSync(p)) rm(p);}); console.log('cleaned .next');\"",
     "db:setup": "node setup-database.js --seed",
     "db:reset": "node setup-database.js --reset --seed",

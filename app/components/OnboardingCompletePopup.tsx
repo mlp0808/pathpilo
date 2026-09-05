@@ -149,7 +149,7 @@ export default function OnboardingCompletePopup({ forceShow = false }: { forceSh
           </div>
           <h2 className="text-xl font-bold text-white">You created your first route!</h2>
           <p className="mt-1.5 text-sm text-white/60 leading-snug">
-            Almost done — just one last thing before we take you to your account.
+            Almost done — name your company, then use the Map anytime to grow the route into a repeating Round.
           </p>
         </div>
 

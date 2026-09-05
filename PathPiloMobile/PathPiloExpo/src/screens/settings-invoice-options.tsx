@@ -103,7 +103,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
   const [paymentLoadError, setPaymentLoadError] = useState('');
 
   const [form, setForm] = useState<InvoiceDefaultsForm>({
-    invoiceDefaultDueDays: 30,
+    invoiceDefaultDueDays: 14,
     invoiceDefaultPaymentTerms: '',
     invoiceNextNumber: 1,
     maxNumericInvoice: 0,
@@ -147,9 +147,12 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
             : typeof d.invoiceNumberingConfigured === 'boolean'
               ? d.invoiceNumberingConfigured
               : false;
+        const savedTerms = String(d.invoiceDefaultPaymentTerms ?? '');
         setForm({
-          invoiceDefaultDueDays: d.invoiceDefaultDueDays ?? 30,
-          invoiceDefaultPaymentTerms: d.invoiceDefaultPaymentTerms ?? '',
+          invoiceDefaultDueDays: d.invoiceDefaultDueDays ?? 14,
+          invoiceDefaultPaymentTerms: savedTerms.trim()
+            ? savedTerms
+            : 'Payment is due no later than {due_date}. Please use invoice number {invoice_number} as the payment reference.\n\nIf payment is not received by the due date, we reserve the right to charge interest on overdue amounts in accordance with applicable law, and to recover reasonable costs of collection.',
           invoiceNextNumber: Math.max(1, Number(nextNumber) || 1),
           maxNumericInvoice: Number(maxIssued) || 0,
           invoiceNumberingConfigured: configured,
@@ -232,7 +235,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
             ? true
             : Boolean(d.invoiceNumberingConfigured);
         setForm({
-          invoiceDefaultDueDays: d.invoiceDefaultDueDays ?? 30,
+          invoiceDefaultDueDays: d.invoiceDefaultDueDays ?? 14,
           invoiceDefaultPaymentTerms: d.invoiceDefaultPaymentTerms ?? '',
           invoiceNextNumber: Math.max(1, Number(nextNumber) || 1),
           maxNumericInvoice: Number(maxIssued) || 0,
@@ -430,7 +433,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
                 editable={canEdit}
                 multiline
                 textAlignVertical="top"
-                placeholder="e.g. Payment due by {due_date}."
+                placeholder="Payment is due no later than {due_date}…"
                 placeholderTextColor="#94A3B8"
                 style={styles.textarea}
               />

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import AddressAutocomplete from './AddressAutocomplete'
@@ -31,10 +31,46 @@ interface Client {
 interface AddClientModalProps {
   isOpen: boolean
   onClose: () => void
-  onClientAdded: () => void
+  onClientAdded: (clientId?: number) => void
+  /** Prefill from a searched map location. */
+  initialAddress?: string
+  initialZip?: string
+  initialCity?: string
+  initialLat?: number | null
+  initialLng?: number | null
 }
 
-export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddClientModalProps) {
+const emptyClient = (): Client => ({
+  client_type: 'person',
+  name: '',
+  last_name: '',
+  company_number: '',
+  contact_name: '',
+  country: '',
+  address: '',
+  zip_code: '',
+  city: '',
+  lat: null,
+  lng: null,
+  email: '',
+  phone: '',
+  billing_address: '',
+  billing_zip_code: '',
+  billing_city: '',
+  billing_email: '',
+  billing_phone: '',
+})
+
+export default function AddClientModal({
+  isOpen,
+  onClose,
+  onClientAdded,
+  initialAddress,
+  initialZip,
+  initialCity,
+  initialLat = null,
+  initialLng = null,
+}: AddClientModalProps) {
   const { t } = useAppI18n()
   const userCountryCode = (() => {
     if (typeof window === 'undefined') return 'DK'
@@ -46,31 +82,26 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
     }
   })()
   const countryRule = getCountryRule(userCountryCode)
-  const [currentClient, setCurrentClient] = useState<Client>({
-    client_type: 'person',
-    name: '',
-    last_name: '',
-    company_number: '',
-    contact_name: '',
-    country: '',
-    address: '',
-    zip_code: '',
-    city: '',
-    lat: null,
-    lng: null,
-    email: '',
-    phone: '',
-    billing_address: '',
-    billing_zip_code: '',
-    billing_city: '',
-    billing_email: '',
-    billing_phone: ''
-  })
+  const [currentClient, setCurrentClient] = useState<Client>(emptyClient)
   const [separateBillingAddress, setSeparateBillingAddress] = useState(false)
   const [separateBillingContact, setSeparateBillingContact] = useState(false)
   const [includeContactPerson, setIncludeContactPerson] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  // Apply location prefill whenever the modal opens.
+  useEffect(() => {
+    if (!isOpen) return
+    setError('')
+    setCurrentClient({
+      ...emptyClient(),
+      address: initialAddress || '',
+      zip_code: initialZip || '',
+      city: initialCity || '',
+      lat: initialLat ?? null,
+      lng: initialLng ?? null,
+    })
+  }, [isOpen, initialAddress, initialZip, initialCity, initialLat, initialLng])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -149,7 +180,7 @@ export default function AddClientModal({ isOpen, onClose, onClientAdded }: AddCl
         
         // Close modal and refresh client list
         onClose()
-        onClientAdded()
+        onClientAdded(data?.id ?? data?.client?.id)
       } else {
         setError(data.error || t('app.clients.add.errCreate'))
       }

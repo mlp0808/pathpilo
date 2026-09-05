@@ -18,18 +18,6 @@ interface Member {
   created_at: string
 }
 
-type WorkHoursMode = 'fixed' | 'flexible'
-
-interface DaySchedule {
-  start: string         // 'HH:MM'
-  end: string           // 'HH:MM'
-  breakMinutes: number  // minutes
-  hours: number         // flexible mode total per day
-  off: boolean          // computed: no hours/time at all
-}
-
-type Weekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
-
 interface AppointmentRow {
   id: number
   user_id: number
@@ -45,26 +33,6 @@ interface AppointmentRow {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-const WEEKDAYS: Array<{ key: Weekday; labelKey: string; short: string }> = [
-  { key: 'monday',    labelKey: 'app.day.monday',    short: 'Mon' },
-  { key: 'tuesday',   labelKey: 'app.day.tuesday',   short: 'Tue' },
-  { key: 'wednesday', labelKey: 'app.day.wednesday', short: 'Wed' },
-  { key: 'thursday',  labelKey: 'app.day.thursday',  short: 'Thu' },
-  { key: 'friday',    labelKey: 'app.day.friday',    short: 'Fri' },
-  { key: 'saturday',  labelKey: 'app.day.saturday',  short: 'Sat' },
-  { key: 'sunday',    labelKey: 'app.day.sunday',    short: 'Sun' },
-]
-
-const DEFAULT_FIXED: Record<Weekday, DaySchedule> = {
-  monday:    { start: '08:00', end: '16:00', breakMinutes: 30, hours: 7.5, off: false },
-  tuesday:   { start: '08:00', end: '16:00', breakMinutes: 30, hours: 7.5, off: false },
-  wednesday: { start: '08:00', end: '16:00', breakMinutes: 30, hours: 7.5, off: false },
-  thursday:  { start: '08:00', end: '16:00', breakMinutes: 30, hours: 7.5, off: false },
-  friday:    { start: '08:00', end: '15:30', breakMinutes: 30, hours: 7.0, off: false },
-  saturday:  { start: '08:00', end: '16:00', breakMinutes: 0,  hours: 0,   off: true  },
-  sunday:    { start: '08:00', end: '16:00', breakMinutes: 0,  hours: 0,   off: true  },
-}
 
 const APPT_CATEGORY_COLORS: Record<AppointmentRow['category'], { bg: string; border: string; text: string }> = {
   personal: { bg: '#EEF2FF', border: '#C7D2FE', text: '#4338CA' },
@@ -85,17 +53,6 @@ function roleBadge(role: string, t: (key: string, fallback?: string) => string) 
   }
 }
 
-// Given HH:MM start, HH:MM end and break minutes, produce net work hours.
-// Returns 0 when end <= start so we never emit negative durations.
-function computeNetHours(start: string, end: string, breakMinutes: number): number {
-  if (!start || !end) return 0
-  const [sh, sm] = start.split(':').map((x) => parseInt(x, 10))
-  const [eh, em] = end.split(':').map((x) => parseInt(x, 10))
-  if ([sh, sm, eh, em].some((n) => !Number.isFinite(n))) return 0
-  const mins = (eh * 60 + em) - (sh * 60 + sm) - (breakMinutes || 0)
-  return Math.max(0, mins / 60)
-}
-
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function EmployeeSettingsPage() {
@@ -106,19 +63,7 @@ export default function EmployeeSettingsPage() {
   const userId = params?.userId as string
 
   const [member, setMember] = useState<Member | null>(null)
-
-  // Work hours model: a mode toggle + one DaySchedule per weekday. Fixed mode
-  // uses start/end/break; flexible mode uses `hours` only. We always keep both
-  // around so flipping between modes never loses user input.
-  const [workHoursMode, setWorkHoursMode] = useState<WorkHoursMode>('fixed')
-  const [schedule, setSchedule] = useState<Record<Weekday, DaySchedule>>(DEFAULT_FIXED)
-
-  const [hoursSaving, setHoursSaving] = useState(false)
-  const [hoursSaved, setHoursSaved] = useState(false)
-  const [hoursError, setHoursError] = useState('')
-
   const [appointments, setAppointments] = useState<AppointmentRow[]>([])
-
   const [loading, setLoading] = useState(true)
 
   // Pull appointments (all statuses) for this user. We keep the window tight
@@ -144,119 +89,15 @@ export default function EmployeeSettingsPage() {
     const headers = { Authorization: `Bearer ${token}` }
     setLoading(true)
     try {
-      const [usersRes, hoursRes] = await Promise.all([
-        fetch(apiUrl('/users'), { headers }),
-        fetch(apiUrl(`/work-hours/${userId}`), { headers }),
-      ])
+      const usersRes = await fetch(apiUrl('/users'), { headers })
       if (usersRes.ok) {
         const d = await usersRes.json()
         setMember((d.users || []).find((u: Member) => String(u.id) === String(userId)) || null)
-      }
-      if (hoursRes.ok) {
-        const d = await hoursRes.json()
-        const wh = d.workHours || {}
-        const mode: WorkHoursMode = wh.work_hours_mode === 'flexible' ? 'flexible' : 'fixed'
-        setWorkHoursMode(mode)
-        const next: Record<Weekday, DaySchedule> = { ...DEFAULT_FIXED }
-        for (const { key } of WEEKDAYS) {
-          const rawHours = wh[`${key}_hours`]
-          const hours = rawHours != null && rawHours !== '' ? parseFloat(String(rawHours)) : DEFAULT_FIXED[key].hours
-          const start = (wh[`${key}_start`] || DEFAULT_FIXED[key].start || '').slice(0, 5)
-          const end   = (wh[`${key}_end`]   || DEFAULT_FIXED[key].end   || '').slice(0, 5)
-          const brk   = wh[`${key}_break_minutes`] != null ? Number(wh[`${key}_break_minutes`]) : DEFAULT_FIXED[key].breakMinutes
-          next[key] = {
-            start: start || '08:00',
-            end: end || '16:00',
-            breakMinutes: Number.isFinite(brk) ? brk : 0,
-            hours: Number.isFinite(hours) ? hours : 0,
-            off: mode === 'fixed'
-              ? computeNetHours(start || '08:00', end || '16:00', brk || 0) === 0
-              : !hours,
-          }
-        }
-        setSchedule(next)
       }
     } finally { setLoading(false) }
   }, [userId])
 
   useEffect(() => { fetchAll(); fetchAppointments() }, [fetchAll, fetchAppointments])
-
-  // Build a single payload that works for both modes. The backend derives
-  // [day]_hours from start/end/break when mode === 'fixed', but we send both
-  // so the UI can fall back gracefully if the user flips modes on the server.
-  const buildWorkHoursPayload = () => {
-    const payload: Record<string, unknown> = {
-      work_hours_mode: workHoursMode,
-    }
-    for (const { key } of WEEKDAYS) {
-      const d = schedule[key]
-      if (workHoursMode === 'fixed') {
-        payload[`${key}_start`] = d.off ? null : d.start
-        payload[`${key}_end`] = d.off ? null : d.end
-        payload[`${key}_break_minutes`] = d.off ? 0 : Math.max(0, d.breakMinutes || 0)
-        payload[`${key}_hours`] = d.off ? 0 : computeNetHours(d.start, d.end, d.breakMinutes)
-      } else {
-        payload[`${key}_hours`] = d.off ? 0 : Math.max(0, d.hours || 0)
-        payload[`${key}_start`] = null
-        payload[`${key}_end`] = null
-        payload[`${key}_break_minutes`] = 0
-      }
-    }
-    // Also include the legacy `workHours` bag so older server builds keep working.
-    const workHours: Record<string, number> = {}
-    for (const { key } of WEEKDAYS) {
-      const d = schedule[key]
-      workHours[`${key}_hours`] = d.off
-        ? 0
-        : workHoursMode === 'fixed'
-          ? computeNetHours(d.start, d.end, d.breakMinutes)
-          : Math.max(0, d.hours || 0)
-    }
-    payload.workHours = workHours
-    return payload
-  }
-
-  const saveHours = async () => {
-    setHoursSaving(true); setHoursError(''); setHoursSaved(false)
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/work-hours/${userId}`), {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildWorkHoursPayload()),
-      })
-      if (!res.ok) { const d = await res.json(); setHoursError(d.error || t('app.teamMember.errSave', 'Failed to save')) }
-      else { setHoursSaved(true); setTimeout(() => setHoursSaved(false), 2500) }
-    } catch { setHoursError(t('app.teamMember.errNetwork', 'Network error')) } finally { setHoursSaving(false) }
-  }
-
-  // Copy Monday's values to Tue-Fri as a quick starting point.
-  const copyMondayToWeekdays = () => {
-    setSchedule((prev) => {
-      const mon = prev.monday
-      const next = { ...prev }
-      for (const key of ['tuesday', 'wednesday', 'thursday', 'friday'] as Weekday[]) {
-        next[key] = { ...mon }
-      }
-      return next
-    })
-  }
-
-  const setDay = (key: Weekday, patch: Partial<DaySchedule>) => {
-    setSchedule((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
-  }
-
-  const totalWeekHours = useMemo(() => {
-    let total = 0
-    for (const { key } of WEEKDAYS) {
-      const d = schedule[key]
-      if (d.off) continue
-      total += workHoursMode === 'fixed'
-        ? computeNetHours(d.start, d.end, d.breakMinutes)
-        : d.hours
-    }
-    return total
-  }, [schedule, workHoursMode])
 
   // Upcoming appointments: future entries only, sorted by date ascending.
   const upcomingAppointments = useMemo(() => {
@@ -326,165 +167,30 @@ export default function EmployeeSettingsPage() {
           </div>
         </div>
 
-        {/* ── Section 1: Work Hours ─────────────────────────────────────── */}
+        {/* ── Section 1: Work Hours → Settings ───────────────────────── */}
         <SectionCard
           icon={<ClockIcon />}
           iconBg="bg-accent-50"
           iconColor="text-accent-600"
           title={t('app.workHours.title', 'Work hours')}
-          subtitle={t('app.workHours.subtitle', 'Planning template used to calculate daily capacity')}
+          subtitle={t('app.teamMember.workHoursMoved', 'Start time and daily hours are managed in Settings')}
         >
-          {/* Mode toggle */}
-          <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
-            <div className="inline-flex bg-gray-100 rounded-xl p-1">
-              <button
-                type="button"
-                onClick={() => setWorkHoursMode('fixed')}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                  workHoursMode === 'fixed'
-                    ? 'bg-white shadow-sm text-gray-900'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {t('app.workHours.modeFixed', 'Fixed hours')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkHoursMode('flexible')}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                  workHoursMode === 'flexible'
-                    ? 'bg-white shadow-sm text-gray-900'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {t('app.workHours.modeFlexible', 'Flexible hours')}
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={copyMondayToWeekdays}
-              className="text-xs font-medium text-accent-600 hover:text-accent-700 hover:bg-accent-50 px-2.5 py-1.5 rounded-lg transition-colors"
-              title={t('app.workHours.copyMondayHelp', "Apply Monday's values to Tue-Fri")}
-            >
-              {t('app.workHours.copyMonday', 'Copy Monday to weekdays')}
-            </button>
-          </div>
-
-          {/* Mode hint */}
-          <div className="mb-4 text-[12px] text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-            {workHoursMode === 'fixed'
-              ? t('app.workHours.fixedHint', 'Fixed schedule: employee starts and ends at the same time each weekday. Good for route planning.')
-              : t('app.workHours.flexibleHint', 'Flexible schedule: employee has a daily hour budget without fixed clock times. Good for contractors.')}
-          </div>
-
-          {/* Per-day rows */}
-          <div className="space-y-2">
-            {WEEKDAYS.map(({ key, labelKey }) => {
-              const d = schedule[key]
-              const netH = workHoursMode === 'fixed'
-                ? computeNetHours(d.start, d.end, d.breakMinutes)
-                : d.hours
-              return (
-                <div
-                  key={key}
-                  className={`flex flex-wrap items-center gap-2 py-2 px-3 rounded-xl border ${
-                    d.off ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-100'
-                  }`}
-                >
-                  <span className={`w-24 text-sm font-medium flex-shrink-0 ${d.off ? 'text-gray-400' : 'text-gray-800'}`}>
-                    {t(labelKey, key)}
-                  </span>
-
-                  {/* Off toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setDay(key, { off: !d.off })}
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-md transition-colors ${
-                      d.off
-                        ? 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                        : 'bg-accent-50 text-accent-700 hover:bg-accent-100'
-                    }`}
-                  >
-                    {d.off ? t('app.workHours.dayOff', 'Off') : t('app.workHours.dayOn', 'Working')}
-                  </button>
-
-                  {!d.off && workHoursMode === 'fixed' && (
-                    <>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[11px] text-gray-400">{t('app.workHours.start', 'Start')}</span>
-                        <input
-                          type="time"
-                          value={d.start}
-                          onChange={(e) => setDay(key, { start: e.target.value })}
-                          className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[11px] text-gray-400">{t('app.workHours.end', 'End')}</span>
-                        <input
-                          type="time"
-                          value={d.end}
-                          onChange={(e) => setDay(key, { end: e.target.value })}
-                          className="text-sm border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                        />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[11px] text-gray-400">{t('app.workHours.break', 'Break')}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={480}
-                          step={5}
-                          value={d.breakMinutes}
-                          onChange={(e) => {
-                            const n = Math.max(0, Math.min(480, parseInt(e.target.value || '0', 10) || 0))
-                            setDay(key, { breakMinutes: n })
-                          }}
-                          className="w-16 text-sm text-right border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                        />
-                        <span className="text-[11px] text-gray-400">{t('app.workHours.minShort', 'min')}</span>
-                      </div>
-                    </>
-                  )}
-
-                  {!d.off && workHoursMode === 'flexible' && (
-                    <div className="flex items-center gap-1">
-                      <span className="text-[11px] text-gray-400">{t('app.workHours.hours', 'Hours')}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={24}
-                        step={0.5}
-                        value={d.hours}
-                        onChange={(e) => {
-                          const n = Math.max(0, Math.min(24, parseFloat(e.target.value) || 0))
-                          setDay(key, { hours: n })
-                        }}
-                        className="w-20 text-sm text-right border border-gray-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
-                      />
-                      <span className="text-[11px] text-gray-400">h</span>
-                    </div>
-                  )}
-
-                  {/* Net hours summary pushed to the right */}
-                  <span className="ml-auto text-[11px] font-semibold text-gray-600 tabular-nums">
-                    {d.off ? '—' : `${netH.toFixed(1)} h`}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-
-          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
-            <p className="text-xs text-gray-400">
-              {t('app.workHours.total', 'Weekly total:')}{' '}
-              <span className="font-semibold text-gray-600">{totalWeekHours.toFixed(1)} h</span>
-            </p>
-            <div className="flex items-center gap-3">
-              {hoursError && <p className="text-sm text-red-600">{hoursError}</p>}
-              <SaveButton saving={hoursSaving} saved={hoursSaved} onClick={saveHours} t={t} />
-            </div>
-          </div>
+          <p className="text-sm text-gray-600 leading-relaxed">
+            {t(
+              'app.teamMember.workHoursMovedHelp',
+              'Set the company default (37h week from 08:00) or customize this employee from Work hours settings.',
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push(`/${company}/settings/work-hours`)}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 transition-colors"
+          >
+            {t('app.teamMember.openWorkHoursSettings', 'Open work hours settings')}
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
         </SectionCard>
 
         {/* ── Section 2: Route locations → Business settings ─────────── */}
@@ -638,37 +344,6 @@ function SectionCard({ icon, iconBg, iconColor, title, subtitle, extra, children
       </div>
       <div className="px-6 py-5">{children}</div>
     </div>
-  )
-}
-
-function SaveButton({
-  saving,
-  saved,
-  onClick,
-  t,
-}: {
-  saving: boolean
-  saved: boolean
-  onClick: () => void
-  t: (key: string, fallback?: string) => string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick} disabled={saving}
-      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all disabled:opacity-60"
-      style={{
-        background: saved ? '#10b981' : '#3DD57A',
-        color: saved ? '#fff' : '#0A1A0A',
-        boxShadow: saved ? '0 0 16px rgba(16,185,129,0.25)' : '0 2px 12px rgba(61,213,122,0.2)',
-      }}
-    >
-      {saving ? (
-        <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('app.common.saving', 'Saving...')}</>
-      ) : saved ? (
-        <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>{t('app.teamMember.saved', 'Saved')}</>
-      ) : t('settings.business.save', 'Save changes')}
-    </button>
   )
 }
 

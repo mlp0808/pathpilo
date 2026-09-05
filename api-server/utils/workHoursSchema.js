@@ -12,16 +12,16 @@
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
-// EU-standard 37-hour work week defaults (Mon-Thu 7.5h, Fri 7h, weekend off),
-// shared between the CREATE TABLE defaults and the API fallback object.
+// Standard 37-hour week: Mon–Thu 7.5h, Fri 7h, weekend off. Start 08:00.
+// End is derived (start + hours) for legacy readers; unpaid breaks come later.
 const DAY_DEFAULTS = {
-  monday:    { start: '08:00', end: '16:00', breakMin: 30, hours: 7.5 },
-  tuesday:   { start: '08:00', end: '16:00', breakMin: 30, hours: 7.5 },
-  wednesday: { start: '08:00', end: '16:00', breakMin: 30, hours: 7.5 },
-  thursday:  { start: '08:00', end: '16:00', breakMin: 30, hours: 7.5 },
-  friday:    { start: '08:00', end: '15:30', breakMin: 30, hours: 7.0 },
-  saturday:  { start: null,    end: null,    breakMin: 0,  hours: 0.0 },
-  sunday:    { start: null,    end: null,    breakMin: 0,  hours: 0.0 },
+  monday:    { start: '08:00', end: '15:30', breakMin: 0, hours: 7.5 },
+  tuesday:   { start: '08:00', end: '15:30', breakMin: 0, hours: 7.5 },
+  wednesday: { start: '08:00', end: '15:30', breakMin: 0, hours: 7.5 },
+  thursday:  { start: '08:00', end: '15:30', breakMin: 0, hours: 7.5 },
+  friday:    { start: '08:00', end: '15:00', breakMin: 0, hours: 7.0 },
+  saturday:  { start: null,    end: null,    breakMin: 0, hours: 0.0 },
+  sunday:    { start: null,    end: null,    breakMin: 0, hours: 0.0 },
 };
 
 let migrationDone = false;
@@ -33,9 +33,10 @@ async function ensureWorkHoursSchema(pool) {
   const alterStmts = [
     `ALTER TABLE user_company_work_hours
        ADD COLUMN IF NOT EXISTS work_hours_mode VARCHAR(10) NOT NULL DEFAULT 'flexible'`,
-    // NOTE: we intentionally do not add a CHECK constraint here because the
-    // table may have been created before CHECK constraint support in older
-    // environments; the API layer validates the value.
+    // Capacity bars are always on — weekends / 0-hour days stay closed on the jobs calendar.
+    `ALTER TABLE companies
+       ADD COLUMN IF NOT EXISTS daily_capacity_enabled BOOLEAN NOT NULL DEFAULT true`,
+    `UPDATE companies SET daily_capacity_enabled = true WHERE daily_capacity_enabled IS DISTINCT FROM true`,
   ];
 
   // Run after employee_appointments CREATE so it applies on existing
@@ -83,7 +84,7 @@ async function ensureWorkHoursSchema(pool) {
   const createCompanyDefaults = `
     CREATE TABLE IF NOT EXISTS company_default_work_hours (
       company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
-      work_hours_mode VARCHAR(10) NOT NULL DEFAULT 'fixed',
+      work_hours_mode VARCHAR(10) NOT NULL DEFAULT 'flexible',
       ${dayDefaults},
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -205,11 +206,21 @@ async function ensureWorkHoursSchema(pool) {
 }
 
 function companyDefaultRowOrFallback(row) {
-  if (row) return row;
+  if (row) {
+    // Normalize TIME strings; ensure hours are present.
+    const out = { ...row, work_hours_mode: row.work_hours_mode || 'flexible' };
+    for (const d of DAYS) {
+      if (out[`${d}_start`]) out[`${d}_start`] = String(out[`${d}_start`]).slice(0, 5);
+      if (out[`${d}_end`]) out[`${d}_end`] = String(out[`${d}_end`]).slice(0, 5);
+      out[`${d}_hours`] = Number(out[`${d}_hours`]) || 0;
+      out[`${d}_break_minutes`] = Number(out[`${d}_break_minutes`]) || 0;
+    }
+    return out;
+  }
   // Mirrors the SQL defaults above so callers always receive a usable shape
   // even before the template row has been explicitly saved.
   const base = {
-    work_hours_mode: 'fixed',
+    work_hours_mode: 'flexible',
     created_at: null,
     updated_at: null,
   };
@@ -223,9 +234,22 @@ function companyDefaultRowOrFallback(row) {
   return base;
 }
 
+/** Add fractional hours to an HH:MM clock time (wraps past midnight). */
+function addHoursToTime(hhmm, hours) {
+  if (!hhmm || !(Number(hours) > 0)) return null;
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const startMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  const total = startMin + Math.round(Number(hours) * 60);
+  const eh = Math.floor(total / 60) % 24;
+  const em = ((total % 60) + 60) % 60;
+  return `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`;
+}
+
 module.exports = {
   ensureWorkHoursSchema,
   companyDefaultRowOrFallback,
+  addHoursToTime,
   DAYS,
   DAY_DEFAULTS,
 };

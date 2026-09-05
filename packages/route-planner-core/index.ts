@@ -4,8 +4,8 @@
 // Keep everything here presentational and free of auth/API coupling so the two
 // consumers stay in sync — app-specific behaviour belongs in each wrapper.
 
-export { default as RouteMap, USER_COLORS } from './RouteMap'
-export type { RouteJob, UserRoute, IsolatedRouteSeg } from './RouteMap'
+export { default as RouteMap, USER_COLORS, colorForUserId, initialsFromName } from './RouteMap'
+export type { RouteJob, UserRoute, IsolatedRouteSeg, OverlayPin } from './RouteMap'
 
 export {
   default as RouteAddSearch,

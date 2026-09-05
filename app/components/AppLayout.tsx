@@ -1,17 +1,17 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import Link from 'next/link'
-import { Bars3Icon } from '@heroicons/react/24/outline'
 import { useUser, SESSION_UPDATED_EVENT } from '../hooks/useUser'
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import SettingsSidebar from './SettingsSidebar'
 import MobileNavDrawer from './MobileNavDrawer'
+import AppTopHeader from './AppTopHeader'
 import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
 import PendingAutomationToasts from './PendingAutomationToasts'
+import WorkspaceAccessGuard from './WorkspaceAccessGuard'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -37,6 +37,24 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const isSettingsPage =
     pathname.startsWith('/settings') ||
     pathname.split('/').filter(Boolean)[1] === 'settings'
+
+  // The map is a full-bleed tool: on desktop it runs top-to-bottom next to the
+  // sidebar with its own search floating over it, so the header steps aside.
+  // Phones keep it — it's the only way to reach the menu from there.
+  const isMapPage = pathname.endsWith('/map')
+
+  // Day-view route planner (jobs?view=day) also goes full-bleed. It signals via
+  // a document attribute because it syncs the URL with replaceState, which
+  // Next.js searchParams won't notice.
+  const [fullBleedTool, setFullBleedTool] = useState(false)
+  useEffect(() => {
+    const sync = () => setFullBleedTool(document.documentElement.dataset.fullBleedTool === '1')
+    sync()
+    window.addEventListener('pathpilo:full-bleed', sync)
+    return () => window.removeEventListener('pathpilo:full-bleed', sync)
+  }, [pathname])
+
+  const headerHideClass = isMapPage ? 'lg:hidden' : fullBleedTool ? 'hidden' : ''
 
   const targetCompanyId = user?.companies?.find((c: { slug?: string }) => c.slug === urlSlug)?.id
   const activeCompanyId = user?.activeCompany?.id
@@ -115,7 +133,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }
 
   // Derive the correct slug for back-navigation from the active company
-  const activeSlug = (user.activeCompany as any)?.slug || ''
+  const activeSlug =
+    (user.activeCompany as { slug?: string } | null)?.slug ||
+    getActiveCompanySlugFromSession(user as Record<string, unknown>) ||
+    ''
 
   const dashboardHrefMobile = getDashboardHref(user as Record<string, unknown>)
 
@@ -141,35 +162,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
       {/* Main column.
           - Below lg we don't reserve the 200px sidebar gutter.
-          - Horizontal padding scales: tight on phones, comfy on desktop.
-          - The page itself stays scrollable; the top bar is sticky so the
-            user can always reach the menu and settings shortcut. */}
+          - AppTopHeader is a transparent strip above every page. */}
       <div className={`flex-1 lg:ml-[200px] relative overflow-x-hidden max-w-full flex flex-col ${isSettingsPage ? 'bg-white' : ''}`}>
-        {/* Mobile / tablet top bar (hidden on lg+). */}
-        <header
-          className="lg:hidden sticky top-0 z-30 bg-page/95 backdrop-blur supports-[backdrop-filter]:bg-page/80 border-b border-primary-500/10 pt-safe"
-        >
-          <div className="flex items-center justify-between px-4 sm:px-6 py-2.5">
-            <button
-              type="button"
-              onClick={() => setIsMobileNavOpen(true)}
-              className="-ml-2 p-2 rounded-lg text-primary-500 hover:bg-primary-500/5 active:bg-primary-500/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-              aria-label={t('app.layout.openMenu', 'Open menu')}
-            >
-              <Bars3Icon className="w-6 h-6" />
-            </button>
-            <Link
-              href={dashboardHrefMobile}
-              className="flex items-baseline gap-0.5 leading-none font-semibold text-primary-500"
-            >
-              <span className="text-base">PathPilo</span>
-              <span className="text-sm text-primary-500/60 font-normal">.app</span>
-            </Link>
-            <div className="w-10 h-10 flex-shrink-0" aria-hidden />
-          </div>
-        </header>
+        <AppTopHeader
+          companySlug={activeSlug || (isCompanyRoute ? urlSlug : '')}
+          userName={`${user.firstName} ${user.lastName}`.trim()}
+          companyName={
+            (user.activeCompany as { name?: string } | null)?.name ||
+            user.companies?.[0]?.name ||
+            ''
+          }
+          onOpenMobileNav={() => setIsMobileNavOpen(true)}
+          className={headerHideClass}
+        />
 
-        <main className="px-4 sm:px-6 lg:px-[40px] pt-3 sm:pt-4 lg:pt-[15px] pb-4 sm:pb-6 lg:pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
+        <main className="px-4 sm:px-6 lg:px-[40px] pt-1 sm:pt-2 lg:pt-2 pb-4 sm:pb-6 lg:pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
           {children}
         </main>
         <PendingAutomationToasts />

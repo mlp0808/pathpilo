@@ -200,12 +200,45 @@ async function main() {
     clientIds.push(r.rows[0].id);
   }
 
-  // ── 6. Email templates (empty defaults) ──────────────────────────────────
-  for (const t of ['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice']) {
+  // ── 6. Email templates (real defaults so send/preview isn't blank) ────────
+  const { getSendInvoiceDefaults } = require('./api-server/utils/companyInvoiceEmailLocale');
+  const sendInv = getSendInvoiceDefaults('DK');
+  const seedTemplates = [
+    {
+      type: 'change_date',
+      subject: 'Your appointment — new date: {Job new date}',
+      message:
+        'Dear {Client name},\n\nYour appointment with {Company name} has been rescheduled.\n\n• Previous date: {Job old date}\n• New date: {Job new date}\n{Job time detail}\n\nIf the new date does not work for you, reply to this email and we will help.\n\nBest regards,\n{Company name}',
+    },
+    {
+      type: 'change_time',
+      subject: 'Updated time for your job on {Job date}',
+      message:
+        'Hi {Client first name},\n\nThe time for your scheduled job has changed.\n\nPrevious time: {Job old time from} - {Job old time to}\nNew time: {Job new time from} - {Job new time to}\nDate: {Job date}\n\nThank you for your understanding.\n\nBest regards,\n{Company name}',
+    },
+    {
+      type: 'change_employee',
+      subject: 'Update: your assigned team member has changed',
+      message:
+        'Hi {Client first name},\n\nYour appointment will now be handled by {Employee new name}.\n\nPrevious team member: {Employee old name}\nNew team member: {Employee new name}\n\nIf you have questions, please reply to this email.\n\nBest regards,\n{Company name}',
+    },
+    {
+      type: 'cancel_job',
+      subject: 'Your job on {Job date} has been cancelled',
+      message:
+        'Hi {Client first name},\n\nWe are sorry, but your scheduled job on {Job date} has been cancelled.\n\nOriginal time: {Job time from} - {Job time to}\nServices: {Job services}\n\nPlease contact us if you want to rebook.\n\nBest regards,\n{Company name}',
+    },
+    {
+      type: 'send_invoice',
+      subject: sendInv.subject,
+      message: sendInv.message,
+    },
+  ];
+  for (const t of seedTemplates) {
     await pool.query(
       `INSERT INTO email_templates (company_id, template_type, subject, message)
-       VALUES ($1,$2,'','') ON CONFLICT (company_id, template_type) DO NOTHING`,
-      [companyId, t]
+       VALUES ($1,$2,$3,$4) ON CONFLICT (company_id, template_type) DO NOTHING`,
+      [companyId, t.type, t.subject, t.message]
     );
   }
 

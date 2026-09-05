@@ -1936,27 +1936,37 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
       const { title, client_id, assigned_user_id, services, note, scheduled_date, scheduled_time_from, scheduled_time_to } = req.body;
     const userId = req.user.userId;
 
+    // "Any" = null date and/or null assignee (unscheduled until placed).
+    const assignedUserId =
+      assigned_user_id == null || assigned_user_id === ''
+        ? null
+        : Number(assigned_user_id);
+    const scheduledDate =
+      scheduled_date == null || scheduled_date === ''
+        ? null
+        : String(scheduled_date).split('T')[0];
+
     console.log('🔧 BACKEND JOB CREATION DEBUG:', { 
       title, 
       client_id, 
-      assigned_user_id, 
+      assigned_user_id: assignedUserId, 
       services, 
       note, 
-      scheduled_date, 
+      scheduled_date: scheduledDate, 
       scheduled_time_from,
       scheduled_time_to,
       userId,
-      scheduledDateType: typeof scheduled_date,
-      scheduledDateValue: scheduled_date,
+      scheduledDateType: typeof scheduledDate,
+      scheduledDateValue: scheduledDate,
       scheduledTimeFromType: typeof scheduled_time_from,
       scheduledTimeFromValue: scheduled_time_from,
       scheduledTimeToType: typeof scheduled_time_to,
       scheduledTimeToValue: scheduled_time_to
     });
 
-    // Validate input
-    if (!client_id || !assigned_user_id || !services || !Array.isArray(services) || !scheduled_date) {
-      return res.status(400).json({ error: 'Client, assigned user, services, and scheduled date are required' });
+    // Validate input — client + services required; date/employee optional ("Any")
+    if (!client_id || !services || !Array.isArray(services)) {
+      return res.status(400).json({ error: 'Client and services are required' });
     }
     
     // For re-do jobs, we allow empty services array
@@ -1982,20 +1992,30 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
-    // Verify assigned user belongs to user's company
-    // Check if assigned user belongs to the company (using user_companies table)
-    const assignedUserCheck = await pool.query(
-      'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
-      [assigned_user_id, companyId]
-    );
+    // Verify assigned user belongs to user's company (when not "Any")
+    if (assignedUserId != null) {
+      if (!Number.isFinite(assignedUserId)) {
+        return res.status(400).json({ error: 'Invalid assigned user' });
+      }
+      const assignedUserCheck = await pool.query(
+        'SELECT user_id FROM user_companies WHERE user_id = $1 AND company_id = $2',
+        [assignedUserId, companyId]
+      );
 
-    if (assignedUserCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Assigned user not found or access denied' });
+      if (assignedUserCheck.rows.length === 0) {
+        return res.status(404).json({ error: 'Assigned user not found or access denied' });
+      }
     }
 
-    // Ensure schema supports ad-hoc tasks (run outside transaction to avoid abort-on-error state)
+    // Ensure schema supports ad-hoc tasks + nullable "Any" schedule fields
     try {
       await pool.query('ALTER TABLE job_services ADD COLUMN IF NOT EXISTS custom_title TEXT');
+    } catch (_) {}
+    try {
+      await pool.query(`ALTER TABLE jobs ALTER COLUMN assigned_user_id DROP NOT NULL`);
+    } catch (_) {}
+    try {
+      await pool.query(`ALTER TABLE jobs ALTER COLUMN scheduled_date DROP NOT NULL`);
     } catch (_) {}
     try {
       await pool.query(`
@@ -2022,14 +2042,14 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
 
       // Create the job
       console.log('💾 DATABASE INSERT DEBUG:', {
-        scheduled_date_for_db: scheduled_date,
-        scheduled_date_type: typeof scheduled_date,
-        insertValues: [companyId, client_id, assigned_user_id, title || '', note, scheduled_date]
+        scheduled_date_for_db: scheduledDate,
+        scheduled_date_type: typeof scheduledDate,
+        insertValues: [companyId, client_id, assignedUserId, title || '', note, scheduledDate]
       });
       
       const jobResult = await dbClient.query(
         'INSERT INTO jobs (company_id, client_id, assigned_user_id, title, note, scheduled_date, scheduled_time_from, scheduled_time_to, recurring_job_id, is_generated) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
-        [companyId, client_id, assigned_user_id, title || '', note, scheduled_date, scheduled_time_from, scheduled_time_to, null, false]
+        [companyId, client_id, assignedUserId, title || '', note, scheduledDate, scheduled_time_from, scheduled_time_to, null, false]
       );
       
       console.log('✅ JOB CREATED IN DATABASE:', {

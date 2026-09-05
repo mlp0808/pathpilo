@@ -244,7 +244,7 @@ export function MobileInvoiceComposerScreen(props: any) {
 
   const [title, setTitle] = useState('Invoice');
   const [issueDate, setIssueDate] = useState<string>(ymd(new Date()));
-  const [dueDays, setDueDays] = useState<number>(30);
+  const [dueDays, setDueDays] = useState<number>(14);
   const [taxRate, setTaxRate] = useState<number>(25);
   const [currency, setCurrency] = useState<string>('DKK');
   const [paymentTerms, setPaymentTerms] = useState('');

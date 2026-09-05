@@ -324,11 +324,11 @@ async function createSchema() {
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-        assigned_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       invoice_id INTEGER,
         title VARCHAR(255) NOT NULL,
         note TEXT,
-        scheduled_date VARCHAR(10) NOT NULL,
+        scheduled_date VARCHAR(10),
         scheduled_time_from TIME,
         scheduled_time_to TIME,
         status VARCHAR(50) DEFAULT 'scheduled',
@@ -352,6 +352,20 @@ async function createSchema() {
       `ALTER TABLE jobs
        ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`
     );
+
+    // "Any" unscheduled jobs: date and/or employee may be unset
+    await safeQuery(`ALTER TABLE jobs ALTER COLUMN assigned_user_id DROP NOT NULL`);
+    await safeQuery(`ALTER TABLE jobs ALTER COLUMN scheduled_date DROP NOT NULL`);
+    // Prefer SET NULL over CASCADE when assignee is removed
+    await safeQuery(`
+      DO $$ BEGIN
+        ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_assigned_user_id_fkey;
+        ALTER TABLE jobs
+          ADD CONSTRAINT jobs_assigned_user_id_fkey
+          FOREIGN KEY (assigned_user_id) REFERENCES users(id) ON DELETE SET NULL;
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `);
 
     // Create index for efficient sorting
     await safeQuery(
@@ -382,6 +396,57 @@ async function createSchema() {
     await safeQuery(`CREATE INDEX IF NOT EXISTS idx_daily_routes_company_date ON daily_routes(company_id, scheduled_date)`);
     await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS leg_minutes REAL[]`);
     await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS total_job_minutes INTEGER`);
+    // Rounds: a saved day route is a "planned package" (round instance).
+    // status: 'draft' | 'planned'. planned = the admin finished this day and it
+    // renders as one connected container that can be moved as a unit.
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS name TEXT`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS status VARCHAR(12) DEFAULT 'draft'`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS round_template_id INTEGER`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS is_occurrence_override BOOLEAN DEFAULT FALSE`);
+
+    // Playground rounds: ordered stop units without required date/employee.
+    // Placement (assigned_user_id + scheduled_date) is optional until the admin
+    // drops the unit onto a day. Distinct from round_templates (recurrence).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rounds (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        name TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'playground',
+        assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        scheduled_date DATE,
+        total_minutes INTEGER,
+        total_km NUMERIC(8,1),
+        leg_minutes REAL[],
+        round_template_id INTEGER,
+        daily_route_id INTEGER,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS round_stops (
+        id SERIAL PRIMARY KEY,
+        round_id INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0,
+        client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+        job_id INTEGER,
+        label TEXT,
+        address TEXT,
+        zip_code TEXT,
+        city TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        estimated_duration_minutes INTEGER DEFAULT 30,
+        services JSONB
+      )
+    `);
+    await safeQuery(`ALTER TABLE round_stops ADD COLUMN IF NOT EXISTS services JSONB`);
+    await safeQuery(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS daily_route_id INTEGER`);
+    await safeQuery(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS round_id INTEGER`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_rounds_company_status ON rounds(company_id, status)`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_rounds_placement ON rounds(company_id, assigned_user_id, scheduled_date)`);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_round_stops_round ON round_stops(round_id, position)`);
     // Ensure job_ids is INTEGER[] (early installs may have created it as JSONB)
     await safeQuery(`
       DO $$ BEGIN
@@ -398,6 +463,12 @@ async function createSchema() {
     // Address autocomplete: store verified coordinates on clients
     await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
     await safeQuery(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
+    // Map multitool: radius queries pre-filter on (company_id, lat, lng)
+    await safeQuery(
+      `CREATE INDEX IF NOT EXISTS idx_clients_company_coords
+       ON clients(company_id, lat, lng)
+       WHERE lat IS NOT NULL AND lng IS NOT NULL`
+    );
 
     // Backward-compatible: ensure deleted_at exists if clients table already existed.
     await safeQuery(
@@ -424,10 +495,14 @@ async function createSchema() {
         starting_date DATE NOT NULL,
         next_occurrence_date DATE NOT NULL,
         last_generated_date DATE,
+        round_id INTEGER, -- set when owned by a library round (hidden from Subscriptions UI)
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    await safeQuery(
+      `ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS round_id INTEGER`
+    );
 
   await safeQuery(`
       ALTER TABLE jobs 
@@ -453,6 +528,36 @@ async function createSchema() {
     ON jobs(company_id, recurring_job_id, recurring_occurrence)
     WHERE recurring_job_id IS NOT NULL AND recurring_occurrence IS NOT NULL
   `);
+
+    // Repeating round templates: an ordered bundle of subscriptions that
+    // projects a planned daily_routes package onto future days.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS round_templates (
+        id                SERIAL PRIMARY KEY,
+        company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        name              VARCHAR(255) NOT NULL,
+        description       TEXT,
+        assigned_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        recurrence_type   VARCHAR(20) NOT NULL DEFAULT 'weekly',
+        day_of_week       INTEGER CHECK (day_of_week BETWEEN 0 AND 6),
+        interval_value    INTEGER NOT NULL DEFAULT 1,
+        is_active         BOOLEAN DEFAULT TRUE,
+        created_from_daily_route_id INTEGER,
+        created_at        TIMESTAMP DEFAULT NOW(),
+        updated_at        TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS round_template_stops (
+        id                SERIAL PRIMARY KEY,
+        round_template_id INTEGER NOT NULL REFERENCES round_templates(id) ON DELETE CASCADE,
+        position          INTEGER NOT NULL DEFAULT 0,
+        recurring_job_id  INTEGER NOT NULL REFERENCES recurring_jobs(id) ON DELETE CASCADE,
+        created_at        TIMESTAMP DEFAULT NOW(),
+        UNIQUE (round_template_id, recurring_job_id)
+      )
+    `);
+    await safeQuery(`CREATE INDEX IF NOT EXISTS idx_round_template_stops_template ON round_template_stops(round_template_id, position)`);
 
     await pool.query(`
     CREATE TABLE IF NOT EXISTS recurring_job_services (
@@ -1088,14 +1193,22 @@ async function seedMiniDemo() {
   );
   await pool.query('UPDATE jobs SET invoice_id = $1 WHERE id = $2', [invoiceId, jobInvoiced.id]);
 
-  // Ensure basic templates exist
-  const templateTypes = ['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice'];
-  for (const t of templateTypes) {
+  // Ensure basic templates exist with usable default copy
+  const { getSendInvoiceDefaults } = require('./api-server/utils/companyInvoiceEmailLocale');
+  const sendInvDefaults = getSendInvoiceDefaults('DK');
+  const seedEmailTemplates = [
+    ['change_date', 'Your appointment — new date: {Job new date}', 'Dear {Client name},\n\nYour appointment with {Company name} has been rescheduled.\n\nBest regards,\n{Company name}'],
+    ['change_time', 'Updated time for your job on {Job date}', 'Hi {Client first name},\n\nThe time for your scheduled job has changed.\n\nBest regards,\n{Company name}'],
+    ['change_employee', 'Update: your assigned team member has changed', 'Hi {Client first name},\n\nYour appointment will now be handled by {Employee new name}.\n\nBest regards,\n{Company name}'],
+    ['cancel_job', 'Your job on {Job date} has been cancelled', 'Hi {Client first name},\n\nYour scheduled job on {Job date} has been cancelled.\n\nBest regards,\n{Company name}'],
+    ['send_invoice', sendInvDefaults.subject, sendInvDefaults.message],
+  ];
+  for (const [type, subject, message] of seedEmailTemplates) {
     await safeQuery(
       `INSERT INTO email_templates (company_id, template_type, subject, message)
-       VALUES ($1,$2,'','')
+       VALUES ($1,$2,$3,$4)
        ON CONFLICT (company_id, template_type) DO NOTHING`,
-      [companyId, t]
+      [companyId, type, subject, message]
     );
   }
 

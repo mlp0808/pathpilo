@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   ArrowRightOnRectangleIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   ChatBubbleLeftRightIcon,
   Cog6ToothIcon,
@@ -30,9 +31,20 @@ interface SidebarAccountPanelProps {
   overwatchActive: boolean
   onLogout: () => void
   onQuitOverwatch: () => void
-  /** Mobile drawer: panel opens below the trigger instead of to the right. */
-  placement?: 'sidebar' | 'drawer'
+  /**
+   * sidebar → panel flies out to the right of the trigger
+   * drawer  → panel expands inline below the trigger
+   * header  → avatar trigger, panel drops below and right-aligned
+   */
+  placement?: 'sidebar' | 'drawer' | 'header'
   onNavigate?: () => void
+}
+
+function initialsFrom(name: string): string {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
 }
 
 const PANEL_SHELL =
@@ -86,10 +98,23 @@ export default function SidebarAccountPanel({
   }, [open, fetchSms])
 
   const updatePanelPosition = useCallback(() => {
-    if (!open || placement !== 'sidebar' || !triggerRef.current) return
+    if (!open || placement === 'drawer' || !triggerRef.current) return
     const rect = triggerRef.current.getBoundingClientRect()
-    let top = rect.top
     const panelHeight = panelRef.current?.offsetHeight ?? 0
+    const panelWidth = panelRef.current?.offsetWidth ?? 280
+
+    if (placement === 'header') {
+      // Drop below the avatar, right-aligned, clamped inside the viewport.
+      const left = Math.max(8, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - 8))
+      let top = rect.bottom + 8
+      if (panelHeight > 0) {
+        top = Math.min(top, Math.max(8, window.innerHeight - panelHeight - 8))
+      }
+      setPanelPos({ top, left })
+      return
+    }
+
+    let top = rect.top
     if (panelHeight > 0) {
       const maxTop = window.innerHeight - panelHeight - 8
       top = Math.max(8, Math.min(rect.top, maxTop))
@@ -101,7 +126,7 @@ export default function SidebarAccountPanel({
   }, [open, placement])
 
   useEffect(() => {
-    if (!open || placement !== 'sidebar') return
+    if (!open || placement === 'drawer') return
     updatePanelPosition()
     window.addEventListener('resize', updatePanelPosition)
     window.addEventListener('scroll', updatePanelPosition, true)
@@ -156,7 +181,7 @@ export default function SidebarAccountPanel({
           ? `mt-2 w-full ${PANEL_SHELL}`
           : `fixed z-[80] w-[min(100vw-1rem,17.5rem)] max-h-[calc(100vh-1rem)] overflow-y-auto ${PANEL_SHELL}`
       }
-      style={placement === 'sidebar' ? { top: panelPos.top, left: panelPos.left } : undefined}
+      style={placement === 'drawer' ? undefined : { top: panelPos.top, left: panelPos.left }}
       role="menu"
       aria-label={t('app.sidebar.accountMenu', 'Account and settings')}
     >
@@ -249,6 +274,43 @@ export default function SidebarAccountPanel({
       </nav>
     </div>
   )
+
+  if (placement === 'header') {
+    return (
+      <div ref={rootRef} className="relative">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label={t('app.sidebar.accountMenu', 'Account and settings')}
+          className={`flex items-center gap-2 rounded-full py-1 pl-1 pr-1 xl:pr-2.5 transition-colors ${
+            open ? 'bg-gray-900/[0.06]' : 'hover:bg-gray-900/[0.05]'
+          }`}
+        >
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary-500 text-[11px] font-bold text-white">
+            {initialsFrom(userName)}
+          </span>
+          <span className="hidden xl:block min-w-0 max-w-[7.5rem] text-left">
+            <span className="block truncate text-[12px] font-semibold leading-tight text-gray-900">
+              {userName}
+            </span>
+            <span className="block truncate text-[10px] leading-tight text-gray-500">
+              {companyName}
+            </span>
+          </span>
+          <ChevronDownIcon
+            className={`hidden xl:block h-3.5 w-3.5 flex-shrink-0 text-gray-400 transition-transform ${
+              open ? 'rotate-180' : ''
+            }`}
+          />
+        </button>
+
+        {open ? panelContent : null}
+      </div>
+    )
+  }
 
   return (
     <div ref={rootRef} className="relative px-3 py-3 border-b border-white/10">

@@ -31,10 +31,11 @@ async function loadMergedSendInvoiceTemplate(pool, companyId, countryCode) {
       [companyId, 'send_invoice']
     );
     if (result.rows[0]) {
+      const subj = result.rows[0].subject != null ? String(result.rows[0].subject) : '';
+      const msg = result.rows[0].message != null ? String(result.rows[0].message) : '';
       merged = {
-        ...base,
-        subject: result.rows[0].subject != null ? String(result.rows[0].subject) : base.subject,
-        message: result.rows[0].message != null ? String(result.rows[0].message) : base.message,
+        subject: subj.trim() ? subj : base.subject,
+        message: msg.trim() ? msg : base.message,
       };
     }
   } catch (_) {

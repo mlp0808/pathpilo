@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, Suspense, useRef } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
-import { apiUrl } from '@/app/utils/api'
+import { apiUrl, resolveAssetUrl } from '@/app/utils/api'
 import { getCountryRule } from '@/app/config/countryRules'
 import { useUser } from '@/app/hooks/useUser'
 // Admin form labels follow the *user's* language preference (the admin's UI
@@ -23,32 +23,16 @@ import {
   ExclamationTriangleIcon,
   MagnifyingGlassIcon,
   PencilIcon,
+  PhotoIcon,
   PlusIcon,
   UserIcon,
   XMarkIcon,
+  EyeIcon,
+  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline'
 import { CheckCircleIcon as CheckCircleSolid } from '@heroicons/react/24/solid'
 
 const MAX_TITLE_LEN = 30
-
-const PAYMENT_TERMS_PLACEHOLDERS = [
-  '{due_date}',
-  '{overdue_days}',
-  '{invoice_date}',
-  '{invoice_number}',
-] as const
-
-function replacePaymentTermsPlaceholders(
-  template: string,
-  values: { due_date: string; overdue_days: number; invoice_date: string; invoice_number: string }
-): string {
-  let out = template
-  out = out.replace(/\{due_date\}/g, values.due_date)
-  out = out.replace(/\{overdue_days\}/g, String(values.overdue_days))
-  out = out.replace(/\{invoice_date\}/g, values.invoice_date)
-  out = out.replace(/\{invoice_number\}/g, values.invoice_number)
-  return out
-}
 
 function formatDate(value: string): string {
   if (!value) return '—'
@@ -65,10 +49,32 @@ interface Client {
   id: number
   name: string | null
   last_name: string | null
+  client_type?: 'person' | 'company' | string | null
   email?: string | null
   phone?: string | null
+  address?: string | null
+  zip_code?: string | null
+  city?: string | null
+  country?: string | null
+  ean_number?: string | null
+  company_number?: string | null
+  billing_email?: string | null
   job_count?: number
   last_job_date?: string | null
+}
+
+type CompanyProfile = {
+  name?: string
+  address?: string
+  city?: string
+  zipCode?: string
+  cvrNumber?: string
+  vatNumber?: string
+  email?: string
+  phone?: string
+  website?: string
+  logoUrl?: string
+  country?: string
 }
 
 interface CompletedJob {
@@ -88,8 +94,13 @@ interface CompletedJob {
 
 function clientFullName(c: Client | null | undefined): string {
   if (!c) return '—'
+  if (String(c.client_type || '').toLowerCase() === 'company') {
+    return String(c.name || '').trim() || '—'
+  }
   return [c.name, c.last_name].filter(Boolean).join(' ').trim() || '—'
 }
+
+const INVOICE_CURRENCIES = ['DKK', 'SEK', 'NOK', 'EUR', 'GBP', 'USD'] as const
 
 interface JobPickerProps {
   availableJobs: CompletedJob[]
@@ -103,9 +114,9 @@ interface JobPickerProps {
 }
 
 /**
- * Searchable combobox used inside the "Line items" section to add a completed
- * job to the invoice. Each pick adds one row; the picker stays usable until
- * every available job has been added.
+ * Searchable combobox used inside the line-items area to add a completed,
+ * uninvoiced job. The field stays openable so users always get feedback —
+ * including when there are no more jobs left to add.
  */
 function JobPicker({
   availableJobs,
@@ -122,7 +133,6 @@ function JobPicker({
   const wrapperRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Close on outside click.
   useEffect(() => {
     if (!open) return
     const onDocMouseDown = (e: MouseEvent) => {
@@ -150,21 +160,29 @@ function JobPicker({
 
   const allAdded = totalCount > 0 && selectedCount >= totalCount
   const noJobsAtAll = !loading && totalCount === 0
-  const disabled = loading || noJobsAtAll || allAdded || !!error
+  const canPick = !loading && !error && availableJobs.length > 0
 
-  const placeholder = (() => {
-    if (loading) return tr('invoice.new.picker.loading', 'Loading completed jobs…')
+  const emptyMessage = (() => {
+    if (loading) return tr('invoice.new.picker.loading', 'Loading jobs…')
     if (error) return error
-    if (noJobsAtAll) return tr('invoice.new.picker.noJobs', 'No completed jobs for this client yet')
-    if (allAdded) return tr('invoice.new.picker.allAdded', 'All completed jobs added to this invoice')
-    return tr('invoice.new.picker.search', 'Search and add a completed job…')
+    if (noJobsAtAll) {
+      return tr(
+        'invoice.new.picker.noJobsDetail',
+        'No completed, uninvoiced jobs for this client. Complete a job first, then add it here.',
+      )
+    }
+    if (allAdded || availableJobs.length === 0) {
+      return tr(
+        'invoice.new.picker.allAddedDetail',
+        'Every completed, uninvoiced job for this client is already on this invoice.',
+      )
+    }
+    return tr('invoice.new.picker.noMatch', 'No completed jobs match') + ` “${query}”.`
   })()
 
   const handlePick = (jobId: number) => {
     onAdd(jobId)
     setQuery('')
-    // Keep focus inside the picker so power users can add several jobs in a
-    // row, but close it if they just added the last available job.
     if (availableJobs.length <= 1) {
       setOpen(false)
     } else {
@@ -174,90 +192,84 @@ function JobPicker({
 
   return (
     <div ref={wrapperRef} className="relative">
-      <div
-        className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors ${
-          disabled
-            ? 'border-gray-200 bg-gray-50 text-gray-400'
-            : open
-              ? 'border-accent-500 bg-white ring-2 ring-accent-500/20'
-              : 'border-gray-200 bg-white hover:border-gray-300'
-        }`}
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v)
+          requestAnimationFrame(() => inputRef.current?.focus())
+        }}
+        className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-gray-300 px-4 py-3.5 text-sm font-medium text-gray-500 transition-colors hover:border-accent-400/80 hover:bg-accent-50/40 hover:text-accent-600"
       >
-        <PlusIcon className={`h-4 w-4 flex-shrink-0 ${disabled ? 'text-gray-300' : 'text-accent-600'}`} />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value)
-            if (!open) setOpen(true)
-          }}
-          onFocus={() => {
-            if (!disabled) setOpen(true)
-          }}
-          onClick={() => {
-            if (!disabled) setOpen(true)
-          }}
-          disabled={disabled}
-          placeholder={placeholder}
-          className="flex-1 border-0 bg-transparent p-0 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:placeholder-gray-400"
+        <PlusIcon className="h-4 w-4 opacity-70" />
+        <span>{tr('invoice.new.picker.addJobs', 'Add jobs')}</span>
+        <ChevronDownIcon
+          className={`h-3.5 w-3.5 opacity-70 transition-transform ${open ? 'rotate-180' : ''}`}
         />
-        {!disabled && (
-          <ChevronDownIcon
-            className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}
-          />
-        )}
-      </div>
+      </button>
 
-      {open && !disabled && (
-        <div className="absolute left-0 right-0 z-20 mt-2 max-h-72 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
-          {filtered.length === 0 ? (
-            <div className="px-4 py-6 text-center text-xs text-gray-500">
-              {tr('invoice.new.picker.noMatch', 'No completed jobs match')} &ldquo;{query}&rdquo;.
-            </div>
-          ) : (
-            <ul className="divide-y divide-gray-100">
-              {filtered.map((job) => {
-                const total = Number(job.total_price) || 0
-                const completedAt = job.updated_at || job.created_at || ''
-                return (
-                  <li key={job.id}>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => handlePick(job.id)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent-50/60"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-gray-900">
-                          {job.title || tr('invoice.new.untitledJob', 'Untitled job')}
-                        </p>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
-                          <span>{tr('invoice.new.picker.completedOn', 'Completed')} {formatDate(completedAt)}</span>
-                          {job.service_count != null && (
+      {open && (
+        <div className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+          <div className="border-b border-gray-100 px-3 py-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              disabled={loading}
+              placeholder={
+                loading
+                  ? tr('invoice.new.picker.loading', 'Loading jobs…')
+                  : tr('invoice.new.picker.filterJobs', 'Search jobs…')
+              }
+              className="w-full border-0 bg-transparent p-1 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {!canPick || filtered.length === 0 ? (
+              <div className="px-4 py-6 text-center text-sm leading-relaxed text-gray-500">
+                {emptyMessage}
+              </div>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {filtered.map((job) => {
+                  const total = Number(job.total_price) || 0
+                  const completedAt = job.updated_at || job.created_at || ''
+                  return (
+                    <li key={job.id}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => handlePick(job.id)}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-gray-50"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-gray-900">
+                            {job.title || tr('invoice.new.untitledJob', 'Untitled job')}
+                          </p>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
                             <span>
-                              · {job.service_count}{' '}
-                              {job.service_count === 1
-                                ? tr('invoice.new.picker.taskOne', 'task')
-                                : tr('invoice.new.picker.taskMany', 'tasks')}
+                              {tr('invoice.new.picker.completedOn', 'Completed')} {formatDate(completedAt)}
                             </span>
-                          )}
-                          {job.status === 'sub_completed' && (
-                            <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-                              {tr('invoice.new.picker.partial', 'Partial')}
-                            </span>
-                          )}
+                            {job.service_count != null && (
+                              <span>
+                                · {job.service_count}{' '}
+                                {job.service_count === 1
+                                  ? tr('invoice.new.picker.taskOne', 'task')
+                                  : tr('invoice.new.picker.taskMany', 'tasks')}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <p className="flex-shrink-0 text-sm font-semibold text-gray-900">
-                        {formatMoney(total, currency)}
-                      </p>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
+                        <p className="flex-shrink-0 text-sm font-semibold text-gray-900">
+                          {formatMoney(total, currency)}
+                        </p>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -330,9 +342,9 @@ function NewInvoicePageContent() {
   // ── Invoice form ───────────────────────────────────────────────────────────
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
-    title: 'Invoice',
+    title: '',
     issue_date: new Date().toISOString().split('T')[0],
-    due_days: 30,
+    due_days: 14,
     tax_rate: 25,
     currency: 'DKK',
     // Intentionally left blank — there is no hardcoded fallback. If the
@@ -375,6 +387,25 @@ function NewInvoicePageContent() {
   const [paymentError, setPaymentError] = useState<string | null>(null)
   // provider → enabled-for-this-invoice. Defaults to ON when first loaded.
   const [paymentMethodOn, setPaymentMethodOn] = useState<Record<string, boolean>>({})
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null)
+  const [invoiceNextNumber, setInvoiceNextNumber] = useState<number | null>(null)
+  const [draftInvoiceNumber, setDraftInvoiceNumber] = useState<string | null>(null)
+  const [clientSavingField, setClientSavingField] = useState<string | null>(null)
+  const [invoiceEmail, setInvoiceEmail] = useState('')
+  const [currencyMenuOpen, setCurrencyMenuOpen] = useState(false)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [sendModalOpen, setSendModalOpen] = useState(false)
+  const [sendConfirmStep, setSendConfirmStep] = useState<'form' | 'confirm'>('form')
+  const [sendTo, setSendTo] = useState('')
+  const [sendCc, setSendCc] = useState('')
+  const [sendSubject, setSendSubject] = useState('')
+  const [sendBody, setSendBody] = useState('')
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const [draftSavedFlash, setDraftSavedFlash] = useState(false)
+  const draftSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const titleInputRef = useRef<HTMLInputElement>(null)
+  const currencyMenuRef = useRef<HTMLDivElement>(null)
   const countryCode = useMemo(() => {
     if (typeof window === 'undefined') return 'DK'
     try {
@@ -385,6 +416,8 @@ function NewInvoicePageContent() {
     }
   }, [])
   const countryRule = useMemo(() => getCountryRule(countryCode), [countryCode])
+  const businessSettingsHref = company ? `/${company}/settings/business` : '/settings/business'
+  const invoiceSettingsHref = company ? `/${company}/settings/invoice-options` : '/settings/invoice-options'
 
   // Apply country defaults once.
   useEffect(() => {
@@ -410,6 +443,8 @@ function NewInvoicePageContent() {
         setInvoicingEnabled(Boolean(d.invoicingEnabled))
         const savedTerms =
           typeof d.invoiceDefaultPaymentTerms === 'string' ? d.invoiceDefaultPaymentTerms.trim() : ''
+        // Treat non-empty terms (including the API starter template) as available
+        // so the composer is prefilled and the "set up" CTA stays hidden.
         setHasCompanyDefaultTerms(savedTerms.length > 0)
         // Multi-signal "is numbering configured" check, in this order:
         //   1. Explicit flag from the API (most authoritative).
@@ -421,6 +456,7 @@ function NewInvoicePageContent() {
         // The server still enforces the real gate on POST.
         const nextNumber = Number(d.invoiceNextNumber) || 0
         const maxIssued = Number(d.maxNumericInvoice) || 0
+        if (nextNumber > 0) setInvoiceNextNumber(nextNumber)
         // Multi-signal "is numbering configured" check.
         //   • Reality wins: if a starting number above the schema default
         //     of 1 is saved, OR an invoice has actually been issued, then
@@ -505,6 +541,18 @@ function NewInvoicePageContent() {
       .finally(() => setPaymentLoaded(true))
   }, [])
 
+  // Fetch company profile (logo + business details shown on the document).
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    fetch(apiUrl('/companies/profile'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.company) setCompanyProfile(data.company)
+      })
+      .catch(() => {})
+  }, [])
+
   // Fetch clients on first render.
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -523,6 +571,33 @@ function NewInvoicePageContent() {
       .catch(() => setClientsError('Failed to load clients'))
       .finally(() => setClientsLoading(false))
   }, [])
+
+  // Load full client record (address etc.) when building an invoice for them.
+  useEffect(() => {
+    if (selectedClientId == null || step !== 'build') return
+    const token = localStorage.getItem('token')
+    if (!token) return
+    let cancelled = false
+    fetch(apiUrl(`/clients/${selectedClientId}`), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || !data?.client) return
+        const full = data.client as Client
+        setClients((prev) => {
+          const idx = prev.findIndex((c) => c.id === full.id)
+          if (idx < 0) return [...prev, full]
+          const next = [...prev]
+          next[idx] = { ...next[idx], ...full }
+          return next
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [selectedClientId, step])
 
   // Fetch completed jobs once (used for both job picker and legacy auto-derive of client).
   useEffect(() => {
@@ -616,9 +691,10 @@ function NewInvoicePageContent() {
 
         setSelectedClientId(inv.client_id ?? null)
         setSelectedJobIds(jobIds)
+        setDraftInvoiceNumber(inv.invoice_number ? String(inv.invoice_number) : null)
         setForm((prev) => ({
           ...prev,
-          title: inv.title || prev.title,
+          title: inv.title || '',
           issue_date: issueDate || prev.issue_date,
           due_days: dueDays || prev.due_days,
           tax_rate: inv.tax_rate != null ? Number(inv.tax_rate) : prev.tax_rate,
@@ -685,11 +761,38 @@ function NewInvoicePageContent() {
     }
   }, [step])
 
+  useEffect(() => {
+    if (editingTitle) {
+      requestAnimationFrame(() => titleInputRef.current?.focus())
+    }
+  }, [editingTitle])
+
+  useEffect(() => {
+    if (!currencyMenuOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (currencyMenuRef.current && e.target instanceof Node && !currencyMenuRef.current.contains(e.target)) {
+        setCurrencyMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [currencyMenuOpen])
+
   // ── Derived data ───────────────────────────────────────────────────────────
   const selectedClient = useMemo(
     () => clients.find((c) => c.id === selectedClientId) || null,
     [clients, selectedClientId],
   )
+
+  useEffect(() => {
+    if (!selectedClient) {
+      setInvoiceEmail('')
+      return
+    }
+    const billing = String(selectedClient.billing_email || '').trim()
+    const contact = String(selectedClient.email || '').trim()
+    setInvoiceEmail(billing || contact || '')
+  }, [selectedClient?.id, selectedClient?.billing_email, selectedClient?.email])
 
   // Completed-but-not-invoiced jobs for the chosen client.
   // In edit mode we also include jobs already attached to THIS draft, so
@@ -827,63 +930,322 @@ function NewInvoicePageContent() {
     }))
   }, [])
 
+  const patchClientField = useCallback(
+    async (field: keyof Client, value: string) => {
+      if (!selectedClientId) return
+      const trimmed = value.trim()
+      const current = clients.find((c) => c.id === selectedClientId)
+      const prevVal = String((current as any)?.[field] ?? '').trim()
+      if (prevVal === trimmed) return
+
+      setClientSavingField(String(field))
+      // Optimistic local update
+      setClients((prev) =>
+        prev.map((c) => (c.id === selectedClientId ? { ...c, [field]: trimmed || null } : c)),
+      )
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl(`/clients/${selectedClientId}`), {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ [field]: trimmed || null }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          // Revert on failure
+          setClients((prev) =>
+            prev.map((c) => (c.id === selectedClientId ? { ...c, [field]: prevVal || null } : c)),
+          )
+          alert(data.error || tr('invoice.new.clientSaveFailed', 'Could not save client details'))
+        } else if (data.client) {
+          setClients((prev) =>
+            prev.map((c) => (c.id === selectedClientId ? { ...c, ...data.client } : c)),
+          )
+        }
+      } catch {
+        setClients((prev) =>
+          prev.map((c) => (c.id === selectedClientId ? { ...c, [field]: prevVal || null } : c)),
+        )
+        alert(tr('invoice.new.clientSaveFailed', 'Could not save client details'))
+      } finally {
+        setClientSavingField(null)
+      }
+    },
+    [clients, selectedClientId, tr],
+  )
+
   const enabledMethodsForSubmit = useMemo(
     () => paymentOptions.filter((opt) => paymentMethodOn[opt.provider]).map((opt) => opt.provider),
     [paymentOptions, paymentMethodOn],
   )
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const commitInvoiceEmail = useCallback(
+    async (raw: string) => {
+      if (!selectedClientId || !selectedClient) return
+      const next = raw.trim()
+      const billing = String(selectedClient.billing_email || '').trim()
+      const contact = String(selectedClient.email || '').trim()
+
+      if (!next) {
+        setInvoiceEmail(billing || contact || '')
+        return
+      }
+
+      if (billing && next !== billing) {
+        const ok = window.confirm(
+          tr(
+            'invoice.new.updateInvoiceEmailConfirm',
+            'Update the client’s invoice email to this address?',
+          ),
+        )
+        if (!ok) {
+          setInvoiceEmail(billing || contact || '')
+          return
+        }
+        await patchClientField('billing_email', next)
+        setInvoiceEmail(next)
+        return
+      }
+
+      // Contact email used as default — don't create billing_email until changed.
+      if (!billing && contact && next === contact) {
+        setInvoiceEmail(next)
+        return
+      }
+
+      if (!billing && next) {
+        await patchClientField('billing_email', next)
+        setInvoiceEmail(next)
+      }
+    },
+    [selectedClient, selectedClientId, patchClientField, tr],
+  )
+
+  const buildInvoicePayload = () => ({
+    job_ids: selectedJobs.map((j) => j.id),
+    title: form.title.trim().slice(0, MAX_TITLE_LEN),
+    issue_date: form.issue_date,
+    due_date,
+    due_days: form.due_days,
+    tax_rate: form.tax_rate,
+    currency: form.currency,
+    payment_terms: form.payment_terms,
+    notes: '',
+    description: form.description.trim() || '',
+    reference_text: form.reference_text.trim() || '',
+    discounts: form.discounts,
+    enabled_payment_methods: enabledMethodsForSubmit,
+  })
+
+  const persistInvoice = async (): Promise<number | null> => {
+    await commitInvoiceEmail(invoiceEmail)
+    const token = localStorage.getItem('token')
+    const payload = buildInvoicePayload()
+    const res = isEditMode
+      ? await fetch(apiUrl(`/invoices/${editDraftId}`), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        })
+      : await fetch(apiUrl(`/clients/${selectedClientId}/invoices`), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        })
+    const data = await res.json()
+    const newId = data?.invoice?.id ?? editDraftId
+    if (!res.ok || !newId) {
+      alert(
+        data.error ||
+          (isEditMode
+            ? tr('invoice.new.failedSaveDraft', 'Failed to save draft')
+            : tr('invoice.new.failedCreate', 'Failed to create invoice')),
+      )
+      return null
+    }
+    return Number(newId)
+  }
+
+  const SEND_INVOICE_FALLBACK = {
+    subject: 'Invoice {invoice_number} from {Company name}',
+    message:
+      'Hi {Client first name},\n\nYour invoice is ready. Open the e-invoice using the button in the email to view details and payment options.\n\nBest regards,\n{Company name}',
+  }
+
+  const applySendPlaceholders = (
+    template: string,
+    ctx: { invoiceNumber: string; companyName: string; clientFirstName: string },
+  ) =>
+    String(template || '')
+      .replace(/\{invoice_number\}/g, ctx.invoiceNumber)
+      .replace(/\{Company name\}/g, ctx.companyName)
+      .replace(/\{Client first name\}/g, ctx.clientFirstName)
+
+  const openSendModal = () => {
     if (!selectedClientId || selectedJobs.length === 0) return
     if (!numberingConfigured) return
     if (paymentOptions.length === 0 || enabledMethodsForSubmit.length === 0) return
+    setSendConfirmStep('form')
+    setSendTo(invoiceEmail.trim())
+    setSendCc('')
+    setSendSubject('')
+    setSendBody('')
+    setSendError(null)
+    setSendModalOpen(true)
+
+    const invNo = String(draftInvoiceNumber || (invoiceNextNumber != null ? invoiceNextNumber : ''))
+    const companyName = String(companyProfile?.name || '')
+    const first = String(selectedClient?.name || '').trim()
+    const ctx = { invoiceNumber: invNo, companyName, clientFirstName: first }
+
+    const applyTpl = (subject: string, message: string) => {
+      const subj = subject.trim() || SEND_INVOICE_FALLBACK.subject
+      const msg = message.trim() || SEND_INVOICE_FALLBACK.message
+      setSendSubject(applySendPlaceholders(subj, ctx))
+      setSendBody(applySendPlaceholders(msg, ctx))
+    }
+
+    const token = localStorage.getItem('token')
+    if (!token) {
+      applyTpl('', '')
+      return
+    }
+    fetch(apiUrl('/email-templates'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => res.json())
+      .then((data) => {
+        const si = data.templates?.send_invoice
+        applyTpl(String(si?.subject || ''), String(si?.message || ''))
+      })
+      .catch(() => applyTpl('', ''))
+  }
+
+  const flashDraftSaved = () => {
+    if (draftSavedTimerRef.current) clearTimeout(draftSavedTimerRef.current)
+    setDraftSavedFlash(true)
+    draftSavedTimerRef.current = setTimeout(() => setDraftSavedFlash(false), 1800)
+  }
+
+  const markSentWithoutEmail = async () => {
+    setSending(true)
+    setSendError(null)
     setSubmitting(true)
     try {
+      const newId = await persistInvoice()
+      if (!newId) return
       const token = localStorage.getItem('token')
-      const payload = {
-        job_ids: selectedJobs.map((j) => j.id),
-        title: form.title.slice(0, MAX_TITLE_LEN),
-        issue_date: form.issue_date,
-        due_date,
-        due_days: form.due_days,
-        tax_rate: form.tax_rate,
-        currency: form.currency,
-        payment_terms: form.payment_terms,
-        notes: '',
-        description: form.description.trim() || '',
-        reference_text: form.reference_text.trim() || '',
-        discounts: form.discounts,
-        enabled_payment_methods: enabledMethodsForSubmit,
-      }
-      // Edit mode → PUT against the existing draft. Create mode → POST.
-      const res = isEditMode
-        ? await fetch(apiUrl(`/invoices/${editDraftId}`), {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(payload),
-          })
-        : await fetch(apiUrl(`/clients/${selectedClientId}/invoices`), {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(payload),
-          })
-      const data = await res.json()
-      const newId = data?.invoice?.id ?? editDraftId
-      if (res.ok && newId) {
-        router.push(`/${company}/invoices/${newId}`)
-      } else {
-        alert(
+      const res = await fetch(apiUrl(`/invoices/${newId}/status`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: 'sent' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setSendError(
           data.error ||
-            (isEditMode
-              ? tr('invoice.new.failedSaveDraft', 'Failed to save draft')
-              : tr('invoice.new.failedCreate', 'Failed to create invoice')),
+            tr('invoice.new.failedMarkSent', 'Could not mark the invoice as sent.'),
         )
+        router.replace(`/${company}/invoices/new?draft=${newId}`)
+        return
+      }
+      setSendModalOpen(false)
+      router.push(`/${company}/invoices/${newId}`)
+    } catch (err) {
+      console.error(err)
+      setSendError(tr('invoice.new.failedMarkSent', 'Could not mark the invoice as sent.'))
+    } finally {
+      setSending(false)
+      setSubmitting(false)
+    }
+  }
+
+  const confirmCreateAndSend = async () => {
+    const to = sendTo.trim()
+    if (!to) {
+      setSendError(tr('invoice.detail.enterEmail', 'Please enter a recipient email.'))
+      return
+    }
+    setSending(true)
+    setSendError(null)
+    setSubmitting(true)
+    try {
+      const newId = await persistInvoice()
+      if (!newId) return
+
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl(`/invoices/${newId}/send`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          to,
+          cc: sendCc.trim() || undefined,
+        }),
+      })
+      const text = await res.text()
+      let data: { success?: boolean; error?: string } = {}
+      try {
+        data = text ? JSON.parse(text) : {}
+      } catch {
+        setSendError(
+          tr(
+            'invoice.detail.failedSendEmail',
+            'Failed to send email. The invoice may have been saved as a draft.',
+          ),
+        )
+        return
+      }
+      if (!res.ok || !data.success) {
+        setSendError(data.error || tr('invoice.detail.failedSendEmail', 'Failed to send email'))
+        router.replace(`/${company}/invoices/new?draft=${newId}`)
+        return
+      }
+      setSendModalOpen(false)
+      router.push(`/${company}/invoices/${newId}`)
+    } catch (err) {
+      console.error(err)
+      setSendError(tr('invoice.detail.failedSendEmail', 'Failed to send email'))
+    } finally {
+      setSending(false)
+      setSubmitting(false)
+    }
+  }
+
+  const saveInvoice = async (mode: 'draft' | 'preview') => {
+    if (!selectedClientId || selectedJobs.length === 0) return
+    if (!numberingConfigured) return
+    if (paymentOptions.length === 0 || enabledMethodsForSubmit.length === 0) return
+    if (mode === 'preview' && !invoiceEmail.trim()) {
+      alert(tr('invoice.new.invoiceEmailRequired', 'Add an invoice email before continuing.'))
+      return
+    }
+    setSubmitting(true)
+    try {
+      const newId = await persistInvoice()
+      if (!newId) return
+      if (mode === 'preview') {
+        window.open(`/${company}/invoices/${newId}/preview`, '_blank', 'noopener,noreferrer')
+        if (!isEditMode || Number(editDraftId) !== Number(newId)) {
+          router.replace(`/${company}/invoices/new?draft=${newId}`)
+        }
+        return
+      }
+      flashDraftSaved()
+      if (!isEditMode || Number(editDraftId) !== Number(newId)) {
+        router.replace(`/${company}/invoices/new?draft=${newId}`)
       }
     } catch (err) {
       console.error(err)
@@ -895,6 +1257,11 @@ function NewInvoicePageContent() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await saveInvoice('draft')
   }
 
   // ── Renders ────────────────────────────────────────────────────────────────
@@ -1127,7 +1494,7 @@ function NewInvoicePageContent() {
     <AppLayout>
       <div className="min-h-screen bg-page">
         <div className="border-b border-gray-200/80 bg-white/80 backdrop-blur-sm">
-          <div className="mx-auto max-w-[1600px] px-6 py-4">
+          <div className="mx-auto max-w-5xl px-6 py-4">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <Link
                 href={`/${company}/invoices`}
@@ -1141,31 +1508,26 @@ function NewInvoicePageContent() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="mx-auto max-w-[1600px] px-6 py-8">
-          {/* Selected-client banner */}
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent-200 bg-accent-50/60 px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold text-accent-700 shadow-sm">
-                {(selectedClient?.name || selectedClient?.last_name || '?').slice(0, 1).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-wider text-accent-700">
-                  {tr('invoice.new.invoiceFor', 'Invoice for')}
-                </p>
-                <p className="truncate text-base font-semibold text-primary-900">
-                  {isClientResolving ? tr('invoice.new.loadingClient', 'Loading client…') : clientFullName(selectedClient)}
-                </p>
-              </div>
+        <form onSubmit={handleSubmit} className="mx-auto max-w-6xl px-6 py-8">
+          {/* Toolbar */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wider text-gray-400">
+                {isEditMode
+                  ? tr('invoice.new.editingDraft', 'Editing draft')
+                  : tr('invoice.new.invoiceFor', 'Invoice for')}
+              </p>
+              <p className="truncate text-lg font-semibold text-primary-900">
+                {isClientResolving
+                  ? tr('invoice.new.loadingClient', 'Loading client…')
+                  : clientFullName(selectedClient)}
+              </p>
             </div>
-            {isEditMode ? (
-              <span className="inline-flex items-center gap-1.5 rounded-xl bg-white/80 px-3 py-1.5 text-xs font-medium text-accent-700 ring-1 ring-accent-200">
-                {tr('invoice.new.editingDraft', 'Editing draft')}
-              </span>
-            ) : (
+            {!isEditMode && (
               <button
                 type="button"
                 onClick={changeClient}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:border-gray-300 hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-white hover:text-gray-900"
               >
                 <PencilIcon className="h-4 w-4" />
                 {tr('invoice.new.changeClient', 'Change client')}
@@ -1173,11 +1535,8 @@ function NewInvoicePageContent() {
             )}
           </div>
 
-          {/* Hard gate: invoice numbering must be configured before any
-              invoice can be issued. We surface this loud and early because
-              once a #1 invoice goes out the door, fixing it is messy. */}
           {defaultsLoaded && !numberingConfigured && (
-            <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-red-200 bg-red-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-red-200 bg-red-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-white text-red-600 shadow-sm">
                   <ExclamationTriangleIcon className="h-5 w-5" />
@@ -1195,7 +1554,7 @@ function NewInvoicePageContent() {
                 </div>
               </div>
               <Link
-                href={`/${company}/settings/invoice-options`}
+                href={invoiceSettingsHref}
                 className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-red-700"
               >
                 {tr('invoice.new.setNumberStart', 'Set invoice number start')}
@@ -1204,111 +1563,165 @@ function NewInvoicePageContent() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1fr,420px]">
-            {/* Left column */}
-            <div className="space-y-6">
-              {/* Invoice details */}
-              <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-gray-500">
-                  <DocumentTextIcon className="h-4 w-4 text-accent-500" />
-                  {tr('invoice.new.invoiceDetails', 'Invoice details')}
-                </h2>
-                <div className="space-y-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                      {tr('invoice.new.titleLabel', 'Title')}
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={MAX_TITLE_LEN}
-                      value={form.title}
-                      onChange={(e) => setForm((p) => ({ ...p, title: e.target.value.slice(0, MAX_TITLE_LEN) }))}
-                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder={tr('invoice.new.titlePlaceholder', 'Invoice')}
+          <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr),260px]">
+          {/* Single invoice document */}
+          <div className="overflow-hidden rounded-2xl border border-gray-200/90 bg-white shadow-sm">
+            {/* Header: logo + date/number on top; company & client names share the same top */}
+            <div className="border-b border-gray-100 px-6 py-8 sm:px-10">
+              <div className="mb-6 flex items-start justify-between gap-6">
+                <Link
+                  href={businessSettingsHref}
+                  className="group inline-flex max-w-full items-center gap-3 rounded-lg p-0.5 transition hover:bg-gray-50"
+                  title={tr('invoice.new.editCompanyHint', 'Edit company details in settings')}
+                >
+                  {companyProfile?.logoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={resolveAssetUrl(companyProfile.logoUrl) ?? companyProfile.logoUrl}
+                      alt=""
+                      className="h-12 w-auto max-w-[150px] object-contain"
                     />
-                    <p className="mt-1 text-xs text-gray-500">
-                      {form.title.length}/{MAX_TITLE_LEN}
+                  ) : (
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 text-gray-400 group-hover:border-accent-400 group-hover:text-accent-600">
+                      <PhotoIcon className="h-5 w-5" />
+                    </div>
+                  )}
+                </Link>
+
+                <div className="space-y-1 text-right">
+                  <input
+                    type="date"
+                    value={form.issue_date}
+                    onChange={(e) => setForm((p) => ({ ...p, issue_date: e.target.value }))}
+                    className="ml-auto block w-full max-w-[11rem] rounded-md border-0 bg-transparent py-0.5 text-right text-sm font-medium text-gray-900 focus:outline-none focus:ring-1 focus:ring-accent-400/40"
+                  />
+                  <p className="text-2xl font-bold tabular-nums tracking-tight text-primary-900">
+                    #{draftInvoiceNumber || (invoiceNextNumber != null ? String(invoiceNextNumber) : '—')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid items-start gap-10 lg:grid-cols-2 lg:gap-16">
+                <Link
+                  href={businessSettingsHref}
+                  className="group block min-w-0 space-y-0.5 rounded-lg py-0 transition hover:bg-gray-50/80"
+                >
+                  <p className="text-base font-semibold leading-snug text-primary-900">
+                    {companyProfile?.name || tr('invoice.new.yourCompany', 'Your company')}
+                  </p>
+                  <p className={`text-sm ${companyProfile?.address ? 'text-gray-600' : 'text-gray-300'}`}>
+                    {companyProfile?.address || tr('invoice.new.missingAddress', 'Address')}
+                  </p>
+                  <p
+                    className={`text-sm ${
+                      companyProfile?.zipCode || companyProfile?.city ? 'text-gray-600' : 'text-gray-300'
+                    }`}
+                  >
+                    {[companyProfile?.zipCode, companyProfile?.city].filter(Boolean).join(' ') ||
+                      tr('invoice.new.missingCity', 'Postal code & city')}
+                  </p>
+                  {companyProfile?.cvrNumber ? (
+                    <p className="text-sm text-gray-600">
+                      {countryRule.taxLabel === 'VAT' ? 'CVR' : 'Reg. no.'} {companyProfile.cvrNumber}
                     </p>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                        {tr('invoice.new.issueDate', 'Issue date')}
-                      </label>
-                      <input
-                        type="date"
-                        value={form.issue_date}
-                        onChange={(e) => setForm((p) => ({ ...p, issue_date: e.target.value }))}
-                        className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                        {tr('invoice.new.currency', 'Currency')}
-                      </label>
-                      <select
-                        value={form.currency}
-                        onChange={(e) => setForm((p) => ({ ...p, currency: e.target.value }))}
-                        className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      >
-                        {['DKK', 'SEK', 'NOK', 'EUR', 'GBP', 'USD'].map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                        {tr('invoice.new.daysUntilDue', 'Days until due')}
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={365}
-                        value={form.due_days}
-                        onChange={(e) =>
-                          setForm((p) => ({
-                            ...p,
-                            due_days: Math.max(1, parseInt(e.target.value, 10) || 30),
-                          }))
-                        }
-                        className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                      {tr('invoice.new.descriptionLabel', 'Description (on invoice, above table)')}
-                    </label>
-                    <textarea
-                      value={form.description}
-                      onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-                      rows={3}
-                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder={tr(
-                        'invoice.new.descriptionPlaceholder',
-                        'Optional description shown on the invoice above the line items...',
-                      )}
-                    />
-                  </div>
-                  {/* Reference / PO input intentionally hidden for now. The
-                      column and API plumbing are still in place, so we can flip
-                      this back on any time without a migration. */}
-                </div>
-              </section>
+                  ) : null}
+                  {companyProfile?.vatNumber ? (
+                    <p className="text-sm text-gray-600">VAT {companyProfile.vatNumber}</p>
+                  ) : null}
+                  <p className={`text-sm ${companyProfile?.email ? 'text-gray-600' : 'text-gray-300'}`}>
+                    {companyProfile?.email || tr('invoice.new.missingEmail', 'Email')}
+                  </p>
+                  <p className={`text-sm ${companyProfile?.phone ? 'text-gray-600' : 'text-gray-300'}`}>
+                    {companyProfile?.phone || tr('invoice.new.missingPhone', 'Phone')}
+                  </p>
+                </Link>
 
-              {/* Line items & discounts */}
-              <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-500">
-                    {tr('invoice.new.lineItems', 'Line items & discounts')}
-                  </h2>
-                  <span className="text-xs text-gray-500">
-                    {tr('invoice.new.xOfYAdded', '{x} of {y} added')
-                      .replace('{x}', String(selectedJobs.length))
-                      .replace('{y}', String(clientInvoiceableJobs.length))}
-                  </span>
-                </div>
+                <div className="min-w-0 text-left sm:text-right lg:ml-auto lg:max-w-xs">
+                  {(() => {
+                    const isCompany = String(selectedClient?.client_type || '').toLowerCase() === 'company'
+                    const zipCityUsStyle = countryCode === 'US'
+                    const name = isCompany
+                      ? String(selectedClient?.name || '').trim()
+                      : clientFullName(selectedClient)
+                    const street = String(selectedClient?.address || '').trim()
+                    const zip = String(selectedClient?.zip_code || '').trim()
+                    const city = String(selectedClient?.city || '').trim()
+                    const country = String(selectedClient?.country || '').trim()
+                    const companyNo = String(selectedClient?.company_number || '').trim()
+                    const ean = String(selectedClient?.ean_number || '').trim()
+                    const zipCity = zipCityUsStyle
+                      ? [city, zip].filter(Boolean).join(', ')
+                      : [zip, city].filter(Boolean).join(', ')
 
+                    return (
+                      <div className="space-y-0.5 text-sm text-gray-600">
+                        <p className="text-base font-semibold leading-snug text-gray-900">
+                          {name || tr('invoice.new.unknownClient', 'Client')}
+                        </p>
+                        {isCompany && companyNo ? (
+                          <p>
+                            {countryRule.companyNumberLabel} {companyNo}
+                          </p>
+                        ) : null}
+                        {street ? <p>{street}</p> : null}
+                        {zipCity ? <p>{zipCity}</p> : null}
+                        {country ? <p>{country}</p> : null}
+                        {isCompany && ean ? <p>EAN {ean}</p> : null}
+                        {selectedClientId != null && (
+                          <Link
+                            href={company ? `/${company}/clients/${selectedClientId}` : `/clients/${selectedClientId}`}
+                            className="mt-2 inline-block text-[11px] font-medium text-gray-400 hover:text-gray-700"
+                          >
+                            {tr('invoice.new.editClientDetails', 'Edit client details')}
+                          </Link>
+                        )}
+                      </div>
+                    )
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            {/* Description + title */}
+            <div className="space-y-5 border-b border-gray-100 px-6 py-8 sm:px-10">
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+                rows={2}
+                placeholder={tr('invoice.new.descriptionPlaceholder', 'Add a short description…')}
+                className="w-full resize-none rounded-md border-0 bg-transparent px-0 py-1 text-sm leading-relaxed text-gray-700 placeholder:text-gray-300 focus:outline-none focus:ring-0"
+              />
+              {editingTitle || form.title.trim() ? (
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  maxLength={MAX_TITLE_LEN}
+                  value={form.title}
+                  onChange={(e) => setForm((p) => ({ ...p, title: e.target.value.slice(0, MAX_TITLE_LEN) }))}
+                  onBlur={() => setEditingTitle(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === 'Escape') {
+                      e.preventDefault()
+                      setEditingTitle(false)
+                    }
+                  }}
+                  placeholder={tr('invoice.new.untitled', 'Untitled')}
+                  className="w-full border-0 bg-transparent px-0 py-1 text-lg font-semibold text-gray-900 placeholder:font-normal placeholder:text-gray-300 focus:outline-none focus:ring-0"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setEditingTitle(true)}
+                  className="block text-left text-lg font-normal text-gray-300 transition hover:text-gray-400"
+                >
+                  {tr('invoice.new.untitled', 'Untitled')}
+                </button>
+              )}
+            </div>
+
+            {/* Line items */}
+            <div className="px-6 py-8 sm:px-10">
+              <div className="mb-6">
                 <JobPicker
                   availableJobs={availableForPicker}
                   selectedCount={selectedJobs.length}
@@ -1319,466 +1732,527 @@ function NewInvoicePageContent() {
                   onAdd={addJob}
                   tr={tr}
                 />
-
-                {jobsLoading && selectedJobs.length === 0 ? (
-                  <div className="mt-4 flex items-center justify-center py-8">
-                    <div className="h-7 w-7 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
-                  </div>
-                ) : !jobsLoading && clientInvoiceableJobs.length === 0 ? (
-                  <div className="mt-4 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-6 py-8 text-center">
-                    <p className="text-sm font-medium text-gray-900">
-                      {tr('invoice.new.noInvoiceableJobs', 'No completed, un-invoiced jobs for this client.')}
-                    </p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {tr(
-                        'invoice.new.noInvoiceableJobsHelp',
-                        'Mark a job as completed first, or pick another client.',
-                      )}
-                    </p>
-                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={changeClient}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                      >
-                        <PencilIcon className="h-4 w-4" />
-                        {tr('invoice.new.changeClient', 'Change client')}
-                      </button>
-                      <Link
-                        href={`/${company}/jobs`}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary-500 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700"
-                      >
-                        <DocumentTextIcon className="h-4 w-4" />
-                        {tr('invoice.new.goToJobs', 'Go to Jobs')}
-                      </Link>
-                    </div>
-                  </div>
-                ) : selectedJobs.length === 0 ? (
-                  <p className="mt-4 rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-4 py-6 text-center text-xs text-gray-500">
-                    {tr(
-                      'invoice.new.noJobsAddedYet',
-                      'No jobs added yet. Use the dropdown above to add completed jobs to this invoice.',
-                    )}
-                  </p>
-                ) : (
-                  <div className="mt-4 space-y-3">
-                    {selectedJobs.map((job) => {
-                      const discount = form.discounts[job.id] ?? 0
-                      const lineTotal = Math.max(0, (Number(job.total_price) || 0) - discount)
-                      return (
-                        <div
-                          key={job.id}
-                          className="flex flex-wrap items-center gap-4 rounded-xl border border-gray-100 bg-gray-50/50 p-4"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium text-gray-900">
-                              {job.title || tr('invoice.new.untitledJob', 'Untitled job')}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {formatMoney(Number(job.total_price) || 0, form.currency)}{' '}
-                              {tr('invoice.new.beforeDiscount', 'before discount')}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs font-medium text-gray-500">
-                              {tr('invoice.new.discount', 'Discount')}
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              value={discount || ''}
-                              onChange={(e) => handleDiscountChange(job.id, parseFloat(e.target.value) || 0)}
-                              className="w-24 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                            />
-                          </div>
-                          <p className="w-28 text-right text-sm font-semibold text-gray-900">
-                            {formatMoney(lineTotal, form.currency)}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => removeJob(job.id)}
-                            aria-label={tr('invoice.new.removeJob', 'Remove job from invoice')}
-                            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-transparent text-gray-400 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                          >
-                            <XMarkIcon className="h-4 w-4" />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </section>
-
-              {/* Payment */}
-              <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">
-                  {tr('invoice.new.paymentSection', 'Payment')}
-                </h2>
-                <div className="space-y-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                      {tr('invoice.new.paymentTerms', 'Payment terms')}
-                    </label>
-
-                    {/* Empty-state CTA: only show once we know the company has no
-                        saved default AND the user hasn't typed anything yet. */}
-                    {defaultsLoaded && !hasCompanyDefaultTerms && !form.payment_terms.trim() && (
-                      <div className="mb-3 flex flex-col gap-3 rounded-xl border border-dashed border-amber-300 bg-amber-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="text-sm text-amber-900">
-                          <p className="font-medium">
-                            {tr('invoice.new.noStandardTermsTitle', 'No standard payment terms saved yet.')}
-                          </p>
-                          <p className="mt-0.5 text-xs text-amber-800/90">
-                            {tr(
-                              'invoice.new.noStandardTermsHelp',
-                              'Save a template once and it will be filled in automatically every time you create an invoice.',
-                            )}
-                          </p>
-                        </div>
-                        <Link
-                          href={`/${company}/settings/invoice-options`}
-                          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 shadow-sm hover:bg-amber-100"
-                        >
-                          {tr('invoice.new.setupStandardTerms', 'Set up standard terms')}
-                          <ArrowRightIcon className="h-3.5 w-3.5" />
-                        </Link>
-                      </div>
-                    )}
-
-                    <textarea
-                      value={form.payment_terms}
-                      onChange={(e) => setForm((p) => ({ ...p, payment_terms: e.target.value }))}
-                      rows={6}
-                      className="input-field w-full rounded-xl border border-gray-200 px-4 py-2.5 font-mono text-sm focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
-                      placeholder={tr(
-                        'invoice.new.paymentTermsPlaceholder',
-                        'Type one-off terms here, or set a reusable template under Invoice options.',
-                      )}
-                    />
-                    <p className="mt-1.5 text-xs text-gray-500">
-                      {tr('invoice.new.placeholders', 'Placeholders:')} {PAYMENT_TERMS_PLACEHOLDERS.join(', ')}
-                    </p>
-                  </div>
-                </div>
-              </section>
-
-              {/* Payment options: snapshot for THIS invoice. Defaults to ON
-                  for every method active at company level. */}
-              <section className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-sm">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-gray-500">
-                      <CreditCardIcon className="h-4 w-4 text-accent-500" />
-                      {tr('invoice.new.paymentOptions', 'Payment options')}
-                    </h2>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {tr(
-                        'invoice.new.paymentOptionsHelp',
-                        "These show up on the invoice you send. Turn one off here if you don't want to offer it for this specific invoice.",
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Empty state: company has no active methods at all → CTA
-                    to settings, just like the payment-terms one above. */}
-                {paymentLoaded && paymentOptions.length === 0 ? (
-                  <div className="flex flex-col gap-3 rounded-xl border border-dashed border-amber-300 bg-amber-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="text-sm text-amber-900">
-                      <p className="font-medium">
-                        {tr('invoice.new.noPaymentOptionsTitle', 'No payment options active yet.')}
-                      </p>
-                      <p className="mt-0.5 text-xs text-amber-800/90">
-                        {tr(
-                          'invoice.new.noPaymentOptionsHelp',
-                          "Activate at least one (e.g. bank transfer) so clients know how to pay you. You can't create an invoice without one.",
-                        )}
-                      </p>
-                    </div>
-                    <Link
-                      href={`/${company}/settings/invoice-options`}
-                      className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 shadow-sm hover:bg-amber-100"
-                    >
-                      {tr('invoice.new.setupPaymentOptions', 'Set up payment options')}
-                      <ArrowRightIcon className="h-3.5 w-3.5" />
-                    </Link>
-                  </div>
-                ) : !paymentLoaded ? (
-                  <div className="flex justify-center py-6">
-                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
-                  </div>
-                ) : paymentError ? (
-                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {paymentError}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {paymentOptions.map((opt) => {
-                      const isOn = paymentMethodOn[opt.provider] !== false
-                      const Icon = providerIconFor(opt.provider)
-                      return (
-                        <div
-                          key={opt.provider}
-                          className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
-                            isOn
-                              ? 'border-accent-200 bg-accent-50/40'
-                              : 'border-gray-200 bg-gray-50/60'
-                          }`}
-                        >
-                          <div
-                            className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${
-                              isOn ? 'bg-white text-accent-600' : 'bg-white text-gray-400'
-                            }`}
-                          >
-                            <Icon className="h-5 w-5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={`text-sm font-semibold ${
-                                isOn ? 'text-gray-900' : 'text-gray-500'
-                              }`}
-                            >
-                              {opt.title}
-                            </p>
-                            {opt.description && (
-                              <p className="text-xs text-gray-500 line-clamp-1">{opt.description}</p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPaymentMethodOn((prev) => ({
-                                ...prev,
-                                [opt.provider]: !(prev[opt.provider] !== false),
-                              }))
-                            }
-                            aria-pressed={isOn}
-                            aria-label={
-                              isOn
-                                ? `${tr('invoice.new.turnOff', 'Turn off')} ${opt.title}`
-                                : `${tr('invoice.new.turnOn', 'Turn on')} ${opt.title}`
-                            }
-                            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full p-0.5 transition-colors ${
-                              isOn ? 'bg-accent-500' : 'bg-gray-300'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                                isOn ? 'translate-x-5' : 'translate-x-0'
-                              }`}
-                            />
-                          </button>
-                        </div>
-                      )
-                    })}
-
-                    {/* Inline guard: if the admin manually turned every
-                        method off we surface the consequence right here so
-                        they don't get a confusing disabled submit button. */}
-                    {allMethodsOff && (
-                      <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                        <span>
-                          {tr(
-                            'invoice.new.allMethodsOffWarn',
-                            "You've turned off every payment option. Turn at least one back on, or this invoice has no way for the client to pay.",
-                          )}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                {(() => {
-                  // Order matters: numbering is the loudest blocker, then
-                  // missing methods, then no jobs picked. Show the most
-                  // important reason only.
-                  if (defaultsLoaded && !numberingConfigured) {
-                    return (
-                      <p className="text-sm text-red-700">
-                        {tr(
-                          'invoice.new.gateNumberingNotSet',
-                          'Set your invoice number start before creating the invoice.',
-                        )}
-                      </p>
-                    )
-                  }
-                  if (hasNoCompanyMethods) {
-                    return (
-                      <p className="text-sm text-amber-700">
-                        {tr(
-                          'invoice.new.gateNoMethods',
-                          'Activate a payment option to enable invoice creation.',
-                        )}
-                      </p>
-                    )
-                  }
-                  if (allMethodsOff) {
-                    return (
-                      <p className="text-sm text-amber-700">
-                        {tr(
-                          'invoice.new.gateAllMethodsOff',
-                          'Turn at least one payment option on for this invoice.',
-                        )}
-                      </p>
-                    )
-                  }
-                  if (selectedJobs.length === 0) {
-                    return (
-                      <p className="text-sm text-gray-500">
-                        {tr('invoice.new.gateNoJobs', 'Pick at least one job to enable invoice creation.')}
-                      </p>
-                    )
-                  }
-                  return null
-                })()}
-                <button
-                  type="submit"
-                  disabled={!canSubmit}
-                  className="btn-primary inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {submitting ? (
-                    <>
-                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                      {isEditMode
-                        ? tr('invoice.new.saving', 'Saving…')
-                        : tr('invoice.new.creating', 'Creating…')}
-                    </>
-                  ) : (
-                    <>
-                      <DocumentTextIcon className="h-5 w-5" />
-                      {isEditMode
-                        ? tr('invoice.new.saveDraft', 'Save draft')
-                        : tr('invoice.new.createInvoice', 'Create invoice')}
-                    </>
-                  )}
-                </button>
               </div>
+
+              {jobsLoading && selectedJobs.length === 0 ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-7 w-7 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
+                </div>
+              ) : selectedJobs.length === 0 ? (
+                <p className="border-t border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
+                  {tr(
+                    'invoice.new.noJobsAddedYet',
+                    'No jobs added yet. Use the search field above to add completed jobs.',
+                  )}
+                </p>
+              ) : (
+                <div className="border-t border-gray-100">
+                  <div className="hidden grid-cols-[1fr,7rem,7rem,2rem] gap-3 border-b border-gray-100 py-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:grid">
+                    <span>{tr('invoice.new.previewDescription', 'Description')}</span>
+                    <span className="text-right">{tr('invoice.new.discount', 'Discount')}</span>
+                    <span className="text-right">{tr('invoice.new.previewAmount', 'Amount')}</span>
+                    <span />
+                  </div>
+                  {selectedJobs.map((job) => {
+                    const discount = form.discounts[job.id] ?? 0
+                    const lineTotal = Math.max(0, (Number(job.total_price) || 0) - discount)
+                    return (
+                      <div
+                        key={job.id}
+                        className="grid grid-cols-1 items-center gap-2 border-b border-gray-100 py-4 sm:grid-cols-[1fr,7rem,7rem,2rem] sm:gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-gray-900">
+                            {job.title || tr('invoice.new.untitledJob', 'Untitled job')}
+                          </p>
+                          <p className="mt-0.5 text-xs text-gray-400">
+                            {formatMoney(Number(job.total_price) || 0, form.currency)}
+                            {discount > 0 ? ` − ${formatMoney(discount, form.currency)}` : ''}
+                          </p>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={discount || ''}
+                          onChange={(e) => handleDiscountChange(job.id, parseFloat(e.target.value) || 0)}
+                          placeholder="0"
+                          className="w-full rounded-md bg-gray-50 px-2 py-1.5 text-right text-sm tabular-nums text-gray-900 ring-1 ring-inset ring-gray-200 focus:bg-white focus:ring-2 focus:ring-accent-500/30"
+                        />
+                        <p className="text-right text-sm font-semibold tabular-nums text-gray-900">
+                          {formatMoney(lineTotal, form.currency)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => removeJob(job.id)}
+                          aria-label={tr('invoice.new.removeJob', 'Remove job from invoice')}
+                          className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-gray-300 hover:bg-red-50 hover:text-red-600 sm:ml-0"
+                        >
+                          <XMarkIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
-            {/* Right column: Preview */}
-            <div className="lg:sticky lg:top-6 lg:self-start">
-              <div className="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-lg">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  {tr('invoice.new.preview', 'Preview')}
-                </p>
-                <div className="overflow-hidden rounded-xl border border-gray-100 bg-gray-50/30">
-                  <div className="border-b border-gray-200/80 bg-white px-5 py-4">
-                    <h3 className="text-lg font-bold tracking-tight text-primary-800">
-                      {tr('invoice.new.previewInvoice', 'INVOICE')}
-                    </h3>
-                    {form.title && <p className="mt-0.5 text-sm text-gray-600">{form.title.slice(0, MAX_TITLE_LEN)}</p>}
-                    <div className="mt-3 flex flex-wrap gap-4 text-xs">
-                      <div>
-                        <span className="text-gray-500">{tr('invoice.new.previewInvoiceDate', 'Invoice date')}</span>
-                        <p className="font-medium text-gray-900">{formatDate(form.issue_date)}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-500">{tr('invoice.new.previewDueDate', 'Due date')}</span>
-                        <p className="font-medium text-gray-900">{formatDate(due_date)}</p>
-                      </div>
-                    </div>
+            {/* Terms + payment + totals */}
+            <div className="grid gap-10 px-6 py-8 sm:px-10 lg:grid-cols-[1.2fr,0.8fr] lg:gap-16">
+              <div className="space-y-6">
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                      {tr('invoice.new.paymentTerms', 'Payment terms')}
+                    </label>
+                    {defaultsLoaded && !hasCompanyDefaultTerms && !form.payment_terms.trim() && (
+                      <Link
+                        href={invoiceSettingsHref}
+                        className="text-[11px] text-gray-400 hover:text-gray-600 hover:underline"
+                      >
+                        {tr('invoice.new.setupStandardTerms', 'Set up standard terms')}
+                      </Link>
+                    )}
                   </div>
-                  <div className="border-b border-gray-200/80 bg-white px-5 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                      {tr('invoice.new.previewBillTo', 'Bill to')}
+                  <textarea
+                    value={form.payment_terms}
+                    onChange={(e) => setForm((p) => ({ ...p, payment_terms: e.target.value }))}
+                    rows={4}
+                    placeholder={tr(
+                      'invoice.new.paymentTermsPlaceholder',
+                      'Type one-off terms here, or set a reusable template under Invoice options.',
+                    )}
+                    className="w-full resize-none rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-800 ring-1 ring-inset ring-gray-200 focus:bg-white focus:ring-2 focus:ring-accent-500/30"
+                  />
+                </div>
+
+                <div className="space-y-5">
+                  <div>
+                    <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                      {tr('invoice.new.daysUntilDue', 'Due in (days)')}
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={form.due_days}
+                      onChange={(e) =>
+                        setForm((p) => ({
+                          ...p,
+                          due_days: Math.max(1, parseInt(e.target.value, 10) || 14),
+                        }))
+                      }
+                      className="w-full max-w-[8rem] rounded-md bg-gray-50 px-3 py-2 text-sm font-medium tabular-nums ring-1 ring-inset ring-gray-200 focus:bg-white focus:ring-2 focus:ring-accent-500/30"
+                    />
+                    <p className="mt-1.5 text-[11px] text-gray-400">
+                      {tr('invoice.new.dueDateResult', 'Due date')}: {formatDate(due_date)}
                     </p>
-                    <p className="mt-1 font-medium text-gray-900">{clientFullName(selectedClient)}</p>
                   </div>
-                  {form.description.trim() && (
-                    <div className="border-b border-gray-200/80 bg-white px-5 py-3">
-                      <p className="whitespace-pre-wrap text-sm text-gray-600">{form.description.trim()}</p>
-                    </div>
-                  )}
-                  <div className="border-b border-gray-200/80 bg-white">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-gray-100 bg-gray-50/80">
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500">
-                            {tr('invoice.new.previewDescription', 'Description')}
-                          </th>
-                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500">
-                            {tr('invoice.new.previewAmount', 'Amount')}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedJobs.length === 0 ? (
-                          <tr>
-                            <td colSpan={2} className="px-4 py-6 text-center text-xs text-gray-400">
-                              {tr('invoice.new.previewEmpty', 'Select jobs to see them here.')}
-                            </td>
-                          </tr>
-                        ) : (
-                          selectedJobs.map((job) => {
-                            const discount = form.discounts[job.id] ?? 0
-                            const lineTotal = Math.max(0, (Number(job.total_price) || 0) - discount)
-                            return (
-                              <tr key={job.id} className="border-b border-gray-100">
-                                <td className="px-4 py-2.5 text-gray-900">
-                                  <span>{job.title || tr('invoice.new.untitledJob', 'Untitled job')}</span>
-                                </td>
-                                <td className="px-4 py-2.5 text-right font-medium text-gray-900">
-                                  {formatMoney(lineTotal, form.currency)}
-                                </td>
-                              </tr>
-                            )
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="bg-white px-5 py-4">
-                    <div className="ml-auto w-48 space-y-1.5 text-sm">
-                      <div className="flex justify-between text-gray-600">
-                        <span>{tr('invoice.new.previewSubtotal', 'Subtotal')}</span>
-                        <span>{formatMoney(subtotal, form.currency)}</span>
-                      </div>
-                      {form.tax_rate > 0 && (
-                        <div className="flex justify-between text-gray-600">
-                          <span>
-                            {countryRule.taxLabel} ({form.tax_rate}%)
-                          </span>
-                          <span>{formatMoney(taxAmount, form.currency)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between border-t border-gray-200 pt-2 font-semibold text-gray-900">
-                        <span>{tr('invoice.new.previewTotal', 'Total')}</span>
-                        <span>{formatMoney(total, form.currency)}</span>
-                      </div>
-                    </div>
-                    {form.payment_terms && (
-                      <div className="mt-3 whitespace-pre-wrap text-xs text-gray-600">
-                        {replacePaymentTermsPlaceholders(form.payment_terms, {
-                          due_date: formatDate(due_date),
-                          overdue_days: form.due_days,
-                          invoice_date: formatDate(form.issue_date),
-                          invoice_number: '[Invoice number]',
+                  <div>
+                    <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                      {tr('invoice.new.paymentOptions', 'Payment option')}
+                    </p>
+                    {paymentLoaded && paymentOptions.length === 0 ? (
+                      <Link
+                        href={invoiceSettingsHref}
+                        className="inline-flex text-xs font-semibold text-amber-800 underline"
+                      >
+                        {tr('invoice.new.setupPaymentOptions', 'Set up payment options')}
+                      </Link>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {paymentOptions.map((opt) => {
+                          const isOn = paymentMethodOn[opt.provider] !== false
+                          const Icon = providerIconFor(opt.provider)
+                          return (
+                            <button
+                              key={opt.provider}
+                              type="button"
+                              onClick={() =>
+                                setPaymentMethodOn((prev) => ({
+                                  ...prev,
+                                  [opt.provider]: !(prev[opt.provider] !== false),
+                                }))
+                              }
+                              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm ring-1 ring-inset transition ${
+                                isOn
+                                  ? 'bg-accent-50 text-primary-900 ring-accent-200'
+                                  : 'bg-gray-50 text-gray-500 ring-gray-200'
+                              }`}
+                            >
+                              <Icon className="h-4 w-4 flex-shrink-0" />
+                              <span className="min-w-0 flex-1 truncate font-medium">{opt.title}</span>
+                              {isOn && <CheckIcon className="h-4 w-4 text-accent-600" />}
+                            </button>
+                          )
                         })}
                       </div>
                     )}
                   </div>
                 </div>
+              </div>
 
-                {selectedJobs.length > 0 && (
-                  <div className="mt-4 flex items-center gap-2 rounded-xl bg-accent-50 px-3 py-2 text-xs text-accent-800">
-                    <CheckCircleSolid className="h-4 w-4" />
-                    {selectedJobs.length}{' '}
-                    {selectedJobs.length === 1
-                      ? tr('invoice.new.jobReadyOne', 'job ready')
-                      : tr('invoice.new.jobReadyMany', 'jobs ready')}
-                    {' '}
-                    · {formatMoney(total, form.currency)} {tr('invoice.new.previewTotal', 'Total').toLowerCase()}
+              {/* Totals */}
+              <div className="space-y-3 pt-1 text-sm">
+                <div className="flex justify-between text-gray-600">
+                  <span>{tr('invoice.new.previewSubtotal', 'Subtotal')}</span>
+                  <span className="tabular-nums">{formatMoney(subtotal, form.currency)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 text-gray-600">
+                  <span className="flex items-center gap-2">
+                    {countryRule.taxLabel}
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.01}
+                      value={form.tax_rate}
+                      onChange={(e) =>
+                        setForm((p) => ({
+                          ...p,
+                          tax_rate: Math.max(0, parseFloat(e.target.value) || 0),
+                        }))
+                      }
+                      className="w-14 rounded-md bg-transparent px-1 py-0.5 text-right text-xs tabular-nums ring-1 ring-inset ring-gray-200 focus:ring-2 focus:ring-accent-500/30"
+                    />
+                    <span className="text-xs">%</span>
+                  </span>
+                  <span className="tabular-nums">{formatMoney(taxAmount, form.currency)}</span>
+                </div>
+                <div className="flex items-baseline justify-between border-t border-gray-200 pt-3 text-base font-semibold text-primary-900">
+                  <span>{tr('invoice.new.previewTotal', 'Total')}</span>
+                  <div ref={currencyMenuRef} className="relative flex items-center gap-1">
+                    <span className="tabular-nums">{formatMoney(total, form.currency)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setCurrencyMenuOpen((v) => !v)}
+                      className="rounded p-0.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+                      aria-label={tr('invoice.new.currency', 'Currency')}
+                    >
+                      <ChevronDownIcon className={`h-4 w-4 transition ${currencyMenuOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {currencyMenuOpen && (
+                      <div className="absolute right-0 top-full z-20 mt-1 min-w-[5.5rem] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                        {INVOICE_CURRENCIES.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                              setForm((p) => ({ ...p, currency: c }))
+                              setCurrencyMenuOpen(false)
+                            }}
+                            className={`block w-full px-3 py-1.5 text-left text-sm tabular-nums ${
+                              form.currency === c
+                                ? 'bg-accent-50 font-semibold text-primary-900'
+                                : 'text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            {c}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
           </div>
+
+          {/* Right control / confirmation panel */}
+          <aside className="lg:sticky lg:top-6 space-y-6 rounded-2xl border border-gray-200/90 bg-white p-5 shadow-sm">
+            <div>
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                {tr('invoice.new.actions', 'Actions')}
+              </p>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  disabled={!canSubmit || submitting || sending}
+                  onClick={() => void saveInvoice('draft')}
+                  className={`relative flex w-full items-center gap-2 overflow-hidden rounded-lg border px-3 py-2.5 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    draftSavedFlash
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                      : 'border-gray-200 text-gray-800 hover:bg-gray-50'
+                  }`}
+                >
+                  {draftSavedFlash ? (
+                    <CheckCircleSolid className="h-4 w-4 animate-pulse text-emerald-600" />
+                  ) : (
+                    <DocumentTextIcon className="h-4 w-4 text-gray-500" />
+                  )}
+                  <span
+                    key={draftSavedFlash ? 'saved' : 'idle'}
+                    className={draftSavedFlash ? 'animate-[fadeIn_0.25s_ease-out]' : undefined}
+                  >
+                    {draftSavedFlash
+                      ? tr('invoice.new.draftSaved', 'Draft saved')
+                      : tr('invoice.new.saveDraft', 'Save as draft')}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!canSubmit || submitting || sending}
+                  onClick={openSendModal}
+                  className="flex w-full items-center gap-2 rounded-lg bg-primary-500 px-3 py-2.5 text-left text-sm font-semibold text-white transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <PaperAirplaneIcon className="h-4 w-4" />
+                  {tr('invoice.new.send', 'Send')}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canSubmit || submitting}
+                  onClick={() => void saveInvoice('preview')}
+                  className="flex w-full items-center gap-2 rounded-lg border border-gray-200 px-3 py-2.5 text-left text-sm font-medium text-gray-800 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <EyeIcon className="h-4 w-4 text-gray-500" />
+                  {tr('invoice.new.previewAction', 'Preview')}
+                </button>
+              </div>
+              {(() => {
+                if (defaultsLoaded && !numberingConfigured) {
+                  return (
+                    <p className="mt-3 text-xs text-red-700">
+                      {tr('invoice.new.gateNumberingNotSet', 'Set your invoice number start first.')}
+                    </p>
+                  )
+                }
+                if (hasNoCompanyMethods || allMethodsOff) {
+                  return (
+                    <p className="mt-3 text-xs text-amber-700">
+                      {tr('invoice.new.gateNoMethods', 'Activate a payment option first.')}
+                    </p>
+                  )
+                }
+                if (selectedJobs.length === 0) {
+                  return (
+                    <p className="mt-3 text-xs text-gray-500">
+                      {tr('invoice.new.gateNoJobs', 'Add at least one job.')}
+                    </p>
+                  )
+                }
+                return null
+              })()}
+            </div>
+
+            <div className="border-t border-gray-100 pt-5">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                {tr('invoice.new.information', 'Information')}
+              </p>
+              <dl className="space-y-4 text-sm">
+                <div>
+                  <dt className="text-[11px] text-gray-400">{tr('invoice.new.infoClient', 'Client')}</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900">{clientFullName(selectedClient)}</dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-gray-400">
+                    {tr('invoice.new.infoInvoiceEmail', 'Invoice email')}
+                  </dt>
+                  <dd className="mt-1">
+                    <input
+                      type="email"
+                      value={invoiceEmail}
+                      onChange={(e) => setInvoiceEmail(e.target.value)}
+                      onBlur={() => void commitInvoiceEmail(invoiceEmail)}
+                      placeholder={tr('invoice.new.infoInvoiceEmailPh', 'client@email.com')}
+                      className={`w-full rounded-md px-2 py-1.5 text-sm ring-1 ring-inset focus:ring-2 focus:ring-accent-500/30 ${
+                        invoiceEmail.trim()
+                          ? 'bg-gray-50 text-gray-900 ring-gray-200'
+                          : 'bg-amber-50 text-gray-900 ring-amber-200'
+                      }`}
+                    />
+                    {!invoiceEmail.trim() && (
+                      <p className="mt-1 text-[11px] text-amber-800">
+                        {tr(
+                          'invoice.new.infoInvoiceEmailRequired',
+                          'Required to send. Saved as the client’s invoice email.',
+                        )}
+                      </p>
+                    )}
+                    {!!selectedClient?.email &&
+                      !selectedClient?.billing_email &&
+                      invoiceEmail.trim() === String(selectedClient.email).trim() && (
+                        <p className="mt-1 text-[11px] text-gray-400">
+                          {tr(
+                            'invoice.new.infoUsingContactEmail',
+                            'Using contact email. Change it to set a dedicated invoice email.',
+                          )}
+                        </p>
+                      )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-gray-400">
+                    {tr('invoice.new.issueDate', 'Invoice date')}
+                  </dt>
+                  <dd className="mt-1">
+                    <input
+                      type="date"
+                      value={form.issue_date}
+                      onChange={(e) => setForm((p) => ({ ...p, issue_date: e.target.value }))}
+                      className="w-full rounded-md bg-gray-50 px-2 py-1.5 text-sm ring-1 ring-inset ring-gray-200 focus:ring-2 focus:ring-accent-500/30"
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-gray-400">{tr('invoice.new.previewTotal', 'Total')}</dt>
+                  <dd className="mt-0.5 text-base font-semibold tabular-nums text-primary-900">
+                    {formatMoney(total, form.currency)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </aside>
+          </div>
         </form>
       </div>
+
+      {sendModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
+            {sendConfirmStep === 'confirm' ? (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {tr('invoice.detail.areYouSure', 'Are you sure?')}
+                </h2>
+                <p className="mt-2 text-sm text-gray-600">
+                  {tr(
+                    'invoice.detail.sendConfirm',
+                    'Once you send this invoice, there is no going back. The invoice will be marked as sent and cannot be edited. The invoice is final as is.',
+                  )}
+                </p>
+                <div className="mt-6 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSendConfirmStep('form')}
+                    disabled={sending}
+                    className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {tr('invoice.detail.goBack', 'Go back')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmCreateAndSend()}
+                    disabled={sending}
+                    className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
+                  >
+                    {sending ? (
+                      <>
+                        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        {tr('invoice.detail.sending', 'Sending…')}
+                      </>
+                    ) : (
+                      <>
+                        <PaperAirplaneIcon className="h-4 w-4" />
+                        {tr('invoice.detail.yesSend', 'Yes, send')}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {tr('invoice.detail.sendTitle', 'Send invoice to client')}
+                </h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  {tr(
+                    'invoice.new.sendAfterCreateHelp',
+                    'Creates the invoice and emails the client a link to the e-invoice. After sending you will land on the invoice page.',
+                  )}
+                </p>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      {tr('invoice.detail.sendToLabel', 'To (email)')}
+                    </label>
+                    <input
+                      type="email"
+                      value={sendTo}
+                      onChange={(e) => setSendTo(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      {tr('invoice.detail.sendSubjectLabel', 'Subject (preview)')}
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={sendSubject}
+                      className="mt-1 w-full cursor-default rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      {tr('invoice.detail.sendBodyLabel', 'Message (preview)')}
+                    </label>
+                    <textarea
+                      readOnly
+                      value={sendBody}
+                      rows={4}
+                      className="mt-1 w-full cursor-default resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      {tr('invoice.detail.sendCcLabel', 'CC (optional)')}
+                    </label>
+                    <input
+                      type="email"
+                      value={sendCc}
+                      onChange={(e) => setSendCc(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                    />
+                  </div>
+                </div>
+                {sendError && <p className="mt-3 text-sm text-red-600">{sendError}</p>}
+                <div className="mt-6 flex flex-col gap-3">
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSendModalOpen(false)
+                        setSendConfirmStep('form')
+                      }}
+                      disabled={sending}
+                      className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {tr('invoice.detail.cancel', 'Cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!sendTo.trim()) {
+                          setSendError(tr('invoice.detail.enterEmail', 'Please enter a recipient email.'))
+                          return
+                        }
+                        setSendError(null)
+                        setSendConfirmStep('confirm')
+                      }}
+                      disabled={sending}
+                      className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-700 disabled:opacity-50"
+                    >
+                      <PaperAirplaneIcon className="h-4 w-4" />
+                      {tr('invoice.detail.continueToSend', 'Continue')}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void markSentWithoutEmail()}
+                    disabled={sending}
+                    className="text-center text-xs font-medium text-gray-400 transition hover:text-gray-700 disabled:opacity-50"
+                  >
+                    {sending
+                      ? tr('invoice.detail.sending', 'Sending…')
+                      : tr('invoice.new.sendMyself', 'I’ll send it myself')}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </AppLayout>
   )
 }

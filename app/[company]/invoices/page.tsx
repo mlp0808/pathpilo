@@ -345,6 +345,8 @@ export default function InvoicesListPage() {
 
   const base = companySlug ? `/${companySlug}/invoices` : '/invoices'
   const settingsHref = companySlug ? `/${companySlug}/settings/invoice-options` : '/settings/invoice-options'
+  const invoiceOpenHref = (inv: { id: number; status?: string | null }) =>
+    (inv.status || 'draft') === 'draft' ? `${base}/new?draft=${inv.id}` : `${base}/${inv.id}`
 
   // While we resolve the gate, render nothing heavy — just a quiet spinner.
   if (invoicingEnabled === null) {
@@ -596,11 +598,21 @@ export default function InvoicesListPage() {
                   </thead>
                   <tbody>
                     {invoices.map((inv) => (
-                      <tr key={inv.id} className="border-b border-gray-100 hover:bg-gray-50/80">
-                        <td className="px-4 py-3">
-                          <Link href={`${base}/${inv.id}`} className="font-medium text-primary-600 hover:underline">
-                            {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
-                          </Link>
+                      <tr
+                        key={inv.id}
+                        role="link"
+                        tabIndex={0}
+                        onClick={() => router.push(invoiceOpenHref(inv))}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            router.push(invoiceOpenHref(inv))
+                          }
+                        }}
+                        className="cursor-pointer border-b border-gray-100 hover:bg-gray-50/80"
+                      >
+                        <td className="px-4 py-3 font-medium text-primary-600">
+                          {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
                         </td>
                         <td className="px-4 py-3 text-gray-800 max-w-[200px] truncate">{inv.title || '—'}</td>
                         <td className="px-4 py-3 text-gray-700">{inv.client_name}</td>
@@ -630,7 +642,7 @@ export default function InvoicesListPage() {
               {invoices.map((inv) => (
                 <li key={inv.id} className="tap-press">
                   <Link
-                    href={`${base}/${inv.id}`}
+                    href={invoiceOpenHref(inv)}
                     className="block px-4 py-3 hover:bg-gray-50 active:bg-gray-100 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">

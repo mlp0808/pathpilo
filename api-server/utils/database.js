@@ -36,3 +36,4 @@ process.on('SIGINT', () => {
 });
 
 module.exports = { pool };
+

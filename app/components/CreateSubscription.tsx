@@ -14,7 +14,7 @@ import {
 } from './ClientStandardNotesPicker'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
-import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
+import AddClientInlineForm, { generateGuestClientName, initialNewClientData } from './AddClientInlineForm'
 import { SchedulePanel, ForecastPanel } from './SubscriptionPanels'
 import {
   buildWeeklyForecast,
@@ -586,7 +586,7 @@ export default function CreateSubscription({
   return (
     <>
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl shadow-lg max-w-2xl w-full min-h-[520px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200">
+        <div className="bg-white rounded-2xl shadow-lg max-w-2xl w-full min-h-[640px] max-h-[98vh] flex flex-col overflow-hidden border border-gray-200">
 
           {/* ── Header ─────────────────────────────────────────── */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
@@ -680,7 +680,7 @@ export default function CreateSubscription({
                             setIsAddingNewClient(false)
                           }
                         }}
-                        onCancel={() => { setIsAddingNewClient(false); setNewClientData({ ...initialNewClientData }) }}
+                        onCancel={() => { setIsAddingNewClient(false); setNewClientData({ ...initialNewClientData, name: generateGuestClientName() }) }}
                       />
                     ) : (
                       <div className="relative dropdown-container" ref={clientDropdownTriggerRef}>
@@ -924,7 +924,7 @@ export default function CreateSubscription({
               <div className="text-xs text-gray-400 mt-0.5">{client.address ? `${client.address}, ${client.city}` : t('app.jobView.noAddress', 'No address')}</div>
             </button>
           )) : <div className="px-4 py-3 text-sm text-gray-400">{t('app.createJob.noClientsFound', 'No clients found')}</div>}
-          <button onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
+          <button onClick={() => { setIsAddingNewClient(true); setNewClientData({ ...initialNewClientData, name: generateGuestClientName() }); setShowClientDropdown(false); setClientSearch('') }}
             className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 sticky bottom-0">
             <div className="text-sm font-semibold text-accent-600 flex items-center gap-2">
               <PlusIcon className="w-4 h-4" />{t('app.createJob.addNewClient', 'Add new client')}

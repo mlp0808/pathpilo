@@ -82,17 +82,58 @@ async function removeSubscriptionCompletely(db, companyId, subscriptionId, optio
 }
 
 /**
+ * Put every active subscription for a client on hold: deactivate + pause, and
+ * remove all future non-completed jobs (planned or not). Past/completed work stays.
+ *
  * @param {import('pg').Pool | import('pg').PoolClient} db
- * @returns {Promise<number>} rows updated
+ * @returns {Promise<{ deactivated: number, deletedJobs: number }>}
  */
-async function deactivateSubscriptionsForClient(db, companyId, clientId) {
+async function deactivateSubscriptionsForClient(db, companyId, clientId, options = {}) {
+  const asOf = options.asOfDate || todayYmdUtc();
+  const deletedJobs = await deleteFutureNonCompletedJobsForClient(db, companyId, clientId, {
+    asOfDate: asOf,
+  });
   const result = await db.query(
     `UPDATE recurring_jobs
-     SET is_active = false, updated_at = NOW()
+     SET is_active = false,
+         paused_at = COALESCE(paused_at, $3::date),
+         updated_at = NOW()
      WHERE company_id = $1 AND client_id = $2 AND is_active = true`,
+    [companyId, clientId, asOf]
+  );
+  return { deactivated: result.rowCount || 0, deletedJobs };
+}
+
+/**
+ * Pause every active subscription for a client (keep is_active) and clear future jobs.
+ * Use when the client is "on hold" but still in the CRM.
+ *
+ * @param {import('pg').Pool | import('pg').PoolClient} db
+ * @returns {Promise<{ paused: number, deletedJobs: number }>}
+ */
+async function pauseSubscriptionsForClient(db, companyId, clientId, options = {}) {
+  const asOf = options.asOfDate || todayYmdUtc();
+  const subs = await db.query(
+    `SELECT id FROM recurring_jobs
+     WHERE company_id = $1 AND client_id = $2 AND is_active = true AND paused_at IS NULL`,
     [companyId, clientId]
   );
-  return result.rowCount || 0;
+  let deletedJobs = 0;
+  for (const row of subs.rows) {
+    deletedJobs += await deleteFutureNonCompletedJobsForSubscription(
+      db,
+      companyId,
+      Number(row.id),
+      { asOfDate: asOf },
+    );
+  }
+  const result = await db.query(
+    `UPDATE recurring_jobs
+     SET paused_at = $3::date, updated_at = NOW()
+     WHERE company_id = $1 AND client_id = $2 AND is_active = true AND paused_at IS NULL`,
+    [companyId, clientId, asOf]
+  );
+  return { paused: result.rowCount || 0, deletedJobs };
 }
 
 module.exports = {
@@ -101,4 +142,5 @@ module.exports = {
   deleteFutureNonCompletedJobsForClient,
   removeSubscriptionCompletely,
   deactivateSubscriptionsForClient,
+  pauseSubscriptionsForClient,
 };

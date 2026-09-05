@@ -21,3 +21,4 @@ export const API_ENDPOINTS = {
   // Advanced features
   SUBSCRIPTIONS: '/subscriptions',
 } as const;
+

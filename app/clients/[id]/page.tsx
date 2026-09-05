@@ -1158,7 +1158,16 @@ export default function ClientDetailPage() {
                             <tr
                               key={invoice.id}
                               className="cursor-pointer transition-colors hover:bg-accent-50/50"
-                              onClick={() => router.push(`/${companySlug}/invoices/${invoice.id}?from=client&clientId=${clientId}&clientName=${encodeURIComponent(fullName)}`)}
+                              onClick={() => {
+                                const status = invoice.status || 'draft'
+                                if (status === 'draft') {
+                                  router.push(`/${companySlug}/invoices/new?draft=${invoice.id}`)
+                                } else {
+                                  router.push(
+                                    `/${companySlug}/invoices/${invoice.id}?from=client&clientId=${clientId}&clientName=${encodeURIComponent(fullName)}`,
+                                  )
+                                }
+                              }}
                             >
                               <td className="whitespace-nowrap px-4 py-3.5 text-sm font-semibold text-gray-900">#{invoice.invoice_number}</td>
                               <td className="whitespace-nowrap px-4 py-3.5">
@@ -1182,8 +1191,15 @@ export default function ClientDetailPage() {
                                       <button onClick={() => { setOpenInvoiceMenuId(null); downloadPdf(invoice.id, invoice.invoice_number_display || invoice.invoice_number) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Download PDF</button>
                                       {invoice.status === 'draft' && (
                                         <>
-                                          <button onClick={() => { setOpenInvoiceMenuId(null); openSendInvoice(invoice) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Send to client…</button>
-                                          <button onClick={() => { setOpenInvoiceMenuId(null); markSentExternal(invoice.id) }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors">Mark as sent (external)</button>
+                                          <button
+                                            onClick={() => {
+                                              setOpenInvoiceMenuId(null)
+                                              router.push(`/${companySlug}/invoices/new?draft=${invoice.id}`)
+                                            }}
+                                            className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors"
+                                          >
+                                            Open draft…
+                                          </button>
                                           <div className="border-t border-gray-100" />
                                           <button onClick={() => { setOpenInvoiceMenuId(null); setDeleteJobAction('restore'); setDeleteInvoiceId(invoice.id) }} className="w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">Delete invoice…</button>
                                         </>

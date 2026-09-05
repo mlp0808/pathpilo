@@ -1,13 +1,17 @@
 'use client'
 
-import { useState, useEffect, useRef, useLayoutEffect } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon, ArrowLeftIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
-import AddClientInlineForm, { initialNewClientData } from './AddClientInlineForm'
+import AddClientInlineForm, {
+  guestClientFromLocation,
+  generateGuestClientName,
+  initialNewClientData,
+} from './AddClientInlineForm'
 import TimePicker from './TimePicker'
 import { useAppI18n } from './I18nProvider'
 import {
@@ -17,6 +21,11 @@ import {
 import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
 import DashedPickerTrigger from './DashedPickerTrigger'
 import JobFormAttachmentBar from './JobFormAttachmentBar'
+import { SchedulePanel } from './SubscriptionPanels'
+import {
+  todayYmdLocal,
+  firstOccurrenceOnOrAfterAnchor,
+} from '../utils/subscriptionHelpers'
 
 const MOBILE_CREATE_JOB_MQ = '(max-width: 1023px)'
 const CREATE_JOB_DROPDOWN_MAX_HEIGHT = 240
@@ -388,6 +397,10 @@ interface Service {
   title: string
   price: number
   duration_minutes: number
+  default_quantity?: number
+  group_id?: number | null
+  group_name?: string | null
+  group_meta_fields?: string[] | null
 }
 
 interface Client {
@@ -439,29 +452,45 @@ interface SelectedService {
   duration_minutes: number
   customPrice: string
   customDuration: number
+  quantity: number
+  hasQuantity?: boolean
+  hasDuration?: boolean
   isCustom?: boolean
   customTitle?: string
+  group_meta_fields?: string[]
 }
 
 interface CreateJobProps {
   isOpen: boolean
   onClose: () => void
-  onJobCreated?: (info?: { scheduledDate?: string | null }) => void
-  initialDate?: string
+  onJobCreated?: (info?: {
+    scheduledDate?: string | null
+    assignedUserId?: number | null
+    jobId?: number
+    clientId?: number | null
+  }) => void
+  initialDate?: string | null
   initialAssignedUserId?: number | null
   mode?: 'job' | 'subscription'
   initialClientId?: number
   lockClient?: boolean
+  /**
+   * When adding a job onto a route/round: date + employee are fixed to the
+   * route placement (including null = "Any") and cannot be changed mid-create.
+   */
+  lockSchedule?: boolean
   /** Start the "new client" flow with these fields prefilled (e.g. picked a map location). */
   initialNewClient?: {
     name?: string
     address?: string
     zip_code?: string
     city?: string
+    lat?: number | null
+    lng?: number | null
   } | null
 }
 
-export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false, initialNewClient }: CreateJobProps) {
+export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, initialAssignedUserId, mode = 'job', initialClientId, lockClient = false, lockSchedule = false, initialNewClient }: CreateJobProps) {
   const { t, locale } = useAppI18n()
   const companyCountryCode = useCompanyCountryCode()
   const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
@@ -527,6 +556,13 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [dayOfWeek, setDayOfWeek] = useState<number>(1) // Monday
   const [dayOfMonth, setDayOfMonth] = useState<number>(1)
   const [intervalValue, setIntervalValue] = useState<number>(1)
+  const [intervalWeeks, setIntervalWeeks] = useState(1)
+  const [intervalMonths, setIntervalMonths] = useState(1)
+  const [customInterval, setCustomInterval] = useState('')
+  const [startAsap, setStartAsap] = useState(true)
+  const [customStartingDate, setCustomStartingDate] = useState('')
+  /** Job modal: details form ↔ recurring schedule slide. */
+  const [jobFormSlide, setJobFormSlide] = useState<'details' | 'schedule'>('details')
   const [expandedSections, setExpandedSections] = useState({ client: true, job: false, schedule: false, recurring: false })
   const [jobType, setJobType] = useState<'new' | 'redo'>('new')
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
@@ -543,6 +579,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     address: '',
     zip_code: '',
     city: '',
+    lat: null as number | null,
+    lng: null as number | null,
     email: '',
     phone: ''
   })
@@ -583,10 +621,22 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     }
   }, [isOpen])
 
+  // Reset form only when the modal opens — never while it's open.
+  // Parents often pass a fresh `initialNewClient={{...}}` on every render
+  // (map hover/overlays); depending on that object would wipe typed name fields.
+  const wasOpenRef = useRef(false)
   useEffect(() => {
-    if (isOpen) {
-      // Prefill date/user when provided (e.g. when opened from the calendar column "Add job")
-      setJobDate(initialDate ? String(initialDate).split('T')[0] : (mode === 'job' ? new Date().toISOString().split('T')[0] : ''))
+    const justOpened = isOpen && !wasOpenRef.current
+    wasOpenRef.current = isOpen
+    if (!justOpened) return
+
+      // Prefill date/user when provided (e.g. when opened from the calendar column "Add job").
+      // Route/round lock: keep null as "Any" (do not default to today).
+      setJobDate(
+        initialDate
+          ? String(initialDate).split('T')[0]
+          : (lockSchedule ? '' : (mode === 'job' ? new Date().toISOString().split('T')[0] : '')),
+      )
       setJobTimeFrom('')
       setJobTimeTo('')
       setJobNote('')
@@ -597,6 +647,16 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setServiceSearch('')
       setClientSearch('')
       setCreatedJobId(null)
+      setJobFormSlide('details')
+      setRecurrenceType('weekly')
+      setDayOfWeek(1)
+      setDayOfMonth(1)
+      setIntervalValue(1)
+      setIntervalWeeks(1)
+      setIntervalMonths(1)
+      setCustomInterval('')
+      setStartAsap(true)
+      setCustomStartingDate('')
       setExpandedSections(initialClientId
         ? { client: false, job: true, schedule: false, recurring: false }
         : { client: true, job: false, schedule: false, recurring: false })
@@ -604,39 +664,17 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
       setSelectedPastJob(null)
       setEditingPrice(null)
       setEditingDuration(null)
-      // When opened from a picked map location, jump straight into the
-      // "new client" flow with the address prefilled so the only thing left
-      // is naming the client.
+      // Map location without a client → guest (Guest#…) so a job can be
+      // scheduled without filling contact details. Name acts like a placeholder.
       if (initialNewClient && !initialClientId) {
         setIsAddingNewClient(true)
-        setNewClientData({
-          client_type: 'person',
-          name: initialNewClient.name || '',
-          last_name: '',
-          company_number: '',
-          address: initialNewClient.address || '',
-          zip_code: initialNewClient.zip_code || '',
-          city: initialNewClient.city || '',
-          email: '',
-          phone: ''
-        })
+        setNewClientData(guestClientFromLocation(initialNewClient))
         setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
       } else {
         setIsAddingNewClient(false)
-        setNewClientData({
-          client_type: 'person',
-          name: '',
-          last_name: '',
-          company_number: '',
-          address: '',
-          zip_code: '',
-          city: '',
-          email: '',
-          phone: ''
-        })
+        setNewClientData({ ...initialNewClientData })
       }
-    }
-  }, [isOpen, initialDate, initialAssignedUserId])
+  }, [isOpen, initialDate, initialAssignedUserId, initialClientId, initialNewClient, lockSchedule, mode])
 
   
   useEffect(() => {
@@ -838,10 +876,20 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   }
 
   const addService = (service: Service) => {
+    const meta = Array.isArray(service.group_meta_fields) ? service.group_meta_fields : ['price', 'duration']
+    const hasQuantity = meta.includes('quantity')
+    const hasDuration = meta.includes('duration')
+    const qty = hasQuantity
+      ? (Number(service.default_quantity) > 0 ? Number(service.default_quantity) : 1)
+      : 1
     setSelectedServices([...selectedServices, {
       ...service,
       customPrice: service.price.toString(),
-      customDuration: service.duration_minutes
+      customDuration: hasDuration ? service.duration_minutes : 0,
+      quantity: qty,
+      hasQuantity,
+      hasDuration,
+      group_meta_fields: meta,
     }])
     setServiceSearch('')
     setShowServiceDropdown(false)
@@ -874,6 +922,9 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         duration_minutes: result.durationMinutes,
         customPrice: String(result.price),
         customDuration: result.durationMinutes,
+        quantity: 1,
+        hasQuantity: false,
+        hasDuration: true,
         isCustom: true,
         customTitle: result.title,
       },
@@ -943,12 +994,80 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const jobDateOnly = jobDate ? String(jobDate).split('T')[0] : ''
   const jobDateDisplay = jobDateOnly ? formatJobDateLines(jobDateOnly, locale) : null
 
+  const pricePerVisit = useMemo(
+    () => selectedServices.reduce((sum, s) => {
+      const unit = parseFloat(String(s.customPrice)) || Number(s.price) || 0
+      const qty = s.hasQuantity ? (Number(s.quantity) || 1) : 1
+      return sum + unit * qty
+    }, 0),
+    [selectedServices],
+  )
+  const durationPerVisit = useMemo(
+    () => selectedServices.reduce((sum, s) => {
+      if (s.hasDuration === false) return sum
+      return sum + (Number(s.customDuration) || Number(s.duration_minutes) || 0)
+    }, 0),
+    [selectedServices],
+  )
+  const visitsPerYear = useMemo(() => {
+    if (recurrenceType === 'monthly') return Math.round(12 / Math.max(1, intervalMonths))
+    return Math.round(52 / Math.max(1, intervalWeeks))
+  }, [recurrenceType, intervalMonths, intervalWeeks])
+  const revenuePerYear = useMemo(() => pricePerVisit * visitsPerYear, [pricePerVisit, visitsPerYear])
+
+  const effectiveStartingDate = useMemo(
+    () => (startAsap ? todayYmdLocal() : customStartingDate),
+    [startAsap, customStartingDate],
+  )
+  const firstVisitYmd = useMemo(() => {
+    const anchor = startAsap ? todayYmdLocal() : customStartingDate.trim()
+    if (!anchor) return ''
+    return firstOccurrenceOnOrAfterAnchor(
+      anchor,
+      recurrenceType,
+      dayOfWeek,
+      intervalWeeks,
+      dayOfMonth,
+      intervalMonths,
+    )
+  }, [startAsap, customStartingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths])
+  const startingDateForApi = useMemo(
+    () => (startAsap ? firstVisitYmd : customStartingDate.trim()),
+    [startAsap, firstVisitYmd, customStartingDate],
+  )
+
+  const canOpenRecurringSlide = !!(
+    (selectedClient || (isAddingNewClient && newClientData.name.trim()))
+    && selectedServices.length > 0
+  )
+
+  const openRecurringSlide = () => {
+    if (!canOpenRecurringSlide) return
+    const anchor = jobDateOnly || todayYmdLocal()
+    const [y, m, d] = anchor.split('-').map(Number)
+    const parsed = y && m && d ? new Date(y, m - 1, d) : new Date()
+    setDayOfWeek(parsed.getDay())
+    setDayOfMonth(Math.min(28, parsed.getDate()))
+    if (jobDateOnly && jobDateOnly > todayYmdLocal()) {
+      setStartAsap(false)
+      setCustomStartingDate(jobDateOnly)
+    } else {
+      setStartAsap(true)
+      setCustomStartingDate(jobDateOnly || todayYmdLocal())
+    }
+    setJobFormSlide('schedule')
+  }
+
   const removeService = (serviceId: number) => {
     setSelectedServices(selectedServices.filter(s => s.id !== serviceId))
   }
 
-  const updateService = (serviceId: number, field: 'customPrice' | 'customDuration', value: string | number) => {
-    setSelectedServices(selectedServices.map(s => 
+  const updateService = (
+    serviceId: number,
+    field: 'customPrice' | 'customDuration' | 'quantity',
+    value: string | number,
+  ) => {
+    setSelectedServices(selectedServices.map(s =>
       s.id === serviceId ? { ...s, [field]: value } : s
     ))
   }
@@ -962,8 +1081,13 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   }
   
   const handleSubmitJob = async () => {
+    const createAsSubscription = mode === 'subscription' || jobFormSlide === 'schedule'
     const hasValidServices = jobType === 'new' ? selectedServices.length > 0 : true
-    if (!selectedUserId || !hasValidServices || (jobType === 'redo' && !selectedPastJob)) {
+    // Route/round: date+employee may be "Any" (null). Scheduling / subscriptions still require them.
+    const scheduleOk = createAsSubscription
+      ? !!(startAsap ? firstVisitYmd : customStartingDate.trim())
+      : (lockSchedule || (selectedUserId != null && !!jobDate))
+    if (!scheduleOk || !hasValidServices || (jobType === 'redo' && !selectedPastJob)) {
       return
     }
     
@@ -1001,6 +1125,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             address: dataToUse.address || null,
             zip_code: dataToUse.zip_code || null,
             city: dataToUse.city || null,
+            lat: dataToUse.lat ?? null,
+            lng: dataToUse.lng ?? null,
             email: dataToUse.email || null,
             phone: dataToUse.phone || null
           })
@@ -1017,30 +1143,51 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         clientId = clientData.client.id
       }
       
-      if (mode === 'subscription') {
-        // Create subscription
+      if (createAsSubscription) {
+        const startDate = startingDateForApi || (jobDate ? jobDate.split('T')[0] : null)
+        if (!startDate) {
+          alert(t('app.subscription.errStartingDateRequired', 'Please set a starting date'))
+          setIsSubmitting(false)
+          return
+        }
+        const clientName = selectedClient
+          ? (selectedClient.client_type === 'company'
+              ? selectedClient.name
+              : `${selectedClient.name}${selectedClient.last_name ? ` ${selectedClient.last_name}` : ''}`.trim())
+          : (newClientData.name || '')
+        const serviceTitle = selectedServices[0]?.isCustom
+          ? (selectedServices[0].customTitle?.trim() || selectedServices[0].title)
+          : selectedServices[0]?.title
+        const subscriptionTitle = (serviceTitle && String(serviceTitle).trim())
+          || (clientName ? `${clientName}` : t('app.subscription.fallbackTitle', 'Subscription'))
+
+        const intervalForApi = recurrenceType === 'monthly' ? intervalMonths : intervalWeeks
         const subscriptionData = {
-          title: '',
+          title: subscriptionTitle,
           client_id: clientId,
-          assigned_user_id: selectedUserId,
+          assigned_user_id: selectedUserId || null,
           services: selectedServices.map(service => (
             service.isCustom
               ? {
                   custom_title: (service.customTitle && service.customTitle.trim().length > 0) ? service.customTitle : 'Custom task',
                   custom_price: parseFloat(service.customPrice) || 0,
-                  custom_duration: service.customDuration || 0
+                  custom_duration: service.customDuration || 0,
+                  quantity: service.hasQuantity ? (Number(service.quantity) || 1) : 1,
                 }
               : {
             service_id: service.id,
             custom_price: parseFloat(service.customPrice) || service.price,
-            custom_duration: service.customDuration
+            custom_duration: service.customDuration,
+            quantity: service.hasQuantity ? (Number(service.quantity) || 1) : 1,
                 }
           )),
-          starting_date: jobDate ? jobDate.split('T')[0] : null,
+          starting_date: startDate,
           recurrence_type: recurrenceType,
-          day_of_week: recurrenceType === 'weekly' ? dayOfWeek : null,
+          day_of_week: recurrenceType === 'weekly'
+            ? dayOfWeek
+            : new Date(`${startDate}T12:00:00`).getDay(),
           day_of_month: recurrenceType === 'monthly' ? dayOfMonth : null,
-          interval_value: intervalValue,
+          interval_value: intervalForApi > 0 ? intervalForApi : intervalValue,
           scheduled_time_from: jobTimeFrom && jobTimeFrom.trim() !== '' ? jobTimeFrom : null,
           scheduled_time_to: jobTimeTo && jobTimeTo.trim() !== '' ? jobTimeTo : null,
           note: jobNote.trim() || null
@@ -1058,36 +1205,45 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         const data = await response.json()
 
         if (response.ok) {
-          onJobCreated?.()
+          onJobCreated?.({
+            scheduledDate: startDate,
+            assignedUserId: selectedUserId,
+            clientId: clientId != null ? Number(clientId) : null,
+          })
           onClose()
         } else {
           console.error('Error creating subscription:', data.error)
           alert(`Error creating subscription: ${data.error || 'Unknown error'}`)
         }
       } else {
-        // Create regular job
+        // Create regular job — null date/employee = "Any" (draft / unplaced)
         const jobData = {
           title: '',
           client_id: clientId,
-          assigned_user_id: selectedUserId,
+          assigned_user_id: selectedUserId == null ? null : Number(selectedUserId),
           services: jobType === 'new' ? selectedServices.map(service => (
             service.isCustom
               ? {
                   custom_title: (service.customTitle && service.customTitle.trim().length > 0) ? service.customTitle : 'Custom task',
                   custom_price: parseFloat(service.customPrice) || 0,
-                  custom_duration: service.customDuration || 0
+                  custom_duration: service.customDuration || 0,
+                  quantity: service.hasQuantity ? (Number(service.quantity) || 1) : 1,
                 }
               : {
             service_id: service.id,
             custom_price: parseFloat(service.customPrice) || service.price,
-            custom_duration: service.customDuration
+            custom_duration: service.customDuration,
+            quantity: service.hasQuantity ? (Number(service.quantity) || 1) : 1,
                 }
           )) : (selectedPastJob?.services?.map(service => ({
             service_id: service.service_id,
             custom_price: service.custom_price,
-            custom_duration: service.custom_duration_minutes
+            custom_duration: service.custom_duration_minutes,
+            quantity: 1,
           })) || []),
-          scheduled_date: jobDate ? jobDate.split('T')[0] : null,
+          scheduled_date: jobDate && String(jobDate).trim() !== ''
+            ? String(jobDate).split('T')[0]
+            : null,
           scheduled_time_from: jobTimeFrom && jobTimeFrom.trim() !== '' ? jobTimeFrom : null,
           scheduled_time_to: jobTimeTo && jobTimeTo.trim() !== '' ? jobTimeTo : null,
           note: jobNote.trim() || null
@@ -1106,7 +1262,12 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
         if (response.ok) {
           setCreatedJobId(data.job.id)
-          onJobCreated?.({ scheduledDate: jobData.scheduled_date })
+          await onJobCreated?.({
+            scheduledDate: jobData.scheduled_date,
+            assignedUserId: selectedUserId,
+            jobId: data.job?.id != null ? Number(data.job.id) : undefined,
+            clientId: clientId != null ? Number(clientId) : null,
+          })
           onClose()
         } else {
           console.error('Error creating job:', data.error)
@@ -1138,22 +1299,58 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
   if (!isOpen) return null
 
-  // Job-only: subscription-style single slide with date at bottom
-  if (mode === 'job') {
+  // Modern sheet: one-time jobs + subscription create (mandatory schedule step).
+  if (mode === 'job' || mode === 'subscription') {
+    const isSubscriptionFlow = mode === 'subscription'
+    const onScheduleSlide = jobFormSlide === 'schedule'
     return (
       <>
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 sm:p-4 animate-fadeIn" onClick={onClose}>
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[98vh] sm:min-h-[660px] flex flex-col overflow-hidden animate-sheet-in-bottom sm:animate-slideDown pb-safe" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-2xl w-full max-h-[94vh] sm:max-h-[98vh] sm:min-h-[780px] flex flex-col overflow-hidden animate-sheet-in-bottom sm:animate-slideDown pb-safe" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-6 border-b border-gray-100 bg-gradient-to-r from-white to-primary-50/30">
-              <div className="space-y-0.5">
-                <h2 className="text-2xl font-bold text-primary-800 tracking-tight">{t('app.jobs.create.title')}</h2>
-                <p className="text-sm text-gray-500 font-medium">{t('app.createJob.subtitle', 'Schedule a one-time job')}</p>
+              <div className="flex items-start gap-3 min-w-0">
+                {onScheduleSlide && (
+                  <button
+                    type="button"
+                    onClick={() => setJobFormSlide('details')}
+                    className="mt-0.5 w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all duration-200 shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md flex-shrink-0"
+                    aria-label={t('app.createJob.back', 'Back')}
+                  >
+                    <ArrowLeftIcon className="w-5 h-5 text-gray-600" />
+                  </button>
+                )}
+                <div className="space-y-0.5 min-w-0">
+                  <h2 className="text-2xl font-bold text-primary-800 tracking-tight truncate">
+                    {onScheduleSlide
+                      ? t('app.createJob.makeRecurringTitle', 'Make recurring')
+                      : isSubscriptionFlow
+                        ? t('app.quickAdd.subscription', 'New subscription')
+                        : t('app.jobs.create.title')}
+                  </h2>
+                  <p className="text-sm text-gray-500 font-medium">
+                    {onScheduleSlide
+                      ? t('app.createJob.makeRecurringSubtitle', 'Choose how often this job should repeat')
+                      : isSubscriptionFlow
+                        ? t('app.createJob.subscriptionSubtitle', 'Add client and services, then set the schedule')
+                        : t('app.createJob.subtitle', 'Schedule a one-time job')}
+                  </p>
+                </div>
               </div>
-              <button onClick={onClose} className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all duration-200 ease-out shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group">
+              <button onClick={onClose} className="w-10 h-10 bg-white rounded-xl flex items-center justify-center hover:bg-gray-50 transition-all duration-200 ease-out shadow-sm border border-gray-200 hover:border-gray-300 hover:shadow-md group flex-shrink-0">
                 <XMarkIcon className="w-5 h-5 text-gray-500 group-hover:text-gray-700 transition-colors" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 flex flex-col bg-gradient-to-b from-white to-gray-50/50">
+
+            <div className="relative flex-1 min-h-0 overflow-hidden bg-gradient-to-b from-white to-gray-50/50">
+              <div
+                className="absolute inset-0 flex transition-transform duration-300 ease-out will-change-transform"
+                style={{
+                  width: '200%',
+                  transform: onScheduleSlide ? 'translateX(-50%)' : 'translateX(0)',
+                }}
+              >
+                {/* ── Slide 1: job details (unchanged layout) ── */}
+                <div className="w-1/2 h-full min-h-0 flex flex-col overflow-hidden">
               <div ref={createJobScrollRef} className="flex-1 min-h-0 overflow-y-auto px-6 pt-6 pb-4">
               {/* Client */}
               <div className="space-y-4 pb-2">
@@ -1175,7 +1372,6 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     </button>
                   </div>
                 ) : isAddingNewClient ? (
-                  <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
                     <AddClientInlineForm
                       data={newClientData}
                       onChange={setNewClientData}
@@ -1186,17 +1382,24 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             id: -1,
                             name: newClientData.name,
                             last_name: newClientData.last_name,
-                            client_type: newClientData.client_type
+                            client_type: newClientData.client_type,
+                            address: newClientData.address,
+                            zip_code: newClientData.zip_code,
+                            city: newClientData.city,
                           })
                           setIsAddingNewClient(false)
                         }
                       }}
                       onCancel={() => {
                         setIsAddingNewClient(false)
-                        setNewClientData(initialNewClientData)
+                        if (initialNewClient && !initialClientId) {
+                          setNewClientData(guestClientFromLocation(initialNewClient))
+                        } else {
+                          setNewClientData({ ...initialNewClientData, name: generateGuestClientName() })
+                        }
                       }}
+                      saveLabel={t('app.createJob.saveSelectClient', 'Continue')}
                     />
-                  </div>
                 ) : (
                   <>
                     <div className="relative dropdown-container" ref={clientDropdownTriggerRef}>
@@ -1232,7 +1435,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="text-xs text-gray-500">{client.address ? `${client.address}, ${client.city}` : 'No address'}</div>
                           </button>
                         )) : null}
-                        <button type="button" onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }} className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 text-sm font-medium text-accent-600 flex items-center gap-2">
+                        <button type="button" onClick={() => { setIsAddingNewClient(true); setNewClientData({ ...initialNewClientData, name: generateGuestClientName() }); setShowClientDropdown(false); setClientSearch('') }} className="w-full px-4 py-3 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 text-sm font-medium text-accent-600 flex items-center gap-2">
                           <PlusIcon className="w-4 h-4" /> Add new client
                         </button>
                       </div>,
@@ -1247,15 +1450,33 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     {selectedServices.length > 0 && (
                       <div className="space-y-2">
                         {selectedServices.map((service) => (
-                          <div key={service.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
-                            <div className="text-sm font-semibold text-primary-800">
+                          <div key={service.id} className="flex items-center justify-between gap-2 p-4 bg-gradient-to-r from-white to-accent-50/20 rounded-xl border border-accent-200/30 shadow-sm">
+                            <div className="text-sm font-semibold text-primary-800 min-w-0 truncate">
                               {service.isCustom ? (service.customTitle?.trim() || service.title) : service.title}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {service.hasQuantity && (
+                                <>
+                                  <input
+                                    type="number"
+                                    min={0.001}
+                                    step="any"
+                                    value={service.quantity}
+                                    onChange={e => updateService(service.id, 'quantity', parseFloat(e.target.value) || 1)}
+                                    className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20"
+                                    title="Quantity"
+                                  />
+                                  <span className="text-xs text-gray-400">×</span>
+                                </>
+                              )}
                               <input type="number" value={typeof service.customPrice === 'string' ? service.customPrice : service.price} onChange={e => updateService(service.id, 'customPrice', e.target.value)} className="w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
                               <span className="text-xs text-gray-500 tabular-nums">{companyCurrency}</span>
-                              <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
-                              <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
+                              {service.hasDuration !== false && (
+                                <>
+                                  <input type="number" value={service.customDuration ?? service.duration_minutes} onChange={e => updateService(service.id, 'customDuration', parseInt(e.target.value) || 0)} className="w-14 px-2 py-1 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-accent-500/20" />
+                                  <span className="text-xs text-gray-500">{t('app.createJob.minutesUnit', 'min')}</span>
+                                </>
+                              )}
                               <button type="button" onClick={() => removeService(service.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><XMarkIcon className="w-4 h-4" /></button>
                             </div>
                           </div>
@@ -1355,12 +1576,22 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             className="dropdown-container bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-y-auto"
                             style={{ position: 'fixed', zIndex: 9999, ...getFixedDropdownPlacement(serviceDropdownRect) }}
                           >
-                            {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => (
+                            {services.filter(s => s.title.toLowerCase().includes(serviceSearch.toLowerCase()) && !selectedServices.find(x => x.id === s.id)).map((service) => {
+                              const meta = Array.isArray(service.group_meta_fields) ? service.group_meta_fields : ['price', 'duration']
+                              const bits = [formatMoney(Number(service.price) || 0, companyCountryCode)]
+                              if (meta.includes('quantity')) bits.push(`qty ${service.default_quantity ?? 1}`)
+                              if (meta.includes('duration') && Number(service.duration_minutes) > 0) {
+                                bits.push(`${service.duration_minutes} ${t('app.createJob.minutesUnit', 'min')}`)
+                              }
+                              return (
                               <button key={service.id} type="button" onClick={() => addService(service)} className="w-full px-4 py-3 text-left hover:bg-accent-50/50 border-b border-gray-100">
                                 <div className="text-sm font-semibold text-primary-800">{service.title}</div>
-                                <div className="text-xs text-gray-500">{formatMoney(Number(service.price) || 0, companyCountryCode)} · {service.duration_minutes} {t('app.createJob.minutesUnit', 'min')}</div>
+                                <div className="text-xs text-gray-500">
+                                  {service.group_name ? `${service.group_name} · ` : ''}{bits.join(' · ')}
+                                </div>
                               </button>
-                            ))}
+                              )
+                            })}
                             <button
                               type="button"
                               onClick={openServiceCreateSheet}
@@ -1379,7 +1610,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               </div>
               </div>
 
-              {/* Date — pinned to bottom of the form body */}
+              {/* Date + optional Make recurring — one-time jobs only */}
+              {!isSubscriptionFlow && (
               <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200/80 bg-gray-50/40">
                 <input
                   ref={jobDateInputRef}
@@ -1390,8 +1622,36 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                   tabIndex={-1}
                   aria-hidden
                 />
-                {jobDateOnly && jobDateDisplay ? (
-                  <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm">
+                <div className="flex items-stretch gap-2.5">
+                  <div className="flex-1 min-w-0">
+                {lockSchedule ? (
+                  <div className="flex items-center gap-3 bg-gray-50 rounded-xl border border-gray-200 p-3.5 h-full">
+                    <div className="w-10 h-10 rounded-xl bg-gray-100 border border-gray-200 flex items-center justify-center flex-shrink-0">
+                      <CalendarDaysIcon className="w-5 h-5 text-gray-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {jobDateOnly && jobDateDisplay ? (
+                        <>
+                          <div className="text-sm font-semibold text-gray-900">{jobDateDisplay.primary}</div>
+                          <div className="text-xs text-gray-500 mt-0.5">{jobDateDisplay.secondary}</div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-sm font-semibold text-gray-500">
+                            {t('app.routePlanner.anyDate', 'Any')}
+                          </div>
+                          <div className="text-xs text-gray-400 mt-0.5">
+                            {t('app.createJob.lockedToRoute', 'Locked to this route')}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 flex-shrink-0">
+                      {t('app.createJob.locked', 'Locked')}
+                    </div>
+                  </div>
+                ) : jobDateOnly && jobDateDisplay ? (
+                  <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm h-full">
                     <div className="w-10 h-10 rounded-xl bg-accent-50 border border-accent-100 flex items-center justify-center flex-shrink-0">
                       <CalendarDaysIcon className="w-5 h-5 text-accent-600" />
                     </div>
@@ -1416,6 +1676,61 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     {t('app.createJob.selectDate', 'Select date')}
                   </DashedPickerTrigger>
                 )}
+                  </div>
+                  {!lockSchedule && (
+                    <button
+                      type="button"
+                      onClick={openRecurringSlide}
+                      disabled={!canOpenRecurringSlide || isSubmitting}
+                      title={
+                        canOpenRecurringSlide
+                          ? t('app.createJob.makeRecurring', 'Make recurring')
+                          : t('app.createJob.makeRecurringNeedDetails', 'Add a client and service first')
+                      }
+                      className="flex-shrink-0 inline-flex flex-col items-center justify-center gap-1 px-3.5 min-w-[5.5rem] rounded-xl border border-gray-200 bg-white text-primary-800 hover:bg-primary-50 hover:border-primary-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                    >
+                      <ArrowPathIcon className="w-[18px] h-[18px]" />
+                      <span className="text-[11px] font-semibold leading-tight text-center">
+                        {t('app.createJob.makeRecurringShort', 'Recurring')}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              )}
+                </div>
+
+                {/* ── Slide 2: recurring schedule ── */}
+                <div className="w-1/2 h-full min-h-0 flex flex-col overflow-hidden">
+                  <div className="flex-1 min-h-0 overflow-y-auto px-6 pt-5 pb-6 space-y-4">
+                    <SchedulePanel
+                      variant="job"
+                      effectiveStartingDate={effectiveStartingDate}
+                      firstVisitYmd={firstVisitYmd}
+                      startAsap={startAsap}
+                      onStartAsapChange={setStartAsap}
+                      customStartingDate={customStartingDate}
+                      onCustomStartingDateChange={setCustomStartingDate}
+                      recurrenceType={recurrenceType}
+                      onRecurrenceTypeChange={setRecurrenceType}
+                      dayOfWeek={dayOfWeek}
+                      onDayOfWeekChange={setDayOfWeek}
+                      intervalWeeks={intervalWeeks}
+                      onIntervalWeeksChange={(n) => { setIntervalWeeks(n); setIntervalValue(n) }}
+                      customInterval={customInterval}
+                      onCustomIntervalChange={setCustomInterval}
+                      dayOfMonth={dayOfMonth}
+                      onDayOfMonthChange={setDayOfMonth}
+                      intervalMonths={intervalMonths}
+                      onIntervalMonthsChange={(n) => { setIntervalMonths(n); setIntervalValue(n) }}
+                      pricePerVisit={pricePerVisit}
+                      durationPerVisit={durationPerVisit}
+                      visitsPerYear={visitsPerYear}
+                      revenuePerYear={revenuePerYear}
+                      countryCode={companyCountryCode}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1424,10 +1739,16 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
               <JobFormAttachmentBar
                 users={users}
                 selectedUserId={selectedUserId}
+                lockEmployee={lockSchedule}
+                anyEmployeeLabel={t('app.routePlanner.anyEmployee', 'Any')}
                 onEmployeeClick={() => {
+                  if (lockSchedule) return
                   if (!selectedUserId || users.length > 1) setShowUserDropdown((v) => !v)
                 }}
-                onClearEmployee={() => setSelectedUserId(null)}
+                onClearEmployee={() => {
+                  if (lockSchedule) return
+                  setSelectedUserId(null)
+                }}
                 userTriggerRef={userDropdownTriggerRef}
                 jobTimeFrom={jobTimeFrom}
                 jobTimeTo={jobTimeTo}
@@ -1445,9 +1766,48 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                 addTimeLabel={t('app.createJob.addTime', 'Add time')}
                 addNoteLabel={t('app.createJob.addNote', 'Add note')}
               />
-              <button type="button" onClick={() => handleSubmitJob()} disabled={(!selectedClient && !isAddingNewClient) || selectedServices.length === 0 || !selectedUserId || !jobDate || isSubmitting} className="flex-shrink-0 px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20">
-                {isSubmitting ? t('app.jobs.create.creating') : t('app.jobs.create.createJob')}
-              </button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isSubscriptionFlow && !onScheduleSlide) {
+                      openRecurringSlide()
+                      return
+                    }
+                    void handleSubmitJob()
+                  }}
+                  disabled={
+                    onScheduleSlide
+                      ? (
+                          (!selectedClient && !isAddingNewClient)
+                          || selectedServices.length === 0
+                          || !(startAsap ? !!firstVisitYmd : !!customStartingDate.trim())
+                          || isSubmitting
+                        )
+                      : isSubscriptionFlow
+                        ? (!canOpenRecurringSlide || isSubmitting)
+                        : (
+                            (!selectedClient && !isAddingNewClient)
+                            || selectedServices.length === 0
+                            || (!lockSchedule && (!selectedUserId || !jobDate))
+                            || isSubmitting
+                          )
+                  }
+                  className="flex-shrink-0 px-8 py-3 bg-accent-500 text-white text-sm font-semibold rounded-xl hover:bg-accent-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200 shadow-lg shadow-accent-500/20"
+                >
+                  {isSubmitting
+                    ? (onScheduleSlide
+                        ? t('app.subscription.creating', 'Creating...')
+                        : t('app.jobs.create.creating'))
+                    : onScheduleSlide
+                      ? (isSubscriptionFlow
+                          ? t('app.subscription.create', 'Create subscription')
+                          : t('app.createJob.createRecurring', 'Create recurring'))
+                      : isSubscriptionFlow
+                        ? t('app.createJob.continueToSchedule', 'Continue')
+                        : t('app.jobs.create.createJob')}
+                </button>
+              </div>
             </div>
             </div>
           </div>
@@ -1842,17 +2202,20 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       )}
                     </div>
                   ) : isAddingNewClient ? (
-                    <div className="space-y-4">
                       <AddClientInlineForm
                         data={newClientData}
                         onChange={setNewClientData}
+                        countryCode={companyCountryCode}
                         onSave={() => {
                           if (newClientData.name.trim()) {
                             setSelectedClient({
                               id: -1,
                               name: newClientData.name,
                               last_name: newClientData.last_name,
-                              client_type: newClientData.client_type
+                              client_type: newClientData.client_type,
+                              address: newClientData.address,
+                              zip_code: newClientData.zip_code,
+                              city: newClientData.city,
                             })
                             setIsAddingNewClient(false)
                             setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
@@ -1860,11 +2223,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                         }}
                         onCancel={() => {
                           setIsAddingNewClient(false)
-                          setNewClientData(initialNewClientData)
+                          if (initialNewClient && !initialClientId) {
+                            setNewClientData(guestClientFromLocation(initialNewClient))
+                          } else {
+                            setNewClientData({ ...initialNewClientData, name: generateGuestClientName() })
+                          }
                         }}
-                        saveLabel={t('app.createJob.saveSelectClient', 'Save & Select Client')}
+                        saveLabel={t('app.createJob.saveSelectClient', 'Continue')}
                       />
-                    </div>
                   ) : (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-gray-900 pb-2 border-b border-gray-100">{t('app.createJob.selectClient', 'Select Client')}</h3>
@@ -1899,7 +2265,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             </button>
                                 ))}
                                 <button
-                                  onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
+                                  onClick={() => { setIsAddingNewClient(true); setNewClientData({ ...initialNewClientData, name: generateGuestClientName() }); setShowClientDropdown(false); setClientSearch('') }}
                                   className="w-full px-3 py-2 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out sticky bottom-0"
                                 >
                                   <div className="text-sm font-medium text-accent-600 flex items-center">
@@ -1914,7 +2280,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                               <>
                                 <div className="px-3 py-2 text-sm text-gray-500">No clients found</div>
                                 <button
-                                  onClick={() => { setIsAddingNewClient(true); setShowClientDropdown(false); setClientSearch('') }}
+                                  onClick={() => { setIsAddingNewClient(true); setNewClientData({ ...initialNewClientData, name: generateGuestClientName() }); setShowClientDropdown(false); setClientSearch('') }}
                                   className="w-full px-3 py-2 text-left hover:bg-accent-50 border-t border-gray-200 bg-gray-50 transition-colors duration-150 ease-out"
                                 >
                                   <div className="text-sm font-medium text-accent-600 flex items-center">
@@ -2075,16 +2441,26 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-50 max-h-60 overflow-y-auto animate-fadeIn">
                       {filteredServices.length > 0 ? (
                               <>
-                                {filteredServices.map((service) => (
+                                {filteredServices.map((service) => {
+                                  const meta = Array.isArray(service.group_meta_fields) ? service.group_meta_fields : ['price', 'duration']
+                                  const bits = [formatMoney(Number(service.price) || 0, companyCountryCode)]
+                                  if (meta.includes('quantity')) bits.push(`qty ${service.default_quantity ?? 1}`)
+                                  if (meta.includes('duration') && Number(service.duration_minutes) > 0) {
+                                    bits.push(`${service.duration_minutes}min`)
+                                  }
+                                  return (
                           <button
                             key={service.id}
                             onClick={() => addService(service)}
                                     className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-100 transition-colors duration-150 ease-out"
                                   >
                                     <div className="text-sm font-medium text-gray-900">{service.title}</div>
-                                    <div className="text-xs text-gray-500 mt-0.5">{formatMoney(Number(service.price) || 0, companyCountryCode)} • {service.duration_minutes}min</div>
+                                    <div className="text-xs text-gray-500 mt-0.5">
+                                      {service.group_name ? `${service.group_name} · ` : ''}{bits.join(' · ')}
+                                    </div>
                                   </button>
-                                ))}
+                                  )
+                                })}
                                 <button
                                   type="button"
                                   onClick={openServiceCreateSheet}
@@ -2150,6 +2526,19 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                           </div>
                         </div>
                               <div className="flex items-center space-x-3 ml-3">
+                                {service.hasQuantity && (
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="text-xs text-gray-500">Qty:</span>
+                                    <input
+                                      type="number"
+                                      min={0.001}
+                                      step="any"
+                                      value={service.quantity}
+                                      onChange={(e) => updateService(service.id, 'quantity', parseFloat(e.target.value) || 1)}
+                                      className="text-xs text-blue-600 bg-white border border-blue-300 rounded px-1.5 py-0.5 w-14"
+                                    />
+                                  </div>
+                                )}
                                 <div className="flex items-center space-x-1.5">
                             <span className="text-xs text-gray-500">Price:</span>
                             {editingPrice === service.id ? (
@@ -2166,10 +2555,14 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                               </>
                             ) : (
                               <button onClick={() => setEditingPrice(service.id)} className="text-xs text-blue-600 underline cursor-pointer bg-transparent border-none hover:text-blue-700 transition-colors">
-                                {formatMoney(parseFloat(String(service.customPrice)) || 0, companyCountryCode)}
+                                {formatMoney(
+                                  (parseFloat(String(service.customPrice)) || 0) * (service.hasQuantity ? (Number(service.quantity) || 1) : 1),
+                                  companyCountryCode,
+                                )}
                               </button>
                             )}
                           </div>
+                                {service.hasDuration !== false && (
                                 <div className="flex items-center space-x-1.5">
                             <span className="text-xs text-gray-500">Time:</span>
                             {editingDuration === service.id ? (
@@ -2187,6 +2580,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                               </button>
                             )}
                           </div>
+                                )}
                                 <button onClick={() => removeService(service.id)} className="text-gray-400 hover:text-red-600 transition-colors duration-150 ease-out p-1 rounded hover:bg-red-50 ml-1">
                                   <XMarkIcon className="w-3.5 h-3.5" />
                           </button>

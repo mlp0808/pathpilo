@@ -42,10 +42,25 @@ function getInvoiceDueReminderDefaults(countryCode) {
   return { ...INVOICE_DUE_REMINDER[lang] };
 }
 
+/** Standard payment-terms template when the company has not saved its own yet. */
+const DEFAULT_PAYMENT_TERMS = {
+  en:
+    'Payment is due no later than {due_date}. Please use invoice number {invoice_number} as the payment reference.\n\nIf payment is not received by the due date, we reserve the right to charge interest on overdue amounts in accordance with applicable law, and to recover reasonable costs of collection.',
+  da:
+    'Betaling skal ske senest {due_date}. Anfør venligst fakturanummer {invoice_number} som betalingsreference.\n\nHvis betaling ikke er modtaget inden forfaldsdatoen, forbeholder vi os retten til at opkræve renter af forfaldne beløb i henhold til gældende lovgivning, samt at inddrive rimelige inkassoomkostninger.',
+};
+
+function getDefaultPaymentTerms(countryCode) {
+  const lang = invoiceCustomerEmailLang(countryCode);
+  return DEFAULT_PAYMENT_TERMS[lang];
+}
+
 module.exports = {
   invoiceCustomerEmailLang,
   getSendInvoiceDefaults,
   getInvoiceDueReminderDefaults,
+  getDefaultPaymentTerms,
   SEND_INVOICE,
   INVOICE_DUE_REMINDER,
+  DEFAULT_PAYMENT_TERMS,
 };

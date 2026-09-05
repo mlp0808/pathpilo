@@ -1,10 +1,16 @@
 // Company-level default work-hours template. Owners / admins can set the
-// default once and every future employee invite inherits it.
+// default once; the settings page also edits per-employee schedules via
+// /work-hours/:userId. Model: start time + daily work hours (no end/break UI).
 
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
-const { ensureWorkHoursSchema, companyDefaultRowOrFallback, DAYS } = require('../utils/workHoursSchema');
+const {
+  ensureWorkHoursSchema,
+  companyDefaultRowOrFallback,
+  addHoursToTime,
+  DAYS,
+} = require('../utils/workHoursSchema');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -33,9 +39,10 @@ function normaliseTime(value) {
   return m ? `${m[1]}:${m[2]}` : null;
 }
 
-function normaliseMode(value, fallback = 'fixed') {
-  const v = String(value || '').trim().toLowerCase();
-  return v === 'fixed' || v === 'flexible' ? v : fallback;
+function normaliseHours(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(24, Math.round(num * 10) / 10));
 }
 
 router.use(authenticateToken);
@@ -60,6 +67,7 @@ router.get('/work-hours', async (req, res) => {
 });
 
 // PUT /api/company-defaults/work-hours — admins only
+// Body: per day `{day}_start` (HH:MM|null) + `{day}_hours` (number). End is derived.
 router.put('/work-hours', async (req, res) => {
   try {
     await ensureWorkHoursSchema(pool);
@@ -70,26 +78,15 @@ router.put('/work-hours', async (req, res) => {
     if (access.error) return res.status(access.status).json({ error: access.error });
 
     const body = req.body || {};
-    const mode = normaliseMode(body.work_hours_mode);
-
-    // Build column list + values. Dates without a start/end mean "day off"
-    // for that weekday (both columns stored as NULL).
     const cols = ['company_id', 'work_hours_mode'];
-    const values = [access.companyId, mode];
+    const values = [access.companyId, 'flexible'];
 
     for (const d of DAYS) {
-      const start = normaliseTime(body[`${d}_start`]);
-      const end = normaliseTime(body[`${d}_end`]);
-      const breakRaw = body[`${d}_break_minutes`];
-      const breakMinutes = Number.isFinite(Number(breakRaw))
-        ? Math.max(0, Math.min(480, Math.round(Number(breakRaw))))
-        : 0;
-      const hoursRaw = body[`${d}_hours`];
-      const hours = Number.isFinite(Number(hoursRaw))
-        ? Math.max(0, Math.min(24, Math.round(Number(hoursRaw) * 10) / 10))
-        : 0;
+      const hours = normaliseHours(body[`${d}_hours`]);
+      const start = hours > 0 ? (normaliseTime(body[`${d}_start`]) || '08:00') : null;
+      const end = hours > 0 ? (normaliseTime(body[`${d}_end`]) || addHoursToTime(start, hours)) : null;
       cols.push(`${d}_start`, `${d}_end`, `${d}_break_minutes`, `${d}_hours`);
-      values.push(start, end, breakMinutes, hours);
+      values.push(start, end, 0, hours);
     }
 
     const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
@@ -109,7 +106,7 @@ router.put('/work-hours', async (req, res) => {
       `SELECT * FROM company_default_work_hours WHERE company_id = $1`,
       [access.companyId],
     );
-    res.json({ defaults: r.rows[0] });
+    res.json({ defaults: companyDefaultRowOrFallback(r.rows[0] || null) });
   } catch (err) {
     console.error('PUT /company-defaults/work-hours:', err);
     res.status(500).json({ error: 'Failed to save company defaults' });

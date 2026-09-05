@@ -23,6 +23,7 @@ function LoginForm() {
   const inviteToken = searchParams.get('invite')
   const emailFromUrl = searchParams.get('email')
   const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
+  const [showSessionExpired, setShowSessionExpired] = useState(searchParams.get('sessionExpired') === '1')
 
   const [inviteForExistingAccount, setInviteForExistingAccount] = useState(false)
 
@@ -99,6 +100,7 @@ function LoginForm() {
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
     if (error) setError('')
+    if (showSessionExpired) setShowSessionExpired(false)
   }
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
@@ -339,6 +341,16 @@ function LoginForm() {
           {view === 'login' && (
             <>
               <div className="rounded-3xl bg-white p-8 shadow-2xl shadow-black/40 ring-1 ring-white/10">
+                {!error && showSessionExpired && (
+                  <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <p className="text-blue-800 text-sm">Your session expired — please sign in again.</p>
+                    </div>
+                  </div>
+                )}
                 {error && (
                   <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
                     <div className="flex items-center gap-2">

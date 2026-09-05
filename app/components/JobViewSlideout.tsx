@@ -2,19 +2,26 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon, SparklesIcon, ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, UserIcon, CalendarIcon, ClockIcon, CheckIcon, EllipsisVerticalIcon, EnvelopeIcon, PhoneIcon, MapPinIcon, DocumentTextIcon, ChevronDownIcon, LockClosedIcon, PencilIcon, ArrowRightIcon, SparklesIcon, ChatBubbleLeftRightIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline'
 import {
   automationChannelFromKey,
   formatAutomationEta,
 } from '../utils/automationEta'
 import { apiUrl } from '../utils/api'
-import { formatMoney } from '../config/countryRules'
+import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
 import TimePicker from './TimePicker'
 import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
 import { useAppI18n } from './I18nProvider'
+import {
+  estimateArrivalForJob,
+  parsePgIdArray,
+  parsePgNumberArray,
+  weekdayIndexFromDateStr,
+  workDayStartFromHours,
+} from '../utils/estimateJobArrival'
 
 /** List/API responses sometimes return job id as string; normalize for fetches and automation badges. */
 function parseJobId(id: unknown): number | null {
@@ -317,11 +324,36 @@ interface JobViewSlideoutProps {
   isOpen: boolean
   onClose: () => void
   job: any
-  onJobUpdated?: () => void
+  onJobUpdated?: (meta?: { jobId?: number | string; scheduledDate?: string | null }) => void
   /** When true (e.g. route planner), assignee change is not sent to API; parent handles it on Save & apply */
   deferAssigneeToParent?: boolean
   /** Called when user confirms a new assignee and deferAssigneeToParent is true */
   onAssigneeChange?: (jobId: number, newUserId: number) => void
+  /** Other jobs merged into the same visit (same client + day + employee). */
+  visitSiblings?: any[]
+  /** Open one of the merged sibling jobs instead. */
+  onOpenSibling?: (job: any) => void
+}
+
+function visitJobSourceLabel(src: any, t: (key: string, fallback?: string) => string): string {
+  const roundId = src?.round_template_id != null ? Number(src.round_template_id) : null
+  if (src?.round_template_name) return String(src.round_template_name)
+  if (roundId != null) {
+    return t('app.jobView.sourceRound', 'Round #{{id}}').replace('{{id}}', String(roundId))
+  }
+  if (src?.library_round_id != null || src?.round_id != null) {
+    const rid = Number(src.library_round_id ?? src.round_id)
+    if (Number.isFinite(rid)) {
+      return t('app.jobView.sourceRound', 'Round #{{id}}').replace('{{id}}', String(rid))
+    }
+  }
+  if (src?.recurring_job_id != null) {
+    return t('app.jobView.sourceSubscription', 'Subscription #{{id}}').replace(
+      '{{id}}',
+      String(src.recurring_job_id),
+    )
+  }
+  return t('app.jobView.sourceOneOff', 'One-off')
 }
 
 function AutomationBadgePopover({
@@ -633,7 +665,7 @@ ${userName}`
   )
 }
 
-export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange }: JobViewSlideoutProps) {
+export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange, visitSiblings, onOpenSibling }: JobViewSlideoutProps) {
   const { t } = useAppI18n()
   const router = useRouter()
   const params = useParams()
@@ -644,6 +676,19 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const [addrDraft, setAddrDraft] = useState<{ address: string; zip_code: string; city: string; lat?: number | null; lng?: number | null }>({ address: '', zip_code: '', city: '' })
   const [addrSaving, setAddrSaving] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
+  // Always start checked — cancel flow should charge the fee unless the user opts out.
+  const [chargeCancellationFee, setChargeCancellationFee] = useState(true)
+  const chargeCancellationFeeRef = useRef(true)
+  const [cancellationFeeSettings, setCancellationFeeSettings] = useState<{
+    enabled: boolean
+    title: string
+    price: number
+  } | null>(null)
+  const cancellationFeeSettingsRef = useRef<{
+    enabled: boolean
+    title: string
+    price: number
+  } | null>(null)
   const [jobLogs, setJobLogs] = useState<JobLog[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
   const [showMoveModal, setShowMoveModal] = useState(false)
@@ -668,7 +713,35 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const [showNoteInput, setShowNoteInput] = useState(false)
   const [activeDetailTab, setActiveDetailTab] = useState<'tasks' | 'history'>('tasks')
   const [updatingServiceId, setUpdatingServiceId] = useState<number | null>(null)
+  /** Edit tasks: local draft of service lines before save. */
+  const [editingTasks, setEditingTasks] = useState(false)
+  const [taskDrafts, setTaskDrafts] = useState<Array<{
+    key: string
+    id?: number
+    service_id?: number | null
+    title: string
+    custom_price: number
+    custom_duration_minutes: number
+    quantity: number
+    status: string
+    isNew?: boolean
+    removed?: boolean
+  }>>([])
+  const [catalogServices, setCatalogServices] = useState<Array<{
+    id: number
+    title: string
+    price: number
+    duration_minutes: number
+    default_quantity?: number
+    group_meta_fields?: string[] | null
+  }>>([])
+  const [showAddTaskPicker, setShowAddTaskPicker] = useState(false)
+  const [addTaskSearch, setAddTaskSearch] = useState('')
+  const [savingTasks, setSavingTasks] = useState(false)
+  /** Full job payloads (with services) for merged visit siblings. */
+  const [siblingDetailsById, setSiblingDetailsById] = useState<Record<string, any>>({})
   const [invoiceSummary, setInvoiceSummary] = useState<{ id: number; status: string; invoice_number?: string | null } | null>(null)
+  const [primaryActionBusy, setPrimaryActionBusy] = useState(false)
   // After a projected job is materialized inline, we briefly flag the note
   // card so it opens directly into edit mode — saves the user an extra click.
   const [autoStartNoteJobId, setAutoStartNoteJobId] = useState<number | null>(null)
@@ -680,6 +753,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     pending: { key: string; sendAt: string; phase: string }[]
     serverNow: string
   } | null>(null)
+  /** Route-based arrival clock (HH:MM), independent of agreed time. */
+  const [routeArrivalEst, setRouteArrivalEst] = useState<string | null>(null)
   const [clockOffsetMs, setClockOffsetMs] = useState(0)
   const [automationBadgeTick, setAutomationBadgeTick] = useState(0)
   const companyCountryCode = useCompanyCountryCode()
@@ -716,15 +791,39 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Failed to update')
-      setJobDetails((prev: any) => {
-        if (!prev || prev.id !== jobId) return prev
-        const nextStatus = data.job?.status ?? prev.status
-        const nextServices = (prev.services || []).map((s: any) =>
+      const patchServices = (services: any[] | undefined) =>
+        (services || []).map((s: any) =>
           s.id === serviceId
-            ? { ...s, status: data.service?.status ?? status, completed_at: data.service?.completed_at ?? (status === 'completed' ? new Date().toISOString() : null), is_completed: (data.service?.status ?? status) === 'completed' }
-            : s
+            ? {
+                ...s,
+                status: data.service?.status ?? status,
+                completed_at:
+                  data.service?.completed_at
+                  ?? (status === 'completed' ? new Date().toISOString() : null),
+                is_completed: (data.service?.status ?? status) === 'completed',
+              }
+            : s,
         )
-        return { ...prev, status: nextStatus, services: nextServices }
+      setJobDetails((prev: any) => {
+        if (!prev || Number(prev.id) !== jobId) return prev
+        return {
+          ...prev,
+          status: data.job?.status ?? prev.status,
+          services: patchServices(prev.services),
+        }
+      })
+      setSiblingDetailsById((prev) => {
+        const key = String(jobId)
+        const row = prev[key]
+        if (!row) return prev
+        return {
+          ...prev,
+          [key]: {
+            ...row,
+            status: data.job?.status ?? row.status,
+            services: patchServices(row.services),
+          },
+        }
       })
       // Refresh logs so the change appears in the activity log
       fetchJobLogs(jobId)
@@ -751,6 +850,10 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     if (isOpen) {
       setActiveDetailTab('tasks')
       setShowNoteInput(false)
+      setEditingTasks(false)
+      setTaskDrafts([])
+      setShowAddTaskPicker(false)
+      setAddTaskSearch('')
     }
   }, [isOpen, job?.id])
 
@@ -860,11 +963,49 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       })
       setCancelTemplate(template)
     }
+    // Load fee policy so the cancel modal can offer charge / waive.
+    // Default the charge checkbox ON whenever a fee is configured.
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(apiUrl('/services/cancellation-fee'), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.cancellationFee) {
+        const nextSettings = {
+          enabled: !!data.cancellationFee.enabled,
+          title: data.cancellationFee.title || 'Cancellation fee',
+          price: Number(data.cancellationFee.price) || 0,
+        }
+        setCancellationFeeSettings(nextSettings)
+        cancellationFeeSettingsRef.current = nextSettings
+        const shouldOfferFee = nextSettings.enabled && nextSettings.price > 0
+        setChargeCancellationFee(shouldOfferFee)
+        chargeCancellationFeeRef.current = shouldOfferFee
+      } else {
+        setCancellationFeeSettings(null)
+        cancellationFeeSettingsRef.current = null
+        setChargeCancellationFee(true)
+        chargeCancellationFeeRef.current = true
+      }
+    } catch {
+      setCancellationFeeSettings(null)
+      cancellationFeeSettingsRef.current = null
+      setChargeCancellationFee(true)
+      chargeCancellationFeeRef.current = true
+    }
     setShowCancelModal(true)
   }
 
   const confirmCancelJob = async ({ notify, message, subject }: { notify: boolean, message: string, subject: string }) => {
     if (parseJobId(currentJob?.id) == null) return
+
+    const feeSettings = cancellationFeeSettingsRef.current
+    const chargeFee = !!(
+      feeSettings?.enabled &&
+      (feeSettings.price || 0) > 0 &&
+      chargeCancellationFeeRef.current
+    )
 
     try {
       setIsDeleting(true)
@@ -879,7 +1020,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
           status: 'cancelled',
           notify_customer: notify,
           notification_subject: notify ? subject : undefined,
-          notification_message: notify ? message : undefined
+          notification_message: notify ? message : undefined,
+          charge_cancellation_fee: chargeFee,
         })
       })
 
@@ -905,7 +1047,9 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     const jobId = await ensureRealJobId()
     if (jobId == null) return
 
-    const confirmed = confirm('Are you sure you want to permanently delete this job? This action cannot be undone and will remove all job data, notes, and logs.')
+    const confirmed = confirm(
+      'Delete this job? It will stay on the calendar as deleted (faded) so you can still see what happened. This can be reviewed later.',
+    )
     if (!confirmed) return
 
     try {
@@ -1138,6 +1282,13 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       }
     }
 
+    if (baseStatus === 'deleted') {
+      return {
+        key: 'deleted',
+        label: 'Deleted',
+        className: 'bg-gray-200 text-gray-700 border border-gray-300',
+      }
+    }
     if (baseStatus === 'cancelled') {
       return {
         key: 'cancelled',
@@ -1321,6 +1472,115 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     }
   }
 
+  /** Forward action: complete remaining (non-cancelled) tasks — same as mobile Complete. */
+  const completeJobForward = async () => {
+    if (isLocked || primaryActionBusy) return
+    setPrimaryActionBusy(true)
+    try {
+      const jobId = await ensureRealJobId()
+      if (!jobId) return
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/jobs/${jobId}/complete-remaining`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to complete job')
+      }
+      // Refresh job + services quietly (avoid full-panel loading flash).
+      try {
+        const detailRes = await fetch(apiUrl(`/jobs/${jobId}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const detailData = await detailRes.json().catch(() => ({}))
+        if (detailRes.ok && detailData.job) {
+          setJobDetails(detailData.job)
+        } else if (data.job) {
+          setJobDetails((prev: any) => ({ ...(prev || {}), ...data.job }))
+        }
+      } catch {
+        if (data.job) setJobDetails((prev: any) => ({ ...(prev || {}), ...data.job }))
+      }
+      fetchJobLogs(jobId)
+      onJobUpdated?.()
+    } catch (error) {
+      console.error('Failed to complete job:', error)
+      alert(error instanceof Error ? error.message : 'Failed to complete job')
+    } finally {
+      setPrimaryActionBusy(false)
+    }
+  }
+
+  const openInvoiceForJob = (jobIdOverride?: number) => {
+    if (invoiceIdOnJob) {
+      const slug = companySlugFromRoute || ''
+      const isDraft = String(invoiceSummary?.status || 'draft').toLowerCase() === 'draft'
+      if (isDraft) {
+        if (slug) router.push(`/${slug}/invoices/new?draft=${invoiceIdOnJob}`)
+        else router.push(`/invoices/new?draft=${invoiceIdOnJob}`)
+      } else if (slug) {
+        router.push(`/${slug}/invoices/${invoiceIdOnJob}`)
+      } else {
+        router.push(`/invoices/${invoiceIdOnJob}`)
+      }
+      return
+    }
+    const jobId = jobIdOverride ?? parseJobId(currentJob?.id)
+    if (jobId == null) return
+    const slug = companySlugFromRoute || ''
+    const clientId = currentJob?.client_id
+    const qs = new URLSearchParams({ jobIds: String(jobId) })
+    if (clientId != null) qs.set('clientId', String(clientId))
+    if (slug) router.push(`/${slug}/invoices/new?${qs.toString()}`)
+    else router.push(`/invoices/new?${qs.toString()}`)
+  }
+
+  type PrimaryAction =
+    | { kind: 'complete'; label: string }
+    | { kind: 'create_invoice'; label: string }
+    | { kind: 'view_invoice'; label: string }
+    | null
+
+  const primaryAction: PrimaryAction = (() => {
+    if (!currentJob) return null
+    const base = String(currentJob.status || 'scheduled')
+    if (base === 'cancelled' || base === 'deleted') return null
+    if (invoiceIdOnJob) {
+      return {
+        kind: 'view_invoice',
+        label: t('app.jobView.action.viewInvoice', 'View invoice'),
+      }
+    }
+    if (isCompleted) {
+      return {
+        kind: 'create_invoice',
+        label: t('app.jobView.action.createInvoice', 'Create invoice'),
+      }
+    }
+    return {
+      kind: 'complete',
+      label: t('app.jobView.action.complete', 'Complete'),
+    }
+  })()
+
+  const runPrimaryAction = () => {
+    if (!primaryAction || primaryActionBusy) return
+    if (primaryAction.kind === 'complete') {
+      void requestDetachOrRun(() => completeJobForward())
+      return
+    }
+    if (primaryAction.kind === 'create_invoice') {
+      void requestDetachOrRun((newJobId) => {
+        openInvoiceForJob(newJobId)
+      })
+      return
+    }
+    if (primaryAction.kind === 'view_invoice') {
+      openInvoiceForJob()
+    }
+  }
+
   const handleConfirmDelete = async ({ notify, message, subject }: { notify: boolean, message: string, subject: string }) => {
     const jobId = await ensureRealJobId()
     if (!jobId) return
@@ -1477,6 +1737,286 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       setLogsLoading(false)
     }
   }
+
+  const companyCurrency = getCountryRule(companyCountryCode).defaultCurrency
+
+  const applyServicesPayload = useCallback((jobId: number, data: {
+    services?: any[]
+    total_price?: number
+    total_duration?: number
+    job?: any
+  }) => {
+    setJobDetails((prev: any) => {
+      if (!prev || Number(prev.id) !== Number(jobId)) return prev
+      return {
+        ...prev,
+        ...(data.job ? { status: data.job.status ?? prev.status, title: data.job.title ?? prev.title } : {}),
+        services: data.services ?? prev.services,
+        total_price: data.total_price ?? prev.total_price,
+        total_duration: data.total_duration ?? prev.total_duration,
+      }
+    })
+  }, [])
+
+  const startEditingTasks = useCallback((servicesOverride?: any[]) => {
+    const primary = jobDetails || job
+    const services = servicesOverride ?? primary?.services ?? primary?.job_services ?? []
+    setTaskDrafts(
+      services.map((s: any) => ({
+        key: s.id != null ? `id-${s.id}` : `tmp-${Math.random().toString(36).slice(2)}`,
+        id: s.id,
+        service_id: s.service_id ?? null,
+        title: s.title || s.service_title || s.service_name || s.custom_title || 'Task',
+        custom_price: Number(s.custom_price ?? s.price) || 0,
+        custom_duration_minutes: Number(s.custom_duration_minutes ?? s.duration_minutes) || 0,
+        quantity: Number(s.quantity) > 0 ? Number(s.quantity) : 1,
+        status: s.status || (s.is_completed ? 'completed' : 'scheduled'),
+      })),
+    )
+    setEditingTasks(true)
+    setShowAddTaskPicker(false)
+    setAddTaskSearch('')
+    // Prefetch catalog for the add picker
+    void (async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl('/services'), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) setCatalogServices(data.services || [])
+      } catch {
+        setCatalogServices([])
+      }
+    })()
+  }, [jobDetails, job])
+
+  const beginEditTasks = useCallback(async (newJobId?: number) => {
+    // After materializing a projected job, reload lines so drafts use real job_services ids.
+    if (newJobId != null) {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(apiUrl(`/jobs/${newJobId}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && data.job) {
+          setJobDetails({
+            ...data.job,
+            services: data.job.services || [],
+            total_price: data.job.total_price,
+            total_duration: data.job.total_duration,
+          })
+          startEditingTasks(data.job.services || [])
+          return
+        }
+      } catch { /* fall through */ }
+    }
+    startEditingTasks()
+  }, [startEditingTasks])
+
+  const cancelEditingTasks = useCallback(() => {
+    setEditingTasks(false)
+    setTaskDrafts([])
+    setShowAddTaskPicker(false)
+    setAddTaskSearch('')
+  }, [])
+
+  const updateTaskDraft = useCallback((
+    key: string,
+    field: 'title' | 'custom_price' | 'custom_duration_minutes' | 'quantity',
+    value: string | number,
+  ) => {
+    setTaskDrafts((prev) =>
+      prev.map((row) => (row.key === key ? { ...row, [field]: value } : row)),
+    )
+  }, [])
+
+  const markTaskRemoved = useCallback((key: string) => {
+    setTaskDrafts((prev) =>
+      prev
+        .map((row) => {
+          if (row.key !== key) return row
+          if (row.isNew) return null
+          return { ...row, removed: true }
+        })
+        .filter(Boolean) as typeof prev,
+    )
+  }, [])
+
+  const addCatalogTask = useCallback((svc: {
+    id: number
+    title: string
+    price: number
+    duration_minutes: number
+    default_quantity?: number
+    group_meta_fields?: string[] | null
+  }) => {
+    const meta = Array.isArray(svc.group_meta_fields) ? svc.group_meta_fields : ['price', 'duration']
+    const hasQty = meta.includes('quantity')
+    const qty = hasQty
+      ? (Number(svc.default_quantity) > 0 ? Number(svc.default_quantity) : 1)
+      : 1
+    setTaskDrafts((prev) => [
+      ...prev,
+      {
+        key: `new-${Date.now()}-${svc.id}`,
+        service_id: svc.id,
+        title: svc.title,
+        custom_price: Number(svc.price) || 0,
+        custom_duration_minutes: meta.includes('duration') ? (Number(svc.duration_minutes) || 0) : 0,
+        quantity: qty,
+        status: 'scheduled',
+        isNew: true,
+      },
+    ])
+    setShowAddTaskPicker(false)
+    setAddTaskSearch('')
+  }, [])
+
+  const addCustomTask = useCallback(() => {
+    setTaskDrafts((prev) => [
+      ...prev,
+      {
+        key: `new-custom-${Date.now()}`,
+        service_id: null,
+        title: '',
+        custom_price: 0,
+        custom_duration_minutes: 30,
+        quantity: 1,
+        status: 'scheduled',
+        isNew: true,
+      },
+    ])
+    setShowAddTaskPicker(false)
+    setAddTaskSearch('')
+  }, [])
+
+  const saveTaskEdits = useCallback(async () => {
+    setSavingTasks(true)
+    try {
+      const jobId = await ensureRealJobId()
+      if (!jobId) throw new Error('Could not open job for editing')
+
+      const token = localStorage.getItem('token')
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      }
+
+      // Snapshot original lines to detect changes
+      const original = (jobDetails?.services || job?.services || job?.job_services || []) as any[]
+      const byId = new Map(original.map((s: any) => [Number(s.id), s]))
+
+      let lastPayload: any = null
+
+      for (const row of taskDrafts) {
+        if (row.removed && row.id != null) {
+          const res = await fetch(apiUrl(`/jobs/${jobId}/services/${row.id}`), {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(data.error || 'Failed to remove task')
+          lastPayload = data
+          continue
+        }
+        if (row.removed) continue
+
+        if (row.isNew || row.id == null) {
+          const title = String(row.title || '').trim()
+          if (!title && !row.service_id) throw new Error('New tasks need a title')
+          const body = row.service_id
+            ? {
+                service_id: row.service_id,
+                custom_price: Number(row.custom_price) || 0,
+                custom_duration_minutes: Number(row.custom_duration_minutes) || 0,
+                quantity: Number(row.quantity) > 0 ? Number(row.quantity) : 1,
+              }
+            : {
+                custom_title: title || 'Custom task',
+                custom_price: Number(row.custom_price) || 0,
+                custom_duration_minutes: Number(row.custom_duration_minutes) || 0,
+                quantity: Number(row.quantity) > 0 ? Number(row.quantity) : 1,
+              }
+          const res = await fetch(apiUrl(`/jobs/${jobId}/services`), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+          })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(data.error || 'Failed to add task')
+          lastPayload = data
+          continue
+        }
+
+        const prev = byId.get(Number(row.id))
+        if (!prev) continue
+        const prevPrice = Number(prev.custom_price ?? prev.price) || 0
+        const prevDur = Number(prev.custom_duration_minutes ?? prev.duration_minutes) || 0
+        const prevQty = Number(prev.quantity) > 0 ? Number(prev.quantity) : 1
+        const nextPrice = Number(row.custom_price) || 0
+        const nextDur = Number(row.custom_duration_minutes) || 0
+        const nextQty = Number(row.quantity) > 0 ? Number(row.quantity) : 1
+        const titleChanged =
+          !row.service_id
+          && String(row.title || '').trim() !== String(prev.custom_title || prev.title || prev.service_name || '').trim()
+
+        if (
+          prevPrice === nextPrice
+          && prevDur === nextDur
+          && prevQty === nextQty
+          && !titleChanged
+        ) continue
+
+        const body: Record<string, unknown> = {
+          custom_price: nextPrice,
+          custom_duration_minutes: nextDur,
+          quantity: nextQty,
+        }
+        if (titleChanged) body.custom_title = String(row.title || '').trim()
+
+        const res = await fetch(apiUrl(`/jobs/${jobId}/services/${row.id}`), {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(body),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Failed to update task')
+        lastPayload = data
+      }
+
+      if (lastPayload?.services) {
+        applyServicesPayload(jobId, lastPayload)
+      } else {
+        // No changes persisted — still refresh from server for safety
+        const res = await fetch(apiUrl(`/jobs/${jobId}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && data.job) {
+          setJobDetails((prev: any) => ({
+            ...(prev || {}),
+            ...data.job,
+            services: data.job.services || prev?.services,
+            total_price: data.job.total_price ?? prev?.total_price,
+            total_duration: data.job.total_duration ?? prev?.total_duration,
+          }))
+        }
+      }
+
+      fetchJobLogs(jobId)
+      onJobUpdated?.({ jobId })
+      setEditingTasks(false)
+      setTaskDrafts([])
+      setShowAddTaskPicker(false)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to save tasks')
+    } finally {
+      setSavingTasks(false)
+    }
+  }, [ensureRealJobId, jobDetails, job, taskDrafts, applyServicesPayload, onJobUpdated])
+
 
   // Helper function to update time template
   const updateTimeTemplate = async (newTimeFrom: string, newTimeTo: string, isRange: boolean) => {
@@ -1757,9 +2297,11 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     } else if (!isOpen) {
       // Reset when closed
       setJobDetails(null)
+      setSiblingDetailsById({})
       setJobLogs([])
       setLoading(false)
       setLogsLoading(false)
+      setRouteArrivalEst(null)
     }
   }, [
     isOpen,
@@ -1768,6 +2310,128 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     job?.recurring_job_id,
     job?.recurring_occurrence,
     job?.scheduled_date
+  ])
+
+  // Load each merged sibling's services so the Tasks tab can list every job
+  // at this stop (no header banner).
+  useEffect(() => {
+    if (!isOpen || !Array.isArray(visitSiblings) || visitSiblings.length === 0) {
+      setSiblingDetailsById({})
+      return
+    }
+    let cancelled = false
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    ;(async () => {
+      const next: Record<string, any> = {}
+      await Promise.all(
+        visitSiblings.map(async (sib) => {
+          const key = String(sib?.id ?? '')
+          if (!key) return
+          try {
+            const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(String(sib.id))}`), {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            })
+            const data = await res.json().catch(() => ({}))
+            if (res.ok && data?.job) {
+              next[key] = data.job
+            } else {
+              next[key] = { ...sib, services: sib.services || [] }
+            }
+          } catch {
+            next[key] = { ...sib, services: sib.services || [] }
+          }
+        }),
+      )
+      if (!cancelled) setSiblingDetailsById(next)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    isOpen,
+    // Re-fetch when the sibling set changes (ids), not on unrelated list churn.
+    Array.isArray(visitSiblings)
+      ? visitSiblings.map((s) => String(s?.id ?? '')).join(',')
+      : '',
+  ])
+
+  // Route-based arrival estimate from planned package order + drive legs + prior durations.
+  useEffect(() => {
+    if (!isOpen || !job) {
+      setRouteArrivalEst(null)
+      return
+    }
+    const current = jobDetails || job
+    const dateStr = current?.scheduled_date ? String(current.scheduled_date).slice(0, 10) : null
+    const userId = current?.assigned_user_id != null ? Number(current.assigned_user_id) : null
+    if (!dateStr || userId == null || !Number.isFinite(userId)) {
+      setRouteArrivalEst(null)
+      return
+    }
+
+    let cancelled = false
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
+    ;(async () => {
+      try {
+        const [routesRes, hoursRes, jobsRes] = await Promise.all([
+          fetch(apiUrl(`/daily-routes?start_date=${dateStr}&end_date=${dateStr}`), { headers }),
+          fetch(apiUrl(`/work-hours/${userId}`), { headers }),
+          fetch(apiUrl(`/jobs?start_date=${dateStr}&end_date=${dateStr}`), { headers }),
+        ])
+
+        const routesData = routesRes.ok ? await routesRes.json().catch(() => null) : null
+        const hoursData = hoursRes.ok ? await hoursRes.json().catch(() => null) : null
+        const jobsData = jobsRes.ok ? await jobsRes.json().catch(() => null) : null
+        if (cancelled) return
+
+        const dayIndex = weekdayIndexFromDateStr(dateStr)
+        const dayStart = workDayStartFromHours(hoursData?.workHours, dayIndex)
+
+        const routeRow = (routesData?.routes || []).find((r: any) => {
+          if (Number(r.user_id) !== userId) return false
+          if (String(r.scheduled_date).slice(0, 10) !== dateStr) return false
+          const ids = parsePgIdArray(r.job_ids)
+          return ids.some((id) => String(id) === String(current.id))
+        }) || (routesData?.routes || []).find((r: any) => {
+          if (Number(r.user_id) !== userId) return false
+          return String(r.scheduled_date).slice(0, 10) === dateStr
+        })
+        const routeJobIds = routeRow ? parsePgIdArray(routeRow.job_ids) : null
+        const routeLegMinutes = routeRow ? parsePgNumberArray(routeRow.leg_minutes) : null
+
+        const dayJobs = ((jobsData?.jobs || []) as any[]).filter((j) => {
+          if (Number(j.assigned_user_id) !== userId) return false
+          if (j.status === 'cancelled' || j.status === 'deleted') return false
+          const jd = j.scheduled_date ? String(j.scheduled_date).slice(0, 10) : ''
+          return jd === dateStr
+        })
+
+        const est = estimateArrivalForJob({
+          job: current,
+          dayJobs,
+          dayStart,
+          routeJobIds,
+          routeLegMinutes,
+        })
+        if (!cancelled) setRouteArrivalEst(est)
+      } catch {
+        if (!cancelled) setRouteArrivalEst(null)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    isOpen,
+    job?.id,
+    jobDetails?.scheduled_date,
+    jobDetails?.assigned_user_id,
+    jobDetails?.estimated_duration,
+    job?.scheduled_date,
+    job?.assigned_user_id,
   ])
 
   const formatDate = (dateString: string) => {
@@ -1929,7 +2593,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         setPendingNewDate(null)
         // Notify parent to refresh jobs list
         if (onJobUpdated) {
-          onJobUpdated()
+          onJobUpdated({ jobId, scheduledDate: newDate })
         }
       } else {
         let errorMessage = 'Unknown error'
@@ -1993,78 +2657,106 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
               </div>
             </div>
           )}
-          {/* Row 1: Person/Company (left, #BFD1C5) | Status pill + Options + Exit on the right. */}
-          <div className="flex items-start justify-between gap-3 mb-3">
+          {/* Row 1: Person/Company | forward action + options + close */}
+          <div className="flex items-center justify-between gap-3 mb-3">
             <span className="text-sm font-medium" style={{ color: '#BFD1C5' }}>
               {(jobDetails || job)?.is_company ? 'Company' : 'Person'}
             </span>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              {statusMeta && (
-                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusMeta.className}`}>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {primaryAction ? (
+                <button
+                  type="button"
+                  onClick={runPrimaryAction}
+                  disabled={primaryActionBusy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-semibold text-primary-700 shadow-sm transition hover:bg-white/90 disabled:opacity-60"
+                >
+                  {primaryActionBusy && primaryAction.kind === 'complete'
+                    ? t('app.jobView.action.completing', 'Completing…')
+                    : primaryAction.label}
+                  {!primaryActionBusy && <ArrowRightIcon className="h-3.5 w-3.5" />}
+                </button>
+              ) : statusMeta ? (
+                <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ${statusMeta.className}`}>
                   {statusMeta.label}
                 </span>
+              ) : null}
+              {String((jobDetails || job)?.status || '') === 'cancelled' && (
+                <span className="inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold bg-amber-50 text-amber-800">
+                  {(() => {
+                    const fee = Number(
+                      (jobDetails || job)?.cancellation_fee_amount ??
+                      (jobDetails || job)?.estimated_price ??
+                      (jobDetails || job)?.total_price ??
+                      0,
+                    ) || 0
+                    return fee > 0
+                      ? `Fee ${formatPrice(fee)}`
+                      : t('app.jobView.noCancellationFee', 'No fee')
+                  })()}
+                </span>
               )}
-              <div className="flex items-center gap-2">
-                {/* Options — circular, outline, 3 dots #BFD1C5 */}
-                <div className="relative options-menu">
-                  <button
-                    onClick={() => setShowOptionsMenu(!showOptionsMenu)}
-                    className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0"
-                    title="Options"
-                  >
-                    <EllipsisVerticalIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
-                  </button>
-                  {showOptionsMenu && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setShowOptionsMenu(false)} aria-hidden />
-                      <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                        {!isLocked && (
-                          <>
-                            <button
-                              onClick={() => {
-                                setShowOptionsMenu(false)
-                                requestDetachOrRun(() => toggleCompletion())
-                              }}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                            >
-                              {isCompleted ? 'Mark as scheduled' : 'Mark as completed'}
-                            </button>
-                            <div className="my-1 border-t border-gray-100" />
-                          </>
-                        )}
-                        <button
-                          onClick={() => {
-                            setShowOptionsMenu(false)
-                            if (!isLocked) requestDetachOrRun(() => handleCancelJob())
-                          }}
-                          disabled={isDeleting || isLocked}
-                          className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
-                        >
-                          Cancel job
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowOptionsMenu(false)
-                            if (!isLocked) requestDetachOrRun(() => handleDeleteJob())
-                          }}
-                          disabled={isDeleting || isLocked}
-                          className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          Delete job
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-                {/* Exit — circular, outline, X #BFD1C5 */}
+              <div className="relative options-menu">
                 <button
-                  onClick={onClose}
-                  className="w-8 h-8 rounded-full flex items-center justify-center border-2 border-[#BFD1C5] bg-transparent hover:bg-white/10 transition-colors flex-shrink-0"
-                  aria-label={t('app.jobView.close')}
+                  type="button"
+                  onClick={() => setShowOptionsMenu(!showOptionsMenu)}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-[#BFD1C5] transition-colors hover:bg-white/10 hover:text-white"
+                  title={t('app.jobView.options', 'Options')}
+                  aria-label={t('app.jobView.options', 'Options')}
                 >
-                  <XMarkIcon className="w-5 h-5" style={{ color: '#BFD1C5' }} />
+                  <EllipsisVerticalIcon className="h-5 w-5" />
                 </button>
+                {showOptionsMenu && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowOptionsMenu(false)} aria-hidden />
+                    <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                      {!isLocked && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setShowOptionsMenu(false)
+                              requestDetachOrRun(() => toggleCompletion())
+                            }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                          >
+                            {isCompleted
+                              ? t('app.jobView.markScheduled', 'Mark as scheduled')
+                              : t('app.jobView.markCompleted', 'Mark as completed')}
+                          </button>
+                          <div className="my-1 border-t border-gray-100" />
+                        </>
+                      )}
+                      <button
+                        onClick={() => {
+                          setShowOptionsMenu(false)
+                          if (!isLocked) requestDetachOrRun(() => handleCancelJob())
+                        }}
+                        disabled={isDeleting || isLocked}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                      >
+                        {t('app.jobView.cancelJob', 'Cancel job')}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowOptionsMenu(false)
+                          if (!isLocked) requestDetachOrRun(() => handleDeleteJob())
+                        }}
+                        disabled={isDeleting || isLocked}
+                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {t('app.jobView.deleteKeepCalendar', 'Delete (keep on calendar)')}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-[#BFD1C5] transition-colors hover:bg-white/10 hover:text-white"
+                aria-label={t('app.jobView.close')}
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
             </div>
           </div>
 
@@ -2084,7 +2776,12 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                         type="button"
                         onClick={() => {
                           const slug = companySlugFromRoute || ''
-                          if (slug) {
+                          const isDraft =
+                            String(invoiceSummary?.status || 'draft').toLowerCase() === 'draft'
+                          if (isDraft) {
+                            if (slug) router.push(`/${slug}/invoices/new?draft=${invoiceSummary.id}`)
+                            else router.push(`/invoices/new?draft=${invoiceSummary.id}`)
+                          } else if (slug) {
                             router.push(`/${slug}/invoices/${invoiceSummary.id}`)
                           } else {
                             router.push(`/invoices/${invoiceSummary.id}`)
@@ -2287,6 +2984,14 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                     <ClockIcon className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                     <span className="text-sm text-primary-500">
                       {formatTimeRange((jobDetails || job)?.scheduled_time_from, (jobDetails || job)?.scheduled_time_to) || t('app.jobView.notSet')}
+                      {routeArrivalEst ? (
+                        <span
+                          className="ml-1.5 font-normal text-gray-400"
+                          title={t('app.jobView.routeArrivalEstTitle', 'Estimated arrival from route order and drive time')}
+                        >
+                          (est. {routeArrivalEst})
+                        </span>
+                      ) : null}
                     </span>
                   </button>
                   <button
@@ -2451,82 +3156,341 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                 {activeDetailTab === 'tasks' && (
               <div>
                 {(() => {
-                  const svcs = (jobDetails || job)?.services || (jobDetails || job)?.job_services || []
-                  const totalTasks = svcs.length
-                  const completedCount = svcs.filter((s: any) => s.status === 'completed').length
-                  const totalDuration =
-                    (jobDetails || job)?.total_duration ??
-                    svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_duration_minutes ?? s.duration_minutes) || 0), 0)
-                  const totalPrice =
-                    (jobDetails || job)?.total_price ?? svcs.reduce((sum: number, s: any) => sum + (Number(s.custom_price ?? s.price) || 0), 0)
-                  // Service status changes are allowed for projected jobs too
-                  // — the detach guard surfaces a confirmation first and then
-                  // materializes the job before applying the change.
+                  const primary = jobDetails || job
+                  const sections: Array<{ key: string; source: any; services: any[]; isPrimary: boolean }> = [
+                    {
+                      key: String(primary?.id ?? 'primary'),
+                      source: primary,
+                      services: primary?.services || primary?.job_services || [],
+                      isPrimary: true,
+                    },
+                  ]
+                  if (Array.isArray(visitSiblings)) {
+                    for (const sib of visitSiblings) {
+                      const key = String(sib?.id ?? '')
+                      if (!key) continue
+                      const detail = siblingDetailsById[key] || sib
+                      sections.push({
+                        key,
+                        source: detail,
+                        services: detail?.services || detail?.job_services || [],
+                        isPrimary: false,
+                      })
+                    }
+                  }
+                  const showSectionTitles = sections.length > 1
+                  const visibleDrafts = taskDrafts.filter((d) => !d.removed)
+                  const allSvcs = editingTasks
+                    ? visibleDrafts
+                    : sections.flatMap((sec) => sec.services)
+                  const totalTasks = allSvcs.length
+                  const completedCount = editingTasks
+                    ? visibleDrafts.filter((s) => s.status === 'completed').length
+                    : allSvcs.filter((s: any) => s.status === 'completed').length
+                  const totalDuration = editingTasks
+                    ? visibleDrafts.reduce((sum, s) => sum + (Number(s.custom_duration_minutes) || 0), 0)
+                    : sections.reduce((sum, sec) => {
+                        const fromJob = sec.source?.total_duration
+                        if (fromJob != null && Number.isFinite(Number(fromJob))) return sum + Number(fromJob)
+                        return sum + sec.services.reduce(
+                          (s: number, svc: any) => s + (Number(svc.custom_duration_minutes ?? svc.duration_minutes) || 0),
+                          0,
+                        )
+                      }, 0)
+                  const totalPrice = editingTasks
+                    ? visibleDrafts.reduce((sum, s) => {
+                        const unit = Number(s.custom_price) || 0
+                        const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+                        return sum + unit * qty
+                      }, 0)
+                    : sections.reduce((sum, sec) => {
+                        const fromJob = sec.source?.total_price
+                        if (fromJob != null && Number.isFinite(Number(fromJob))) return sum + Number(fromJob)
+                        return sum + sec.services.reduce(
+                          (s: number, svc: any) => {
+                            const unit = Number(svc.custom_price ?? svc.price) || 0
+                            const qty = Number(svc.quantity) > 0 ? Number(svc.quantity) : 1
+                            return s + unit * qty
+                          },
+                          0,
+                        )
+                      }, 0)
                   const canEditServices = !isLocked
-                  const runServiceMutation = async (s: any, nextStatus: 'scheduled' | 'completed' | 'cancelled') => {
-                    if (!s?.id) return
-                    const jobId = await ensureRealJobId()
-                    if (!jobId) return
-                    updateServiceStatus(jobId, s.id, nextStatus)
+                  const filteredCatalog = catalogServices.filter((s) =>
+                    !addTaskSearch.trim()
+                    || s.title.toLowerCase().includes(addTaskSearch.trim().toLowerCase()),
+                  )
+
+                  const renderServiceRow = (s: any, sectionJobId: number | null, sectionIsPrimary: boolean) => {
+                    const serviceStatus = (s.status || (s.is_completed ? 'completed' : 'scheduled')) as string
+                    const isServiceCompleted = serviceStatus === 'completed'
+                    const isServiceCancelled = serviceStatus === 'cancelled'
+                    const isUpdating = updatingServiceId === s.id
+                    const canMutate = canEditServices && !!s.id && sectionJobId != null
+                    const runMutation = async (nextStatus: 'scheduled' | 'completed' | 'cancelled') => {
+                      if (!s?.id || sectionJobId == null) return
+                      if (sectionIsPrimary) {
+                        const jobId = await ensureRealJobId()
+                        if (!jobId) return
+                        updateServiceStatus(jobId, s.id, nextStatus)
+                        return
+                      }
+                      updateServiceStatus(sectionJobId, s.id, nextStatus)
+                    }
+                    const handleCheckClick = async () => {
+                      if (!canMutate) return
+                      const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
+                      if (sectionIsPrimary) {
+                        requestDetachOrRun(() => runMutation(next))
+                      } else {
+                        await runMutation(next)
+                      }
+                    }
+                    const handleCancelClick = async () => {
+                      if (!canMutate) return
+                      const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
+                      if (sectionIsPrimary) {
+                        requestDetachOrRun(() => runMutation(next))
+                      } else {
+                        await runMutation(next)
+                      }
+                    }
+                    return (
+                      <div
+                        key={`${sectionJobId ?? 'x'}-${s.service_id || s.id}`}
+                        className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 transition-colors shadow-sm ${isServiceCancelled ? 'bg-red-50 shadow-red-100/50' : 'bg-white'}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void handleCheckClick()}
+                          disabled={!canMutate || isUpdating}
+                          className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-colors disabled:opacity-50 ${isServiceCancelled ? 'border-red-300 bg-red-100 text-red-500' : isServiceCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white hover:border-accent-400'}`}
+                          title={isServiceCancelled ? t('app.jobView.undoCancel') : isServiceCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
+                        >
+                          {isServiceCancelled ? (
+                            <XMarkIcon className="w-3 h-3" strokeWidth={2.5} />
+                          ) : (
+                            <CheckIcon className={`w-3 h-3 ${isServiceCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
+                          )}
+                        </button>
+                        <div className="flex-1 min-w-0 flex items-center gap-2">
+                          <span className={`text-sm font-medium truncate ${isServiceCancelled ? 'text-red-700 line-through' : 'text-primary-500'}`}>
+                            {s.title || s.service_title || s.service_name || t('app.jobView.task')}
+                          </span>
+                          {Number(s.quantity) > 0 && Number(s.quantity) !== 1 && (
+                            <span className="text-xs text-gray-400 flex-shrink-0 tabular-nums">
+                              ×{Number(s.quantity)}
+                            </span>
+                          )}
+                          {(Number(s.custom_duration_minutes ?? s.duration_minutes) || 0) > 0 && (
+                            <span className="text-xs text-gray-500 flex-shrink-0">
+                              {formatDuration(s.custom_duration_minutes ?? s.duration_minutes ?? 0)}
+                            </span>
+                          )}
+                        </div>
+                        <div className={`text-sm font-medium flex-shrink-0 ${isServiceCancelled ? 'text-red-600' : 'text-primary-500'}`}>
+                          {formatPrice(
+                            (Number(s.custom_price ?? s.price) || 0) *
+                              (Number(s.quantity) > 0 ? Number(s.quantity) : 1),
+                          )}
+                        </div>
+                        {canMutate && (
+                          <button
+                            type="button"
+                            onClick={() => void handleCancelClick()}
+                            disabled={isUpdating}
+                            className="flex-shrink-0 text-xs font-medium px-2 py-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
+                          >
+                            {isServiceCancelled ? t('app.jobView.undo') : t('app.common.cancel')}
+                          </button>
+                        )}
+                      </div>
+                    )
                   }
-                  const handleCheckClick = async (s: any) => {
-                    if (!canEditServices || !s.id) return
-                    const next = s.status === 'completed' ? 'scheduled' : s.status === 'cancelled' ? 'scheduled' : 'completed'
-                    requestDetachOrRun(() => runServiceMutation(s, next))
-                  }
-                  const handleCancelClick = async (s: any) => {
-                    if (!canEditServices || !s.id) return
-                    const next = s.status === 'cancelled' ? 'scheduled' : 'cancelled'
-                    requestDetachOrRun(() => runServiceMutation(s, next))
-                  }
+
                   return (
                     <>
-                      {svcs.length > 0 ? (
-                        <div className="space-y-1.5">
-                          {svcs.map((s: any, i: number) => {
-                            const serviceStatus = (s.status || (s.is_completed ? 'completed' : 'scheduled')) as string
-                            const isServiceCompleted = serviceStatus === 'completed'
-                            const isServiceCancelled = serviceStatus === 'cancelled'
-                            const isUpdating = updatingServiceId === s.id
-                            return (
-                              <div
-                                key={s.service_id || s.id || i}
-                                className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 transition-colors shadow-sm ${isServiceCancelled ? 'bg-red-50 shadow-red-100/50' : 'bg-white'}`}
+                      {/* Edit / save toolbar */}
+                      {canEditServices && (
+                        <div className="flex items-center justify-end gap-2 mb-3">
+                          {editingTasks ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={cancelEditingTasks}
+                                disabled={savingTasks}
+                                className="text-xs font-semibold text-gray-500 hover:text-gray-800 px-2 py-1.5"
                               >
+                                {t('app.common.cancel', 'Cancel')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => requestDetachOrRun(() => void saveTaskEdits())}
+                                disabled={savingTasks}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 text-white text-xs font-semibold px-3 py-1.5 hover:bg-accent-600 disabled:opacity-50"
+                              >
+                                {savingTasks ? t('app.common.saving', 'Saving…') : t('app.common.save', 'Save')}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => requestDetachOrRun((newId) => void beginEditTasks(newId))}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white text-xs font-semibold text-gray-700 px-3 py-1.5 hover:bg-gray-50"
+                            >
+                              <PencilIcon className="w-3.5 h-3.5" />
+                              {t('app.jobView.editTasks', 'Edit tasks')}
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {editingTasks ? (
+                        <div className="space-y-2">
+                          {visibleDrafts.length === 0 && (
+                            <p className="text-sm text-gray-500 py-2 text-center">{t('app.jobView.noTasks')}</p>
+                          )}
+                          {visibleDrafts.map((row) => (
+                            <div
+                              key={row.key}
+                              className="rounded-lg bg-white border border-gray-200 px-3 py-2.5 space-y-2 shadow-sm"
+                            >
+                              <div className="flex items-start gap-2">
+                                <input
+                                  type="text"
+                                  value={row.title}
+                                  onChange={(e) => updateTaskDraft(row.key, 'title', e.target.value)}
+                                  disabled={!!row.service_id && !row.isNew}
+                                  className="flex-1 min-w-0 text-sm font-medium text-primary-700 bg-transparent border-b border-transparent focus:border-accent-400 outline-none disabled:text-primary-500"
+                                  placeholder={t('app.jobView.taskTitle', 'Task title')}
+                                />
                                 <button
                                   type="button"
-                                  onClick={() => handleCheckClick(s)}
-                                  disabled={!canEditServices || isUpdating}
-                                  className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 transition-colors disabled:opacity-50 ${isServiceCancelled ? 'border-red-300 bg-red-100 text-red-500' : isServiceCompleted ? 'border-accent-500 bg-accent-50 text-accent-600' : 'border-gray-300 bg-white hover:border-accent-400'}`}
-                                  title={isServiceCancelled ? t('app.jobView.undoCancel') : isServiceCompleted ? t('app.jobsPage.markNotCompleted') : t('app.jobsPage.markCompleted')}
+                                  onClick={() => markTaskRemoved(row.key)}
+                                  className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                  title={t('app.jobView.removeTask', 'Remove task')}
                                 >
-                                  {isServiceCancelled ? (
-                                    <XMarkIcon className="w-3 h-3" strokeWidth={2.5} />
-                                  ) : (
-                                    <CheckIcon className={`w-3 h-3 ${isServiceCompleted ? 'text-accent-600' : 'text-gray-400'}`} />
-                                  )}
+                                  <TrashIcon className="w-4 h-4" />
                                 </button>
-                                <div className="flex-1 min-w-0 flex items-center gap-2">
-                                  <span className={`text-sm font-medium truncate ${isServiceCancelled ? 'text-red-700 line-through' : 'text-primary-500'}`}>
-                                    {s.title || s.service_title || s.service_name || t('app.jobView.task')}
-                                  </span>
-                                  <span className="text-xs text-gray-500 flex-shrink-0">
-                                    {formatDuration(s.custom_duration_minutes ?? s.duration_minutes ?? 0)}
-                                  </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <label className="flex items-center gap-1 text-[11px] text-gray-500">
+                                  Qty
+                                  <input
+                                    type="number"
+                                    min={0.001}
+                                    step="any"
+                                    value={row.quantity}
+                                    onChange={(e) => updateTaskDraft(row.key, 'quantity', parseFloat(e.target.value) || 1)}
+                                    className="w-14 px-1.5 py-1 text-xs border border-gray-200 rounded-md"
+                                  />
+                                </label>
+                                <label className="flex items-center gap-1 text-[11px] text-gray-500">
+                                  {companyCurrency}
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={row.custom_price}
+                                    onChange={(e) => updateTaskDraft(row.key, 'custom_price', parseFloat(e.target.value) || 0)}
+                                    className="w-16 px-1.5 py-1 text-xs border border-gray-200 rounded-md"
+                                  />
+                                </label>
+                                <label className="flex items-center gap-1 text-[11px] text-gray-500">
+                                  min
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={row.custom_duration_minutes}
+                                    onChange={(e) => updateTaskDraft(row.key, 'custom_duration_minutes', parseInt(e.target.value, 10) || 0)}
+                                    className="w-14 px-1.5 py-1 text-xs border border-gray-200 rounded-md"
+                                  />
+                                </label>
+                                <span className="ml-auto text-xs font-semibold text-primary-600 tabular-nums">
+                                  {formatPrice(
+                                    (Number(row.custom_price) || 0) *
+                                      (Number(row.quantity) > 0 ? Number(row.quantity) : 1),
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+
+                          <div className="relative pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setShowAddTaskPicker((v) => !v)}
+                              className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-gray-300 bg-white px-3 py-2.5 text-xs font-semibold text-accent-700 hover:bg-accent-50/40"
+                            >
+                              <PlusIcon className="w-4 h-4" />
+                              {t('app.jobView.addTask', 'Add task')}
+                            </button>
+                            {showAddTaskPicker && (
+                              <div className="absolute left-0 right-0 mt-1 z-20 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                                <input
+                                  type="text"
+                                  value={addTaskSearch}
+                                  onChange={(e) => setAddTaskSearch(e.target.value)}
+                                  placeholder={t('app.jobView.searchItems', 'Search items…')}
+                                  className="w-full px-3 py-2 text-sm border-b border-gray-100 outline-none"
+                                  autoFocus
+                                />
+                                <div className="max-h-48 overflow-y-auto">
+                                  {filteredCatalog.map((svc) => (
+                                    <button
+                                      key={svc.id}
+                                      type="button"
+                                      onClick={() => addCatalogTask(svc)}
+                                      className="w-full px-3 py-2 text-left hover:bg-gray-50 border-b border-gray-50"
+                                    >
+                                      <div className="text-sm font-medium text-gray-900">{svc.title}</div>
+                                      <div className="text-[11px] text-gray-500">
+                                        {formatPrice(Number(svc.price) || 0)}
+                                        {Number(svc.duration_minutes) > 0 ? ` · ${svc.duration_minutes} min` : ''}
+                                      </div>
+                                    </button>
+                                  ))}
+                                  {filteredCatalog.length === 0 && (
+                                    <p className="px-3 py-2 text-xs text-gray-500">No items found</p>
+                                  )}
                                 </div>
-                                <div className={`text-sm font-medium flex-shrink-0 ${isServiceCancelled ? 'text-red-600' : 'text-primary-500'}`}>
-                                  {formatPrice(s.custom_price ?? s.price ?? 0)}
-                                </div>
-                                {canEditServices && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCancelClick(s)}
-                                    disabled={isUpdating}
-                                    className="flex-shrink-0 text-xs font-medium px-2 py-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
-                                  >
-                                    {isServiceCancelled ? t('app.jobView.undo') : t('app.common.cancel')}
-                                  </button>
+                                <button
+                                  type="button"
+                                  onClick={addCustomTask}
+                                  className="w-full px-3 py-2.5 text-left text-sm font-semibold text-accent-700 bg-gray-50 hover:bg-accent-50 border-t border-gray-100"
+                                >
+                                  <PlusIcon className="w-4 h-4 inline mr-1.5" />
+                                  {t('app.jobView.customTask', 'Custom task')}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : totalTasks > 0 ? (
+                        <div className="space-y-4">
+                          {sections.map((sec, idx) => {
+                            const sectionJobId = parseJobId(sec.source?.id)
+                            const sourceLabel = visitJobSourceLabel(sec.source, t)
+                            return (
+                              <div key={sec.key}>
+                                {showSectionTitles && idx > 0 && (
+                                  <div className="border-t border-slate-200 mb-3" role="separator" />
                                 )}
+                                {showSectionTitles && (
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                                    {sourceLabel}
+                                  </p>
+                                )}
+                                {sec.services.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {sec.services.map((s: any) =>
+                                      renderServiceRow(s, sectionJobId, sec.isPrimary),
+                                    )}
+                                  </div>
+                                ) : showSectionTitles ? (
+                                  <p className="text-sm text-gray-500 py-2">{t('app.jobView.noTasks')}</p>
+                                ) : null}
                               </div>
                             )
                           })}
@@ -2534,7 +3498,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
                       ) : (
                         <p className="text-sm text-gray-500 py-4 text-center">{t('app.jobView.noTasks')}</p>
                       )}
-                      {svcs.length > 0 && (
+                      {totalTasks > 0 && (
                         <p className="mt-2 text-right text-xs text-gray-500 tabular-nums leading-relaxed">
                           <span>
                             {t('app.jobView.tasksProgress')
@@ -3191,7 +4155,13 @@ ${currentUserName}`
       {/* Cancel Job Confirmation Modal */}
       <ConfirmModal
         isOpen={showCancelModal}
-        onClose={() => { setShowCancelModal(false); setCancelTemplate({ subject: '', message: '' }) }}
+        onClose={() => {
+          setShowCancelModal(false)
+          setCancelTemplate({ subject: '', message: '' })
+          // Next open should start checked again.
+          setChargeCancellationFee(true)
+          chargeCancellationFeeRef.current = true
+        }}
         onConfirm={confirmCancelJob}
         title="Cancel Job"
         description="Are you sure you want to cancel this job?"
@@ -3215,8 +4185,30 @@ Kind regards,
 ${userName}`
         })()}
       >
-        <div className="text-sm text-gray-600">
+        <div className="text-sm text-gray-600 space-y-3">
           <p>This will mark the job as cancelled. The customer will be notified if you choose to send a notification.</p>
+          {cancellationFeeSettings?.enabled && (cancellationFeeSettings.price || 0) > 0 && (
+            <label className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 rounded border-gray-300 text-amber-700 accent-amber-700 focus:ring-amber-500"
+                checked={chargeCancellationFee}
+                onChange={(e) => {
+                  const next = e.target.checked
+                  setChargeCancellationFee(next)
+                  chargeCancellationFeeRef.current = next
+                }}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-gray-900">
+                  Charge {cancellationFeeSettings.title || 'cancellation fee'}
+                </span>
+                <span className="block text-xs text-gray-600 mt-0.5">
+                  {formatMoney(cancellationFeeSettings.price, companyCountryCode)} — creates an invoiceable fee for this visit date
+                </span>
+              </span>
+            </label>
+          )}
         </div>
       </ConfirmModal>
     </>

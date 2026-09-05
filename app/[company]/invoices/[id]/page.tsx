@@ -52,6 +52,13 @@ function applySendInvoicePlaceholders(
     .replace(/\{Client first name\}/g, ctx.clientFirstName)
 }
 
+/** Client-side fallback if the API is slow/empty (matches server defaults). */
+const SEND_INVOICE_FALLBACK = {
+  subject: 'Invoice {invoice_number} from {Company name}',
+  message:
+    'Hi {Client first name},\n\nYour invoice is ready. Open the e-invoice using the button in the email to view details and payment options.\n\nBest regards,\n{Company name}',
+}
+
 export default function InvoicePage() {
   const { t } = useAppI18n()
   const tr = (key: MessageKey, fallback?: string) => t(key, fallback)
@@ -142,7 +149,17 @@ export default function InvoicePage() {
       .then(([invData, eData, tplData]) => {
         if (cancelled) return
         if (invData.invoice) {
-          setInvoice(invData.invoice)
+          const inv = invData.invoice
+          // Drafts are edited only in the composer — never on this status page.
+          if ((inv.status || 'draft') === 'draft') {
+            router.replace(
+              company
+                ? `/${company}/invoices/new?draft=${encodeURIComponent(String(id))}`
+                : `/invoices/new?draft=${encodeURIComponent(String(id))}`,
+            )
+            return
+          }
+          setInvoice(inv)
           setPendingInvoiceReminder(invData.pendingInvoiceReminder ?? null)
         } else setError(invData.error || tr('invoice.detail.notFound', 'Invoice not found'))
         if (eData.invoice) {
@@ -165,36 +182,7 @@ export default function InvoicePage() {
     return () => {
       cancelled = true
     }
-  }, [id])
-
-  const openSendModal = () => {
-    if ((invoice?.status || 'draft') !== 'draft') return
-    setSendConfirmStep('form')
-    const email = (invoice?.billing_email || invoice?.email || '').trim()
-    setSendTo(email)
-    setSendSubject('')
-    setSendBody('')
-    setSendCc('')
-    setSendError(null)
-    setSendModalOpen(true)
-    const invNo = String(
-      invoice?.invoice_number_display || invoice?.invoice_number || invoice?.id || '',
-    )
-    const token = localStorage.getItem('token')
-    if (!token) return
-    fetch(apiUrl('/email-templates'), { headers: { Authorization: `Bearer ${token}` } })
-      .then((res) => res.json())
-      .then((data) => {
-        const si = data.templates?.send_invoice
-        if (!si) return
-        const companyName = String(invoice?.company_name ?? '')
-        const first = String(invoice?.name ?? '').trim()
-        const ctx = { invoiceNumber: invNo, companyName, clientFirstName: first }
-        setSendSubject(applySendInvoicePlaceholders(si.subject || '', ctx))
-        setSendBody(applySendInvoicePlaceholders(si.message || '', ctx))
-      })
-      .catch(() => {})
-  }
+  }, [id, company, router])
 
   const refreshInvoiceReminderStatus = async () => {
     const token = localStorage.getItem('token')
@@ -507,10 +495,6 @@ export default function InvoicePage() {
   const openOnlineInvoice = async () => {
     const token = localStorage.getItem('token')
     if (!token || !id) return
-    if ((invoice?.status || 'draft') === 'draft') {
-      window.open(`${window.location.origin}/${company}/invoices/${id}/preview`, '_blank', 'noopener,noreferrer')
-      return
-    }
     setOnlineInvoiceLoading(true)
     try {
       const res = await fetch(apiUrl(`/invoices/${id}/online-link`), {
@@ -836,58 +820,21 @@ export default function InvoicePage() {
                       {tr('invoice.detail.paymentReceived', 'Payment received')}
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={openOnlineInvoice}
-                    disabled={onlineInvoiceLoading}
-                    className="inline-flex w-full items-center justify-center gap-1.5 text-sm font-medium text-accent-700 hover:text-accent-800 disabled:opacity-60"
-                  >
-                    <EyeIcon className="h-4 w-4" aria-hidden />
-                    {onlineInvoiceLoading
-                      ? tr('invoice.detail.opening', 'Opening…')
-                      : isDraft
-                        ? tr('invoice.detail.previewInvoice', 'Preview e-invoice')
-                        : tr('invoice.detail.viewInvoice', 'View invoice')}
-                  </button>
+            <button
+              type="button"
+              onClick={openOnlineInvoice}
+              disabled={onlineInvoiceLoading}
+              className="inline-flex w-full items-center justify-center gap-1.5 text-sm font-medium text-accent-700 hover:text-accent-800 disabled:opacity-60"
+            >
+              <EyeIcon className="h-4 w-4" aria-hidden />
+              {onlineInvoiceLoading
+                ? tr('invoice.detail.opening', 'Opening…')
+                : tr('invoice.detail.viewInvoice', 'View invoice')}
+            </button>
                 </div>
               </div>
             </div>
 
-            {(invoice.status === 'draft' || !invoice.status) && (
-              <div className="flex gap-2">
-                <Link
-                  href={`/${company}/invoices/${id}/edit`}
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2"
-                >
-                  <PencilSquareIcon className="h-5 w-5" />
-                  {tr('invoice.detail.edit', 'Edit')}
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => { setDeleteJobsToo(false); setDeleteError(null); setDeleteModalOpen(true) }}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50 hover:border-red-200 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-                  title={tr('invoice.detail.deleteDraft', 'Delete draft')}
-                >
-                  <TrashIcon className="h-5 w-5" />
-                </button>
-              </div>
-            )}
-            {isDraft && (
-              <button
-                type="button"
-                onClick={openSendModal}
-                disabled={cannotLeaveDraftWithoutPayments}
-                title={
-                  cannotLeaveDraftWithoutPayments
-                    ? tr('invoice.detail.enablePaymentMethodWarn', 'Enable at least one payment method in Extensions before sending.')
-                    : undefined
-                }
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-accent-600 bg-accent-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <PaperAirplaneIcon className="h-5 w-5" aria-hidden />
-                {tr('invoice.detail.completeAndSend', 'Complete and send')}
-              </button>
-            )}
             {showSendNotification && (
               <div className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3">
                 <div className="flex items-start gap-2">
@@ -1026,7 +973,7 @@ export default function InvoicePage() {
                     type="text"
                     readOnly
                     value={sendSubject}
-                    placeholder={tr('invoice.detail.sendLoadingTemplate', 'Loading from template…')}
+                    placeholder={tr('invoice.detail.sendSubjectPlaceholder', 'Subject')}
                     className="mt-1 w-full cursor-default rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />
                 </div>
@@ -1035,7 +982,7 @@ export default function InvoicePage() {
                   <textarea
                     readOnly
                     value={sendBody}
-                    placeholder={tr('invoice.detail.sendLoadingTemplate', 'Loading from template…')}
+                    placeholder={tr('invoice.detail.sendBodyPlaceholder', 'Message')}
                     rows={4}
                     className="mt-1 w-full cursor-default resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
                   />

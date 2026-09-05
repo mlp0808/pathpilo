@@ -331,14 +331,13 @@ function replacePaymentTermsPlaceholders(template, invoice) {
 }
 
 // Build PDF buffer for an invoice. The layout intentionally mirrors the
-// digital invoice (DigitalInvoiceView.tsx) section-by-section: same headers,
-// same Bill to block, same totals, same payment terms, same payment options.
-// This is required for accounting consistency — the customer must never see
-// conflicting data between the digital and printed surfaces.
+// digital invoice (DigitalInvoiceView.tsx) and the invoice composer document:
+// logo + date/#, company | client names aligned, description/title, line items,
+// terms + totals, then how to pay.
 function buildInvoicePdf(invoice, bankRow = null) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const doc = new PDFDocument({ size: 'A4', margin: 48 });
       const chunks = [];
       doc.on('data', (c) => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -350,22 +349,36 @@ function buildInvoicePdf(invoice, bankRow = null) {
       // translated through this locale.
       const locale = invoice.invoice_locale || 'en';
       const tr = (key, fallback) => tI18n(locale, key, fallback);
-      const formatNum = (n) => (Number(n) || 0).toFixed(2);
       const pageWidth = 595;
-      const margin = 50;
+      const margin = 48;
       const rightEdge = pageWidth - margin;
       const contentWidth = rightEdge - margin;
 
       // Brand + neutral palette (matches Tailwind classes in the digital view)
       const brand = '#193434';
-      const gray50 = '#f9fafb';
       const gray100 = '#f3f4f6';
-      const gray200 = '#e5e7eb';
       const gray400 = '#9ca3af';
       const gray500 = '#6b7280';
       const gray600 = '#4b5563';
       const gray700 = '#374151';
       const gray900 = '#111827';
+
+      const formatMoney = (n) => {
+        const v = Number(n) || 0;
+        const [intPart, dec] = v.toFixed(2).split('.');
+        const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        return `${withSep}.${dec} ${currency}`;
+      };
+      const formatIban = (iban) =>
+        iban ? String(iban).replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim() : '';
+      const hairline = (y) => {
+        doc
+          .moveTo(margin, y)
+          .lineTo(rightEdge, y)
+          .strokeColor(gray100)
+          .lineWidth(0.6)
+          .stroke();
+      };
 
       // Pre-resolve every label so empty fields can be skipped cleanly. The
       // snapshot lens (resolveInvoiceParties) has already filled these in for
@@ -375,30 +388,18 @@ function buildInvoicePdf(invoice, bankRow = null) {
       const invoiceNumber = String(
         invoice.invoice_number_display || invoice.invoice_number || invoice.id,
       );
-      // Reference / PO rendering is intentionally disabled for now. The
-      // snapshot column stays on `invoices` so re-enabling is a one-line flip.
-      const referenceText = null;
 
-      // ════════════════════════════════════════════════════════════════════════
-      // HEADER: company logo (or brand mark) on the left, big "INVOICE #1234"
-      // block on the right. Modeled after Stripe / Xero invoices.
-      // ════════════════════════════════════════════════════════════════════════
+      // ── Header: logo left · issue date + # right ──────────────────────────
       const headerTop = margin;
-      const logoMaxW = 160;
-      const logoMaxH = 60;
+      const logoMaxW = 150;
+      const logoMaxH = 44;
       let headerLeftBottom = headerTop;
 
       if (invoice.company_logo_url) {
-        // Logo URLs from this app are served by the API itself under /uploads/.
-        // pdfkit's image() can take a Buffer or a path; we resolve the URL to a
-        // local file when possible. If the URL is external or unreadable we
-        // silently fall back to the text mark.
         try {
           const pdfPath = require('path');
           const pdfFs = require('fs');
           const url = String(invoice.company_logo_url);
-          // Resolve to a local file path — supports both the legacy /uploads/
-          // format and the new /api/companies/logo/ format.
           let localLogoPath = null;
           const LOGO_DIR_PDF = pdfPath.resolve(__dirname, '..', 'uploads', 'company-logos');
           const newMatch = url.match(/\/api\/companies\/logo\/([^/?#]+)$/);
@@ -407,404 +408,363 @@ function buildInvoicePdf(invoice, bankRow = null) {
           else if (legacyMatch) localLogoPath = pdfPath.join(LOGO_DIR_PDF, pdfPath.basename(legacyMatch[1]));
           if (localLogoPath && pdfFs.existsSync(localLogoPath)) {
             doc.image(localLogoPath, margin, headerTop, { fit: [logoMaxW, logoMaxH] });
-            headerLeftBottom = headerTop + logoMaxH + 4;
+            headerLeftBottom = headerTop + logoMaxH;
           }
         } catch (_) {
-          /* fall through to text mark */
+          /* no logo */
         }
       }
 
-      if (headerLeftBottom === headerTop) {
-        // No usable logo — render a discreet brand mark with the company name.
-        if (invoice.company_name) {
-          doc.fontSize(16).fillColor(brand).font('Helvetica-Bold');
-          doc.text(invoice.company_name, margin, headerTop, { width: 260 });
-          headerLeftBottom = doc.y + 4;
-        } else {
-          headerLeftBottom = headerTop + 24;
-        }
-      }
-
-      // Right-side INVOICE block
-      doc.font('Helvetica').fillColor(gray500).fontSize(9);
-      doc.text(tr('invoice.documentTitle', 'INVOICE'), rightEdge - 200, headerTop, {
-        width: 200,
-        align: 'right',
-        characterSpacing: 2,
-      });
-      doc.font('Helvetica-Bold').fillColor(gray900).fontSize(22);
-      doc.text(`#${invoiceNumber}`, rightEdge - 200, headerTop + 12, {
+      doc.font('Helvetica').fillColor(gray900).fontSize(10);
+      doc.text(formatPdfDate(invoice.issue_date, locale) || '', rightEdge - 200, headerTop, {
         width: 200,
         align: 'right',
       });
-      const headerRightBottom = headerTop + 12 + 24;
-      const headerBottom = Math.max(headerLeftBottom, headerRightBottom) + 14;
+      doc.font('Helvetica-Bold').fillColor(brand).fontSize(20);
+      doc.text(`#${invoiceNumber}`, rightEdge - 200, headerTop + 16, {
+        width: 200,
+        align: 'right',
+      });
+      const headerRightBottom = headerTop + 16 + 24;
+      doc.y = Math.max(headerLeftBottom, headerRightBottom) + 28;
 
-      doc.y = headerBottom;
-      doc.moveTo(margin, doc.y).lineTo(rightEdge, doc.y).strokeColor(gray200).stroke();
-      doc.y += 18;
-
-      // ════════════════════════════════════════════════════════════════════════
-      // PARTIES: From (left, sender) | Bill to (right, recipient)
-      // Each block hides any empty field — per spec, blanks must NOT appear.
-      // ════════════════════════════════════════════════════════════════════════
+      // ── Parties: company | client (aligned tops, no labels) ───────────────
       const partiesTop = doc.y;
-      const colW = (contentWidth - 30) / 2;
+      const gutter = 40;
+      const colW = (contentWidth - gutter) / 2;
       const fromX = margin;
-      const billToX = margin + colW + 30;
+      const billToX = margin + colW + gutter;
 
-      const drawSmallLabel = (text, x, y) => {
-        doc.font('Helvetica-Bold').fontSize(8).fillColor(gray500);
-        doc.text(text, x, y, { width: colW, characterSpacing: 1.2 });
+      const drawPartyLines = (lines, x, align) => {
+        let y = partiesTop;
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line || !line.text) continue;
+          doc.font(line.bold ? 'Helvetica-Bold' : 'Helvetica')
+            .fontSize(line.size || 9)
+            .fillColor(line.color || gray600);
+          doc.text(line.text, x, y, { width: colW, align, lineGap: 1 });
+          y = doc.y + (line.after ?? 1.5);
+        }
+        return y;
       };
 
-      // ── FROM (sender / admin company) ──
-      drawSmallLabel(tr('invoice.from', 'FROM'), fromX, partiesTop);
-      let fromY = partiesTop + 14;
-      if (invoice.company_name) {
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(gray900);
-        doc.text(invoice.company_name, fromX, fromY, { width: colW });
-        fromY = doc.y + 2;
-      }
-      doc.font('Helvetica').fontSize(9).fillColor(gray700);
-      const fromAddress = invoice.company_address;
-      const fromCityLine = [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ');
-      if (fromAddress) {
-        doc.text(fromAddress, fromX, fromY, { width: colW });
-        fromY = doc.y + 1;
-      }
-      if (fromCityLine) {
-        doc.text(fromCityLine, fromX, fromY, { width: colW });
-        fromY = doc.y + 1;
-      }
-      if (invoice.company_country) {
-        doc.text(invoice.company_country, fromX, fromY, { width: colW });
-        fromY = doc.y + 1;
-      }
-      if (invoice.company_cvr_number) {
-        doc.fillColor(gray600).text(`${cvrLabel} ${invoice.company_cvr_number}`, fromX, fromY + 4, {
-          width: colW,
-        });
-        fromY = doc.y + 1;
-      }
-      if (invoice.company_vat_number) {
-        doc.fillColor(gray600).text(`VAT No. ${invoice.company_vat_number}`, fromX, fromY + 2, {
-          width: colW,
-        });
-        fromY = doc.y + 1;
-      }
-      // Sender contact info — each piece independently hidden if empty.
-      const senderContactLines = [
-        invoice.company_email || null,
-        invoice.company_phone || null,
-        invoice.company_website || null,
+      const companyLines = [
+        invoice.company_name
+          ? { text: invoice.company_name, bold: true, size: 11, color: brand, after: 4 }
+          : null,
+        invoice.company_address ? { text: invoice.company_address } : null,
+        [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ')
+          ? { text: [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ') }
+          : null,
+        invoice.company_country ? { text: invoice.company_country } : null,
+        invoice.company_cvr_number
+          ? { text: `${cvrLabel} ${invoice.company_cvr_number}`, after: 1.5 }
+          : null,
+        invoice.company_vat_number ? { text: `VAT ${invoice.company_vat_number}` } : null,
+        invoice.company_email ? { text: invoice.company_email } : null,
+        invoice.company_phone ? { text: invoice.company_phone } : null,
       ].filter(Boolean);
-      if (senderContactLines.length > 0) {
-        fromY += 4;
-        doc.fontSize(9).fillColor(gray600);
-        for (const line of senderContactLines) {
-          doc.text(line, fromX, fromY, { width: colW });
-          fromY = doc.y + 1;
-        }
-      }
-      const fromBlockBottom = fromY;
 
-      // ── BILL TO (recipient / client) ──
-      drawSmallLabel(tr('invoice.billTo', 'BILL TO'), billToX, partiesTop);
-      let billY = partiesTop + 14;
-      doc.font('Helvetica-Bold').fontSize(11).fillColor(gray900);
-      doc.text(invoice.client_name || '\u2014', billToX, billY, { width: colW });
-      billY = doc.y + 2;
-      doc.font('Helvetica').fontSize(9).fillColor(gray700);
-      const billAddress =
+      const billStreet =
         (invoice.invoice_to_address && String(invoice.invoice_to_address).trim()) ||
-        [invoice.address, invoice.zip_code, invoice.city].filter(Boolean).join(', ');
-      if (billAddress) {
-        doc.text(billAddress, billToX, billY, { width: colW });
-        billY = doc.y + 1;
-      }
+        invoice.address ||
+        null;
+      const billZipCity = [invoice.zip_code, invoice.city].filter(Boolean).join(', ');
+      const billEan = invoice.bill_to_ean || invoice.client_ean;
       const billEmail = invoice.invoice_to_email || invoice.email;
       const billPhone = invoice.invoice_to_phone || invoice.phone;
-      if (billEmail) {
-        doc.text(billEmail, billToX, billY, { width: colW });
-        billY = doc.y + 1;
-      }
-      if (billPhone) {
-        doc.text(billPhone, billToX, billY, { width: colW });
-        billY = doc.y + 1;
-      }
-      // EAN/GLN for Danish public-sector clients. Hidden when blank.
-      const billEan = invoice.bill_to_ean || invoice.client_ean;
-      if (billEan) {
-        doc
-          .fillColor(gray600)
-          .text(`${tr('invoice.eanLabel', 'EAN/GLN')} ${billEan}`, billToX, billY + 4, { width: colW });
-        billY = doc.y + 1;
-      }
-      const billBlockBottom = billY;
+      const clientLines = [
+        { text: invoice.client_name || '\u2014', bold: true, size: 11, color: gray900, after: 4 },
+        billStreet ? { text: billStreet } : null,
+        billZipCity ? { text: billZipCity } : null,
+        invoice.country ? { text: invoice.country } : null,
+        billEan ? { text: `${tr('invoice.eanLabel', 'EAN/GLN')} ${billEan}` } : null,
+        billEmail ? { text: billEmail } : null,
+        billPhone ? { text: billPhone } : null,
+      ].filter(Boolean);
 
-      doc.y = Math.max(fromBlockBottom, billBlockBottom) + 18;
+      const fromBottom = drawPartyLines(companyLines, fromX, 'left');
+      const billBottom = drawPartyLines(clientLines, billToX, 'right');
 
-      // ════════════════════════════════════════════════════════════════════════
-      // META STRIP: Issue date · Due date · Reference (only if filled)
-      // ════════════════════════════════════════════════════════════════════════
-      const metaTop = doc.y;
-      const metaCols = referenceText ? 3 : 2;
-      const metaColW = (contentWidth - (metaCols - 1) * 20) / metaCols;
-      const metaXs = [];
-      for (let i = 0; i < metaCols; i++) metaXs.push(margin + i * (metaColW + 20));
+      doc.y = Math.max(fromBottom, billBottom) + 22;
+      hairline(doc.y);
+      doc.y += 22;
 
-      const drawMeta = (x, label, value) => {
-        drawSmallLabel(label, x, metaTop);
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(gray900);
-        doc.text(value || '\u2014', x, metaTop + 14, { width: metaColW });
-      };
-      drawMeta(
-        metaXs[0],
-        tr('invoice.issueDateUpper', 'ISSUE DATE'),
-        formatPdfDate(invoice.issue_date, locale),
-      );
-      drawMeta(
-        metaXs[1],
-        tr('invoice.dueDateUpper', 'DUE DATE'),
-        formatPdfDate(invoice.due_date, locale),
-      );
-      if (referenceText) {
-        drawMeta(metaXs[2], 'REFERENCE / PO', referenceText);
-      }
-      doc.y = metaTop + 14 + 18;
-
-      // ════════════════════════════════════════════════════════════════════════
-      // OPTIONAL DESCRIPTION (above the table, per product spec)
-      // ════════════════════════════════════════════════════════════════════════
-      if (invoice.title || invoice.description) {
-        doc.moveTo(margin, doc.y).lineTo(rightEdge, doc.y).strokeColor(gray100).stroke();
-        doc.y += 14;
-        if (invoice.title) {
-          doc.fontSize(11).fillColor(gray900).font('Helvetica-Bold');
-          doc.text(invoice.title, margin, doc.y, { width: contentWidth });
-          doc.font('Helvetica');
-          doc.y += 4;
-        }
+      // ── Description + title ───────────────────────────────────────────────
+      if (invoice.description || invoice.title) {
         if (invoice.description) {
-          doc.fontSize(10).fillColor(gray700);
+          doc.font('Helvetica').fontSize(10).fillColor(gray700);
           doc.text(String(invoice.description), margin, doc.y, {
             width: contentWidth,
-            lineGap: 2,
+            lineGap: 2.5,
           });
+          doc.y += 8;
+        }
+        if (invoice.title) {
+          doc.font('Helvetica-Bold').fontSize(13).fillColor(gray900);
+          doc.text(String(invoice.title), margin, doc.y, { width: contentWidth });
           doc.y += 6;
         }
+        doc.y += 10;
+        hairline(doc.y);
+        doc.y += 18;
       }
 
-      // ════════════════════════════════════════════════════════════════════════
-      // LINE-ITEMS TABLE
-      // ════════════════════════════════════════════════════════════════════════
-      const colDesc = margin;
-      const colQtyRight = margin + 320;
-      const colUnitRight = margin + 410;
-      const colAmtRight = rightEdge;
-      const tableTop = doc.y + 8;
-      const headerH = 22;
+      // ── Line items ───────────────────────────────────────────────────────
+      const amtColW = 100;
+      const descW = contentWidth - amtColW - 12;
 
-      doc.rect(margin, tableTop, contentWidth, headerH).fill(gray50);
-      doc.moveTo(margin, tableTop + headerH).lineTo(rightEdge, tableTop + headerH).strokeColor(gray200).stroke();
-      doc.fontSize(9).fillColor(gray500).font('Helvetica-Bold');
-      doc.text(tr('invoice.descriptionUpper', 'DESCRIPTION'), colDesc + 8, tableTop + 7, {
-        width: 280,
-        characterSpacing: 1,
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(gray400);
+      doc.text(tr('invoice.description', 'Description').toUpperCase(), margin, doc.y, {
+        width: descW,
+        characterSpacing: 0.8,
       });
-      doc.text(tr('invoice.qtyUpper', 'QTY'), colDesc, tableTop + 7, {
-        width: colQtyRight - colDesc - 8,
+      doc.text(tr('invoice.amount', 'Amount').toUpperCase(), margin, doc.y, {
+        width: contentWidth,
         align: 'right',
-        characterSpacing: 1,
+        characterSpacing: 0.8,
       });
-      doc.text(tr('invoice.unitPriceUpper', 'UNIT PRICE'), colDesc, tableTop + 7, {
-        width: colUnitRight - colDesc - 8,
-        align: 'right',
-        characterSpacing: 1,
-      });
-      doc.text(tr('invoice.amountUpper', 'AMOUNT'), colDesc, tableTop + 7, {
-        width: colAmtRight - colDesc - 8,
-        align: 'right',
-        characterSpacing: 1,
-      });
-      doc.font('Helvetica');
-      doc.y = tableTop + headerH + 8;
+      doc.y += 14;
+      hairline(doc.y);
+      doc.y += 10;
 
       const items = invoice.items || [];
       if (items.length === 0) {
-        doc.fontSize(10).fillColor(gray500).text(tr('invoice.noLineItems', 'No line items'), colDesc + 8, doc.y, {
+        doc.font('Helvetica').fontSize(10).fillColor(gray400);
+        doc.text(tr('invoice.noLineItems', 'No line items'), margin, doc.y + 8, {
           width: contentWidth,
+          align: 'center',
         });
-        doc.y += 18;
+        doc.y += 36;
       } else {
         for (const it of items) {
           const desc = it.description || it.service_title || '\u2014';
           const y = doc.y;
-          doc.fontSize(10).fillColor(gray900);
-          doc.text(desc, colDesc + 8, y, { width: 280 });
-          const lineH = doc.y - y;
-          doc.fillColor(gray600);
-          doc.text(String(it.quantity ?? 1), colDesc, y, {
-            width: colQtyRight - colDesc - 8,
+          const qty = Number(it.quantity ?? 1);
+          doc.font('Helvetica').fontSize(10).fillColor(gray900);
+          doc.text(desc, margin, y, { width: descW, lineGap: 1.5 });
+          let blockH = doc.y - y;
+          if (qty !== 1) {
+            doc.font('Helvetica').fontSize(8).fillColor(gray400);
+            doc.text(`${qty} \u00d7 ${formatMoney(it.unit_price)}`, margin, y + blockH + 2, {
+              width: descW,
+            });
+            blockH = doc.y - y;
+          }
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(gray900);
+          doc.text(formatMoney(it.line_total), margin, y, {
+            width: contentWidth,
             align: 'right',
           });
-          doc.text(formatNum(it.unit_price), colDesc, y, {
-            width: colUnitRight - colDesc - 8,
-            align: 'right',
-          });
-          doc.fillColor(gray900).font('Helvetica-Bold');
-          doc.text(formatNum(it.line_total), colDesc, y, {
-            width: colAmtRight - colDesc - 8,
-            align: 'right',
-          });
-          doc.font('Helvetica');
-          doc.y = y + Math.max(lineH, 14) + 6;
-          doc
-            .moveTo(margin, doc.y)
-            .lineTo(rightEdge, doc.y)
-            .strokeColor(gray100)
-            .stroke();
-          doc.y += 4;
+          doc.y = y + Math.max(blockH, 12) + 12;
+          hairline(doc.y);
+          doc.y += 10;
         }
       }
 
-      doc.y += 10;
+      doc.y += 14;
 
-      // ════════════════════════════════════════════════════════════════════════
-      // TOTALS BOX (right-aligned, with Total highlighted in brand color)
-      // ════════════════════════════════════════════════════════════════════════
-      const totalsW = 240;
+      // ── Terms (left) + totals (right) ─────────────────────────────────────
+      const blockTop = doc.y;
+      const termsW = contentWidth * 0.52;
+      const totalsW = 200;
       const totalsX = rightEdge - totalsW;
-      doc.fontSize(10).fillColor(gray600).font('Helvetica');
-      const drawTotalRow = (label, value, bold) => {
+
+      let termsBottom = blockTop;
+      if (invoice.payment_terms && String(invoice.payment_terms).trim() !== '') {
+        doc.font('Helvetica').fontSize(8).fillColor(gray500);
+        const termsResolved = replacePaymentTermsPlaceholders(invoice.payment_terms, invoice);
+        doc.text(termsResolved, margin, blockTop, { width: termsW, lineGap: 2 });
+        termsBottom = doc.y;
+      }
+      doc.font('Helvetica').fontSize(8).fillColor(gray500);
+      const dueLabel = tr('invoice.dueDate', 'Due date');
+      const dueValue = formatPdfDate(invoice.due_date, locale) || '\u2014';
+      doc.text(`${dueLabel} \u00b7 ${dueValue}`, margin, termsBottom + (termsBottom > blockTop ? 10 : 0), {
+        width: termsW,
+      });
+      termsBottom = doc.y;
+
+      doc.y = blockTop;
+      const drawTotalRow = (label, value, opts = {}) => {
         const y = doc.y;
-        if (bold) doc.font('Helvetica-Bold').fillColor(gray900);
-        doc.text(label, totalsX, y, { width: totalsW - 100 });
+        const size = opts.size || 10;
+        doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica')
+          .fontSize(size)
+          .fillColor(opts.color || gray600);
+        doc.text(label, totalsX, y, { width: totalsW - 90 });
         doc.text(value, totalsX, y, { width: totalsW, align: 'right' });
-        doc.font('Helvetica').fillColor(gray600);
-        doc.y = y + 16;
+        doc.y = y + (opts.gap || 15);
       };
-      drawTotalRow(tr('invoice.subtotal', 'Subtotal'), `${formatNum(invoice.subtotal)} ${currency}`);
+
+      drawTotalRow(tr('invoice.subtotal', 'Subtotal'), formatMoney(invoice.subtotal));
       if (Number(invoice.tax_rate) > 0) {
         drawTotalRow(
-          `${taxLabel} (${formatNum(invoice.tax_rate)}%)`,
-          `${formatNum(invoice.tax_amount)} ${currency}`,
+          `${taxLabel} (${Number(invoice.tax_rate).toFixed(0)}%)`,
+          formatMoney(invoice.tax_amount),
         );
       }
-      // Highlighted Total row
-      const totalY = doc.y;
-      doc.rect(totalsX - 8, totalY - 4, totalsW + 16, 28).fill(brand);
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(11);
-      doc.text(tr('invoice.totalUpper', 'TOTAL'), totalsX, totalY + 5, {
-        width: totalsW - 100,
-        characterSpacing: 1.2,
+      doc
+        .moveTo(totalsX, doc.y)
+        .lineTo(rightEdge, doc.y)
+        .strokeColor(gray100)
+        .lineWidth(0.6)
+        .stroke();
+      doc.y += 8;
+      drawTotalRow(tr('invoice.total', 'Total'), formatMoney(invoice.total), {
+        bold: true,
+        color: gray900,
+        size: 11,
+        gap: 16,
       });
-      doc.text(`${formatNum(invoice.total)} ${currency}`, totalsX, totalY + 5, {
-        width: totalsW,
-        align: 'right',
-      });
-      doc.font('Helvetica').fillColor(gray900);
-      doc.y = totalY + 36;
 
-      // ════════════════════════════════════════════════════════════════════════
-      // PAYMENT TERMS
-      // ════════════════════════════════════════════════════════════════════════
-      if (invoice.payment_terms && String(invoice.payment_terms).trim() !== '') {
-        doc.y += 4;
-        doc.moveTo(margin, doc.y).lineTo(rightEdge, doc.y).strokeColor(gray200).stroke();
-        doc.y += 14;
-        drawSmallLabel(tr('invoice.paymentTermsUpper', 'PAYMENT TERMS'), margin, doc.y);
-        doc.y += 14;
-        doc.fontSize(10).fillColor(gray700).font('Helvetica');
-        const termsResolved = replacePaymentTermsPlaceholders(invoice.payment_terms, invoice);
-        doc.text(termsResolved, margin, doc.y, { width: contentWidth, lineGap: 2 });
-        doc.y += 14;
-      }
-
-      // ════════════════════════════════════════════════════════════════════════
-      // HOW TO PAY (bank transfer — mirrors DigitalInvoiceView)
-      // ════════════════════════════════════════════════════════════════════════
       const balanceDue =
         invoice.balance != null ? Number(invoice.balance) : Number(invoice.total) || 0;
+      if (balanceDue > 0 && Math.abs(balanceDue - Number(invoice.total)) > 0.001) {
+        drawTotalRow(tr('invoice.amountDue', 'Amount due'), formatMoney(balanceDue), {
+          bold: true,
+          color: brand,
+          size: 10,
+        });
+      }
+      const totalsBottom = doc.y;
+
+      doc.y = Math.max(termsBottom, totalsBottom) + 24;
+
+      // ── Payment details (label | value rows like digital) ─────────────────
       const paymentMethods = buildPaymentOptions(invoice.company_id, invoice, bankRow);
       const bankMethod = paymentMethods.find((m) => m.type === 'bank_transfer');
       if (bankMethod?.bank && balanceDue > 0) {
         const bank = bankMethod.bank;
         const isUk = String(invoice.company_country_code || '').toUpperCase() === 'GB';
 
-        doc.y += 4;
-        doc.moveTo(margin, doc.y).lineTo(rightEdge, doc.y).strokeColor(gray200).stroke();
-        doc.y += 14;
-        drawSmallLabel(tr('invoice.howToPay', 'HOW TO PAY'), margin, doc.y);
-        doc.y += 14;
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(brand);
-        doc.text(bankMethod.title, margin, doc.y, { width: contentWidth });
-        doc.y += 4;
-        doc.font('Helvetica').fontSize(9).fillColor(gray600);
-        doc.text(bankMethod.description, margin, doc.y, { width: contentWidth, lineGap: 2 });
-        doc.y += 10;
+        hairline(doc.y);
+        doc.y += 20;
 
-        const drawBankLine = (label, value) => {
-          if (!value) return;
-          doc.font('Helvetica-Bold').fontSize(8).fillColor(gray500);
-          doc.text(label.toUpperCase(), margin, doc.y, { width: contentWidth, characterSpacing: 0.8 });
-          doc.y += 11;
-          doc.font('Helvetica').fontSize(10).fillColor(gray900);
-          doc.text(String(value), margin, doc.y, { width: contentWidth });
-          doc.y += 14;
-        };
-
-        drawBankLine(tr('invoice.accountHolder', 'Account holder'), bank.accountHolder);
-        if (isUk) {
-          drawBankLine(tr('invoice.sortCode', 'Sort code'), bank.registrationNumber);
-          drawBankLine(tr('invoice.accountNo', 'Account no.'), bank.accountNumber);
-          drawBankLine(tr('invoice.iban', 'IBAN'), bank.iban);
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(gray900);
+        doc.text(bankMethod.title || tr('invoice.bankTransfer', 'Bank transfer'), margin, doc.y, {
+          width: contentWidth,
+        });
+        doc.y += 4;
+        if (bankMethod.description) {
+          doc.font('Helvetica').fontSize(8).fillColor(gray500);
+          doc.text(String(bankMethod.description), margin, doc.y, {
+            width: contentWidth,
+            lineGap: 1.5,
+          });
+          doc.y += 8;
         } else {
-          drawBankLine(tr('invoice.iban', 'IBAN'), bank.iban);
-          drawBankLine(tr('invoice.regNo', 'Reg. no.'), bank.registrationNumber);
-          drawBankLine(tr('invoice.accountNo', 'Account no.'), bank.accountNumber);
+          doc.y += 6;
+        }
+
+        const labelW = 110;
+        const valueX = margin + labelW + 12;
+        const valueW = contentWidth - labelW - 12;
+        const bankRows = [];
+        if (bank.accountHolder) {
+          bankRows.push({
+            label: tr('invoice.accountHolder', 'Account holder'),
+            value: bank.accountHolder,
+          });
+        }
+        if (isUk) {
+          if (bank.registrationNumber) {
+            bankRows.push({
+              label: tr('invoice.sortCode', 'Sort code'),
+              value: bank.registrationNumber,
+              mono: true,
+            });
+          }
+          if (bank.accountNumber) {
+            bankRows.push({
+              label: tr('invoice.accountNo', 'Account no.'),
+              value: bank.accountNumber,
+              mono: true,
+            });
+          }
+          if (bank.iban) {
+            bankRows.push({
+              label: tr('invoice.iban', 'IBAN'),
+              value: formatIban(bank.iban),
+              mono: true,
+            });
+          }
+        } else {
+          if (bank.iban) {
+            bankRows.push({
+              label: tr('invoice.iban', 'IBAN'),
+              value: formatIban(bank.iban),
+              mono: true,
+            });
+          }
+          if (bank.registrationNumber) {
+            bankRows.push({
+              label: tr('invoice.regNo', 'Reg. no.'),
+              value: bank.registrationNumber,
+              mono: true,
+            });
+          }
+          if (bank.accountNumber) {
+            bankRows.push({
+              label: tr('invoice.accountNo', 'Account no.'),
+              value: bank.accountNumber,
+              mono: true,
+            });
+          }
         }
         if (bank.paymentReference) {
-          doc.font('Helvetica-Bold').fontSize(8).fillColor(gray500);
-          doc.text(tr('invoice.paymentReference', 'Payment reference').toUpperCase(), margin, doc.y, {
-            width: contentWidth,
-            characterSpacing: 0.8,
+          bankRows.push({
+            label: tr('invoice.paymentReference', 'Payment reference'),
+            value: bank.paymentReference,
+            mono: true,
+            emphasis: true,
           });
-          doc.y += 11;
-          doc.font('Courier-Bold').fontSize(10).fillColor(gray900);
-          doc.text(String(bank.paymentReference), margin, doc.y, { width: contentWidth });
-          doc.y += 14;
+        }
+
+        if (bankRows.length > 0) {
+          hairline(doc.y);
+          for (const row of bankRows) {
+            const rowY = doc.y + 8;
+            doc.font('Helvetica').fontSize(7).fillColor(gray400);
+            doc.text(String(row.label).toUpperCase(), margin, rowY + 1, {
+              width: labelW,
+              characterSpacing: 0.6,
+            });
+            doc
+              .font(row.emphasis ? 'Courier-Bold' : row.mono ? 'Courier' : 'Helvetica')
+              .fontSize(row.emphasis ? 9 : 9)
+              .fillColor(gray900);
+            doc.text(String(row.value), valueX, rowY, { width: valueW });
+            doc.y = Math.max(doc.y, rowY + 12) + 6;
+            hairline(doc.y);
+          }
+        }
+
+        if (bank.instructions) {
+          doc.y += 10;
+          doc.font('Helvetica').fontSize(8).fillColor(gray500);
+          doc.text(String(bank.instructions), margin, doc.y, {
+            width: contentWidth,
+            lineGap: 2,
+          });
         }
       }
 
-      // ════════════════════════════════════════════════════════════════════════
-      // FOOTER
-      // ════════════════════════════════════════════════════════════════════════
-      const footerY = Math.min(800, Math.max(770, doc.y + 30));
-      doc.moveTo(margin, footerY - 18).lineTo(rightEdge, footerY - 18).strokeColor(gray200).stroke();
-      doc.fontSize(8).fillColor(gray400).font('Helvetica');
-      const footerLine1 = [
-        invoice.company_name,
-        [invoice.company_address, invoice.company_zip_code, invoice.company_city]
-          .filter(Boolean)
-          .join(' / '),
-        invoice.company_cvr_number ? `${cvrLabel} ${invoice.company_cvr_number}` : null,
-        invoice.company_vat_number ? `VAT No. ${invoice.company_vat_number}` : null,
-      ]
-        .filter(Boolean)
-        .join('  \u00b7  ');
-      const footerLine2 = [
-        invoice.company_email,
-        invoice.company_phone,
-        invoice.company_website,
-      ]
-        .filter(Boolean)
-        .join('  \u00b7  ');
-      doc.text(footerLine1, margin, footerY - 10, { width: contentWidth, align: 'center' });
-      if (footerLine2) {
-        doc.text(footerLine2, margin, footerY + 2, { width: contentWidth, align: 'center' });
-      }
+      // ── Footer (questions / contact — mirrors digital) ────────────────────
+      doc.y += 28;
+      hairline(doc.y);
+      doc.y += 14;
+      const contacts = [invoice.company_email, invoice.company_phone, invoice.company_website].filter(
+        Boolean,
+      );
+      const who = invoice.company_name || tr('invoice.theSender', 'the sender');
+      const footerText =
+        contacts.length > 0
+          ? `Questions? Contact ${who} via ${contacts.join(' \u00b7 ')}.`
+          : `Questions? Contact ${who}.`;
+      doc.font('Helvetica').fontSize(8).fillColor(gray400);
+      doc.text(footerText, margin, doc.y, { width: contentWidth, align: 'center', lineGap: 2 });
 
       doc.end();
     } catch (e) {
@@ -1458,7 +1418,7 @@ router.put('/:invoiceId', authenticateToken, async (req, res) => {
           `
           SELECT
             js.*,
-            COALESCE(s.title, js.custom_title) AS service_title,
+            COALESCE(NULLIF(TRIM(js.custom_title), ''), s.title, 'Service') AS service_title,
             s.price
           FROM job_services js
           LEFT JOIN services s ON js.service_id = s.id

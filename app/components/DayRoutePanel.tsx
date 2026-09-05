@@ -1,7 +1,7 @@
-'use client'
+﻿'use client'
 
 import Link from 'next/link'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -17,10 +17,36 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { HomeIcon } from '@heroicons/react/24/outline'
+import { HomeIcon, ArchiveBoxArrowDownIcon } from '@heroicons/react/24/outline'
 import { UserRoute, RouteJob, IsolatedRouteSeg } from './RouteMap'
 import { useAppI18n } from './I18nProvider'
 import { SequentialPickListRow } from './sequentialPick/SequentialPickListRow'
+import SaveAsRoundModal from './planner/SaveAsRoundModal'
+import {
+  EmployeeSwitcher,
+  RouteActionIcons,
+  RouteSaveStats,
+  routeDrawMeta,
+} from './planner/PlannerChrome'
+import {
+  PLANNER_ARCHIVED_JOBS_EVENT,
+  archivePlannerJobId,
+  getArchivedPlannerJobIds,
+} from '@/app/utils/plannerArchivedJobs'
+import {
+  RoundNameField,
+  RoundEmployeePicker,
+  type PlacementUser,
+  type RoundRecurrenceType,
+  type RoundScheduleMode,
+} from './planner/RoundPlacementBar'
+import { RoundPlaceControls } from './planner/RoundPlaceControls'
+import { apiUrl } from '@/app/utils/api'
+import {
+  arrivalEstimatesForRouteJobs,
+  weekdayIndexFromDateStr,
+  workDayStartFromHours,
+} from '@/app/utils/estimateJobArrival'
 
 /** Returns Mapbox [lng, lat] for a job, or null if coords are missing. */
 function jobCoord(job: Pick<RouteJob, 'lat' | 'lng'>): [number, number] | null {
@@ -268,95 +294,40 @@ function RouteStatsLine({
   )
 }
 
-/** Dropdown menu for draw / auto-draw route tools. */
-function RoutePlanMenu({
-  label,
-  actionsOpen,
-  onToggle,
-  onClose,
+/** Compact icon actions live in PlannerChrome — kept here only as a thin mobile fallback wrapper. */
+function MobileRouteChrome({
+  route,
   canDraw,
   optimizing,
   hasCoords,
   onDrawStart,
   onOptimize,
-  userId,
+  onSaveAsRound,
 }: {
-  label: string
-  actionsOpen: boolean
-  onToggle: () => void
-  onClose: () => void
+  route: UserRoute
   canDraw: boolean
   optimizing: boolean
   hasCoords: boolean
   onDrawStart?: () => void
   onOptimize: (userId: number) => void
-  userId: number
+  onSaveAsRound?: () => void
 }) {
-  const { t } = useAppI18n()
-
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full flex items-center justify-center gap-2 h-11 rounded-xl bg-gray-100 text-gray-800 text-[14px] font-semibold hover:bg-gray-200/80 active:scale-[0.99] transition-all"
-      >
-        {label}
-        <svg className={`w-4 h-4 text-gray-500 transition-transform ${actionsOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {actionsOpen && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
-          <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.18)] border border-gray-100 p-1.5 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
-            <button
-              type="button"
-              onClick={() => { onClose(); onDrawStart?.() }}
-              disabled={!canDraw || optimizing || !onDrawStart}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <span className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center flex-shrink-0">
-                <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6.586-6.586a2 2 0 112.828 2.828L11.828 13.828A2 2 0 0110 14H8v-2a2 2 0 01.586-1.414L9 11zM3 21l4-1 9-9-3-3-9 9-1 4z" />
-                </svg>
-              </span>
-              <span className="min-w-0">
-                <span className="block text-[14px] font-bold text-gray-900 leading-tight">{t('app.routePlanner.drawRoute', 'Draw route')}</span>
-                <span className="block text-[11.5px] text-gray-500 leading-tight mt-0.5">{t('app.routePlanner.drawRouteSub', 'Tap stops in your own order')}</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => { onClose(); onOptimize(userId) }}
-              disabled={optimizing || !hasCoords}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <span className="w-9 h-9 rounded-xl bg-accent-50 text-accent-600 flex items-center justify-center flex-shrink-0">
-                {optimizing ? (
-                  <svg className="w-[18px] h-[18px] animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : (
-                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                )}
-              </span>
-              <span className="min-w-0">
-                <span className="block text-[14px] font-bold text-gray-900 leading-tight">{t('app.routePlanner.autoDrawFull', 'Auto-draw route')}</span>
-                <span className="block text-[11.5px] text-gray-500 leading-tight mt-0.5">{t('app.routePlanner.autoDrawSub', 'Let us find the fastest order')}</span>
-              </span>
-            </button>
-          </div>
-        </>
-      )}
+    <div className="flex items-center justify-end mb-2 flex-shrink-0">
+      <RouteActionIcons
+        canDraw={canDraw}
+        optimizing={optimizing}
+        hasCoords={hasCoords}
+        onDrawStart={onDrawStart}
+        onOptimize={onOptimize}
+        onSaveAsRound={onSaveAsRound}
+        userId={route.userId}
+      />
     </div>
   )
 }
 
-// ── Timeline-style sortable job card ─────────────────────────────────────────
+// -- Timeline-style sortable job card -----------------------------------------
 
 function SortableJobCard({
   job,
@@ -364,6 +335,7 @@ function SortableJobCard({
   isLast,
   color,
   nextLegMinutes,
+  arrivalEst,
   onOpen,
   isHighlighted,
   onMouseEnter,
@@ -376,6 +348,8 @@ function SortableJobCard({
   isLast: boolean
   color: string
   nextLegMinutes?: number | null
+  /** Estimated clock arrival from route order + drive + prior work. */
+  arrivalEst?: string | null
   onOpen: (id: number | string) => void
   isHighlighted?: boolean
   onMouseEnter?: () => void
@@ -396,6 +370,9 @@ function SortableJobCard({
   }
 
   const hasDuration = job.estimated_duration_minutes != null && job.estimated_duration_minutes > 0
+  const numberTitle = arrivalEst
+    ? t('app.routePlanner.estArrival', 'est. {{time}}').replace('{{time}}', arrivalEst)
+    : undefined
 
   return (
     <div ref={setNodeRef} style={style}>
@@ -403,6 +380,7 @@ function SortableJobCard({
         {/* ── Rail: numbered node + connector ── */}
         <div className="flex flex-col items-center flex-shrink-0 pt-1" style={{ width: RAIL_W }}>
           <div
+            title={numberTitle}
             className="flex items-center justify-center rounded-full text-white font-bold flex-shrink-0 transition-all duration-150"
             style={{
               width: 26,
@@ -640,6 +618,11 @@ function UserRoutePanel({
   jobsFirst = false,
   isWizardMode = false,
   onCompleteSetup,
+  date,
+  onEnsureSaved,
+  onRoundSaved,
+  hideInlineChrome = false,
+  routeStatsClean = false,
 }: {
   companySlug?: string
   route: UserRoute
@@ -666,25 +649,100 @@ function UserRoutePanel({
   /** Setup wizard mode — show "Keep adding" + "Save and complete setup" CTAs */
   isWizardMode?: boolean
   onCompleteSetup?: () => void
+  date?: string
+  onEnsureSaved?: () => Promise<void>
+  onRoundSaved?: () => void
+  hideInlineChrome?: boolean
+  /** When true, RouteSaveStats treats current values as the saved baseline. */
+  routeStatsClean?: boolean
 }) {
   const { t } = useAppI18n()
-  const [actionsOpen, setActionsOpen] = useState(false)
+  const [saveAsRoundOpen, setSaveAsRoundOpen] = useState(false)
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(() => getArchivedPlannerJobIds())
+  const [exitingIds, setExitingIds] = useState<Set<string>>(() => new Set())
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  useEffect(() => {
+    const sync = () => setArchivedIds(getArchivedPlannerJobIds())
+    sync()
+    window.addEventListener(PLANNER_ARCHIVED_JOBS_EVENT, sync)
+    return () => window.removeEventListener(PLANNER_ARCHIVED_JOBS_EVENT, sync)
+  }, [])
+
+  const dismissInactiveJob = useCallback((jobId: string | number) => {
+    const key = String(jobId)
+    setExitingIds(prev => {
+      const next = new Set(prev)
+      next.add(key)
+      return next
+    })
+    window.setTimeout(() => {
+      archivePlannerJobId(key)
+      setExitingIds(prev => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }, 280)
+  }, [])
+
   const activeJobs = route.jobs.filter(j => !j.is_cancelled)
-  const cancelledJobs = route.jobs.filter(j => j.is_cancelled)
-  const startJob = activeJobs.length > 0 && activeJobs[0].is_home ? activeJobs[0] : null
-  const endJob = activeJobs.length > 1 && activeJobs[activeJobs.length - 1].is_home ? activeJobs[activeJobs.length - 1] : null
-  const middleJobs = startJob && endJob
-    ? activeJobs.slice(1, -1)
-    : startJob
-      ? activeJobs.slice(1)
-      : endJob
-        ? activeJobs.slice(0, -1)
-        : activeJobs
+  const cancelledJobs = route.jobs.filter(
+    j => j.is_cancelled && !(j as any).is_deleted && !archivedIds.has(String(j.id)),
+  )
+  const deletedJobs = route.jobs.filter(
+    j => (j as any).is_deleted && !archivedIds.has(String(j.id)),
+  )
+  const startJob = activeJobs.find(j => j.is_home && String(j.id).startsWith('start-'))
+    ?? (activeJobs.length > 0 && activeJobs[0].is_home ? activeJobs[0] : null)
+  const endJob = activeJobs.find(j => j.is_home && String(j.id).startsWith('end-'))
+    ?? (activeJobs.length > 1 && activeJobs[activeJobs.length - 1].is_home
+      ? activeJobs[activeJobs.length - 1]
+      : null)
+  const middleJobs = activeJobs.filter(j => {
+    if (!j.is_home) return true
+    if (startJob && String(j.id) === String(startJob.id)) return false
+    if (endJob && String(j.id) === String(endJob.id)) return false
+    return false
+  })
   const hasCoords = middleJobs.filter(j => j.lat != null && j.lng != null).length >= 2
   const canDraw = middleJobs.length >= 2
 
-  // ── Draw mode: derive numbered + remaining lists from drawOrder ──────────────
+  // Employee day-start clock → used for hover "est. arrival" on stop numbers.
+  const [dayStartClock, setDayStartClock] = useState('08:00')
+  useEffect(() => {
+    if (!date || !route.userId) {
+      setDayStartClock('08:00')
+      return
+    }
+    let cancelled = false
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    fetch(apiUrl(`/work-hours/${route.userId}`), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return
+        const dayIndex = weekdayIndexFromDateStr(date)
+        setDayStartClock(workDayStartFromHours(data?.workHours, dayIndex))
+      })
+      .catch(() => {
+        if (!cancelled) setDayStartClock('08:00')
+      })
+    return () => { cancelled = true }
+  }, [date, route.userId])
+
+  const arrivalByJobId = useMemo(
+    () => arrivalEstimatesForRouteJobs(middleJobs, dayStartClock),
+    // Recompute when order, drive legs, or durations change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      dayStartClock,
+      middleJobs.map((j) => `${j.id}:${j.legMinutes ?? ''}:${j.estimated_duration_minutes ?? ''}`).join('|'),
+    ],
+  )
+
+  // -- Draw mode: derive numbered + remaining lists from drawOrder --------------
   const drawOrderSafe = drawMode ? (drawOrder ?? []) : []
   const drawNumberByJob = useMemo(() => {
     const m = new Map<string, number>()
@@ -710,57 +768,25 @@ function UserRoutePanel({
       const newIdx = middleJobs.findIndex(j => j.id === over.id)
       if (oldIdx === -1 || newIdx === -1) return
       const newMiddle = arrayMove(middleJobs, oldIdx, newIdx)
-      const fullOrder = [...(startJob ? [startJob] : []), ...newMiddle, ...(endJob ? [endJob] : []), ...cancelledJobs]
+      const fullOrder = [...(startJob ? [startJob] : []), ...newMiddle, ...(endJob ? [endJob] : []), ...cancelledJobs, ...deletedJobs]
       onReorder(route.userId, fullOrder)
     },
-    [middleJobs, startJob, endJob, cancelledJobs, route.userId, onReorder]
+    [middleJobs, startJob, endJob, cancelledJobs, deletedJobs, route.userId, onReorder]
   )
 
   return (
     <div className={`flex flex-col ${jobsFirst ? '' : 'gap-3'} ${drawMode ? 'is-draw-mode' : ''}`}>
-      {/* Mobile: plan actions + stats before the job list */}
-      {jobsFirst && !drawMode && (
-        <div className="flex flex-col gap-2 mb-3 flex-shrink-0">
-          <RoutePlanMenu
-            label={t('app.routePlanner.actions', 'Actions')}
-            actionsOpen={actionsOpen}
-            onToggle={() => setActionsOpen(o => !o)}
-            onClose={() => setActionsOpen(false)}
-            canDraw={canDraw}
-            optimizing={optimizing}
-            hasCoords={hasCoords}
-            onDrawStart={onDrawStart}
-            onOptimize={onOptimize}
-            userId={route.userId}
-          />
-          <RouteStatsLine
-            route={route}
-            baselineMinutes={baselineMinutes}
-            availableMinutes={availableMinutes}
-            className="px-0.5"
-          />
-        </div>
-      )}
-
-      {/* Desktop: compact stats + plan route menu */}
-      {!jobsFirst && !drawMode && (
-        <div className="mb-3 flex-shrink-0">
-          <RouteQuickStats route={route} baselineMinutes={baselineMinutes} />
-          <div className="mt-2">
-            <RoutePlanMenu
-              label={t('app.routePlanner.planRoute', 'Plan route')}
-              actionsOpen={actionsOpen}
-              onToggle={() => setActionsOpen(o => !o)}
-              onClose={() => setActionsOpen(false)}
-              canDraw={canDraw}
-              optimizing={optimizing}
-              hasCoords={hasCoords}
-              onDrawStart={onDrawStart}
-              onOptimize={onOptimize}
-              userId={route.userId}
-            />
-          </div>
-        </div>
+      {/* Mobile: compact actions + stats before the job list */}
+      {jobsFirst && !drawMode && !hideInlineChrome && (
+        <MobileRouteChrome
+          route={route}
+          canDraw={canDraw}
+          optimizing={optimizing}
+          hasCoords={hasCoords}
+          onDrawStart={onDrawStart}
+          onOptimize={onOptimize}
+          onSaveAsRound={date ? () => setSaveAsRoundOpen(true) : undefined}
+        />
       )}
 
       {/* Desktop: draw-mode banner */}
@@ -904,10 +930,36 @@ function UserRoutePanel({
 
       {/* Timeline job list */}
       <div>
-      {!jobsFirst && <div className="h-px bg-gray-100 mb-3" />}
+      {!drawMode ? (
+        <RouteSaveStats
+          route={route}
+          baselineDriveMinutes={baselineMinutes}
+          isClean={routeStatsClean}
+        />
+      ) : (
+        !jobsFirst && <div className="h-px bg-gray-100 mb-3" />
+      )}
 
-      {activeJobs.length === 0 && cancelledJobs.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-10">{t('app.routePlanner.noJobsToday', 'No jobs today')}</p>
+      {activeJobs.length === 0 && cancelledJobs.length === 0 && deletedJobs.length === 0 ? (
+        onAddJob ? (
+          <div className="py-6 px-0.5">
+            <button
+              type="button"
+              onClick={onAddJob}
+              className="w-full flex items-center justify-center gap-2 border border-dashed border-gray-300 rounded-2xl py-3 text-[13px] font-semibold text-gray-500 hover:text-accent-600 hover:border-accent-400 hover:bg-accent-50/40 transition-colors"
+            >
+              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+              </svg>
+              {t('app.jobsPage.addNewJob', 'Add new job')}
+            </button>
+            <p className="text-center text-[11px] text-gray-400 mt-2.5 leading-snug">
+              {t('app.routePlanner.emptyRouteHint', 'Add the first stop to start building this route.')}
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 text-center py-10">{t('app.routePlanner.noJobsToday', 'No jobs today')}</p>
+        )
       ) : drawMode ? (
         <div className="relative z-10">
           {startJob && (
@@ -1017,6 +1069,7 @@ function UserRoutePanel({
                         isLast={idx === middleJobs.length - 1}
                         color={route.color}
                         nextLegMinutes={middleJobs[idx + 1]?.legMinutes}
+                        arrivalEst={arrivalByJobId[String(job.id)] ?? null}
                         onOpen={onJobOpen}
                         isHighlighted={highlightedJobId != null && String(job.id) === String(highlightedJobId)}
                         onMouseEnter={() => onJobCardHover?.(job.id)}
@@ -1092,21 +1145,88 @@ function UserRoutePanel({
           {cancelledJobs.length > 0 && (
             <div className="mt-5">
               <p className="text-[9px] font-bold uppercase tracking-widest mb-2.5 text-gray-400">
-                Cancelled ({cancelledJobs.length})
+                {t('app.jobsPage.cancelledSection', 'Cancelled')} ({cancelledJobs.length})
               </p>
-              <div className="space-y-1.5">
-                {cancelledJobs.map(job => (
-                  <div
-                    key={job.id}
-                    className="rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 bg-gray-50 border border-gray-100 opacity-60"
-                  >
-                    <div className="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-gray-500 truncate line-through">{job.label}</p>
-                      {job.address && <p className="text-[10px] text-gray-400 truncate">{job.address}</p>}
+              <div className="space-y-1.5 overflow-hidden">
+                {cancelledJobs.map(job => {
+                  const exiting = exitingIds.has(String(job.id))
+                  return (
+                    <div
+                      key={job.id}
+                      className={`rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 bg-gray-50 border border-gray-100 opacity-60 transition-all duration-300 ease-out ${
+                        exiting
+                          ? '-translate-x-[120%] opacity-0 max-h-0 !py-0 !my-0 border-transparent overflow-hidden'
+                          : 'translate-x-0 max-h-24'
+                      }`}
+                    >
+                      <div className="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-gray-500 truncate line-through">{job.label}</p>
+                        {job.address && <p className="text-[10px] text-gray-400 truncate">{job.address}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          dismissInactiveJob(job.id)
+                        }}
+                        className="flex-shrink-0 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-200/80 transition-colors"
+                        title={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                        aria-label={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                      >
+                        <ArchiveBoxArrowDownIcon className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[9px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
+                        {t('app.jobsPage.cancelled', 'Cancelled')}
+                      </span>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Soft-deleted jobs — still visible until archived from the planner */}
+          {deletedJobs.length > 0 && (
+            <div className="mt-5">
+              <p className="text-[9px] font-bold uppercase tracking-widest mb-2.5 text-gray-400">
+                {t('app.jobsPage.deletedSection', 'Deleted')} ({deletedJobs.length})
+              </p>
+              <div className="space-y-1.5 overflow-hidden">
+                {deletedJobs.map(job => {
+                  const exiting = exitingIds.has(String(job.id))
+                  return (
+                    <div
+                      key={job.id}
+                      className={`rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 bg-gray-50 border border-gray-100 opacity-35 transition-all duration-300 ease-out ${
+                        exiting
+                          ? '-translate-x-[120%] opacity-0 max-h-0 !py-0 !my-0 border-transparent overflow-hidden'
+                          : 'translate-x-0 max-h-24'
+                      }`}
+                    >
+                      <div className="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-gray-500 truncate">{job.label}</p>
+                        {job.address && <p className="text-[10px] text-gray-400 truncate">{job.address}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          dismissInactiveJob(job.id)
+                        }}
+                        className="flex-shrink-0 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-200/80 transition-colors"
+                        title={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                        aria-label={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
+                      >
+                        <ArchiveBoxArrowDownIcon className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[9px] font-semibold text-gray-600 bg-gray-200 px-1.5 py-0.5 rounded">
+                        {t('app.jobsPage.deleted', 'Deleted')}
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -1145,11 +1265,22 @@ function UserRoutePanel({
         </div>
       )}
       </div>
+
+      {date && (
+        <SaveAsRoundModal
+          isOpen={saveAsRoundOpen}
+          onClose={() => setSaveAsRoundOpen(false)}
+          route={route}
+          date={date}
+          onEnsureSaved={onEnsureSaved}
+          onSaved={onRoundSaved}
+        />
+      )}
     </div>
   )
 }
 
-// ── All-users overview ────────────────────────────────────────────────────────
+// -- All-users overview -------------------------------------------------------
 
 export interface BulkOptimizeProgress {
   step: number
@@ -1193,6 +1324,15 @@ function AllUsersPanel({
   const [allowReassign, setAllowReassign] = useState(false)
   const [bulkRunning, setBulkRunning] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<BulkOptimizeProgress | null>(null)
+
+  // If this panel unmounts mid-hover (navigate away / open one employee), clear
+  // the map isolation so a single route can't stick forever.
+  useEffect(() => {
+    return () => {
+      onHoverUser?.(null)
+      onSelectionChange?.([])
+    }
+  }, [onHoverUser, onSelectionChange])
 
   const isSelectMode = selectedIds.length > 0
 
@@ -1572,7 +1712,7 @@ interface DayRoutePanelProps {
   onJobOpen: (jobId: number) => void
   onOptimize: (userId: number) => void
   optimizing: boolean
-  geocodingCount: number
+  geocodingCount?: number
   /** Save a specific user's route (or all unsaved routes when called without argument). */
   onSave: (userId?: number) => Promise<void>
   /** Save all users' unsaved routes at once. */
@@ -1623,6 +1763,48 @@ interface DayRoutePanelProps {
   onHoverUser?: (userId: number | null) => void
   /** AllEmployees panel: called when the checkbox selection changes. */
   onAllPanelSelectionChange?: (ids: number[]) => void
+  /** Day being planned (YYYY-MM-DD) — enables Save as Round. */
+  date?: string
+  /** Planned-package metadata per user (from daily_routes). */
+  plannedMetaByUser?: Record<number, { status?: string | null; name?: string | null }>
+  /** Called after a round / planned package was saved from this panel. */
+  onRoundSaved?: () => void
+  /**
+   * Round playground: title + go-to-rounds above the shared planner chrome.
+   * Employee switcher / job list / homes match the day route planner.
+   */
+  panelKind?: 'day' | 'round'
+  placementUsers?: PlacementUser[]
+  placementUserId?: number | null
+  placementDates?: string[]
+  placementScheduleMode?: RoundScheduleMode
+  placementDayOfWeek?: number
+  placementIntervalWeeks?: number
+  placementRecurrenceType?: RoundRecurrenceType
+  placementDayOfMonth?: number
+  placementIntervalMonths?: number
+  placementStartingDate?: string
+  onPlacementUserChange?: (userId: number | null) => void
+  onPlacementDatesChange?: (dates: string[]) => void
+  onPlacementScheduleModeChange?: (mode: RoundScheduleMode) => void
+  onPlacementDayOfWeekChange?: (day: number) => void
+  onPlacementIntervalWeeksChange?: (n: number) => void
+  onPlacementRecurrenceTypeChange?: (t: RoundRecurrenceType) => void
+  onPlacementDayOfMonthChange?: (d: number) => void
+  onPlacementIntervalMonthsChange?: (n: number) => void
+  onPlacementStartingDateChange?: (d: string) => void
+  onApplyManualSchedule?: (dates: string[]) => void
+  onApplyRecurringSchedule?: (next: {
+    recurrenceType: RoundRecurrenceType
+    dayOfWeek: number
+    intervalWeeks: number
+    dayOfMonth: number
+    intervalMonths: number
+    startingDate: string
+  }) => void
+  onRoundNameChange?: (name: string | null) => void
+  /** Rebuild homes / directions after start-end settings change. */
+  onRouteLocationsChanged?: () => void
 }
 
 export default function DayRoutePanel({
@@ -1635,7 +1817,7 @@ export default function DayRoutePanel({
   onJobOpen,
   onOptimize,
   optimizing,
-  geocodingCount,
+  geocodingCount = 0,
   onSave,
   onSaveAll,
   onDiscardUser,
@@ -1665,21 +1847,50 @@ export default function DayRoutePanel({
   onBulkOptimize,
   onHoverUser,
   onAllPanelSelectionChange,
+  date,
+  plannedMetaByUser,
+  onRoundSaved,
+  panelKind = 'day',
+  placementUsers = [],
+  placementUserId = null,
+  placementDates = [],
+  placementScheduleMode = null,
+  placementDayOfWeek = 1,
+  placementIntervalWeeks = 1,
+  placementRecurrenceType = 'weekly',
+  placementDayOfMonth = 1,
+  placementIntervalMonths = 1,
+  placementStartingDate = '',
+  onPlacementUserChange,
+  onPlacementDatesChange,
+  onPlacementScheduleModeChange,
+  onPlacementDayOfWeekChange,
+  onPlacementIntervalWeeksChange,
+  onPlacementRecurrenceTypeChange,
+  onPlacementDayOfMonthChange,
+  onPlacementIntervalMonthsChange,
+  onPlacementStartingDateChange,
+  onApplyManualSchedule,
+  onApplyRecurringSchedule,
+  onRoundNameChange,
+  onRouteLocationsChanged,
 }: DayRoutePanelProps) {
   const { t, locale } = useAppI18n()
-  // Solo company: only one user has routes today → skip the "all employees" picker entirely
-  // and render that user's route panel directly. The user can't (and shouldn't) navigate
-  // back to a multi-employee overview.
+  // Prefer explicit focus (URL ?focus=route) over solo-company auto-pick.
   const isSoloCompany = routes.length === 1
-  const focusedRoute = isSoloCompany
-    ? routes[0]
-    : focusUserId != null
-      ? routes.find(r => r.userId === focusUserId)
+  const focusedRoute = focusUserId != null
+    ? routes.find(r => r.userId === focusUserId) ?? null
+    : isSoloCompany
+      ? routes[0]
       : null
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [headerSaveAsRoundOpen, setHeaderSaveAsRoundOpen] = useState(false)
   const focusedUserUnsaved = focusedRoute != null && unsavedUserIds.includes(focusedRoute.userId)
-  const saveBarVisible = focusedUserUnsaved || saving || saved
+  const focusedAlreadyPlanned = focusedRoute != null
+    && plannedMetaByUser?.[focusedRoute.userId]?.status === 'planned'
+  const saveBarVisible = focusedRoute != null || saving || saved
+  const focusedDraw = focusedRoute ? routeDrawMeta(focusedRoute) : null
 
   const handleSave = async () => {
     setSaving(true)
@@ -1692,17 +1903,8 @@ export default function DayRoutePanel({
 
   const saveToolbarInner = (
     <div
-      className={`flex-shrink-0 ${mobileSheet ? 'px-4 pt-2 pb-2' : 'px-5 pt-3 pb-5 border-t border-gray-200'}`}
-      style={{ opacity: !mobileSheet && drawMode ? 0.32 : 1 }}
+      className={`flex-shrink-0 ${mobileSheet ? 'px-4 pt-2 pb-2' : 'px-4 pt-2.5 pb-3.5 border-t border-gray-200'}`}
     >
-      {focusedRoute && !mobileSheet && (
-        <RouteStatsLine
-          route={focusedRoute}
-          baselineMinutes={baselineMinutesByUser?.[focusedRoute.userId]}
-          availableMinutes={availableMinutesByUser?.[focusedRoute.userId]}
-          className="mb-2.5 justify-center"
-        />
-      )}
       {geocodingCount > 0 && (
         <p className="text-[11px] text-amber-500 mb-2 flex items-center gap-1.5 justify-center">
           <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1714,12 +1916,38 @@ export default function DayRoutePanel({
             .replace('{{suffix}}', geocodingCount !== 1 ? (locale === 'da' ? 'r' : 'es') : '')}
         </p>
       )}
-      <div className="flex gap-2">
+      {panelKind === 'round' && onPlacementScheduleModeChange && onPlacementDatesChange && onPlacementUserChange && (
+        <RoundPlaceControls
+          mode={placementScheduleMode ?? null}
+          dates={placementDates || []}
+          dayOfWeek={placementDayOfWeek ?? 1}
+          intervalWeeks={placementIntervalWeeks ?? 1}
+          recurrenceType={placementRecurrenceType || 'weekly'}
+          dayOfMonth={placementDayOfMonth ?? 1}
+          intervalMonths={placementIntervalMonths ?? 1}
+          startingDate={placementStartingDate || ''}
+          onModeChange={onPlacementScheduleModeChange}
+          onDatesChange={onPlacementDatesChange}
+          onDayOfWeekChange={onPlacementDayOfWeekChange || (() => {})}
+          onIntervalWeeksChange={onPlacementIntervalWeeksChange || (() => {})}
+          onRecurrenceTypeChange={onPlacementRecurrenceTypeChange}
+          onDayOfMonthChange={onPlacementDayOfMonthChange}
+          onIntervalMonthsChange={onPlacementIntervalMonthsChange}
+          onStartingDateChange={onPlacementStartingDateChange}
+          onApplyManual={onApplyManualSchedule}
+          onApplyRecurring={onApplyRecurringSchedule}
+          busy={saving}
+        />
+      )}
+      <div
+        className="flex gap-2"
+        style={{ opacity: !mobileSheet && drawMode ? 0.32 : 1 }}
+      >
         {onDiscardUser && focusedRoute && focusedUserUnsaved && !saved && !saving && (
           <button
             type="button"
             onClick={() => onDiscardUser(focusedRoute.userId)}
-            className="flex items-center justify-center gap-1.5 px-4 py-3.5 rounded-2xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-all active:scale-[0.98] flex-shrink-0"
+            className="flex items-center justify-center gap-1.5 px-3 py-3 rounded-2xl text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-all active:scale-[0.98] flex-shrink-0"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1730,8 +1958,8 @@ export default function DayRoutePanel({
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || drawMode}
-          className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
+          disabled={saving || drawMode || !focusedRoute}
+          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-bold transition-all disabled:opacity-60"
           title={drawMode ? t('app.routePlanner.drawSaveBlocked', 'Finish drawing to save.') : undefined}
           style={{
             background: saved ? '#10b981' : '#3DD57A',
@@ -1762,7 +1990,9 @@ export default function DayRoutePanel({
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
               </svg>
-              {t('app.routePlanner.saveApply', 'Save & apply route')}
+              {focusedAlreadyPlanned
+                ? t('app.routePlanner.saveApply', 'Save & apply route')
+                : t('app.routePlanner.saveAsPlannedRound', 'Save as round')}
             </>
           )}
         </button>
@@ -1863,6 +2093,11 @@ export default function DayRoutePanel({
           jobsFirst={mobileSheet}
           isWizardMode={isWizardMode}
           onCompleteSetup={onCompleteSetup}
+          date={date}
+          onEnsureSaved={() => onSave(focusedRoute.userId)}
+          onRoundSaved={onRoundSaved}
+          hideInlineChrome={!mobileSheet}
+          routeStatsClean={!focusedUserUnsaved}
         />
       ) : (
         <AllUsersPanel
@@ -1894,66 +2129,99 @@ export default function DayRoutePanel({
   return (
     <div className={`h-full flex flex-col overflow-hidden bg-[#F8F9FB] ${mobileSheet ? '' : 'border-r border-gray-200'}`}>
 
-      {/* ── Header (desktop sidebar only) ───────────────────────── */}
+      {/* Compact control strip (desktop sidebar) */}
       {!mobileSheet && (
       <>
-      <div className="flex-shrink-0 px-5 pt-4 pb-3">
-        <div className="flex items-center gap-2.5">
-          {focusedRoute && !isSoloCompany ? (
-            <button
-              type="button"
-              onClick={onClearUser}
-              className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
-              title={t('app.routePlanner.allEmployees', 'All employees')}
+      {panelKind === 'round' && (
+        <div className="flex-shrink-0 px-3 pt-2.5 pb-1.5 flex items-center gap-2">
+          <RoundNameField
+            name={dateLabel}
+            placeholder={t('app.rounds.newRound', 'New round')}
+            onChange={onRoundNameChange || (() => {})}
+          />
+          {companySlug && (
+            <Link
+              href={`/${companySlug}/recurring/rounds`}
+              className="h-8 flex-shrink-0 inline-flex items-center px-2.5 rounded-xl text-[11px] font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 hover:text-gray-800 transition-colors"
+              title={t('app.rounds.goToRounds', 'Go to rounds')}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-          ) : onBackToWeek ? (
+              {t('app.rounds.rounds', 'Rounds')}
+            </Link>
+          )}
+        </div>
+      )}
+      <div className="flex-shrink-0 px-3 pt-2 pb-2">
+        <div className="flex items-center gap-1.5">
+          {onBackToWeek && (
             <button
               type="button"
               onClick={onBackToWeek}
-              className="w-8 h-8 flex items-center justify-center rounded-full flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all"
-              title={t('app.routePlanner.backToWeek', 'Back to week view')}
+              className="w-8 h-8 flex items-center justify-center rounded-xl flex-shrink-0 bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-all active:scale-95"
+              title={t('app.routePlanner.back', 'Back')}
+              aria-label={t('app.routePlanner.back', 'Back')}
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-          ) : null}
-          {focusedRoute ? (
-            <>
-              <RouteEmployeeAvatar name={focusedRoute.userName} color={focusedRoute.color} size={36} />
-              <p className="flex-1 min-w-0 text-base font-bold text-gray-900 truncate">{focusedRoute.userName}</p>
-            </>
+          )}
+
+          {panelKind === 'round' && onPlacementUserChange && (placementUserId == null || placementUserId <= 0) ? (
+            <RoundEmployeePicker
+              users={placementUsers}
+              userId={placementUserId}
+              onUserChange={onPlacementUserChange}
+              className="!flex-none flex-1 !h-9 !rounded-xl"
+            />
           ) : (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-gray-900 leading-tight">
-                {t('app.routePlanner.selectEmployeePlan', 'Select an employee to plan their route')}
-              </p>
-              {dateLabel && (
-                <p className="text-[11px] text-gray-400 mt-0.5 truncate">{dateLabel}</p>
-              )}
-            </div>
+            <EmployeeSwitcher
+              routes={routes}
+              focused={focusedRoute ?? null}
+              onSelectUser={onSelectUser}
+              onShowAll={panelKind === 'round' ? undefined : (!isSoloCompany ? onClearUser : undefined)}
+            />
+          )}
+
+          {focusedRoute && !drawMode && focusedDraw && (
+            <RouteActionIcons
+              canDraw={focusedDraw.canDraw}
+              optimizing={optimizing}
+              hasCoords={focusedDraw.hasCoords}
+              onDrawStart={onDrawStart}
+              onOptimize={onOptimize}
+              onSaveAsRound={date ? () => setHeaderSaveAsRoundOpen(true) : undefined}
+              userId={focusedRoute.userId}
+            />
           )}
         </div>
+        {panelKind !== 'round' && !focusedRoute && dateLabel && (
+          <p className="text-[10px] text-gray-400 mt-1 truncate px-0.5">{dateLabel}</p>
+        )}
       </div>
-
-      {/* Divider */}
-      <div className="mx-5 mb-3 h-px bg-gray-200" />
+      <div className="mx-3 mb-1.5 h-px bg-gray-200/80" />
       </>
       )}
 
-      {/* ── Scrollable body ─────────────────────────────────────── */}
+      {/* Scrollable body */}
       <div
-        className={`flex-1 overflow-y-auto min-h-0 ${mobileSheet ? 'px-4 pt-1 pb-3' : 'px-5 pb-4'}`}
+        className={`flex-1 overflow-y-auto min-h-0 ${mobileSheet ? 'px-4 pt-1 pb-3' : 'px-3 pb-3'}`}
         style={{ scrollbarWidth: 'none' } as React.CSSProperties}
       >
         {panelBody}
       </div>
 
       {saveToolbar}
+
+      {focusedRoute && date && (
+        <SaveAsRoundModal
+          isOpen={headerSaveAsRoundOpen}
+          onClose={() => setHeaderSaveAsRoundOpen(false)}
+          route={focusedRoute}
+          date={date}
+          onEnsureSaved={() => onSave(focusedRoute.userId)}
+          onSaved={onRoundSaved}
+        />
+      )}
     </div>
   )
 }

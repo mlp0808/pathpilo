@@ -11,6 +11,10 @@ export interface MapPinJobInput {
   estimated_duration_minutes?: number
   legMinutes?: number
   is_home?: boolean
+  /** Initials for employee home pins (e.g. "JW"). */
+  home_initials?: string
+  client_type?: 'person' | 'company' | string | null
+  is_location_pin?: boolean
 }
 
 /** GeoJSON features for RouteMap — supports normal numbering and sequential pick mode. */
@@ -20,15 +24,28 @@ export function buildSequentialPickMapFeatures(
     pickActive: boolean
     pickOrder: SequentialPickId[]
     highlightedId: SequentialPickId | null | undefined
+    /** Persisted selection (e.g. active client pin) — keeps bubble size without hover. */
+    selectedId?: SequentialPickId | null | undefined
+    /** Multiple open client cards — any matching id is selected. */
+    selectedIds?: SequentialPickId[]
+    /** Skip 1,2,3 labels — client location overlays use plain dots (+ optional person/company icon). */
+    plainPins?: boolean
   },
 ) {
   let clientIndex = 0
+  const selectedSet = new Set(
+    [
+      ...(options.selectedId != null ? [String(options.selectedId)] : []),
+      ...(options.selectedIds || []).map(String),
+    ],
+  )
   return jobs
     .filter((j): j is MapPinJobInput & { lat: number; lng: number } => j.lat != null && j.lng != null)
     .map((job, idx) => {
       const isHome = !!job.is_home
       const highlight =
         options.highlightedId != null && String(job.id) === String(options.highlightedId)
+      const selected = selectedSet.has(String(job.id))
 
       const pick = options.pickActive && !isHome
         ? getSequentialPickMeta(job.id, true, options.pickOrder, options.highlightedId)
@@ -48,11 +65,19 @@ export function buildSequentialPickMapFeatures(
 
       const showPinIcon = pickAvailable && !isPicked && previewNumber == null
 
-      const seq = options.pickActive
+      // Plain client overlays: never number. Route stops: 1, 2, 3…
+      const seq = options.plainPins || options.pickActive || isHome
         ? ''
-        : isHome
-          ? ''
-          : String(++clientIndex)
+        : String(++clientIndex)
+
+      const ct = String(job.client_type || '').toLowerCase()
+      const clientIcon = options.plainPins && !isHome && !job.is_location_pin
+        ? (ct === 'company' ? 'company' : ct === 'person' ? 'person' : '')
+        : ''
+
+      const homeInitials = isHome
+        ? String(job.home_initials || '').trim().toUpperCase().slice(0, 2)
+        : ''
 
       return {
         type: 'Feature' as const,
@@ -61,6 +86,8 @@ export function buildSequentialPickMapFeatures(
           seq,
           centerLabel,
           showPinIcon: showPinIcon ? 1 : 0,
+          clientIcon,
+          locationPin: job.is_location_pin ? 1 : 0,
           label: job.label,
           address: job.address || '',
           time: job.time || '',
@@ -68,7 +95,11 @@ export function buildSequentialPickMapFeatures(
           legMinutes: job.legMinutes ?? -1,
           idx,
           isHome: isHome ? 1 : 0,
+          homeInitials,
           highlight: highlight ? 1 : 0,
+          selected: selected ? 1 : 0,
+          // Bubble = hover or active selection (paint expressions read this).
+          bubbled: highlight || selected ? 1 : 0,
           pickAvailable: pickAvailable ? 1 : 0,
           isPicked: isPicked ? 1 : 0,
         },

@@ -1,8 +1,13 @@
 /**
- * route-stress-seed.js — Route planner stress-test dataset
+ * route-stress-seed.js — Route planner stress-test dataset (full-year 2026)
  *
  * Creates a NEW company (does not wipe other accounts). Re-running removes
  * only the previous "RouteTest" company and recreates it fresh.
+ *
+ * Fills the ENTIRE calendar year (see YEAR below) across 6 employees, so the
+ * planner/map/invoicing/reporting all have a genuinely large, long-lived
+ * dataset to stress-test against — thousands of clients and jobs, ~1,000+
+ * scheduled routes (employee-days with jobs on them).
  *
  * Usage:  node route-stress-seed.js
  *
@@ -31,20 +36,31 @@ const pool = new Pool({
 const COMPANY_SLUG = 'routetest-field';
 const PASSWORD = 'demo1234';
 
+// ── Stress-test scale knobs ──────────────────────────────────────────────
+const YEAR = 2026;
+const RANGE_START = new Date(YEAR, 0, 1);   // Jan 1
+const RANGE_END = new Date(YEAR, 11, 31);   // Dec 31
+const CLIENT_VARIANTS_PER_LOCATION = 30;    // 60 base addresses × 30 = ~1,800 clients
+const LEAVE_CHANCE = 0.12;                  // per employee, per working day (holiday/sick/personal)
+const CHUNK_SIZE = 500;                     // rows per multi-row INSERT
+
+// UK bank holidays (company-wide days off — no jobs scheduled at all).
+const BANK_HOLIDAYS = new Set([
+  '2026-01-01', // New Year's Day
+  '2026-04-03', // Good Friday
+  '2026-04-06', // Easter Monday
+  '2026-05-04', // Early May bank holiday
+  '2026-05-25', // Spring bank holiday
+  '2026-08-31', // Summer bank holiday
+  '2026-12-25', // Christmas Day
+  '2026-12-28', // Boxing Day (substitute day — 26th falls on a Saturday)
+]);
+
 const fmt = (d) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-};
-
-const monday = (date) => {
-  const d = new Date(date);
-  const dow = d.getDay();
-  const diff = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + diff);
-  d.setHours(12, 0, 0, 0);
-  return d;
 };
 
 const addDays = (d, n) => {
@@ -170,6 +186,35 @@ const BUSINESS_NAMES = [
   'Bloom Florist', 'TechFix Repairs', 'Riverside Pharmacy', 'Metro Accounting',
 ];
 
+// ── Generic chunked multi-row insert helper ─────────────────────────────
+// Builds `INSERT INTO table (cols) VALUES (...),(...),... [RETURNING x]` in
+// batches so a full-year seed (thousands of rows) doesn't need one DB
+// round-trip per row.
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function chunkedInsert(pool, table, columns, rows, { returning, chunkSize = CHUNK_SIZE } = {}) {
+  const ids = [];
+  for (const chunk of chunkArray(rows, chunkSize)) {
+    if (chunk.length === 0) continue;
+    const values = [];
+    const tuples = [];
+    let p = 1;
+    for (const row of chunk) {
+      tuples.push(`(${columns.map(() => `$${p++}`).join(',')})`);
+      for (const col of columns) values.push(row[col]);
+    }
+    const sql = `INSERT INTO ${table} (${columns.join(',')}) VALUES ${tuples.join(',')}` +
+      (returning ? ` RETURNING ${returning}` : '');
+    const res = await pool.query(sql, values);
+    if (returning) for (const r of res.rows) ids.push(r[returning]);
+  }
+  return ids;
+}
+
 async function ensureColumns(pool) {
   await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_start_address TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS default_end_address TEXT`).catch(() => {});
@@ -179,6 +224,23 @@ async function ensureColumns(pool) {
   await pool.query(`ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS start_address TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS end_address TEXT`).catch(() => {});
   await pool.query(`ALTER TABLE user_company_work_hours ADD COLUMN IF NOT EXISTS use_company_default_location BOOLEAN DEFAULT TRUE`).catch(() => {});
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_leave (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      leave_date DATE NOT NULL,
+      leave_type VARCHAR(30) NOT NULL DEFAULT 'full_day'
+        CHECK (leave_type IN ('full_day', 'half_day_morning', 'half_day_afternoon', 'custom_hours')),
+      hours_off DECIMAL(4,1),
+      category VARCHAR(30) NOT NULL DEFAULT 'holiday'
+        CHECK (category IN ('holiday', 'sick', 'personal', 'public_holiday', 'other')),
+      note TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, company_id, leave_date)
+    )
+  `).catch(() => {});
 }
 
 async function wipeExistingCompany(pool, slug) {
@@ -197,6 +259,7 @@ async function wipeExistingCompany(pool, slug) {
   await pool.query('DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM invoices WHERE company_id = $1)', [companyId]).catch(() => {});
   await pool.query('DELETE FROM invoices WHERE company_id = $1', [companyId]).catch(() => {});
   await pool.query('DELETE FROM daily_routes WHERE company_id = $1', [companyId]).catch(() => {});
+  await pool.query('DELETE FROM employee_leave WHERE company_id = $1', [companyId]).catch(() => {});
   await pool.query('DELETE FROM jobs WHERE company_id = $1', [companyId]);
 
   const subRows = await pool.query('SELECT id FROM recurring_jobs WHERE company_id = $1', [companyId]);
@@ -206,12 +269,44 @@ async function wipeExistingCompany(pool, slug) {
   }
   await pool.query('DELETE FROM recurring_jobs WHERE company_id = $1', [companyId]);
 
+  // Notes may reference clients and company users — clear before deleting either.
+  await pool.query(
+    `DELETE FROM secure_notes_audit
+     WHERE note_id IN (
+       SELECT id FROM secure_notes
+       WHERE client_id IN (SELECT id FROM clients WHERE company_id = $1)
+     )
+     OR user_id IN (SELECT id FROM users WHERE company_id = $1)`,
+    [companyId],
+  ).catch(() => {});
+  await pool.query(
+    `DELETE FROM secure_notes
+     WHERE client_id IN (SELECT id FROM clients WHERE company_id = $1)`,
+    [companyId],
+  ).catch(() => {});
+  await pool.query(
+    `UPDATE secure_notes SET updated_by = NULL
+     WHERE updated_by IN (SELECT id FROM users WHERE company_id = $1)`,
+    [companyId],
+  ).catch(() => {});
+  await pool.query(
+    `UPDATE secure_notes SET created_by = NULL
+     WHERE created_by IN (SELECT id FROM users WHERE company_id = $1)`,
+    [companyId],
+  ).catch(() => {});
+  await pool.query(
+    `DELETE FROM secure_notes_audit
+     WHERE user_id IN (SELECT id FROM users WHERE company_id = $1)`,
+    [companyId],
+  ).catch(() => {});
+
   await pool.query('DELETE FROM clients WHERE company_id = $1', [companyId]);
   await pool.query('DELETE FROM services WHERE company_id = $1', [companyId]);
   await pool.query('DELETE FROM email_templates WHERE company_id = $1', [companyId]).catch(() => {});
   await pool.query('DELETE FROM user_company_work_hours WHERE company_id = $1', [companyId]).catch(() => {});
   await pool.query('DELETE FROM company_default_work_hours WHERE company_id = $1', [companyId]).catch(() => {});
   await pool.query('DELETE FROM employee_appointments WHERE company_id = $1', [companyId]).catch(() => {});
+  await pool.query('DELETE FROM offers WHERE company_id = $1', [companyId]).catch(() => {});
 
   await pool.query('DELETE FROM user_companies WHERE company_id = $1', [companyId]);
 
@@ -221,6 +316,9 @@ async function wipeExistingCompany(pool, slug) {
   await pool.query('DELETE FROM companies WHERE id = $1', [companyId]);
 }
 
+// Expand each hand-picked base address into several nearby variants (jittered
+// house number + coordinates) so the dataset scales into the thousands
+// without needing thousands of hand-authored addresses.
 function buildClients() {
   const clients = [];
   let idx = 0;
@@ -229,33 +327,47 @@ function buildClients() {
     const locs = LOCATION_POOL[territory];
     for (let i = 0; i < locs.length; i++) {
       const loc = locs[i];
-      const isBusiness = i % 4 === 3;
-      if (isBusiness) {
-        clients.push({
-          territory,
-          type: 'company',
-          name: BUSINESS_NAMES[idx % BUSINESS_NAMES.length],
-          last: null,
-          email: `biz${idx}@client-routetest.co.uk`,
-          phone: `+44 7700 ${String(900000 + idx).slice(-6)}`,
-          ...loc,
-          country: 'United Kingdom',
-        });
-      } else {
-        const fn = FIRST_NAMES[idx % FIRST_NAMES.length];
-        const ln = LAST_NAMES[(idx * 3) % LAST_NAMES.length];
-        clients.push({
-          territory,
-          type: 'person',
-          name: fn,
-          last: ln,
-          email: `${fn.toLowerCase()}.${ln.toLowerCase()}${idx}@mail.co.uk`,
-          phone: `+44 7700 ${String(900000 + idx).slice(-6)}`,
-          ...loc,
-          country: 'United Kingdom',
-        });
+      for (let v = 0; v < CLIENT_VARIANTS_PER_LOCATION; v++) {
+        const isBusiness = idx % 4 === 3;
+        const numMatch = loc.address.match(/^(\d+)(.*)$/);
+        const houseNum = numMatch ? Number(numMatch[1]) + v * 3 + (v > 0 ? 1 : 0) : null;
+        const address = v === 0
+          ? loc.address
+          : numMatch
+            ? `${houseNum}${numMatch[2]}`
+            : `Unit ${v}, ${loc.address}`;
+        const lat = loc.lat + (Math.random() - 0.5) * 0.012;
+        const lng = loc.lng + (Math.random() - 0.5) * 0.018;
+
+        if (isBusiness) {
+          const branch = Math.floor(idx / BUSINESS_NAMES.length) + 1;
+          const baseName = BUSINESS_NAMES[idx % BUSINESS_NAMES.length];
+          clients.push({
+            territory,
+            client_type: 'company',
+            name: branch > 1 ? `${baseName} — Branch ${branch}` : baseName,
+            last_name: null,
+            email: `biz${idx}@client-routetest.co.uk`,
+            phone: `+44 7700 ${String(900000 + idx).slice(-6)}`,
+            address, city: loc.city, zip_code: loc.zip, lat, lng,
+            country: 'United Kingdom',
+          });
+        } else {
+          const fn = FIRST_NAMES[idx % FIRST_NAMES.length];
+          const ln = LAST_NAMES[(idx * 3) % LAST_NAMES.length];
+          clients.push({
+            territory,
+            client_type: 'person',
+            name: fn,
+            last_name: ln,
+            email: `${fn.toLowerCase()}.${ln.toLowerCase()}${idx}@mail.co.uk`,
+            phone: `+44 7700 ${String(900000 + idx).slice(-6)}`,
+            address, city: loc.city, zip_code: loc.zip, lat, lng,
+            country: 'United Kingdom',
+          });
+        }
+        idx++;
       }
-      idx++;
     }
   }
 
@@ -296,13 +408,13 @@ async function insertWorkHours(pool, userId, companyId, homeAddress) {
 }
 
 async function main() {
-  console.log('\n🚐  RouteTest Field Services — stress-test seed\n');
+  console.log(`\n🚐  RouteTest Field Services — full-year (${YEAR}) stress-test seed\n`);
 
   await ensureColumns(pool);
   await wipeExistingCompany(pool, COMPANY_SLUG);
 
   const passwordHash = await bcrypt.hash(PASSWORD, 10);
-  const clients = buildClients();
+  const clientDrafts = buildClients();
 
   const ownerRes = await pool.query(
     `INSERT INTO users (first_name, last_name, email, password_hash, role, language_code)
@@ -328,8 +440,6 @@ async function main() {
 
   console.log('👤  Creating 6 field employees...');
   const employeeIds = [];
-  const employeeByTerritory = {};
-
   for (const emp of EMPLOYEES) {
     const r = await pool.query(
       `INSERT INTO users (first_name, last_name, email, password_hash, role, language_code, company_id)
@@ -339,7 +449,6 @@ async function main() {
     );
     const uid = r.rows[0].id;
     employeeIds.push(uid);
-    employeeByTerritory[emp.territory] = uid;
     await pool.query(
       `INSERT INTO user_companies (user_id, company_id, role) VALUES ($1, $2, 'employee')`,
       [uid, companyId],
@@ -358,127 +467,160 @@ async function main() {
     svcRows.push({ id: r.rows[0].id, ...s });
   }
 
-  console.log(`👥  Creating ${clients.length} clients with coordinates...`);
-  const clientRecords = [];
-  for (const c of clients) {
-    const r = await pool.query(
-      `INSERT INTO clients
-        (company_id, client_type, name, last_name, email, phone, address, city, zip_code, country, lat, lng)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       RETURNING id`,
-      [companyId, c.type, c.name, c.last, c.email, c.phone, c.address, c.city, c.zip, c.country, c.lat, c.lng],
-    );
-    clientRecords.push({ id: r.rows[0].id, territory: c.territory, lat: c.lat, lng: c.lng });
-  }
+  console.log(`👥  Inserting ${clientDrafts.length} clients (batched)...`);
+  const clientColumns = ['company_id', 'client_type', 'name', 'last_name', 'email', 'phone', 'address', 'city', 'zip_code', 'country', 'lat', 'lng'];
+  const clientRows = clientDrafts.map((c) => ({ company_id: companyId, ...c }));
+  const clientIds = await chunkedInsert(pool, 'clients', clientColumns, clientRows, { returning: 'id' });
 
+  const clientRecords = clientIds.map((id, i) => ({ id, territory: clientDrafts[i].territory, lat: clientDrafts[i].lat, lng: clientDrafts[i].lng }));
   const clientsByTerritory = {};
   for (const c of clientRecords) {
     if (!clientsByTerritory[c.territory]) clientsByTerritory[c.territory] = [];
     clientsByTerritory[c.territory].push(c);
   }
 
-  for (const t of ['change_date', 'change_time', 'change_employee', 'cancel_job', 'send_invoice']) {
+  const { getSendInvoiceDefaults } = require('./api-server/utils/companyInvoiceEmailLocale');
+  const sendInvTpl = getSendInvoiceDefaults('DK');
+  const emailTplSeed = [
+    ['change_date', 'Your appointment — new date: {Job new date}', 'Dear {Client name},\n\nYour appointment has been rescheduled.\n\nBest regards,\n{Company name}'],
+    ['change_time', 'Updated time for your job on {Job date}', 'Hi {Client first name},\n\nThe time for your job has changed.\n\nBest regards,\n{Company name}'],
+    ['change_employee', 'Update: your assigned team member has changed', 'Hi {Client first name},\n\nYour appointment will now be handled by {Employee new name}.\n\nBest regards,\n{Company name}'],
+    ['cancel_job', 'Your job on {Job date} has been cancelled', 'Hi {Client first name},\n\nYour job on {Job date} has been cancelled.\n\nBest regards,\n{Company name}'],
+    ['send_invoice', sendInvTpl.subject, sendInvTpl.message],
+  ];
+  for (const [type, subject, message] of emailTplSeed) {
     await pool.query(
       `INSERT INTO email_templates (company_id, template_type, subject, message)
-       VALUES ($1,$2,'','') ON CONFLICT (company_id, template_type) DO NOTHING`,
-      [companyId, t],
+       VALUES ($1,$2,$3,$4) ON CONFLICT (company_id, template_type) DO NOTHING`,
+      [companyId, type, subject, message],
     ).catch(() => {});
   }
 
   const today = new Date();
   today.setHours(12, 0, 0, 0);
   const todayStr = fmt(today);
-  const weekOffsets = [-1, 0, 1, 2];
-  let jobCount = 0;
+
+  console.log(`📅  Building jobs for every weekday in ${YEAR} (6 employees, bank holidays + random leave excluded)...`);
+
+  const pendingJobs = []; // { ...jobFields, services: [{service_id, custom_price, custom_duration_minutes, status}] }
+  const leaveRows = [];
   let sortGlobal = 0;
+  let workingDayCount = 0;
+  let routeDayCount = 0;
 
-  console.log('📅  Scheduling jobs (6 employees × weekdays × 4 weeks, 3–8 hrs/day)...');
+  for (let date = new Date(RANGE_START); date <= RANGE_END; date = addDays(date, 1)) {
+    const dow = date.getDay();
+    if (dow === 0 || dow === 6) continue; // weekends
+    const dateStr = fmt(date);
+    if (BANK_HOLIDAYS.has(dateStr)) continue; // company-wide closure
+    workingDayCount++;
+    const isPast = dateStr < todayStr;
 
-  for (const weekOffset of weekOffsets) {
-    const mon = monday(today);
-    mon.setDate(mon.getDate() + weekOffset * 7);
+    for (let e = 0; e < EMPLOYEES.length; e++) {
+      const emp = EMPLOYEES[e];
+      const userId = employeeIds[e];
 
-    for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
-      const date = addDays(mon, dayIdx);
-      const dateStr = fmt(date);
-      const isPast = dateStr < todayStr;
-
-      for (let e = 0; e < EMPLOYEES.length; e++) {
-        const emp = EMPLOYEES[e];
-        const userId = employeeIds[e];
-        const poolClients = clientsByTerritory[emp.territory] || clientRecords;
-        let dayMinutes = 0;
-        const targetMinutes = rand(180, 480);
-        let cursor = rand(0, poolClients.length - 1);
-        let routeOrder = 0;
-        let timeCursor = 8 * 60 + rand(0, 30);
-
-        while (dayMinutes < targetMinutes && poolClients.length > 0) {
-          const client = poolClients[cursor % poolClients.length];
-          cursor++;
-
-          const svcCount = Math.random() < 0.75 ? 1 : 2;
-          const svcs = [];
-          const used = new Set();
-          for (let s = 0; s < svcCount; s++) {
-            let svc;
-            do { svc = pick(svcRows); } while (used.has(svc.id) && used.size < svcRows.length);
-            used.add(svc.id);
-            svcs.push(svc);
-          }
-
-          const jobMinutes = svcs.reduce((sum, s) => sum + s.duration, 0) + rand(0, 15);
-          if (dayMinutes + jobMinutes > targetMinutes + 45 && dayMinutes >= 180) break;
-
-          const timeFrom = minutesToTime(timeCursor);
-          const timeTo = minutesToTime(timeCursor + jobMinutes);
-          timeCursor += jobMinutes + rand(10, 25);
-
-          const title = svcs.length === 1 ? svcs[0].title : `${svcs[0].title} + ${svcs[1].title}`;
-          let status = 'scheduled';
-          if (isPast) status = Math.random() < 0.9 ? 'completed' : 'cancelled';
-          else if (dateStr === todayStr) status = routeOrder < 2 ? 'completed' : 'scheduled';
-
-          const flexRoll = Math.random();
-          const schedulingFlex = flexRoll < 0.12 ? 'flexible' : flexRoll < 0.08 ? 'fixed_weekday' : 'fixed_date';
-          const allowedDays = schedulingFlex === 'flexible' ? [0, 1, 2, 3, 4] : schedulingFlex === 'fixed_weekday' ? [dayIdx] : null;
-
-          const jobRes = await pool.query(
-            `INSERT INTO jobs
-              (company_id, client_id, assigned_user_id, title, note,
-               scheduled_date, scheduled_time_from, scheduled_time_to,
-               status, is_generated, sort_order, route_order,
-               scheduling_flexibility, allowed_weekdays)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10,$11,$12,$13)
-             RETURNING id`,
-            [
-              companyId, client.id, userId, title,
-              Math.random() < 0.25 ? 'Access via side gate. Park on street.' : null,
-              dateStr, timeFrom, timeTo, status, sortGlobal++, routeOrder++,
-              schedulingFlex, allowedDays,
-            ],
-          );
-
-          for (const svc of svcs) {
-            const svcStatus = status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'scheduled';
-            await pool.query(
-              `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
-               VALUES ($1,$2,$3,$4,$5)`,
-              [jobRes.rows[0].id, svc.id, svc.price, svc.duration, svcStatus],
-            );
-          }
-
-          dayMinutes += jobMinutes;
-          jobCount++;
-          if (routeOrder > 12) break;
-        }
+      // Random annual leave / sick / personal day — that employee has no jobs.
+      if (Math.random() < LEAVE_CHANCE) {
+        const roll = Math.random();
+        const category = roll < 0.6 ? 'holiday' : roll < 0.85 ? 'sick' : 'personal';
+        leaveRows.push({
+          user_id: userId, company_id: companyId, leave_date: dateStr,
+          leave_type: 'full_day', hours_off: null, category, note: null,
+        });
+        continue;
       }
+
+      const poolClients = clientsByTerritory[emp.territory] || clientRecords;
+      let dayMinutes = 0;
+      const targetMinutes = rand(180, 480);
+      let cursor = rand(0, poolClients.length - 1);
+      let routeOrder = 0;
+      let timeCursor = 8 * 60 + rand(0, 30);
+      let addedAnyJob = false;
+
+      while (dayMinutes < targetMinutes && poolClients.length > 0) {
+        const client = poolClients[cursor % poolClients.length];
+        cursor++;
+
+        const svcCount = Math.random() < 0.75 ? 1 : 2;
+        const svcs = [];
+        const used = new Set();
+        for (let s = 0; s < svcCount; s++) {
+          let svc;
+          do { svc = pick(svcRows); } while (used.has(svc.id) && used.size < svcRows.length);
+          used.add(svc.id);
+          svcs.push(svc);
+        }
+
+        const jobMinutes = svcs.reduce((sum, s) => sum + s.duration, 0) + rand(0, 15);
+        if (dayMinutes + jobMinutes > targetMinutes + 45 && dayMinutes >= 180) break;
+
+        const timeFrom = minutesToTime(timeCursor);
+        const timeTo = minutesToTime(timeCursor + jobMinutes);
+        timeCursor += jobMinutes + rand(10, 25);
+
+        const title = svcs.length === 1 ? svcs[0].title : `${svcs[0].title} + ${svcs[1].title}`;
+        let status = 'scheduled';
+        if (isPast) status = Math.random() < 0.9 ? 'completed' : 'cancelled';
+        else if (dateStr === todayStr) status = routeOrder < 2 ? 'completed' : 'scheduled';
+
+        const flexRoll = Math.random();
+        const schedulingFlex = flexRoll < 0.12 ? 'flexible' : flexRoll < 0.08 ? 'fixed_weekday' : 'fixed_date';
+        const allowedDays = schedulingFlex === 'flexible' ? [0, 1, 2, 3, 4] : schedulingFlex === 'fixed_weekday' ? [dow === 0 ? 6 : dow - 1] : null;
+
+        const jobServices = svcs.map((svc) => ({
+          service_id: svc.id,
+          custom_price: svc.price,
+          custom_duration_minutes: svc.duration,
+          status: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'scheduled',
+        }));
+
+        pendingJobs.push({
+          company_id: companyId, client_id: client.id, assigned_user_id: userId, title,
+          note: Math.random() < 0.25 ? 'Access via side gate. Park on street.' : null,
+          scheduled_date: dateStr, scheduled_time_from: timeFrom, scheduled_time_to: timeTo,
+          status, is_generated: false, sort_order: sortGlobal++, route_order: routeOrder++,
+          scheduling_flexibility: schedulingFlex, allowed_weekdays: allowedDays,
+          services: jobServices,
+        });
+
+        dayMinutes += jobMinutes;
+        addedAnyJob = true;
+        if (routeOrder > 12) break;
+      }
+
+      if (addedAnyJob) routeDayCount++;
     }
   }
 
+  console.log(`💾  Inserting ${pendingJobs.length} jobs (batched)...`);
+  const jobColumns = [
+    'company_id', 'client_id', 'assigned_user_id', 'title', 'note',
+    'scheduled_date', 'scheduled_time_from', 'scheduled_time_to',
+    'status', 'is_generated', 'sort_order', 'route_order',
+    'scheduling_flexibility', 'allowed_weekdays',
+  ];
+  const jobIds = await chunkedInsert(pool, 'jobs', jobColumns, pendingJobs, { returning: 'id' });
+
+  console.log('💾  Inserting job services (batched)...');
+  const jobServiceRows = [];
+  for (let i = 0; i < pendingJobs.length; i++) {
+    const jobId = jobIds[i];
+    for (const svc of pendingJobs[i].services) {
+      jobServiceRows.push({ job_id: jobId, ...svc });
+    }
+  }
+  const jobServiceColumns = ['job_id', 'service_id', 'custom_price', 'custom_duration_minutes', 'status'];
+  await chunkedInsert(pool, 'job_services', jobServiceColumns, jobServiceRows);
+
+  console.log(`💾  Inserting ${leaveRows.length} employee leave days (batched)...`);
+  const leaveColumns = ['user_id', 'company_id', 'leave_date', 'leave_type', 'hours_off', 'category', 'note'];
+  if (leaveRows.length) await chunkedInsert(pool, 'employee_leave', leaveColumns, leaveRows);
+
   console.log('🔄  Creating subscriptions...');
   let subCount = 0;
-  const subClients = clientRecords.filter((_, i) => i % 2 === 0).slice(0, 28);
+  const subClients = clientRecords.filter((_, i) => i % 20 === 0).slice(0, 150);
 
   for (let i = 0; i < subClients.length; i++) {
     const client = subClients[i];
@@ -524,12 +666,17 @@ async function main() {
 
   console.log('\n✅  Stress-test seed complete!\n');
   console.log('─'.repeat(56));
-  console.log('🏢  Company:      RouteTest Field Services');
-  console.log(`🔗  Slug:         ${COMPANY_SLUG}`);
-  console.log(`👥  Clients:      ${clientRecords.length} (with lat/lng)`);
-  console.log(`💼  Jobs:         ${jobCount}`);
-  console.log(`🔄  Subscriptions: ${subCount}`);
-  console.log(`👷  Employees:    ${EMPLOYEES.length}`);
+  console.log('🏢  Company:        RouteTest Field Services');
+  console.log(`🔗  Slug:           ${COMPANY_SLUG}`);
+  console.log(`📆  Date range:     ${fmt(RANGE_START)} → ${fmt(RANGE_END)} (all of ${YEAR})`);
+  console.log(`🎌  Bank holidays:  ${BANK_HOLIDAYS.size} (no jobs company-wide)`);
+  console.log(`🏖   Leave days:     ${leaveRows.length} (employee holiday/sick/personal)`);
+  console.log(`👥  Clients:        ${clientRecords.length} (with lat/lng)`);
+  console.log(`💼  Jobs:           ${pendingJobs.length}`);
+  console.log(`🧾  Job services:   ${jobServiceRows.length}`);
+  console.log(`🗺   Routes:         ~${routeDayCount} employee-days with jobs`);
+  console.log(`🔄  Subscriptions:  ${subCount}`);
+  console.log(`👷  Employees:      ${EMPLOYEES.length}`);
   console.log('─'.repeat(56));
   console.log(`\n🔑  Password for all accounts: ${PASSWORD}\n`);
   console.log('   admin@routetest.co.uk  — owner (Alex Morgan)');

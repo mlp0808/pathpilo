@@ -847,4 +847,145 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// ── Silent session renewal ────────────────────────────────────────────────
+// There's a single long-lived access token (7d) and no separate refresh
+// token. Left alone, a tab that's been open — or just idle — past that
+// window hits a hard "Invalid or expired token" wall on its next request.
+// The frontend calls this in the background (on load, on tab focus, and as a
+// one-shot recovery right after any 401/403) to re-sign a fresh token before
+// that ever happens. Anything older than the grace window below still needs
+// a real login — this only smooths over normal "away for a few days" gaps.
+const REFRESH_GRACE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days past expiry
+
+// POST /api/auth/refresh
+// No body — the (possibly just-expired) token travels in the Authorization
+// header. Returns a freshly-signed token + the current user/company state,
+// same shape as /login, so the frontend can drop it in with the same code.
+router.post('/refresh', async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const oldToken = authHeader && authHeader.split(' ')[1];
+  if (!oldToken) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  let decoded;
+  try {
+    // Signature must still check out — only the expiry check is relaxed.
+    decoded = jwt.verify(oldToken, JWT_SECRET, { ignoreExpiration: true });
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  // Overwatch impersonation sessions are deliberately time-boxed — never
+  // silently extend one past its 30-minute window.
+  if (decoded.overwatch) {
+    return res.status(403).json({ error: 'Overwatch sessions cannot be refreshed' });
+  }
+
+  if (decoded.exp && Date.now() - decoded.exp * 1000 > REFRESH_GRACE_MS) {
+    return res.status(401).json({ error: 'Session expired, please log in again' });
+  }
+
+  // Env-only super admin has no DB row to re-check — just re-sign the claims.
+  if (decoded.userId === 0 && decoded.role === 'admin') {
+    const token = jwt.sign(
+      {
+        userId: 0,
+        email: decoded.email,
+        firstName: decoded.firstName || 'Admin',
+        lastName: decoded.lastName || '',
+        role: 'admin',
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    return res.status(200).json({
+      token,
+      user: {
+        id: 0,
+        firstName: decoded.firstName || 'Admin',
+        lastName: decoded.lastName || '',
+        email: decoded.email,
+        role: 'admin',
+        companies: [],
+        activeCompany: null,
+      },
+    });
+  }
+
+  try {
+    const userResult = await pool.query(
+      `SELECT id, first_name, last_name, email, role, language_code FROM users WHERE id = $1`,
+      [decoded.userId]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ error: 'Account no longer exists' });
+    }
+    const user = userResult.rows[0];
+
+    const companies = await fetchUserCompanies(user.id);
+    const pendingInvites = await fetchPendingInvitesForEmail(user.email);
+
+    if (companies.length === 0 && pendingInvites.length === 0 && user.role !== 'admin') {
+      return res.status(403).json({ error: 'User is not associated with any company' });
+    }
+
+    // Keep the workspace the old token already had, as long as it's still
+    // valid — otherwise fall back the same way /login does.
+    const stillValid =
+      decoded.activeCompanyId != null
+        ? companies.find((c) => c.id === decoded.activeCompanyId)
+        : null;
+    const activeCompany =
+      stillValid || companies.find((c) => !c.suspendedAt) || (companies.length > 0 ? companies[0] : null);
+
+    const tokenPayload = {
+      userId: user.id,
+      email: user.email,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      role: user.role,
+    };
+    if (activeCompany) {
+      tokenPayload.activeCompanyId = activeCompany.id;
+      tokenPayload.role = activeCompany.role;
+    }
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
+
+    const responseData = {
+      token,
+      user: {
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        languageCode: user.language_code || DEFAULT_LANGUAGE_CODE,
+        role: user.role,
+        companies,
+        pendingInvites,
+      },
+    };
+
+    if (activeCompany) {
+      responseData.user.activeCompany = {
+        id: activeCompany.id,
+        name: activeCompany.name,
+        slug: activeCompany.slug,
+        countryCode: activeCompany.countryCode || DEFAULT_COUNTRY_CODE,
+        role: activeCompany.role,
+        isOwner: activeCompany.isOwner,
+        suspendedAt: activeCompany.suspendedAt || null,
+      };
+      responseData.user.companyId = activeCompany.id;
+      responseData.user.companyName = activeCompany.name;
+    }
+
+    res.status(200).json(responseData);
+  } catch (err) {
+    console.error('[auth] refresh error:', err);
+    res.status(500).json({ error: 'Failed to refresh session' });
+  }
+});
+
 module.exports = router;

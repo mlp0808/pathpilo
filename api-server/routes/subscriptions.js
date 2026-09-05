@@ -8,6 +8,7 @@ const {
 } = require('../utils/subscriptionStopCleanup');
 const jobEncryptedNotes = require('../utils/jobEncryptedNotes');
 const { ensureSchedulingSchema } = require('../services/routePlanner/ensureSchedulingSchema');
+const { ensureItemCatalogSchema } = require('../utils/itemCatalogSchema');
 
 const router = express.Router();
 
@@ -171,6 +172,11 @@ router.get('/', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    // Round-owned subscriptions (recurring_jobs.round_id) stay out of this list.
+    try {
+      await pool.query(`ALTER TABLE recurring_jobs ADD COLUMN IF NOT EXISTS round_id INTEGER`);
+    } catch { /* older installs / missing table handled below */ }
+
     // Check if recurring_jobs table exists
     let subscriptions = [];
     try {
@@ -178,6 +184,7 @@ router.get('/', authenticateToken, async (req, res) => {
         SELECT
           rj.*,
           c.name, c.last_name,
+          c.address, c.zip_code, c.city,
           COUNT(rjs.id) as service_count,
           COALESCE(SUM(COALESCE(rjs.custom_price, s.price)), 0) as total_price
         FROM recurring_jobs rj
@@ -185,7 +192,8 @@ router.get('/', authenticateToken, async (req, res) => {
         LEFT JOIN recurring_job_services rjs ON rj.id = rjs.recurring_job_id
         LEFT JOIN services s ON rjs.service_id = s.id
         WHERE rj.company_id = $1 AND rj.is_active = true
-        GROUP BY rj.id, c.name, c.last_name
+          AND rj.round_id IS NULL
+        GROUP BY rj.id, c.name, c.last_name, c.address, c.zip_code, c.city
         ORDER BY rj.created_at DESC
       `, [companyId]);
 
@@ -259,6 +267,7 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
+    await ensureItemCatalogSchema(pool);
 
     // Verify client belongs to company
     const clientCheck = await pool.query(
@@ -333,18 +342,22 @@ router.post('/', authenticateToken, async (req, res) => {
       // Add services
       if (services.length > 0) {
         for (const service of services) {
+          const qty = service.quantity != null && service.quantity !== ''
+            ? Number(service.quantity)
+            : 1;
+          const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
           if (service.service_id) {
             await dbClient.query(`
               INSERT INTO recurring_job_services
-              (recurring_job_id, service_id, custom_price, custom_duration_minutes)
-              VALUES ($1, $2, $3, $4)
-            `, [subscription.id, service.service_id, service.custom_price, service.custom_duration]);
+              (recurring_job_id, service_id, custom_price, custom_duration_minutes, quantity)
+              VALUES ($1, $2, $3, $4, $5)
+            `, [subscription.id, service.service_id, service.custom_price, service.custom_duration, quantity]);
           } else if (service.custom_title) {
             await dbClient.query(`
               INSERT INTO recurring_job_services
-              (recurring_job_id, custom_title, custom_price, custom_duration_minutes)
-              VALUES ($1, $2, $3, $4)
-            `, [subscription.id, service.custom_title, service.custom_price, service.custom_duration]);
+              (recurring_job_id, custom_title, custom_price, custom_duration_minutes, quantity)
+              VALUES ($1, $2, $3, $4, $5)
+            `, [subscription.id, service.custom_title, service.custom_price, service.custom_duration, quantity]);
           }
         }
       }
@@ -381,16 +394,20 @@ router.post('/', authenticateToken, async (req, res) => {
         }
         if (services.length > 0) {
           for (const service of services) {
+            const qty = service.quantity != null && service.quantity !== ''
+              ? Number(service.quantity)
+              : 1;
+            const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
             if (service.service_id) {
               await dbClient.query(`
-                INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, status)
-                VALUES ($1, $2, $3, $4, 'scheduled')
-              `, [firstJob.id, service.service_id, service.custom_price, service.custom_duration]);
+                INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, quantity, status)
+                VALUES ($1, $2, $3, $4, $5, 'scheduled')
+              `, [firstJob.id, service.service_id, service.custom_price, service.custom_duration, quantity]);
             } else if (service.custom_title) {
               await dbClient.query(`
-                INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, status)
-                VALUES ($1, $2, $3, $4, 'scheduled')
-              `, [firstJob.id, service.custom_title, service.custom_price, service.custom_duration]);
+                INSERT INTO job_services (job_id, custom_title, custom_price, custom_duration_minutes, quantity, status)
+                VALUES ($1, $2, $3, $4, $5, 'scheduled')
+              `, [firstJob.id, service.custom_title, service.custom_price, service.custom_duration, quantity]);
             }
           }
         }
@@ -531,6 +548,21 @@ router.put('/:subscriptionId', authenticateToken, async (req, res) => {
       subscription = result.rows[0];
     }
 
+    // Schedule changes apply to all future work: drop already-materialized
+    // future jobs so ghosts / re-place follow the new rule. Past + completed stay.
+    const scheduleChanged = starting_date !== undefined
+      || recurrence_type !== undefined
+      || day_of_week !== undefined
+      || day_of_month !== undefined
+      || resolvedInterval != null;
+    if (scheduleChanged) {
+      await deleteFutureNonCompletedJobsForSubscription(
+        dbClient,
+        companyId,
+        Number(subscriptionId),
+      );
+    }
+
     // Replace services if provided
     if (Array.isArray(services) && services.length > 0) {
       await dbClient.query(
@@ -538,17 +570,21 @@ router.put('/:subscriptionId', authenticateToken, async (req, res) => {
         [subscriptionId]
       );
       for (const service of services) {
+        const qty = service.quantity != null && service.quantity !== ''
+          ? Number(service.quantity)
+          : 1;
+        const quantity = Number.isFinite(qty) && qty > 0 ? qty : 1;
         if (service.service_id) {
           await dbClient.query(
-            `INSERT INTO recurring_job_services (recurring_job_id, service_id, custom_price, custom_duration_minutes)
-             VALUES ($1, $2, $3, $4)`,
-            [subscriptionId, service.service_id, service.custom_price ?? null, service.custom_duration ?? null]
+            `INSERT INTO recurring_job_services (recurring_job_id, service_id, custom_price, custom_duration_minutes, quantity)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [subscriptionId, service.service_id, service.custom_price ?? null, service.custom_duration ?? null, quantity]
           );
         } else if (service.custom_title) {
           await dbClient.query(
-            `INSERT INTO recurring_job_services (recurring_job_id, custom_title, custom_price, custom_duration_minutes)
-             VALUES ($1, $2, $3, $4)`,
-            [subscriptionId, service.custom_title, service.custom_price ?? null, service.custom_duration ?? null]
+            `INSERT INTO recurring_job_services (recurring_job_id, custom_title, custom_price, custom_duration_minutes, quantity)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [subscriptionId, service.custom_title, service.custom_price ?? null, service.custom_duration ?? null, quantity]
           );
         }
       }
@@ -817,7 +853,7 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
     }
 
     const subServicesRes = await dbClient.query(
-      `SELECT rjs.service_id, rjs.custom_price, rjs.custom_duration_minutes
+      `SELECT rjs.service_id, rjs.custom_price, rjs.custom_duration_minutes, COALESCE(rjs.quantity, 1) as quantity
        FROM recurring_job_services rjs
        WHERE rjs.recurring_job_id = $1
        ORDER BY rjs.created_at ASC`,
@@ -890,10 +926,10 @@ router.post('/:subscriptionId/occurrences/:occurrence/materialize', authenticate
 
     for (const s of subServices) {
       await dbClient.query(
-        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes)
-         VALUES ($1,$2,$3,$4)
+        `INSERT INTO job_services (job_id, service_id, custom_price, custom_duration_minutes, quantity)
+         VALUES ($1,$2,$3,$4,$5)
          ON CONFLICT (job_id, service_id) DO NOTHING`,
-        [jobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null]
+        [jobId, s.service_id, s.custom_price || null, s.custom_duration_minutes || null, s.quantity ?? 1]
       );
     }
 

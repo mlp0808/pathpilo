@@ -181,7 +181,18 @@ router.get('/', authenticateToken, async (req, res) => {
       send_invoice: getSendInvoiceDefaults(countryCode),
       invoice_due_reminder: getInvoiceDueReminderDefaults(countryCode),
     };
-    const merged = { ...DEFAULT_TEMPLATES, ...localeInvoice, ...templates };
+    // Empty DB rows (subject/message '') must NOT override built-in defaults —
+    // many companies were seeded with blank templates and that left the send
+    // modal stuck on "Loading from template…".
+    const baseDefaults = { ...DEFAULT_TEMPLATES, ...localeInvoice };
+    const merged = { ...baseDefaults };
+    for (const [key, stored] of Object.entries(templates)) {
+      const def = baseDefaults[key] || { subject: '', message: '' };
+      merged[key] = {
+        subject: String(stored?.subject || '').trim() ? stored.subject : def.subject,
+        message: String(stored?.message || '').trim() ? stored.message : def.message,
+      };
+    }
     if (invFromCompany) {
       if (!merged.send_invoice?.subject?.trim() && invFromCompany.invoice_email_default_subject) {
         merged.send_invoice = merged.send_invoice || {};

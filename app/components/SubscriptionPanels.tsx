@@ -38,6 +38,8 @@ interface SchedulePanelProps extends Omit<ScheduleState, 'startingDate'> {
   visitsPerYear?: number
   revenuePerYear?: number
   countryCode?: string
+  /** `job` matches Create Job modal; `compact` is the same look scaled for the round sidebar. */
+  variant?: 'default' | 'job' | 'compact'
 }
 
 export function SchedulePanel({
@@ -53,10 +55,13 @@ export function SchedulePanel({
   intervalMonths, onIntervalMonthsChange,
   pricePerVisit = 0, durationPerVisit = 0, visitsPerYear = 0, revenuePerYear = 0,
   countryCode = 'DK',
+  variant = 'default',
 }: SchedulePanelProps) {
   const { t, locale } = useAppI18n()
   const hasStats = pricePerVisit > 0 || durationPerVisit > 0
   const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
+  const isJob = variant === 'job' || variant === 'compact'
+  const isCompact = variant === 'compact'
   const weekDayNames = Array.from({ length: 7 }).map((_, idx) =>
     new Date(2024, 0, 7 + idx).toLocaleDateString(dateLocale, { weekday: 'long' })
   )
@@ -79,24 +84,44 @@ export function SchedulePanel({
           .replace('{{ordinal}}', ordinal(dayOfMonth))
 
   const btnSeg = (active: boolean) =>
-    `flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
-      active
-        ? 'bg-primary-800 text-white shadow-sm'
-        : 'text-gray-600 hover:bg-gray-100'
-    }`
+    isJob
+      ? `flex-1 ${isCompact ? 'py-2 text-xs' : 'py-2.5 text-sm'} font-semibold rounded-xl transition-all duration-200 ${
+          active
+            ? 'bg-white text-gray-900 shadow-sm ring-1 ring-black/5'
+            : 'text-gray-500 hover:text-gray-800'
+        }`
+      : `flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
+          active
+            ? 'bg-primary-800 text-white shadow-sm'
+            : 'text-gray-600 hover:bg-gray-100'
+        }`
 
   const btnChoice = (active: boolean) =>
-    `min-h-[2.25rem] py-2 px-1 rounded-md text-xs font-medium transition-colors ${
-      active
-        ? 'bg-primary-800 text-white shadow-sm'
-        : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-    }`
+    isJob
+      ? `${isCompact ? 'min-h-[2rem] py-1.5' : 'min-h-[2.5rem] py-2'} px-1 rounded-xl text-xs font-semibold transition-all duration-200 ${
+          active
+            ? 'bg-gray-900 text-white shadow-sm'
+            : 'border border-gray-200/80 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-800 hover:bg-gray-50'
+        }`
+      : `min-h-[2.25rem] py-2 px-1 rounded-md text-xs font-medium transition-colors ${
+          active
+            ? 'bg-primary-800 text-white shadow-sm'
+            : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+        }`
+
+  const sectionLabel = isJob
+    ? `block text-[11px] font-semibold uppercase tracking-wide text-gray-400 ${isCompact ? 'mb-1.5' : 'mb-2'}`
+    : 'block text-xs font-medium text-gray-600 mb-1.5'
+
+  const segWrap = isJob
+    ? `flex ${isCompact ? 'p-0.5 gap-0.5 rounded-xl' : 'p-1 gap-1 rounded-2xl'} bg-gray-100/90`
+    : 'flex p-0.5 gap-0.5 rounded-lg border border-gray-200 bg-white'
 
   return (
-    <div className="space-y-4">
+    <div className={isCompact ? 'space-y-3' : isJob ? 'space-y-5' : 'space-y-4'}>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.recurrenceType')}</label>
-        <div className="flex p-0.5 gap-0.5 rounded-lg border border-gray-200 bg-white">
+        <label className={sectionLabel}>{t('app.subscription.schedule.recurrenceType')}</label>
+        <div className={segWrap}>
           {(['weekly', 'monthly'] as const).map(type => (
             <button
               key={type}
@@ -116,8 +141,8 @@ export function SchedulePanel({
       {recurrenceType === 'weekly' && (
         <>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.dayOfWeek')}</label>
-            <div className="grid grid-cols-7 gap-1">
+            <label className={sectionLabel}>{t('app.subscription.schedule.dayOfWeek')}</label>
+            <div className="grid grid-cols-7 gap-1.5">
               {weekDayShort.map((name, idx) => (
                 <button
                   key={idx}
@@ -132,7 +157,7 @@ export function SchedulePanel({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.repeatEvery')}</label>
+            <label className={sectionLabel}>{t('app.subscription.schedule.repeatEvery')}</label>
             <div className="grid grid-cols-3 gap-1.5">
               {[1, 2, 3].map(n => (
                 <button
@@ -155,8 +180,10 @@ export function SchedulePanel({
                 </button>
               ))}
               <div
-                className={`min-w-0 flex items-center gap-1 rounded-md border px-1.5 py-0.5 transition-colors ${
-                  customInterval ? 'border-primary-800 bg-primary-800' : 'border-gray-200 bg-white'
+                className={`min-w-0 flex items-center gap-1 rounded-xl border px-1.5 py-0.5 transition-colors ${
+                  customInterval
+                    ? (isJob ? 'border-gray-900 bg-gray-900' : 'border-primary-800 bg-primary-800')
+                    : 'border-gray-200 bg-white'
                 }`}
               >
                 <input
@@ -189,8 +216,8 @@ export function SchedulePanel({
       {recurrenceType === 'monthly' && (
         <>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.dayOfMonth')}</label>
-            <div className="grid grid-cols-7 gap-1">
+            <label className={sectionLabel}>{t('app.subscription.schedule.dayOfMonth')}</label>
+            <div className="grid grid-cols-7 gap-1.5">
               {Array.from({ length: 28 }, (_, i) => i + 1).map(day => (
                 <button
                   key={day}
@@ -202,13 +229,13 @@ export function SchedulePanel({
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className={`text-xs text-gray-400 ${isCompact ? 'mt-1' : 'mt-1.5'} ${isCompact ? 'hidden' : ''}`}>
               {t('app.subscription.schedule.dayOfMonthHelp')}
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+            <label className={sectionLabel}>
               {t('app.subscription.schedule.repeatEveryNMonthsLabel', 'Repeat every')}
             </label>
             <div className="flex items-center gap-2 max-w-[220px]">
@@ -227,7 +254,11 @@ export function SchedulePanel({
                   if (!Number.isFinite(n)) return
                   onIntervalMonthsChange(Math.min(24, Math.max(1, n)))
                 }}
-                className="w-20 px-3 py-2 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-800/25"
+                className={
+                  isJob
+                    ? 'w-20 px-3 py-2.5 text-sm font-semibold border border-gray-200 rounded-xl bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400 shadow-sm'
+                    : 'w-20 px-3 py-2 text-sm font-medium border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-800/25'
+                }
               />
               <span className="text-xs text-gray-500">
                 {intervalMonths === 1
@@ -235,7 +266,7 @@ export function SchedulePanel({
                   : t('app.subscription.schedule.months', 'months')}
               </span>
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">
+            <p className={`text-xs text-gray-400 mt-1.5 ${isCompact ? 'hidden' : ''}`}>
               {t(
                 'app.subscription.schedule.repeatEveryNMonthsHelp',
                 'Enter how many months between visits. 1 = every month, 2 = every other month, 3 = quarterly, etc.'
@@ -246,8 +277,8 @@ export function SchedulePanel({
       )}
 
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1.5">{t('app.subscription.schedule.startingDate')}</label>
-        <div className="flex p-0.5 gap-0.5 rounded-lg border border-gray-200 bg-white mb-2">
+        <label className={sectionLabel}>{t('app.subscription.schedule.startingDate')}</label>
+        <div className={`${segWrap} mb-2`}>
           <button
             type="button"
             onClick={() => onStartAsapChange(true)}
@@ -268,30 +299,46 @@ export function SchedulePanel({
             type="date"
             value={customStartingDate}
             onChange={e => onCustomStartingDateChange(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-1 focus:ring-primary-400/30 focus:border-primary-400"
+            className={
+              isJob
+                ? 'w-full px-4 py-3 border border-gray-200 rounded-2xl text-sm bg-white shadow-sm focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400'
+                : 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:ring-1 focus:ring-primary-400/30 focus:border-primary-400'
+            }
           />
         )}
-        <p className="text-xs text-gray-400 mt-1.5">
-          {startAsap
-            ? t('app.subscription.schedule.startAsapHelp', 'The first visit is the next matching day on or after today.')
-            : t('app.subscription.schedule.startingDateHelp')}
-        </p>
+        {!isJob && (
+          <p className="text-xs text-gray-400 mt-1.5">
+            {startAsap
+              ? t('app.subscription.schedule.startAsapHelp', 'The first visit is the next matching day on or after today.')
+              : t('app.subscription.schedule.startingDateHelp')}
+          </p>
+        )}
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-4">
-        <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-2">{t('app.subscription.schedule.schedulePreview')}</div>
+      <div
+        className={
+          isCompact
+            ? 'rounded-xl border border-gray-200/80 bg-white p-3 shadow-sm'
+            : isJob
+              ? 'rounded-2xl border border-gray-200/80 bg-white p-4 shadow-sm'
+              : 'rounded-lg border border-gray-200 bg-gray-50/50 p-4'
+        }
+      >
+        <div className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${isJob ? 'text-gray-400' : 'text-gray-500'}`}>
+          {t('app.subscription.schedule.schedulePreview')}
+        </div>
         <div className="space-y-1.5">
-          <div className="text-sm font-semibold text-gray-900">
+          <div className={`text-sm font-semibold ${isJob ? 'text-gray-900' : 'text-gray-900'}`}>
             {recurrenceType === 'weekly' ? weeklyPreview : monthlyPreview}
           </div>
           {firstVisitYmd ? (
             <div className="text-xs text-gray-600 space-y-0.5">
-              <div className="text-[11px] font-medium text-gray-700">
+              <div className="text-[11px] font-medium text-gray-500">
                 {t('app.subscription.schedule.firstVisitLabel', 'First visit')}
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-1 h-1 rounded-full bg-primary-600 inline-block flex-shrink-0" />
-                <span>
+                <span className={`w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 ${isJob ? 'bg-gray-900' : 'bg-primary-600'}`} />
+                <span className={isJob ? 'text-gray-700' : undefined}>
                   {new Date(firstVisitYmd + 'T12:00:00').toLocaleDateString(dateLocale, {
                     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
                   })}
@@ -301,8 +348,8 @@ export function SchedulePanel({
           ) : (
             <div className="text-xs text-gray-400">{t('app.subscription.schedule.chooseStartingDate')}</div>
           )}
-          {hasStats && (
-            <div className="mt-2 pt-2 border-t border-gray-200/80 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+          {hasStats && !isCompact && (
+            <div className={`mt-2.5 pt-2.5 border-t flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 ${isJob ? 'border-gray-100' : 'border-gray-200/80'}`}>
               <span><span className="font-medium text-gray-800">{fmtMoney(pricePerVisit, countryCode)}</span> {t('app.subscription.schedule.perVisitStat')}</span>
               <span><span className="font-medium text-gray-800">{durationPerVisit} {t('app.subscription.schedule.minPerVisit')}</span></span>
               <span><span className="font-medium text-gray-800">~{visitsPerYear}×</span> {t('app.subscription.schedule.perYearStat')}</span>

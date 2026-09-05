@@ -105,7 +105,15 @@ export function setupPathForStep(step: string, user?: Record<string, unknown> | 
   const slug = user ? getCompanySlug(user) : null
   if (step === 'clients') return '/setup/clients'
   if (step === 'jobs' && slug) return `/${slug}/jobs`
-  if (step === 'route' && slug) return `/${slug}/jobs?view=day`
+  // Map-first route step: land in the planner so "Save & apply" / Save as Round
+  // are the natural next actions (jobs day view remains as a fallback via Jobs).
+  if (step === 'route' && slug) {
+    const today = new Date()
+    const y = today.getFullYear()
+    const m = String(today.getMonth() + 1).padStart(2, '0')
+    const d = String(today.getDate()).padStart(2, '0')
+    return `/${slug}/map?focus=day&date=${y}-${m}-${d}`
+  }
   if (['company', 'services', 'plan'].includes(step)) return '/setup/clients'
   if (slug) return `/${slug}/jobs`
   return '/setup/clients'
