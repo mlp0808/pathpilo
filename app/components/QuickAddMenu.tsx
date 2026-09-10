@@ -18,6 +18,7 @@ import {
   UserPlusIcon,
 } from '@heroicons/react/24/outline'
 import { useAppI18n } from './I18nProvider'
+import { requestMissionsRefresh } from '@/app/config/missions'
 
 const CreateJob = dynamic(() => import('./CreateJob'), { ssr: false })
 const AddClientModal = dynamic(() => import('./AddClientModal'), { ssr: false })
@@ -56,6 +57,7 @@ export default function QuickAddMenu({ companySlug }: { companySlug: string }) {
 
   const finishFlow = () => {
     setFlow(null)
+    requestMissionsRefresh()
     router.refresh()
   }
 

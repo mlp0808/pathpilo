@@ -630,13 +630,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     wasOpenRef.current = isOpen
     if (!justOpened) return
 
-      // Prefill date/user when provided (e.g. when opened from the calendar column "Add job").
-      // Route/round lock: keep null as "Any" (do not default to today).
-      setJobDate(
-        initialDate
-          ? String(initialDate).split('T')[0]
-          : (lockSchedule ? '' : (mode === 'job' ? new Date().toISOString().split('T')[0] : '')),
-      )
+      setJobDate(initialDate ? String(initialDate).split('T')[0] : '')
       setJobTimeFrom('')
       setJobTimeTo('')
       setJobNote('')
@@ -1651,7 +1645,11 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     </div>
                   </div>
                 ) : jobDateOnly && jobDateDisplay ? (
-                  <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm h-full">
+                  <button
+                    type="button"
+                    onClick={openDatePicker}
+                    className="flex w-full items-center gap-3 bg-white rounded-xl border border-gray-200/80 p-3.5 shadow-sm h-full text-left hover:border-gray-300 transition-colors"
+                  >
                     <div className="w-10 h-10 rounded-xl bg-accent-50 border border-accent-100 flex items-center justify-center flex-shrink-0">
                       <CalendarDaysIcon className="w-5 h-5 text-accent-600" />
                     </div>
@@ -1659,18 +1657,28 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       <div className="text-sm font-semibold text-gray-900">{jobDateDisplay.primary}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{jobDateDisplay.secondary}</div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation()
                         setJobDate('')
                         requestAnimationFrame(openDatePicker)
                       }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setJobDate('')
+                          requestAnimationFrame(openDatePicker)
+                        }
+                      }}
                       className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 flex-shrink-0"
-                      aria-label={t('app.createJob.changeDate', 'Change date')}
+                      aria-label={t('app.createJob.clearDate', 'Clear date')}
                     >
                       <XMarkIcon className="w-4 h-4" />
-                    </button>
-                  </div>
+                    </span>
+                  </button>
                 ) : (
                   <DashedPickerTrigger onClick={openDatePicker}>
                     {t('app.createJob.selectDate', 'Select date')}

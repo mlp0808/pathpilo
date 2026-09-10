@@ -129,9 +129,16 @@ router.put('/', async (req, res) => {
     const jobIdsClause = jobIdsArr.length > 0 ? `ARRAY[${jobIdsArr.join(',')}]` : 'NULL';
 
     const legMinsArr = Array.isArray(leg_minutes) ? leg_minutes : [];
-    const legMinsClause = legMinsArr.length > 0
-      ? `ARRAY[${legMinsArr.map(v => (v == null || isNaN(v)) ? 'NULL' : parseFloat(v)).join(',')}]::real[]`
-      : 'NULL';
+    // Prefer a real array — some DBs have NOT NULL on leg_minutes. Coerce
+    // missing values to 0 so we never write SQL NULL into the column.
+    const normalizedLegs = legMinsArr.map((v) => {
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      return Number.isFinite(n) ? n : 0;
+    });
+    const legMinsClause =
+      normalizedLegs.length > 0
+        ? `ARRAY[${normalizedLegs.join(',')}]::real[]`
+        : `ARRAY[]::real[]`;
 
     // route_geometry is a JSON-serialised [[lng,lat]] array from the web app.
     // Store as TEXT; null clears any previously cached geometry so the
@@ -251,7 +258,7 @@ router.put('/', async (req, res) => {
           name: name != null && String(name).trim() !== '' ? String(name).trim() : row.name,
           totalMinutes: total_minutes,
           totalKm: total_km,
-          legMinutes: legMinsArr,
+          legMinutes: normalizedLegs,
           jobIds: jobIdsArr,
           roundTemplateId: row.round_template_id || templateIdValue,
           dailyRouteId: row.id,

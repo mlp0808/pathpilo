@@ -4,8 +4,10 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
 import AddClientModal from '../../components/AddClientModal'
+import MissionsPanel from '../../components/missions/MissionsPanel'
 import { useAppI18n } from '../../components/I18nProvider'
 import { apiUrl } from '../../utils/api'
+import { requestMissionsRefresh } from '../../config/missions'
 
 interface Client {
   id: number
@@ -95,6 +97,7 @@ export default function ClientsPage() {
   const handleClientAdded = () => {
     fetchClients()
     setIsAddModalOpen(false)
+    requestMissionsRefresh()
   }
 
   const goToClient = (id: number) => {
@@ -105,6 +108,17 @@ export default function ClientsPage() {
   return (
     <AppLayout>
       <div>
+        {companySlug && (
+          <MissionsPanel
+            companySlug={companySlug}
+            className="mb-5 sm:mb-6"
+            onLaunch={(kind) => {
+              if (kind !== 'add_client') return false
+              setIsAddModalOpen(true)
+              return true
+            }}
+          />
+        )}
         {/* Header. On mobile the button collapses to a compact "+ Add" pill
             so the title and total can use the full line width. */}
         <div className="flex items-center justify-between mb-5 sm:mb-6 gap-3">
@@ -120,10 +134,7 @@ export default function ClientsPage() {
             onClick={openAddClient}
             className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 active:bg-primary-700/90 transition-colors flex-shrink-0"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            <span className="hidden xs:inline">{t('app.clientsList.newClient')}</span>
+            {t('app.clientsList.newClient', '+ New client')}
           </button>
         </div>
 
@@ -204,7 +215,7 @@ export default function ClientsPage() {
                 onClick={openAddClient}
                 className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
               >
-                {t('app.clientsList.addClient')}
+                {t('app.clientsList.newClient', '+ New client')}
               </button>
             )}
           </div>

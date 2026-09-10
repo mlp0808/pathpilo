@@ -4,6 +4,8 @@ import { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'rea
 import dynamic from 'next/dynamic'
 import { useUser } from '@/app/hooks/useUser'
 import AppLayout from '@/app/components/AppLayout'
+import MissionsPanel from '@/app/components/missions/MissionsPanel'
+import { requestMissionsRefresh } from '@/app/config/missions'
 import CreateJob from '@/app/components/CreateJob'
 import CreateSubscription from '@/app/components/CreateSubscription'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
@@ -377,7 +379,42 @@ function JobsPageContent() {
   const [routeClients, setRouteClients] = useState<RouteSearchClient[]>([])
   const [mobileRouteDayPickerOpen, setMobileRouteDayPickerOpen] = useState(false)
   const mobileRouteHeaderRef = useRef<HTMLDivElement>(null)
+  const pendingFocusJobRef = useRef<number | null>(null)
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false)
+
+  // Guide / deep-link: jump to the week of ?date= and focus ?job=
+  useEffect(() => {
+    if (searchParams.get('view') === 'day') return
+    const dateStr = searchParams.get('date')
+    const jobParam = searchParams.get('job')
+    if (dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number)
+      if (y && m && d) {
+        const parsed = new Date(y, m - 1, d)
+        if (!isNaN(parsed.getTime())) setCurrentWeek(parsed)
+      }
+    }
+    if (jobParam) {
+      const id = Number(jobParam)
+      if (Number.isFinite(id)) pendingFocusJobRef.current = id
+    }
+  }, [searchParams])
+
+  useEffect(() => {
+    const id = pendingFocusJobRef.current
+    if (id == null || loading) return
+    const timer = window.setTimeout(() => {
+      const el = document.querySelector(`[data-job-id="${id}"]`) as HTMLElement | null
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('ring-2', 'ring-accent-400', 'ring-offset-2')
+      window.setTimeout(() => {
+        el.classList.remove('ring-2', 'ring-accent-400', 'ring-offset-2')
+      }, 1600)
+      pendingFocusJobRef.current = null
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [jobs, loading, currentWeek])
   const [users, setUsers] = useState<User[]>([])
   const [selectedUserId, setSelectedUserId] = useState<number | 'all'>('all')
   const [workHours, setWorkHours] = useState<WorkHours | null>(DEFAULT_WORK_HOURS)
@@ -1645,6 +1682,16 @@ function JobsPageContent() {
         setIsCreateModalOpen(true)
     }
 
+    /** Guide / generic add — no day context, leave the date field empty. */
+    const openCreateJobBlank = () => {
+        setCreateJobClientId(undefined)
+        setCreateJobLockClient(false)
+        setCreateJobNewClient(null)
+        setCreateJobPrefillDate(null)
+        setCreateJobPrefillUserId(selectedUserId === 'all' ? null : selectedUserId)
+        setIsCreateModalOpen(true)
+    }
+
     // Route planner search â start a job for an existing client
     const openCreateJobForClient = (clientId: number) => {
         setCreateJobNewClient(null)
@@ -2251,7 +2298,7 @@ function JobsPageContent() {
         if (job.address) parts.push(job.address)
         const zipCity = [job.zip_code, job.city].filter(Boolean).join(' ')
         if (zipCity) parts.push(zipCity)
-        return parts.join(' â¢ ')
+        return parts.join(' • ')
     }
 
     // Handle job click
@@ -2290,6 +2337,7 @@ function JobsPageContent() {
 
       setJobs(applyPatch)
       setAllJobs(applyPatch)
+      requestMissionsRefresh()
     } catch (error) {
       console.error('Failed to update job status from calendar:', error)
     }
@@ -2929,7 +2977,12 @@ function JobsPageContent() {
 
       let totalDriveMins: number | null = route.totalMinutes != null ? Math.round(route.totalMinutes) : null
       let totalKm: number | null = route.totalKm != null ? Math.round(route.totalKm * 10) / 10 : null
-      let legMins: (number | null)[] = []
+      let legMins: number[] = realJobs.map((real) => {
+        const onRoute = route.jobs.find((j) => Number(j.id) === Number(real.id))
+        return onRoute?.legMinutes != null && Number.isFinite(onRoute.legMinutes)
+          ? Math.round(onRoute.legMinutes * 10) / 10
+          : 0
+      })
       let routeGeometry: string | null = route.routeGeometry?.coordinates
         ? JSON.stringify(route.routeGeometry.coordinates)
         : null
@@ -2944,10 +2997,12 @@ function JobsPageContent() {
           if (totalKm == null && directions.totalKm != null) {
             totalKm = Math.round(directions.totalKm * 10) / 10
           }
-          legMins = realJobs.map(real => {
-            const idx = (directions.jobs ?? []).findIndex(j => j.id === real.id)
-            const j = idx >= 0 ? (directions.jobs ?? [])[idx] : null
-            return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
+          legMins = realJobs.map((real, i) => {
+            const j = (directions.jobs ?? []).find((d) => Number(d.id) === Number(real.id))
+            if (j?.legMinutes != null && Number.isFinite(j.legMinutes)) {
+              return Math.round(j.legMinutes * 10) / 10
+            }
+            return legMins[i] ?? 0
           })
         }
       } catch { /* directions best-effort */ }
@@ -2968,7 +3023,7 @@ function JobsPageContent() {
             user_id: route.userId,
             scheduled_date: dateStr,
             job_ids: realJobs.map(j => Number(j.id)),
-            leg_minutes: legMins.length > 0 ? legMins : null,
+            leg_minutes: legMins,
             total_minutes: totalDriveMins,
             total_job_minutes: Math.round(totalJobMins),
             total_km: totalKm,
@@ -2986,6 +3041,7 @@ function JobsPageContent() {
         if (!saveRes.ok) {
           console.error('[Save & Apply] daily-routes save failed:', saveRes.status, await saveRes.text())
         } else {
+          requestMissionsRefresh()
           const body = await saveRes.json().catch(() => null)
           console.log('[Save & Apply] saved to DB', { round_id: body?.round_id })
           if (totalDriveMins != null) {
@@ -3380,6 +3436,22 @@ function JobsPageContent() {
     return (
         <AppLayout>
             <div className="space-y-4 overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
+                {viewMode !== 'day' && companySlug && (
+                  <MissionsPanel
+                    companySlug={companySlug}
+                    onLaunch={(kind) => {
+                      if (kind === 'add_job') {
+                        openCreateJobBlank()
+                        return true
+                      }
+                      if (kind === 'add_subscription') {
+                        setIsSubscriptionModalOpen(true)
+                        return true
+                      }
+                      return false
+                    }}
+                  />
+                )}
                 {apiError && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
                     <div className="text-sm text-red-800 font-medium">{t('app.jobsPage.errorTitle')}</div>
@@ -4017,6 +4089,7 @@ function JobsPageContent() {
                                                     return (
                                                         <div
                                                             key={job.id}
+                                                            data-job-id={String(job.id)}
                                                             className={`overflow-hidden transition-all duration-300 ease-out ${
                                                               isExiting
                                                                 ? '-translate-x-[120%] opacity-0 max-h-0'
@@ -4585,6 +4658,7 @@ function JobsPageContent() {
                                                             return (
                                                                 <div
                                                                   key={visit.key}
+                                                                  data-job-id={String(job.id)}
                                                                   className={`overflow-hidden transition-all duration-300 ease-out ${
                                                                     inRound ? 'relative' : ''
                                                                   } ${
@@ -4830,14 +4904,26 @@ function JobsPageContent() {
                     setCreateJobLockClient(false)
                     setCreateJobNewClient(null)
                 }}
-                onJobCreated={() => {
+                onJobCreated={(info) => {
                     setIsCreateModalOpen(false)
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
                     setCreateJobClientId(undefined)
                     setCreateJobLockClient(false)
                     setCreateJobNewClient(null)
+                    const dateStr = info?.scheduledDate ? String(info.scheduledDate).slice(0, 10) : null
+                    if (dateStr) {
+                      const [y, m, d] = dateStr.split('-').map(Number)
+                      if (y && m && d) {
+                        const parsed = new Date(y, m - 1, d)
+                        if (!isNaN(parsed.getTime())) setCurrentWeek(parsed)
+                      }
+                    }
+                    if (info?.jobId != null) {
+                      pendingFocusJobRef.current = Number(info.jobId)
+                    }
                     fetchJobsForWeek()
+                    requestMissionsRefresh()
                 }}
                 initialDate={createJobPrefillDate || undefined}
                 initialAssignedUserId={createJobPrefillUserId}
@@ -4860,6 +4946,7 @@ function JobsPageContent() {
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
                     fetchJobsForWeek()
+                    requestMissionsRefresh()
                 }}
             />
 

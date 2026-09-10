@@ -12,6 +12,7 @@ import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
 import PendingAutomationToasts from './PendingAutomationToasts'
 import WorkspaceAccessGuard from './WorkspaceAccessGuard'
+import useMissionPageVisit from '../hooks/useMissionPageVisit'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -21,6 +22,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const { t } = useAppI18n()
   const { user, loading } = useUser()
   const pathname = usePathname()
+  useMissionPageVisit()
   const [syncingCompany, setSyncingCompany] = useState(false)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
   /** Stops hammering POST /companies/switch if the server returns no token or errors. */

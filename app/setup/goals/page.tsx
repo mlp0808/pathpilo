@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { CheckIcon } from '@heroicons/react/24/solid'
 import { useUser } from '../../hooks/useUser'
 import { USAGE_GOALS } from '../../config/companyOnboarding'
 import SetupWizardLayout from '@/app/components/setup/SetupWizardLayout'
@@ -55,6 +54,8 @@ export default function GoalsSetupPage() {
           </div>
         )}
 
+        {/* Chips stay a fixed size when toggled — the selected state is carried by
+            colour and ring only, so picking one never reflows the rows. */}
         <div className="flex flex-wrap gap-2">
           {USAGE_GOALS.map((goal) => {
             const isSelected = selected.includes(goal.id)
@@ -65,13 +66,12 @@ export default function GoalsSetupPage() {
                 aria-pressed={isSelected}
                 onClick={() => toggle(goal.id)}
                 className={[
-                  'inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-medium transition-all',
+                  'rounded-full border px-3.5 py-2 text-[13px] font-medium transition-colors',
                   isSelected
-                    ? 'border-accent-500 bg-accent-500/10 text-accent-700'
-                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50',
+                    ? 'border-accent-500 bg-accent-500/10 text-accent-700 ring-1 ring-accent-500/30'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50',
                 ].join(' ')}
               >
-                {isSelected && <CheckIcon className="h-4 w-4 flex-none text-accent-600" />}
                 {goal.label}
               </button>
             )

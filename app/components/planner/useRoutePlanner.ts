@@ -1505,7 +1505,13 @@ async function saveDailyRoute(route: UserRoute, date: string, name?: string | nu
 
   let totalDriveMins: number | null = route.totalMinutes != null ? Math.round(route.totalMinutes) : null
   let totalKm: number | null = route.totalKm != null ? Math.round(route.totalKm * 10) / 10 : null
-  let legMins: (number | null)[] = []
+  // Seed from in-memory legs first so a directions failure never sends null.
+  let legMins: number[] = realJobs.map((real) => {
+    const onRoute = route.jobs.find((j) => Number(j.id) === Number(real.id))
+    return onRoute?.legMinutes != null && Number.isFinite(onRoute.legMinutes)
+      ? Math.round(onRoute.legMinutes * 10) / 10
+      : 0
+  })
   let routeGeometry: string | null = route.routeGeometry?.coordinates
     ? JSON.stringify(route.routeGeometry.coordinates)
     : null
@@ -1519,10 +1525,15 @@ async function saveDailyRoute(route: UserRoute, date: string, name?: string | nu
       if (totalKm == null && directions?.totalKm != null) {
         totalKm = Math.round(directions.totalKm * 10) / 10
       }
-      legMins = realJobs.map(real => {
-        const j = (directions?.jobs ?? []).find(d => d.id === real.id)
-        return j?.legMinutes != null ? Math.round(j.legMinutes * 10) / 10 : null
-      })
+      if (directions?.jobs?.length) {
+        legMins = realJobs.map((real, i) => {
+          const j = directions.jobs!.find((d) => Number(d.id) === Number(real.id))
+          if (j?.legMinutes != null && Number.isFinite(j.legMinutes)) {
+            return Math.round(j.legMinutes * 10) / 10
+          }
+          return legMins[i] ?? 0
+        })
+      }
       if (!routeGeometry && directions?.routeGeometry?.coordinates) {
         routeGeometry = JSON.stringify(directions.routeGeometry.coordinates)
       }
@@ -1539,7 +1550,7 @@ async function saveDailyRoute(route: UserRoute, date: string, name?: string | nu
         user_id: route.userId,
         scheduled_date: date,
         job_ids: realJobs.map(j => Number(j.id)),
-        leg_minutes: legMins.length > 0 ? legMins : null,
+        leg_minutes: legMins,
         total_minutes: totalDriveMins,
         total_job_minutes: Math.round(totalJobMins),
         total_km: totalKm,
@@ -1550,6 +1561,11 @@ async function saveDailyRoute(route: UserRoute, date: string, name?: string | nu
     })
     if (!res.ok) {
       console.error('[planner] daily-routes save failed:', res.status, await res.text())
+    } else {
+      try {
+        const { requestMissionsRefresh } = await import('@/app/config/missions')
+        requestMissionsRefresh()
+      } catch { /* ignore */ }
     }
   } catch (err) {
     console.error('[planner] daily-routes network error', err)

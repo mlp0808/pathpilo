@@ -6,72 +6,30 @@
  * option in both places or the API will reject it.
  */
 
-export interface IndustryGroup {
-  label: string
-  options: Array<{ id: string; label: string }>
-}
-
-export const INDUSTRY_GROUPS: IndustryGroup[] = [
-  {
-    label: 'Cleaning',
-    options: [
-      { id: 'bin_cleaning', label: 'Bin Cleaning' },
-      { id: 'carpet_cleaning', label: 'Carpet Cleaning' },
-      { id: 'commercial_cleaning', label: 'Commercial Cleaning' },
-      { id: 'pressure_washing', label: 'Pressure Washing Service' },
-      { id: 'residential_cleaning', label: 'Residential Cleaning' },
-      { id: 'window_washing', label: 'Window Washing' },
-    ],
-  },
-  {
-    label: 'Green Industry',
-    options: [
-      { id: 'tree_care', label: 'Arborist / Tree Care' },
-      { id: 'landscaping', label: 'Landscaping Contractor' },
-      { id: 'lawn_care', label: 'Lawn Care & Lawn Maintenance' },
-    ],
-  },
-  {
-    label: 'Hi Tech',
-    options: [
-      { id: 'computers_it', label: 'Computers & IT' },
-      { id: 'home_theater', label: 'Home Theater' },
-      { id: 'security_alarm', label: 'Security and Alarm' },
-    ],
-  },
-  {
-    label: 'Trade',
-    options: [
-      { id: 'construction', label: 'Construction & Contracting' },
-      { id: 'electrical', label: 'Electrical Contractor' },
-      { id: 'hvac', label: 'HVAC' },
-      { id: 'locksmith', label: 'Locksmith' },
-      { id: 'mechanical_service', label: 'Mechanical Service' },
-      { id: 'plumbing', label: 'Plumbing' },
-    ],
-  },
-  {
-    label: 'Other',
-    options: [
-      { id: 'appliance_repair', label: 'Appliance Repair' },
-      { id: 'flooring', label: 'Flooring Service' },
-      { id: 'handyman', label: 'Handyman' },
-      { id: 'junk_removal', label: 'Junk Removal' },
-      { id: 'painting', label: 'Painting' },
-      { id: 'pest_control', label: 'Pest Control' },
-      { id: 'pool_spa', label: 'Pool and Spa Service' },
-      { id: 'renovations', label: 'Renovations' },
-      { id: 'roofing', label: 'Roofing Service' },
-      { id: 'snow_removal', label: 'Snow Removal' },
-      { id: 'other', label: 'Other' },
-    ],
-  },
+/**
+ * Deliberately broad: one pick should be obvious at a glance, so these are
+ * whole trades rather than niches. "Field service" and "Other" close the list
+ * as catch-alls for anything the specific entries miss.
+ */
+export const INDUSTRIES: Array<{ id: string; label: string }> = [
+  { id: 'cleaning', label: 'Cleaning' },
+  { id: 'construction', label: 'Construction & renovation' },
+  { id: 'electrical', label: 'Electrical' },
+  { id: 'handyman', label: 'Handyman & repairs' },
+  { id: 'hvac', label: 'HVAC' },
+  { id: 'landscaping', label: 'Landscaping & lawn care' },
+  { id: 'moving_delivery', label: 'Moving & delivery' },
+  { id: 'pest_control', label: 'Pest control' },
+  { id: 'plumbing', label: 'Plumbing' },
+  { id: 'pressure_washing', label: 'Pressure washing' },
+  { id: 'security_it', label: 'Security & IT' },
+  { id: 'window_cleaning', label: 'Window cleaning' },
+  { id: 'field_service', label: 'Field service' },
+  { id: 'other', label: 'Other' },
 ]
 
 const INDUSTRY_LABELS: Record<string, string> = {}
-for (const group of INDUSTRY_GROUPS) {
-  for (const option of group.options) INDUSTRY_LABELS[option.id] = option.label
-}
+for (const industry of INDUSTRIES) INDUSTRY_LABELS[industry.id] = industry.label
 
 /** Display label for a stored industry id; falls back to the raw id. */
 export function industryLabel(id: string | null | undefined): string {
@@ -79,15 +37,16 @@ export function industryLabel(id: string | null | undefined): string {
   return INDUSTRY_LABELS[id] || id
 }
 
+/** Kept to one or two words so the picker reads as inline chips, not a list. */
 export const USAGE_GOALS: Array<{ id: string; label: string }> = [
-  { id: 'quotes', label: 'Sending professional quotes' },
-  { id: 'scheduling', label: 'Better scheduling of jobs' },
-  { id: 'invoicing', label: 'Sending invoices' },
-  { id: 'routes', label: 'Planning efficient routes' },
-  { id: 'recurring', label: 'Managing recurring work' },
-  { id: 'team', label: 'Managing my team in the field' },
-  { id: 'payments', label: 'Getting paid faster' },
-  { id: 'client_history', label: 'Keeping client history in one place' },
+  { id: 'quotes', label: 'Quotes' },
+  { id: 'scheduling', label: 'Scheduling' },
+  { id: 'invoicing', label: 'Invoicing' },
+  { id: 'routes', label: 'Route planning' },
+  { id: 'recurring', label: 'Recurring work' },
+  { id: 'team', label: 'Team management' },
+  { id: 'payments', label: 'Faster payments' },
+  { id: 'client_history', label: 'Client history' },
 ]
 
 const GOAL_LABELS: Record<string, string> = {}

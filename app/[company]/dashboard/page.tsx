@@ -7,7 +7,7 @@ import { useUser } from '../../hooks/useUser'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoney } from '../../config/countryRules'
 import dynamic from 'next/dynamic'
-import GettingStartedPanel from '../../components/dashboard/GettingStartedPanel'
+import MissionsPanel from '../../components/missions/MissionsPanel'
 import type { DashboardTimelineRange } from '../../components/dashboard/JobsTimelineChart'
 import DashboardTeamPerformance, {
   type EmployeeStatsRow,
@@ -258,14 +258,14 @@ export default function DashboardPage() {
   return (
     <AppLayout>
       <div className="space-y-6 sm:space-y-8 p-0 sm:p-4 lg:p-6">
+        {companySlug && <MissionsPanel companySlug={companySlug} variant="hub" />}
+
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-sm text-gray-600 mt-1">
             Use the timeline to choose your date range. Team stats below follow the same period.
           </p>
         </div>
-
-        {companySlug && <GettingStartedPanel companySlug={companySlug} />}
 
         <JobsTimelineChart onRangeChange={handleTimelineRangeChange} />
 

@@ -668,44 +668,88 @@ router.post('/onboarding/complete', authenticateToken, async (req, res) => {
 });
 
 /**
- * The dashboard getting-started actions. Nothing here is enforced — each flag
- * is derived from whether the company already has the underlying record, so the
- * list ticks itself off as the owner uses the app.
+ * Optional onboarding missions. Counts come from live data; active / skipped
+ * mission state and skipped step ids are stored on the company.
  */
-const GETTING_STARTED_ACTIONS = [
-  { id: 'client', queries: [`SELECT 1 FROM clients WHERE company_id = $1 LIMIT 1`] },
-  { id: 'services', queries: [`SELECT 1 FROM services WHERE company_id = $1 LIMIT 1`] },
-  { id: 'job', queries: [`SELECT 1 FROM jobs WHERE company_id = $1 LIMIT 1`] },
-  {
-    id: 'route',
-    queries: [
-      `SELECT 1 FROM daily_routes WHERE company_id = $1 LIMIT 1`,
-      `SELECT 1 FROM rounds WHERE company_id = $1 LIMIT 1`,
-    ],
-  },
-  {
-    id: 'completed_job',
-    queries: [`SELECT 1 FROM jobs WHERE company_id = $1 AND status = 'completed' LIMIT 1`],
-  },
-  { id: 'invoice', queries: [`SELECT 1 FROM invoices WHERE company_id = $1 LIMIT 1` ]},
-];
+const ROADMAP_COUNT_QUERIES = {
+  clients: `SELECT COUNT(*)::int AS n FROM clients WHERE company_id = $1`,
+  // System rows (e.g. the hidden cancellation-fee item) are not real services.
+  services: `SELECT COUNT(*)::int AS n FROM services
+             WHERE company_id = $1 AND COALESCE(is_system, FALSE) = FALSE AND archived_at IS NULL`,
+  jobs: `SELECT COUNT(*)::int AS n FROM jobs
+         WHERE company_id = $1 AND COALESCE(status, '') <> 'cancelled'
+           AND COALESCE(job_kind, 'standard') = 'standard'`,
+  // Fullest single calendar day (non-cancelled standard jobs) — for "4 jobs on one day".
+  jobs_same_day: `SELECT COALESCE(MAX(cnt), 0)::int AS n FROM (
+                    SELECT COUNT(*)::int AS cnt
+                    FROM jobs
+                    WHERE company_id = $1
+                      AND scheduled_date IS NOT NULL
+                      AND COALESCE(status, '') <> 'cancelled'
+                      AND COALESCE(job_kind, 'standard') = 'standard'
+                    GROUP BY scheduled_date
+                  ) t`,
+  completed_jobs: `SELECT COUNT(*)::int AS n FROM jobs WHERE company_id = $1 AND status = 'completed'`,
+  invoices: `SELECT COUNT(*)::int AS n FROM invoices WHERE company_id = $1`,
+  subscriptions: `SELECT COUNT(*)::int AS n FROM recurring_jobs WHERE company_id = $1`,
+  // Only count intentionally planned packages (not empty drafts).
+  routes: `SELECT COUNT(*)::int AS n FROM daily_routes
+           WHERE company_id = $1 AND status = 'planned'
+             AND job_ids IS NOT NULL AND cardinality(job_ids) > 0`,
+  rounds: `SELECT COUNT(*)::int AS n FROM rounds WHERE company_id = $1`,
+  custom_groups: `SELECT COUNT(*)::int AS n FROM item_groups
+                  WHERE company_id = $1 AND COALESCE(is_system, FALSE) = FALSE`,
+  cancellation_fee: `SELECT COUNT(*)::int AS n FROM companies
+                     WHERE id = $1 AND cancellation_fee_enabled = TRUE`,
+};
 
-/** Treats a missing table (fresh install) as "not done" rather than a 500. */
-async function actionIsDone(queries, companyId) {
-  for (const sql of queries) {
-    try {
-      const r = await pool.query(sql, [companyId]);
-      if (r.rows.length > 0) return true;
-    } catch (e) {
-      if (e?.code !== '42P01') {
-        console.warn('[gettingStarted] check failed:', e?.message || e);
-      }
+const ROADMAP_STEP_IDS = [
+  'client_first',
+  'service_first',
+  'job_first',
+  'jobs_same_day',
+  'route_first',
+  'job_complete',
+  'invoice_first',
+  'subscription_first',
+];
+const MISSION_IDS = ['get_started', 'route_planning', 'invoicing', 'subscriptions'];
+const VISIT_KEYS = ['clients', 'services', 'jobs', 'map', 'invoices'];
+
+/** Treats a missing table or column (fresh install) as zero rather than a 500. */
+async function countOrZero(sql, companyId) {
+  try {
+    const r = await pool.query(sql, [companyId]);
+    return Number(r.rows[0]?.n) || 0;
+  } catch (e) {
+    if (e?.code !== '42P01' && e?.code !== '42703') {
+      console.warn('[roadmap] count failed:', e?.message || e);
     }
+    return 0;
   }
-  return false;
 }
 
-// GET /api/companies/getting-started — optional onboarding checklist for the dashboard
+/** Column is named `_archived` for history; it stores skipped step ids. */
+function parseSkipped(value) {
+  const list = Array.isArray(value) ? value : [];
+  return list.map((id) => String(id)).filter((id) => ROADMAP_STEP_IDS.includes(id));
+}
+
+function parseSkippedMissions(value) {
+  const list = Array.isArray(value) ? value : [];
+  return list.map((id) => String(id)).filter((id) => MISSION_IDS.includes(id));
+}
+
+function parseVisits(value) {
+  const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = {};
+  for (const key of VISIT_KEYS) {
+    if (src[key] === true) out[key] = true;
+  }
+  return out;
+}
+
+// GET /api/companies/getting-started — mission progress for the dashboard / pages
 router.get('/getting-started', authenticateToken, async (req, res) => {
   try {
     const companyId = await resolveCompanyIdForUser(pool, req.user, req.query?.companyId);
@@ -713,26 +757,184 @@ router.get('/getting-started', authenticateToken, async (req, res) => {
 
     await ensureCompanyOnboardingSchema(pool);
 
-    const results = await Promise.all(
-      GETTING_STARTED_ACTIONS.map(async (a) => [a.id, await actionIsDone(a.queries, companyId)])
-    );
+    const [countsEntries, row] = await Promise.all([
+      Promise.all(
+        Object.entries(ROADMAP_COUNT_QUERIES).map(async ([key, sql]) => [
+          key,
+          await countOrZero(sql, companyId),
+        ])
+      ),
+      pool.query(
+        `SELECT getting_started_dismissed, getting_started_archived, getting_started_visits,
+                getting_started_active_mission, getting_started_skipped_missions
+         FROM companies WHERE id = $1`,
+        [companyId]
+      ),
+    ]);
 
-    const row = await pool.query(
-      `SELECT getting_started_dismissed FROM companies WHERE id = $1`,
-      [companyId]
-    );
-
+    const activeRaw = row.rows[0]?.getting_started_active_mission;
     res.json({
       dismissed: row.rows[0]?.getting_started_dismissed === true,
-      actions: Object.fromEntries(results),
+      skipped: parseSkipped(row.rows[0]?.getting_started_archived),
+      skippedMissions: parseSkippedMissions(row.rows[0]?.getting_started_skipped_missions),
+      // null = let the client pick the default; '' = user paused
+      activeMissionId: activeRaw == null ? null : String(activeRaw),
+      visits: parseVisits(row.rows[0]?.getting_started_visits),
+      counts: Object.fromEntries(countsEntries),
     });
   } catch (error) {
-    console.error('Error loading getting-started checklist:', error);
-    res.status(500).json({ error: 'Failed to load getting started checklist' });
+    console.error('Error loading onboarding roadmap:', error);
+    res.status(500).json({ error: 'Failed to load onboarding roadmap' });
   }
 });
 
-// PUT /api/companies/getting-started/dismissed — hide/show the checklist
+// PUT /api/companies/getting-started/active-mission — start, stop, or switch mission
+router.put('/getting-started/active-mission', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can change the guide' });
+    }
+
+    // null/undefined → clear to default picker behaviour; '' → paused; else mission id
+    let value = req.body?.missionId;
+    if (value === null || value === undefined) {
+      value = null;
+    } else {
+      value = String(value).trim();
+      if (value !== '' && !MISSION_IDS.includes(value)) {
+        return res.status(400).json({ error: 'Unknown mission' });
+      }
+    }
+
+    await ensureCompanyOnboardingSchema(pool);
+    await pool.query(
+      `UPDATE companies SET getting_started_active_mission = $1, updated_at = NOW() WHERE id = $2`,
+      [value, companyId]
+    );
+
+    res.json({ success: true, activeMissionId: value });
+  } catch (error) {
+    console.error('Error updating active mission:', error);
+    res.status(500).json({ error: 'Failed to update active mission' });
+  }
+});
+
+// PUT /api/companies/getting-started/skip-mission — skip a whole mission
+router.put('/getting-started/skip-mission', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can change the guide' });
+    }
+
+    const missionId = String(req.body?.missionId || '').trim();
+    if (!MISSION_IDS.includes(missionId)) {
+      return res.status(400).json({ error: 'Unknown mission' });
+    }
+
+    await ensureCompanyOnboardingSchema(pool);
+    const current = await pool.query(
+      `SELECT getting_started_skipped_missions, getting_started_active_mission FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    const skipped = parseSkippedMissions(current.rows[0]?.getting_started_skipped_missions);
+    if (!skipped.includes(missionId)) skipped.push(missionId);
+
+    let active = current.rows[0]?.getting_started_active_mission;
+    if (active === missionId) active = null;
+
+    await pool.query(
+      `UPDATE companies
+       SET getting_started_skipped_missions = $1::jsonb,
+           getting_started_active_mission = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [JSON.stringify(skipped), active, companyId]
+    );
+
+    res.json({ success: true, skippedMissions: skipped, activeMissionId: active });
+  } catch (error) {
+    console.error('Error skipping mission:', error);
+    res.status(500).json({ error: 'Failed to skip mission' });
+  }
+});
+
+// PUT /api/companies/getting-started/visit — mark that the company has opened a page
+router.put('/getting-started/visit', authenticateToken, async (req, res) => {
+  try {
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const page = String(req.body?.page || '').trim().toLowerCase();
+    if (!VISIT_KEYS.includes(page)) {
+      return res.status(400).json({ error: 'Unknown page' });
+    }
+
+    await ensureCompanyOnboardingSchema(pool);
+    const patch = JSON.stringify({ [page]: true });
+    const result = await pool.query(
+      `UPDATE companies
+       SET getting_started_visits = COALESCE(getting_started_visits, '{}'::jsonb) || $1::jsonb,
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING getting_started_visits`,
+      [patch, companyId]
+    );
+
+    res.json({ success: true, visits: parseVisits(result.rows[0]?.getting_started_visits) });
+  } catch (error) {
+    console.error('Error recording mission visit:', error);
+    res.status(500).json({ error: 'Failed to record visit' });
+  }
+});
+
+// PUT /api/companies/getting-started/skip — drop one step from the roadmap forever
+router.put('/getting-started/skip', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id;
+    const companyId = await resolveCompanyIdForUser(pool, req.user, req.body?.companyId);
+    if (!companyId) return res.status(404).json({ error: 'Company not found' });
+
+    const isOwner = await assertCompanyOwner(pool, userId, companyId);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the company owner can change the guide' });
+    }
+
+    const stepId = String(req.body?.stepId || '').trim();
+    if (!ROADMAP_STEP_IDS.includes(stepId)) {
+      return res.status(400).json({ error: 'Unknown step' });
+    }
+
+    await ensureCompanyOnboardingSchema(pool);
+    const current = await pool.query(
+      `SELECT getting_started_archived FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    const skipped = parseSkipped(current.rows[0]?.getting_started_archived);
+    if (!skipped.includes(stepId)) skipped.push(stepId);
+
+    await pool.query(
+      `UPDATE companies SET getting_started_archived = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(skipped), companyId]
+    );
+
+    res.json({ success: true, skipped });
+  } catch (error) {
+    console.error('Error skipping roadmap step:', error);
+    res.status(500).json({ error: 'Failed to skip step' });
+  }
+});
+
+// PUT /api/companies/getting-started/dismissed — hide the whole guide
 router.put('/getting-started/dismissed', authenticateToken, async (req, res) => {
   try {
     const userId = req.user?.userId || req.user?.id;
@@ -741,7 +943,7 @@ router.put('/getting-started/dismissed', authenticateToken, async (req, res) => 
 
     const isOwner = await assertCompanyOwner(pool, userId, companyId);
     if (!isOwner) {
-      return res.status(403).json({ error: 'Only the company owner can change this' });
+      return res.status(403).json({ error: 'Only the company owner can change the guide' });
     }
 
     await ensureCompanyOnboardingSchema(pool);
@@ -753,8 +955,8 @@ router.put('/getting-started/dismissed', authenticateToken, async (req, res) => 
 
     res.json({ success: true, dismissed });
   } catch (error) {
-    console.error('Error updating getting-started visibility:', error);
-    res.status(500).json({ error: 'Failed to update checklist visibility' });
+    console.error('Error updating roadmap visibility:', error);
+    res.status(500).json({ error: 'Failed to update guide visibility' });
   }
 });
 

@@ -5,39 +5,19 @@
  */
 
 const COMPANY_INDUSTRIES = [
-  // Cleaning
-  'bin_cleaning',
-  'carpet_cleaning',
-  'commercial_cleaning',
-  'pressure_washing',
-  'residential_cleaning',
-  'window_washing',
-  // Green industry
-  'tree_care',
-  'landscaping',
-  'lawn_care',
-  // Hi tech
-  'computers_it',
-  'home_theater',
-  'security_alarm',
-  // Trade
+  'cleaning',
   'construction',
   'electrical',
-  'hvac',
-  'locksmith',
-  'mechanical_service',
-  'plumbing',
-  // Other
-  'appliance_repair',
-  'flooring',
   'handyman',
-  'junk_removal',
-  'painting',
+  'hvac',
+  'landscaping',
+  'moving_delivery',
   'pest_control',
-  'pool_spa',
-  'renovations',
-  'roofing',
-  'snow_removal',
+  'plumbing',
+  'pressure_washing',
+  'security_it',
+  'window_cleaning',
+  'field_service',
   'other',
 ];
 

@@ -38,7 +38,7 @@ export default function AppBreadcrumbs() {
 
   const labels: Record<string, string> = {
     dashboard: t('app.nav.dashboard', 'Dashboard'),
-    jobs: t('app.nav.jobs', 'Jobs'),
+    jobs: t('app.nav.jobs', 'Schedule'),
     map: t('app.nav.map', 'Map'),
     clients: t('app.nav.clients', 'Clients'),
     invoices: t('app.nav.invoices', 'Invoices'),

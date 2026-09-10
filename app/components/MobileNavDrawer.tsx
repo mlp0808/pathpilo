@@ -116,7 +116,7 @@ export default function MobileNavDrawer({
   }
   const navigation: NavItem[] = [
     { name: t('app.nav.dashboard', 'Dashboard'), href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
-    { name: t('app.nav.jobs', 'Jobs'), href: jobsBase, icon: ClipboardDocumentListIcon },
+    { name: t('app.nav.jobs', 'Schedule'), href: jobsBase, icon: ClipboardDocumentListIcon },
     { name: t('app.nav.map', 'Map'), href: companySlug ? `/${companySlug}/map` : '/map', icon: MapPinIcon, beta: true },
     {
       name: t('app.nav.recurring', 'Recurring'),

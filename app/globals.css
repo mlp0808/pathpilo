@@ -88,6 +88,53 @@
   }
 }
 
+@keyframes mission-check-pop {
+  0% {
+    transform: scale(0.35);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes mission-cta-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(61, 213, 122, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(61, 213, 122, 0);
+  }
+}
+
+@keyframes mission-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mission-celebrate {
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(61, 213, 122, 0);
+  }
+  40% {
+    box-shadow: inset 0 0 0 2px rgba(61, 213, 122, 0.45);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(61, 213, 122, 0);
+  }
+}
+
 .animate-in {
   animation: slideInFromBottom 0.3s ease-out;
 }
@@ -114,6 +161,37 @@
 
 .animate-backdrop-in {
   animation: backdropIn 0.22s var(--ease-out-soft) both;
+}
+
+@keyframes mission-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-mission-toast {
+  animation: mission-toast-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-mission-check {
+  animation: mission-check-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-mission-cta {
+  animation: mission-cta-glow 2.2s ease-out infinite;
+}
+
+.animate-mission-row {
+  animation: mission-row-in 0.35s ease-out both;
+}
+
+.animate-mission-celebrate {
+  animation: mission-celebrate 0.7s ease-out;
 }
 
 .animate-pop {

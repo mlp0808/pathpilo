@@ -15,6 +15,7 @@ import TimePicker from './TimePicker'
 import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
 import { useAppI18n } from './I18nProvider'
+import { requestMissionsRefresh } from '@/app/config/missions'
 import {
   estimateArrivalForJob,
   parsePgIdArray,
@@ -1466,6 +1467,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       if (onJobUpdated) {
         onJobUpdated()
       }
+      requestMissionsRefresh()
     } catch (error) {
       console.error('Failed to toggle job completion:', error)
       alert('Failed to update job completion status')
@@ -1504,6 +1506,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       }
       fetchJobLogs(jobId)
       onJobUpdated?.()
+      requestMissionsRefresh()
     } catch (error) {
       console.error('Failed to complete job:', error)
       alert(error instanceof Error ? error.message : 'Failed to complete job')
