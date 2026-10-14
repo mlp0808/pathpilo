@@ -62,12 +62,20 @@ function requireAuth(req, res, next) {
   })
 }
 
+// Always allow local health checks; public hosts come from env / Nginx.
+const allowedHosts = [
+  '127.0.0.1',
+  'localhost',
+  '::1',
+  ...(process.env.BLOG_MCP_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+]
+
 const app = createMcpExpressApp({
   host: HOST,
-  // When behind a tunnel/proxy the Host header won't be localhost.
-  allowedHosts: process.env.BLOG_MCP_ALLOWED_HOSTS
-    ? process.env.BLOG_MCP_ALLOWED_HOSTS.split(',').map((s) => s.trim()).filter(Boolean)
-    : undefined,
+  allowedHosts,
 })
 
 app.use((req, res, next) => {
