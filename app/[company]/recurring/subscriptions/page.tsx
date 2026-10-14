@@ -8,14 +8,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import {
   MagnifyingGlassIcon,
   PlusIcon,
 } from '@heroicons/react/24/outline'
 import { apiUrl } from '@/app/utils/api'
 import { useAppI18n } from '@/app/components/I18nProvider'
-import CreateSubscription from '@/app/components/CreateSubscription'
+import CreateJob from '@/app/components/CreateJob'
 
 interface StandingRow {
   id: number
@@ -72,6 +72,8 @@ export default function RecurringSubscriptionsPage() {
   const { t } = useAppI18n() as unknown as { t: (key: string, fallback: string) => string }
   const params = useParams<{ company: string }>()
   const companySlug = params?.company ?? ''
+  const searchParams = useSearchParams()
+  const router = useRouter()
 
   const [rows, setRows] = useState<StandingRow[]>([])
   const [users, setUsers] = useState<Emp[]>([])
@@ -103,6 +105,20 @@ export default function RecurringSubscriptionsPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Guide / deep-link: ?create=1 opens the new subscription composer.
+  useEffect(() => {
+    if (searchParams.get('create') === '1') {
+      setCreateOpen(true)
+    }
+  }, [searchParams])
+
+  const closeCreate = useCallback(() => {
+    setCreateOpen(false)
+    if (searchParams.get('create') === '1') {
+      router.replace(`/${companySlug}/recurring/subscriptions`)
+    }
+  }, [searchParams, router, companySlug])
+
   const userName = useCallback((id: number | null | undefined) => {
     if (id == null) return null
     const u = users.find(x => x.id === id)
@@ -118,10 +134,10 @@ export default function RecurringSubscriptionsPage() {
       const hay = [
         clientLabel(row),
         row.title || '',
+        cadenceLabel(row),
+        emp,
         row.address || '',
         row.city || '',
-        emp,
-        cadenceLabel(row),
       ].join(' ').toLowerCase()
       return hay.includes(q)
     })
@@ -161,7 +177,7 @@ export default function RecurringSubscriptionsPage() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search client, title, address, employee…"
+            placeholder={t('app.recurring.searchSubscriptions', 'Search client, title, address, employee…')}
             className="w-full h-10 rounded-xl border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#193434]/15 focus:border-[#193434]/40"
           />
         </div>
@@ -170,28 +186,43 @@ export default function RecurringSubscriptionsPage() {
           onChange={(e) => setEmployeeId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
           className="h-10 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#193434]/15 sm:w-52"
         >
-          <option value="all">All employees</option>
-          {users.map(u => (
-            <option key={u.id} value={u.id}>{u.first_name} {u.last_name}</option>
+          <option value="all">{t('app.recurring.allEmployees', 'All employees')}</option>
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.first_name} {u.last_name}
+            </option>
           ))}
         </select>
       </div>
 
       {loading ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">Loading…</div>
+        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
+          {t('app.common.loading', 'Loading…')}
+        </div>
       ) : error ? (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-14 text-center">
-          <p className="text-sm font-semibold text-gray-900">No subscriptions match</p>
-          <p className="mt-1 text-sm text-gray-500">Try another search, or create a new subscription.</p>
+          <p className="text-sm font-semibold text-gray-900">
+            {rows.length === 0
+              ? t('app.recurring.noSubscriptionsYet', 'No subscriptions yet')
+              : t('app.recurring.noMatchingSubscriptions', 'No subscriptions match')}
+          </p>
+          <p className="mt-1 text-sm text-gray-500">
+            {rows.length === 0
+              ? t(
+                  'app.recurring.noSubscriptionsHint',
+                  'Create a subscription to put recurring visits on the schedule automatically.',
+                )
+              : 'Try another search, or create a new subscription.'}
+          </p>
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
             className="mt-4 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-accent-500 text-white text-sm font-semibold hover:bg-accent-600"
           >
             <PlusIcon className="h-4 w-4" strokeWidth={2.5} />
-            Create subscription
+            {t('app.recurring.createSubscription', 'Create subscription')}
           </button>
         </div>
       ) : (
@@ -200,11 +231,11 @@ export default function RecurringSubscriptionsPage() {
             <table className="min-w-full text-sm">
               <thead className="bg-gray-50 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500 border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3">Client</th>
-                  <th className="px-4 py-3 hidden md:table-cell">Title</th>
-                  <th className="px-4 py-3">Cadence</th>
-                  <th className="px-4 py-3 hidden sm:table-cell">Employee</th>
-                  <th className="px-4 py-3 hidden lg:table-cell text-right">Tasks</th>
+                  <th className="px-4 py-3">{t('app.recurring.colClient', 'Client')}</th>
+                  <th className="px-4 py-3 hidden md:table-cell">{t('app.recurring.colTitle', 'Title')}</th>
+                  <th className="px-4 py-3">{t('app.recurring.colCadence', 'Cadence')}</th>
+                  <th className="px-4 py-3 hidden sm:table-cell">{t('app.recurring.colEmployee', 'Employee')}</th>
+                  <th className="px-4 py-3 hidden lg:table-cell text-right">{t('app.recurring.colServices', 'Tasks')}</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -251,11 +282,12 @@ export default function RecurringSubscriptionsPage() {
         </div>
       )}
 
-      <CreateSubscription
+      <CreateJob
         isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSubscriptionCreated={() => {
-          setCreateOpen(false)
+        mode="subscription"
+        onClose={closeCreate}
+        onJobCreated={() => {
+          closeCreate()
           void load()
         }}
       />

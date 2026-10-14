@@ -1,6 +1,7 @@
 const { DateTime } = require('luxon');
 const { sendEmail, STANDARD_FOOTER_PLACEHOLDER } = require('./email');
 const { normalizeCompanyTimezone } = require('./companyTimezone');
+const { ensurePipelineSchema } = require('./pipelineSchema');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -362,9 +363,10 @@ async function loadAutomationSettings(pool, companyId) {
 async function scheduleAutomationSendsForJob(pool, companyId, jobId) {
   try {
     await ensureSchema(pool);
+    await ensurePipelineSchema(pool);
 
     const jobRes = await pool.query(
-      `SELECT j.created_at, j.scheduled_date, j.status,
+      `SELECT j.created_at, j.scheduled_date, j.status, j.booking_status,
               co.country_code, co.timezone,
               COALESCE(NULLIF(TRIM(c.email), ''), '') AS client_email,
               COALESCE(NULLIF(TRIM(c.phone), ''), '') AS client_phone
@@ -376,7 +378,8 @@ async function scheduleAutomationSendsForJob(pool, companyId, jobId) {
     );
     if (jobRes.rows.length === 0) return;
     const job = jobRes.rows[0];
-    if (job.status === 'cancelled') return;
+    // Pending bookings are scheduled when the admin confirms them.
+    if (job.status === 'cancelled' || job.booking_status === 'pending') return;
 
     const settings = await loadAutomationSettings(pool, companyId);
 
@@ -427,9 +430,10 @@ async function scheduleAutomationSendsForJob(pool, companyId, jobId) {
 async function rescheduleReminderForJob(pool, companyId, jobId) {
   try {
     await ensureSchema(pool);
+    await ensurePipelineSchema(pool);
 
     const jobRes = await pool.query(
-      `SELECT j.scheduled_date, j.status,
+      `SELECT j.scheduled_date, j.status, j.booking_status,
               co.country_code, co.timezone,
               COALESCE(NULLIF(TRIM(c.email), ''), '') AS client_email,
               COALESCE(NULLIF(TRIM(c.phone), ''), '') AS client_phone
@@ -442,7 +446,7 @@ async function rescheduleReminderForJob(pool, companyId, jobId) {
     if (jobRes.rows.length === 0) return;
     const job = jobRes.rows[0];
 
-    if (job.status === 'cancelled') {
+    if (job.status === 'cancelled' || job.booking_status === 'pending') {
       await pool.query(
         `DELETE FROM scheduled_automation_sends
          WHERE job_id = $1 AND company_id = $2

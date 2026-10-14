@@ -15,7 +15,6 @@ import {
   type Guide,
   type GuideStep,
   type LaunchKind,
-  type StepCounts,
 } from '@/app/config/missions'
 import type { MessageKey } from '@/app/i18n'
 import { useGuidesProgress } from './useGuidesProgress'
@@ -23,6 +22,7 @@ import { useGuidesProgress } from './useGuidesProgress'
 const AddClientModal = dynamic(() => import('@/app/components/AddClientModal'), { ssr: false })
 const AddServiceModal = dynamic(() => import('@/app/components/AddServiceModal'), { ssr: false })
 const CreateJob = dynamic(() => import('@/app/components/CreateJob'), { ssr: false })
+const StartTrialModal = dynamic(() => import('./StartTrialModal'), { ssr: false })
 
 function fill(text: string, vars: Record<string, string | number>) {
   return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{{${k}}}`, String(v)), text)
@@ -171,6 +171,16 @@ export default function MissionsPanel({
     [activeGuideId],
   )
 
+  /** First incomplete guide — owns the row-level Start CTA after earlier guides finish. */
+  const nextGuideId = useMemo(() => {
+    if (!progress) return null
+    for (const g of GUIDES) {
+      if (skippedGuides.has(g.id)) continue
+      if (!isGuideComplete(g, progress.counts, progress.visits, skippedSteps)) return g.id
+    }
+    return null
+  }, [progress, skippedSteps, skippedGuides])
+
   // When the started guide finishes, clear it so the hub can be used again.
   useEffect(() => {
     if (!progress) return
@@ -271,6 +281,13 @@ export default function MissionsPanel({
         <AddServiceModal isOpen onClose={onModalClose} onServiceAdded={onCreated} />
       )}
       {modal === 'add_job' && <CreateJob isOpen onClose={onModalClose} onJobCreated={onCreated} />}
+      {modal === 'start_trial' && (
+        <StartTrialModal
+          companySlug={companySlug}
+          returnPath={`/${companySlug}/team`}
+          onClose={onModalClose}
+        />
+      )}
     </>
   )
 
@@ -339,7 +356,11 @@ export default function MissionsPanel({
                 skippedSteps,
               )
               const isActive = activeGuideId === guide.id
-              const previewSteps = guide.steps.filter((s) => !skippedSteps.has(s.id)).slice(0, 3)
+              const previewSteps = guide.steps.filter((s) => !skippedSteps.has(s.id))
+              // Row CTA sits on the next incomplete guide (advances when one finishes),
+              // or on whichever guide is already in progress ("Continue").
+              const showRowCta = !complete && (isActive || guide.id === nextGuideId)
+              const showPanelStart = !complete && !showRowCta
 
               return (
                 <li key={guide.id}>
@@ -377,6 +398,11 @@ export default function MissionsPanel({
                               {t('guide.active', 'In progress')}
                             </span>
                           )}
+                          {guide.id === 'team' && !complete && (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 ring-1 ring-amber-200/70">
+                              {t('guide.team.badge', '14-day free trial')}
+                            </span>
+                          )}
                           {!complete && (
                             <span className="text-xs tabular-nums text-gray-400">
                               {fill(t('roadmap.progress', '{{done}}/{{total}}'), { done, total })}
@@ -389,9 +415,8 @@ export default function MissionsPanel({
                       </span>
                     </button>
 
-                    {/* Right rail: CTA (get started only) + accordion chevron, vertically centered */}
                     <div className="ml-auto flex flex-none items-center gap-2 self-center">
-                      {guide.id === 'get_started' && !complete && (
+                      {showRowCta && (
                         <button
                           type="button"
                           onClick={() => startGuide(guide)}
@@ -399,7 +424,9 @@ export default function MissionsPanel({
                         >
                           {isActive
                             ? t('guide.continue', 'Continue guide')
-                            : t('guide.getStarted.cta', 'Get started')}
+                            : guide.id === 'get_started'
+                              ? t('guide.getStarted.cta', 'Get started')
+                              : t('guide.start', 'Start guide')}
                         </button>
                       )}
                       <button
@@ -424,30 +451,19 @@ export default function MissionsPanel({
                   >
                     <div className="overflow-hidden">
                       <div className="relative px-5 pb-5 pt-1 sm:px-8 sm:pb-6">
-                        {/* Row CTA covers get_started; other guides keep Start inside the panel */}
-                        {!complete && guide.id !== 'get_started' && (
+                        {/* Jump-ahead: Start lives in the panel when this isn't the next/active row CTA */}
+                        {showPanelStart && (
                           <div className="mb-4 flex flex-wrap items-center gap-2">
                             <button
                               type="button"
                               onClick={() => startGuide(guide)}
                               className="inline-flex items-center rounded-xl bg-accent-500 px-4 py-2 text-sm font-semibold text-[#193434] shadow-sm transition-colors hover:bg-accent-400"
                             >
-                              {isActive
-                                ? t('guide.continue', 'Continue guide')
-                                : t('guide.start', 'Start guide')}
+                              {t('guide.start', 'Start guide')}
                             </button>
-                            {isActive && (
-                              <button
-                                type="button"
-                                onClick={stopGuide}
-                                className="rounded-xl px-3 py-2 text-sm font-medium text-gray-400 hover:text-gray-600"
-                              >
-                                {t('guide.stop', 'Stop guide')}
-                              </button>
-                            )}
                           </div>
                         )}
-                        {guide.id === 'get_started' && isActive && !complete && (
+                        {isActive && !complete && (
                           <div className="mb-4">
                             <button
                               type="button"
@@ -520,7 +536,7 @@ export default function MissionsPanel({
     )
   }
 
-  // Compact active guide (other pages) — hub styling, current guide only.
+  // Compact active guide (other pages) — thin strip, current step only.
   if (!activeGuide) return toastNode
 
   const steps = activeGuide.steps.filter((s) => !skippedSteps.has(s.id))
@@ -531,196 +547,96 @@ export default function MissionsPanel({
     progress.visits,
     skippedSteps,
   )
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0
-  const guideIndex = Math.max(0, GUIDES.findIndex((g) => g.id === activeGuide.id))
+  const activeIndex = activeStep ? steps.findIndex((s) => s.id === activeStep.id) : -1
+  const { have, target } = activeStep
+    ? stepCount(activeStep, progress.counts)
+    : { have: 0, target: 0 }
 
   return (
     <>
       {toastNode}
       <section
-        className={`overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm ${className}`}
+        className={`rounded-xl border border-gray-200 bg-white px-3 py-2.5 sm:px-3.5 ${className}`}
       >
-        <div className="border-b border-gray-100 bg-gradient-to-br from-[#193434]/[0.04] via-white to-accent-50/40 px-4 py-3.5 sm:px-5 sm:py-4">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-full bg-[#193434] text-xs font-bold text-white">
-              {guideIndex + 1}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-700">
-                {t('guide.active', 'In progress')}
-              </p>
-              <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-semibold tracking-tight text-gray-900 sm:text-lg">
-                  {t(activeGuide.titleKey as MessageKey, activeGuide.title)}
-                </h2>
-                <span className="flex-none rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-gray-500 ring-1 ring-gray-200/80">
+        <div className="flex items-start gap-2.5 sm:items-center">
+          <span className="mt-0.5 flex h-6 w-6 flex-none items-center justify-center rounded-full bg-[#193434] text-[10px] font-bold tabular-nums text-white sm:mt-0">
+            {activeIndex >= 0 ? activeIndex + 1 : '✓'}
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <p className="truncate text-[11px] font-medium text-gray-400">
+                {t(activeGuide.titleKey as MessageKey, activeGuide.title)}
+                <span className="mx-1.5 text-gray-300">·</span>
+                <span className="tabular-nums">
                   {fill(t('roadmap.progress', '{{done}}/{{total}}'), { done, total })}
                 </span>
-              </div>
-              <p className="mt-0.5 text-xs text-gray-500 sm:text-[13px]">
-                {activeStep
-                  ? fill(t('roadmap.subtitle', 'Next up: {{title}}'), {
-                      title: t(activeStep.titleKey as MessageKey, activeStep.title),
-                    })
-                  : t(activeGuide.blurbKey as MessageKey, activeGuide.blurb)}
               </p>
             </div>
-            <div className="ml-auto flex flex-none items-center gap-0.5 self-center">
-              <button
-                type="button"
-                onClick={stopGuide}
-                className="rounded-lg px-2 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-white/70 hover:text-gray-600"
-              >
-                {t('guide.stop', 'Stop guide')}
-              </button>
-              <button
-                type="button"
-                onClick={dismissAll}
-                aria-label={t('roadmap.dismissAll', 'Hide the guide for good')}
-                className="rounded-lg p-1.5 text-gray-300 transition-colors hover:bg-white/80 hover:text-gray-500"
-              >
-                <XMarkIcon className="h-4 w-4" />
-              </button>
-            </div>
+            {activeStep ? (
+              <>
+                <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <p className="text-sm font-semibold text-gray-900">
+                    {t(activeStep.titleKey as MessageKey, activeStep.title)}
+                  </p>
+                  {activeStep.countKey && target > 1 && (
+                    <span className="rounded-full bg-accent-50 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-accent-700">
+                      {have}/{target}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 line-clamp-2 overflow-hidden">
+                  <HowToText
+                    text={t(activeStep.howToKey as MessageKey, activeStep.howTo)}
+                    companySlug={companySlug}
+                  />
+                </p>
+              </>
+            ) : (
+              <p className="mt-0.5 text-sm font-medium text-gray-700">
+                {t('guide.complete', 'Complete')}
+              </p>
+            )}
           </div>
-          <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/70 ring-1 ring-gray-200/60">
-            <div
-              className="h-full rounded-full bg-accent-500 transition-all duration-700 ease-out"
-              style={{ width: `${pct}%` }}
-            />
+
+          <div className="ml-auto flex flex-none flex-col items-end gap-1 self-center sm:flex-row sm:items-center sm:gap-1.5">
+            {activeStep && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => runStep(activeStep)}
+                  className="inline-flex items-center rounded-lg bg-accent-500 px-2.5 py-1.5 text-xs font-semibold text-[#193434] shadow-sm transition-colors hover:bg-accent-400"
+                >
+                  {t(activeStep.ctaKey as MessageKey, activeStep.cta)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => skipStep(activeStep.id)}
+                  className="rounded-lg px-1.5 py-1 text-[11px] font-medium text-gray-400 transition-colors hover:text-gray-600"
+                >
+                  {t('roadmap.skip', 'Skip this step')}
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={stopGuide}
+              className="rounded-lg px-1.5 py-1 text-[11px] font-medium text-gray-400 transition-colors hover:text-gray-600"
+            >
+              {t('guide.stop', 'Stop guide')}
+            </button>
+            <button
+              type="button"
+              onClick={dismissAll}
+              aria-label={t('roadmap.dismissAll', 'Hide the guide for good')}
+              className="rounded-lg p-1 text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-500"
+            >
+              <XMarkIcon className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
-
-        <ol className="px-3 py-2 sm:px-4">
-          {steps.map((step, index) => (
-            <StepRow
-              key={step.id}
-              step={step}
-              index={index}
-              isLast={index === steps.length - 1}
-              done={isStepDone(step, progress.counts, progress.visits)}
-              isActive={activeStep?.id === step.id}
-              counts={progress.counts}
-              companySlug={companySlug}
-              onRun={() => runStep(step)}
-              onSkip={() => skipStep(step.id)}
-            />
-          ))}
-        </ol>
         {modals}
       </section>
     </>
-  )
-}
-
-function StepRow({
-  step,
-  index,
-  isLast,
-  done,
-  isActive,
-  counts,
-  companySlug,
-  onRun,
-  onSkip,
-}: {
-  step: GuideStep
-  index: number
-  isLast: boolean
-  done: boolean
-  isActive: boolean
-  counts: StepCounts
-  companySlug: string
-  onRun: () => void
-  onSkip: () => void
-}) {
-  const { t } = useAppI18n()
-  const { have, target } = stepCount(step, counts)
-
-  return (
-    <li className="relative flex items-start gap-3">
-      {!isLast && (
-        <span
-          aria-hidden
-          className={`absolute left-[11px] top-7 bottom-0 w-px ${done ? 'bg-accent-500/30' : 'bg-gray-200'}`}
-        />
-      )}
-      <span
-        className={[
-          'relative z-10 mt-2 flex h-[22px] w-[22px] flex-none items-center justify-center rounded-full text-[10px] font-bold',
-          done
-            ? 'bg-accent-500 text-white'
-            : isActive
-              ? 'bg-[#193434] text-white ring-4 ring-accent-500/15'
-              : 'border border-gray-200 bg-white text-gray-400',
-        ].join(' ')}
-      >
-        {done ? <CheckIcon className="h-3 w-3 animate-mission-check" /> : index + 1}
-      </span>
-
-      <div
-        className={[
-          'flex min-w-0 flex-1 items-start gap-2 sm:gap-3',
-          isActive ? 'py-2' : 'py-1.5',
-        ].join(' ')}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <p
-              className={[
-                'min-w-0',
-                done
-                  ? 'text-[13px] text-gray-400'
-                  : isActive
-                    ? 'text-sm font-semibold text-gray-900'
-                    : 'text-[13px] text-gray-500',
-              ].join(' ')}
-            >
-              {t(step.titleKey as MessageKey, step.title)}
-            </p>
-            {isActive && step.countKey && target > 1 && (
-              <span className="flex-none rounded-full bg-accent-50 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-accent-700">
-                {have}/{target}
-              </span>
-            )}
-          </div>
-          {!done && isActive && (
-            <p className="mt-1 overflow-visible">
-              <HowToText
-                text={t(step.howToKey as MessageKey, step.howTo)}
-                companySlug={companySlug}
-              />
-            </p>
-          )}
-          {!done && !isActive && (
-            <p className="mt-0.5 hidden overflow-visible lg:block">
-              <HowToText
-                text={t(step.howToKey as MessageKey, step.howTo)}
-                companySlug={companySlug}
-              />
-            </p>
-          )}
-        </div>
-
-        {isActive && (
-          <div className="ml-auto flex flex-none flex-col items-end gap-1 self-center sm:flex-row sm:items-center">
-            <button
-              type="button"
-              onClick={onRun}
-              className="inline-flex items-center rounded-lg bg-accent-500 px-3 py-1.5 text-xs font-semibold text-[#193434] shadow-sm transition-colors hover:bg-accent-400"
-            >
-              {t(step.ctaKey as MessageKey, step.cta)}
-            </button>
-            <button
-              type="button"
-              onClick={onSkip}
-              className="rounded-lg px-2 py-1 text-[11px] font-medium text-gray-400 transition-colors hover:text-gray-600"
-            >
-              {t('roadmap.skip', 'Skip this step')}
-            </button>
-          </div>
-        )}
-      </div>
-    </li>
   )
 }

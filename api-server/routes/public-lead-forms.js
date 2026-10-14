@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../utils/database');
 const { mapSubmission } = require('../utils/leadForm');
+const { createNotification } = require('../utils/notifications');
 
 const router = express.Router();
 
@@ -113,6 +114,18 @@ router.post('/lead-forms/:token/submit', async (req, res) => {
       ]
     );
 
+    createNotification(pool, {
+      companyId,
+      type: 'lead.new',
+      entityType: 'lead',
+      entityId: result.rows[0].id,
+      meta: {
+        name: [columns.first_name, columns.last_name].filter(Boolean).join(' ') || columns.email || '',
+        city: columns.city || '',
+        message: String(columns.message || answers.find((a) => a.value)?.value || '').slice(0, 140),
+      },
+    });
+
     // Fire-and-forget notification to the company's chosen address.
     const notifyEmail = typeof config.notifyEmail === 'string' ? config.notifyEmail.trim() : '';
     if (notifyEmail && sendEmail) {
@@ -127,6 +140,49 @@ router.post('/lead-forms/:token/submit', async (req, res) => {
           .map((a) => `<p><strong>${a.label}:</strong> ${String(a.value).replace(/</g, '&lt;')}</p>`)
           .join('')}`,
       }).catch((e) => console.warn('[lead-form] notify email failed:', e?.message || e));
+    }
+
+    // Confirmation email to the client (default on).
+    const clientEmail = typeof columns.email === 'string' ? columns.email.trim() : '';
+    const confirmEnabled = config.confirmEmailEnabled !== false;
+    if (confirmEnabled && clientEmail && sendEmail) {
+      const first = String(columns.first_name || '').trim();
+      const fill = (s) =>
+        String(s || '')
+          .replace(/\{name\}/gi, first || 'there')
+          .replace(/\{company\}/gi, companyName || '');
+      const subject =
+        fill(typeof config.confirmEmailSubject === 'string' && config.confirmEmailSubject.trim()
+          ? config.confirmEmailSubject
+          : 'We received your request') || 'We received your request';
+      const bodyRaw =
+        typeof config.confirmEmailBody === 'string' && config.confirmEmailBody.trim()
+          ? config.confirmEmailBody
+          : 'Hi {name},\n\nThanks for getting in touch. We’ve received your request and will get back to you within 24 hours.\n\n— {company}';
+      const body = fill(bodyRaw);
+      const escape = (s) =>
+        String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      const htmlBody = escape(body).replace(/\n/g, '<br>');
+      sendEmail({
+        to: clientEmail,
+        companyId,
+        fromName: companyName || undefined,
+        subject,
+        text: body,
+        html: `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#fafafa;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;padding:32px 12px;"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;">
+    <tr><td style="padding:28px 26px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.6;color:#374151;">
+      ${htmlBody}
+    </td></tr>
+  </table>
+</td></tr></table></body></html>`,
+      }).catch((e) => console.warn('[lead-form] confirm email failed:', e?.message || e));
     }
 
     res.status(201).json({

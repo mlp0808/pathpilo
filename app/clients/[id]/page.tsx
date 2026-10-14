@@ -10,6 +10,7 @@ import JobViewSlideout from '../../components/JobViewSlideout'
 import SubscriptionSlideout from '../../components/SubscriptionSlideout'
 import CreateSubscription from '../../components/CreateSubscription'
 import SendInvoiceModal from '../../components/SendInvoiceModal'
+import CreateOfferModal from '../../components/offers/CreateOfferModal'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
 import type { MessageKey } from '../../i18n'
@@ -148,6 +149,7 @@ export default function ClientDetailPage() {
   const [jobsLoading, setJobsLoading] = useState(false)
   const [jobFilter, setJobFilter] = useState<'all' | 'scheduled' | 'completed' | 'cancelled'>('all')
   const [isCreateJobOpen, setIsCreateJobOpen] = useState(false)
+  const [isCreateOfferOpen, setIsCreateOfferOpen] = useState(false)
   const [editingJob, setEditingJob] = useState<any>(null)
 
   // Subscriptions
@@ -781,15 +783,23 @@ export default function ClientDetailPage() {
                   </button>
                 ))}
               </div>
-              <button
-                onClick={() => setIsCreateJobOpen(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                {t('app.clientDetail.newJob')}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsCreateOfferOpen(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-sm font-medium text-gray-800 rounded-xl hover:bg-gray-50 transition-colors"
+                >
+                  Offer
+                </button>
+                <button
+                  onClick={() => setIsCreateJobOpen(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-xl hover:bg-primary-700 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  {t('app.clientDetail.newJob')}
+                </button>
+              </div>
             </div>
 
             {jobsLoading ? <Spinner /> : filteredJobs.length === 0 ? (
@@ -1427,6 +1437,23 @@ export default function ClientDetailPage() {
           onJobCreated={() => fetchJobs()}
           clientId={client.id}
           clientName={fullName}
+        />
+      )}
+
+      {client && (
+        <CreateOfferModal
+          isOpen={isCreateOfferOpen}
+          onClose={() => setIsCreateOfferOpen(false)}
+          lockClient
+          prefill={{
+            clientId: client.id,
+            clientName: fullName,
+            email: client.email,
+            phone: client.phone,
+            address: client.address || '',
+            zip_code: client.zip_code || '',
+            city: client.city || '',
+          }}
         />
       )}
 

@@ -72,6 +72,10 @@ export type LeadFormConfig = {
   successMessage: string
   /** Optional internal address to be notified when a lead comes in. */
   notifyEmail: string
+  /** Whether the submitter gets a confirmation email (default on). */
+  confirmEmailEnabled: boolean
+  confirmEmailSubject: string
+  confirmEmailBody: string
   theme: LeadFormTheme
 }
 
@@ -211,6 +215,10 @@ export function defaultLeadFormConfig(): LeadFormConfig {
     successTitle: 'Thank you!',
     successMessage: 'We’ve received your request and will be in touch soon.',
     notifyEmail: '',
+    confirmEmailEnabled: true,
+    confirmEmailSubject: 'We received your request',
+    confirmEmailBody:
+      'Hi {name},\n\nThanks for getting in touch. We’ve received your request and will get back to you within 24 hours.\n\n— {company}',
     theme: {
       accent: '#0F766E',
       corners: 'rounded',
@@ -269,6 +277,16 @@ export function normalizeConfig(raw: any): LeadFormConfig {
     successMessage:
       typeof raw.successMessage === 'string' && raw.successMessage ? raw.successMessage : d.successMessage,
     notifyEmail: typeof raw.notifyEmail === 'string' ? raw.notifyEmail : '',
+    // Default ON for existing forms that never had this key.
+    confirmEmailEnabled: raw.confirmEmailEnabled === false ? false : true,
+    confirmEmailSubject:
+      typeof raw.confirmEmailSubject === 'string' && raw.confirmEmailSubject.trim()
+        ? raw.confirmEmailSubject
+        : d.confirmEmailSubject,
+    confirmEmailBody:
+      typeof raw.confirmEmailBody === 'string' && raw.confirmEmailBody.trim()
+        ? raw.confirmEmailBody
+        : d.confirmEmailBody,
     theme: {
       accent:
         typeof raw?.theme?.accent === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw.theme.accent)

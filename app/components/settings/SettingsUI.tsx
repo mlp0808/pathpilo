@@ -46,7 +46,7 @@ export function SettingsHeader({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Section — a small heading with a hairline rule beneath it, then rows.
-// No box. `disabled` dims + blocks the body (used by the invoicing gate).
+// No box. `disabled` dims + blocks the body when a section is temporarily locked.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function SettingsSection({

@@ -43,6 +43,10 @@ export const initialNewClientData: NewClientData = {
 
 /** Prefill for a map location that is not a client yet — guest name + address. */
 export function guestClientFromLocation(loc?: {
+  name?: string
+  last_name?: string
+  email?: string
+  phone?: string
   address?: string
   zip_code?: string
   city?: string
@@ -52,8 +56,10 @@ export function guestClientFromLocation(loc?: {
   return {
     ...initialNewClientData,
     client_type: 'person',
-    name: generateGuestClientName(),
-    last_name: '',
+    name: (loc?.name && String(loc.name).trim()) || generateGuestClientName(),
+    last_name: loc?.last_name || '',
+    email: loc?.email || '',
+    phone: loc?.phone || '',
     address: loc?.address || '',
     zip_code: loc?.zip_code || '',
     city: loc?.city || '',
@@ -85,7 +91,10 @@ export default function AddClientInlineForm({
   countryCode,
 }: AddClientInlineFormProps) {
   const { t } = useAppI18n()
-  const hasLocation = !!(data.address || data.city || data.zip_code)
+  // Only treat the location as "locked in" once we have coordinates (map pick or
+  // autocomplete selection). Typing into the search must not replace the input
+  // with a static chip after the first word.
+  const hasConfirmedLocation = data.lat != null && data.lng != null
   const locationLine = [data.address, [data.zip_code, data.city].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
   const nameIsGuest = isGuestClientName(data.name)
 
@@ -133,12 +142,28 @@ export default function AddClientInlineForm({
         </div>
       </div>
 
-      {hasLocation && (
+      {hasConfirmedLocation && (
         <div className="flex items-center gap-2 rounded-lg bg-white border border-gray-100 px-2.5 py-1.5">
           <MapPinIcon className="h-3.5 w-3.5 flex-shrink-0 text-[#193434]/70" />
-          <p className="min-w-0 truncate text-[12px] font-medium text-gray-700">
+          <p className="min-w-0 flex-1 truncate text-[12px] font-medium text-gray-700">
             {locationLine || t('app.createJob.noAddress', 'No address')}
           </p>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...data,
+                address: '',
+                zip_code: '',
+                city: '',
+                lat: null,
+                lng: null,
+              })
+            }
+            className="flex-shrink-0 text-[10px] font-semibold text-gray-500 hover:text-gray-800"
+          >
+            {t('app.createJob.changeAddress', 'Change')}
+          </button>
         </div>
       )}
 
@@ -163,7 +188,7 @@ export default function AddClientInlineForm({
                 ? 'Acme Ltd'
                 : t('app.createJob.guestNamePlaceholder', 'guest#…')
             }
-            autoFocus={!hasLocation}
+            autoFocus={!hasConfirmedLocation}
           />
         </div>
         {data.client_type === 'person' ? (
@@ -195,7 +220,7 @@ export default function AddClientInlineForm({
         )}
       </div>
 
-      {!hasLocation && (
+      {!hasConfirmedLocation && (
         <div>
           <label className="block text-[10px] font-semibold text-gray-500 mb-1">
             {t('app.createJob.address', 'Address')}
@@ -207,6 +232,8 @@ export default function AddClientInlineForm({
             lat={data.lat}
             lng={data.lng}
             countryCode={countryCode}
+            label=""
+            hidePostalFields
             onChange={(addr) =>
               onChange({
                 ...data,

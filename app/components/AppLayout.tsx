@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { useUser, SESSION_UPDATED_EVENT } from '../hooks/useUser'
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
@@ -11,8 +12,12 @@ import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sessionClient'
 import PendingAutomationToasts from './PendingAutomationToasts'
+import NotificationToasts from './notifications/NotificationToasts'
 import WorkspaceAccessGuard from './WorkspaceAccessGuard'
 import useMissionPageVisit from '../hooks/useMissionPageVisit'
+
+/** Lazy so AppLayout (every page) doesn't pull CreateJob / guide modals into the shell bundle. */
+const MissionsPanel = dynamic(() => import('./missions/MissionsPanel'), { ssr: false })
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -57,6 +62,18 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }, [pathname])
 
   const headerHideClass = isMapPage ? 'lg:hidden' : fullBleedTool ? 'hidden' : ''
+
+  // Pages that don't render their own compact guide strip get one here, so an
+  // active guide can follow the user through the whole product (pipeline,
+  // offers, recurring, team and the settings pages guides send you to).
+  const pathParts = pathname.split('/').filter(Boolean)
+  const routeSegment = pathParts[1] || ''
+  const settingsSub = routeSegment === 'settings' ? pathParts[2] || '' : ''
+  const showGuideStrip =
+    Boolean(isCompanyRoute) &&
+    !fullBleedTool &&
+    (['pipeline', 'offers', 'recurring', 'team'].includes(routeSegment) ||
+      ['leads-form', 'invoices', 'notifications', 'business'].includes(settingsSub))
 
   const targetCompanyId = user?.companies?.find((c: { slug?: string }) => c.slug === urlSlug)?.id
   const activeCompanyId = user?.activeCompany?.id
@@ -179,9 +196,17 @@ export default function AppLayout({ children }: AppLayoutProps) {
         />
 
         <main className="px-4 sm:px-6 lg:px-[40px] pt-1 sm:pt-2 lg:pt-2 pb-4 sm:pb-6 lg:pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
+          {showGuideStrip && (
+            <MissionsPanel
+              companySlug={activeSlug || urlSlug}
+              variant="active"
+              className="mb-3 flex-none sm:mb-4"
+            />
+          )}
           {children}
         </main>
         <PendingAutomationToasts />
+        <NotificationToasts companySlug={activeSlug || (isCompanyRoute ? urlSlug : '')} />
       </div>
     </div>
   )

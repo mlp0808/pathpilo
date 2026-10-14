@@ -11,6 +11,7 @@ const {
   deactivateSubscriptionsForClient,
   deleteFutureNonCompletedJobsForClient,
 } = require('../utils/subscriptionStopCleanup');
+const { ensureItemCatalogSchema } = require('../utils/itemCatalogSchema');
 
 const SECURE_NOTE_MAX_LENGTH = 10000;
 
@@ -533,8 +534,8 @@ router.delete('/:clientId', authenticateToken, async (req, res) => {
 // GET /api/clients/:clientId/jobs - Get jobs for a specific client
 router.get('/:clientId/jobs', authenticateToken, async (req, res) => {
   try {
+    await ensureItemCatalogSchema(pool);
     const { clientId } = req.params;
-    const userId = req.user.userId;
 
     // Get user's active company from JWT token
     const companyAccess = getActiveCompanyId(req);
@@ -561,15 +562,21 @@ router.get('/:clientId/jobs', authenticateToken, async (req, res) => {
         MAX(c.email) as client_email,
         MAX(c.phone) as client_phone,
         COUNT(js.id) as service_count,
-        COALESCE(SUM(COALESCE(js.custom_price, s.price)), 0) as total_price,
-        COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes)), 0) as total_duration
+        COALESCE(SUM(COALESCE(js.custom_price, s.price, 0) * COALESCE(js.quantity, 1)), 0) as total_price,
+        COALESCE(SUM(COALESCE(js.custom_duration_minutes, s.duration_minutes, 0)), 0) as total_duration
       FROM jobs j
       LEFT JOIN clients c ON j.client_id = c.id
       LEFT JOIN job_services js ON j.id = js.job_id
       LEFT JOIN services s ON js.service_id = s.id
-      WHERE j.client_id = $1 AND j.company_id = $2 AND j.status != 'cancelled'
+      WHERE j.client_id = $1 AND j.company_id = $2
+        AND j.status NOT IN ('cancelled', 'deleted')
+        AND COALESCE(j.job_kind, 'standard') <> 'cancellation_fee'
       GROUP BY j.id
-      ORDER BY j.scheduled_date DESC, j.created_at DESC
+      ORDER BY COALESCE(
+        NULLIF(TRIM(j.scheduled_date::text), '')::date,
+        j.created_at::date
+      ) DESC NULLS LAST, j.created_at DESC
+      LIMIT 12
     `, [clientId, companyId]);
 
     const jobs = result.rows;
@@ -584,7 +591,8 @@ router.get('/:clientId/jobs', authenticateToken, async (req, res) => {
           js.custom_title,
           js.custom_price,
           js.custom_duration_minutes,
-          COALESCE(js.custom_title, s.title) as service_title,
+          COALESCE(js.quantity, 1) as quantity,
+          COALESCE(NULLIF(TRIM(js.custom_title), ''), s.title) as service_title,
           COALESCE(js.custom_price, s.price) as price,
           COALESCE(js.custom_duration_minutes, s.duration_minutes) as duration_minutes
         FROM job_services js
@@ -599,13 +607,19 @@ router.get('/:clientId/jobs', authenticateToken, async (req, res) => {
         service_id: service.service_id,
         service_title: service.service_title,
         custom_title: service.custom_title,
+        title: service.service_title,
         price: parseFloat(service.price) || 0,
-        duration_minutes: parseInt(service.duration_minutes) || 0
+        custom_price: service.custom_price != null ? parseFloat(service.custom_price) : null,
+        duration_minutes: parseInt(service.duration_minutes, 10) || 0,
+        custom_duration_minutes: service.custom_duration_minutes != null
+          ? parseInt(service.custom_duration_minutes, 10)
+          : null,
+        quantity: Math.max(0, Number(service.quantity) || 1),
       }));
     }
 
     res.json({
-      jobs: jobs,
+      jobs: jobs.filter((j) => Array.isArray(j.services) && j.services.length > 0),
       total: jobs.length
     });
 
@@ -724,24 +738,7 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       enabled_payment_methods: enabledPaymentMethodsInput,
     } = req.body;
 
-    // ── Gate 0: the whole invoicing feature must be activated for this
-    // company. Invoicing is opt-in (defaults off) and must be switched on in
-    // Settings → Invoices before any invoice can be created. This mirrors the
-    // UI gate so the feature can't be bypassed via direct API calls.
-    await dbClient.query(
-      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoicing_enabled BOOLEAN NOT NULL DEFAULT FALSE`
-    ).catch(() => {});
-    const invoicingRow = await dbClient.query(
-      `SELECT invoicing_enabled FROM companies WHERE id = $1`,
-      [companyId]
-    );
-    if (invoicingRow.rows[0]?.invoicing_enabled !== true) {
-      return res.status(400).json({
-        error: 'Activate invoicing in Settings → Invoices before creating an invoice.',
-        code: 'invoicing_disabled',
-      });
-    }
-
+    // Invoicing is always available — missing setup is guided in the UI.
     // ── Gate 1: company must have explicitly chosen its starting invoice
     // number. We never want to silently start a customer at #1 when they
     // came from a previous system that was already at #847.
@@ -898,8 +895,8 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
 
       let jobTotal = 0;
       for (const service of jobServices.rows) {
-        const quantity = 1;
-        const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0);
+        const quantity = Math.max(0, Number(service.quantity) || 1);
+        const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0) || 0;
         jobTotal += unitPrice * quantity;
       }
 
@@ -907,12 +904,13 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       const finalJobTotal = Math.max(0, jobTotal - jobDiscount);
 
       for (const service of jobServices.rows) {
-        const quantity = 1;
-        const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0);
-        const serviceProportion = jobTotal > 0 ? unitPrice / jobTotal : 0;
+        const quantity = Math.max(0, Number(service.quantity) || 1);
+        const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0) || 0;
+        const lineGross = unitPrice * quantity;
+        const serviceProportion = jobTotal > 0 ? lineGross / jobTotal : 0;
         const serviceDiscount = jobDiscount * serviceProportion;
-        const finalUnitPrice = unitPrice - serviceDiscount;
-        const lineTotal = Math.max(0, finalUnitPrice) * quantity;
+        const lineTotal = Math.max(0, lineGross - serviceDiscount);
+        const finalUnitPrice = quantity > 0 ? lineTotal / quantity : 0;
 
         subtotal += lineTotal;
 

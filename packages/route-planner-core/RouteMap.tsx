@@ -41,6 +41,8 @@ export interface RouteJob {
   legMinutes?: number
   is_projected?: boolean
   is_cancelled?: boolean
+  /** Booked by the client from an offer; waiting for the admin to confirm. */
+  is_pending_booking?: boolean
   has_own_coords?: boolean
   estimated_duration_minutes?: number
   /** Planned job value (all tasks) from jobs API `estimated_price` / `total_price`. */

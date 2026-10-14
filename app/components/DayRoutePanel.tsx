@@ -410,8 +410,8 @@ function SortableJobCard({
             onMouseLeave={onMouseLeave}
             className="rounded-2xl pl-4 pr-2 py-3 flex items-center gap-2 cursor-pointer transition-all duration-150 active:scale-[0.99]"
             style={{
-              background: isHighlighted ? `${color}14` : '#fff',
-              border: `1.5px solid ${isHighlighted ? color : '#eef0ee'}`,
+              background: isHighlighted ? `${color}14` : job.is_pending_booking ? '#fffbeb' : '#fff',
+              border: `1.5px solid ${isHighlighted ? color : job.is_pending_booking ? '#fcd34d' : '#eef0ee'}`,
               boxShadow: isDragging
                 ? '0 12px 30px rgba(0,0,0,0.14)'
                 : isHighlighted
@@ -420,8 +420,13 @@ function SortableJobCard({
             }}
           >
             <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-bold text-gray-900 truncate leading-tight">
-                {job.label}
+              <p className="flex items-center gap-1.5 text-[15px] font-bold text-gray-900 leading-tight">
+                <span className="truncate">{job.label}</span>
+                {job.is_pending_booking && (
+                  <span className="flex-shrink-0 rounded-full bg-[#d6f5e3] px-1.5 py-0.5 text-[10px] font-semibold text-[#1f7a46]">
+                    {t('app.pipeline.toConfirm', 'Accepted')}
+                  </span>
+                )}
               </p>
               {job.address && (
                 <p className="flex items-center gap-1 text-[12px] text-gray-400 truncate mt-1 leading-tight">

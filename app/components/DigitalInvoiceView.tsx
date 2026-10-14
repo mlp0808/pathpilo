@@ -350,8 +350,10 @@ export function DigitalInvoiceView({
           )}
 
           <div className="px-6 py-8 sm:px-10">
-            <div className="hidden grid-cols-[1fr,8rem] gap-3 border-b border-gray-100 py-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:grid">
+            <div className="hidden grid-cols-[1fr,4.5rem,7rem,7rem] gap-3 border-b border-gray-100 py-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:grid">
               <span>{tr('invoice.description', 'Description')}</span>
+              <span className="text-right">{tr('invoice.qty', 'Qty')}</span>
+              <span className="text-right">{tr('invoice.unitPrice', 'Unit price')}</span>
               <span className="text-right">{tr('invoice.amount', 'Amount')}</span>
             </div>
             {inv.lineItems.length === 0 ? (
@@ -361,16 +363,20 @@ export function DigitalInvoiceView({
                 {inv.lineItems.map((row) => (
                   <div
                     key={row.id}
-                    className="grid grid-cols-1 items-start gap-1 border-b border-gray-100 py-4 sm:grid-cols-[1fr,8rem] sm:gap-3"
+                    className="grid grid-cols-1 items-start gap-1 border-b border-gray-100 py-4 sm:grid-cols-[1fr,4.5rem,7rem,7rem] sm:gap-3"
                   >
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-900">{row.description}</p>
-                      {Number(row.quantity) !== 1 && (
-                        <p className="mt-0.5 text-xs text-gray-400">
-                          {row.quantity} × {formatMoney(row.unitPrice, inv.currency)}
-                        </p>
-                      )}
+                      <p className="mt-0.5 text-xs text-gray-400 sm:hidden">
+                        {row.quantity} × {formatMoney(row.unitPrice, inv.currency)}
+                      </p>
                     </div>
+                    <p className="hidden text-right text-sm tabular-nums text-gray-600 sm:block">
+                      {row.quantity}
+                    </p>
+                    <p className="hidden text-right text-sm tabular-nums text-gray-600 sm:block">
+                      {formatMoney(row.unitPrice, inv.currency)}
+                    </p>
                     <p className="text-sm font-semibold tabular-nums text-gray-900 sm:text-right">
                       {formatMoney(row.lineTotal, inv.currency)}
                     </p>

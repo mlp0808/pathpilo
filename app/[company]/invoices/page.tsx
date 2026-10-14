@@ -7,9 +7,7 @@ import AppLayout from '@/app/components/AppLayout'
 import MissionsPanel from '@/app/components/missions/MissionsPanel'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import { apiUrl } from '@/app/utils/api'
-import { ChevronDownIcon, MagnifyingGlassIcon, PlusIcon, Cog6ToothIcon, ChevronRightIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
-
-const INVOICING_HELP_URL = 'https://help.pathpilo.com/category/invoicing/'
+import { ChevronDownIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline'
 
 type DatePresetId =
   | 'all'
@@ -157,8 +155,6 @@ export default function InvoicesListPage() {
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  // null = still checking whether invoicing is turned on for this company.
-  const [invoicingEnabled, setInvoicingEnabled] = useState<boolean | null>(null)
 
   const [datePreset, setDatePreset] = useState<DatePresetId>('all')
   const [dateFrom, setDateFrom] = useState('')
@@ -237,22 +233,6 @@ export default function InvoicesListPage() {
       .catch(() => {})
   }, [])
 
-  // Resolve the invoicing on/off gate. Until this returns we hold back the
-  // list/filters so a disabled company never flashes the full UI first.
-  useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (!token) {
-      setInvoicingEnabled(false)
-      return
-    }
-    fetch(apiUrl('/companies/invoice-defaults'), { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((data) => {
-        setInvoicingEnabled(Boolean(data?.defaults?.invoicingEnabled))
-      })
-      .catch(() => setInvoicingEnabled(false))
-  }, [])
-
   const buildQuery = useCallback(() => {
     const q = new URLSearchParams()
     if (dateFrom) q.set('dateFrom', dateFrom)
@@ -288,9 +268,8 @@ export default function InvoicesListPage() {
 
   useEffect(() => {
     if (!filtersReady) return
-    if (invoicingEnabled !== true) return
     fetchInvoices()
-  }, [filtersReady, fetchInvoices, invoicingEnabled])
+  }, [filtersReady, fetchInvoices])
 
   useEffect(() => {
     if (!filtersReady) return
@@ -345,77 +324,17 @@ export default function InvoicesListPage() {
   }, [selectedStatuses, t])
 
   const base = companySlug ? `/${companySlug}/invoices` : '/invoices'
-  const settingsHref = companySlug ? `/${companySlug}/settings/invoice-options` : '/settings/invoice-options'
   const invoiceOpenHref = (inv: { id: number; status?: string | null }) =>
     (inv.status || 'draft') === 'draft' ? `${base}/new?draft=${inv.id}` : `${base}/${inv.id}`
 
-  // While we resolve the gate, render nothing heavy — just a quiet spinner.
-  if (invoicingEnabled === null) {
-    return (
-      <AppLayout>
-        <div className="flex justify-center py-24">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-gray-900" />
-        </div>
-      </AppLayout>
-    )
-  }
-
-  // Invoicing turned off → guided empty state. No list, no create button.
-  if (invoicingEnabled === false) {
-    return (
-      <AppLayout>
-        <div className="flex min-h-[60vh] items-center justify-center px-4">
-          <div className="w-full max-w-md text-center">
-            {/* [gear] > Invoices > Turn on invoices */}
-            <div className="mb-6 inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-500">
-              <Cog6ToothIcon className="h-4 w-4 text-gray-400" />
-              <ChevronRightIcon className="h-3 w-3 text-gray-300" />
-              <span>{t('app.invoicesList.disabled.crumbInvoices', 'Invoices')}</span>
-              <ChevronRightIcon className="h-3 w-3 text-gray-300" />
-              <span className="text-gray-900">
-                {t('app.invoicesList.disabled.crumbTurnOn', 'Turn on invoices')}
-              </span>
-            </div>
-
-            <h1 className="text-xl font-semibold tracking-tight text-gray-900">
-              {t('app.invoicesList.disabled.title', 'This is your invoicing area')}
-            </h1>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-gray-500">
-              {t(
-                'app.invoicesList.disabled.body',
-                'Invoicing is turned off. Activate it in settings to create, send and track invoices. Take a moment to set it up the way your business works.',
-              )}
-            </p>
-
-            <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
-              <Link
-                href={settingsHref}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-black sm:w-auto"
-              >
-                <Cog6ToothIcon className="h-4 w-4" />
-                {t('app.invoicesList.disabled.goToSettings', 'Go to invoice settings')}
-              </Link>
-              <a
-                href={INVOICING_HELP_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 sm:w-auto"
-              >
-                {t('app.invoicesList.disabled.learnMore', 'Learn about invoicing')}
-                <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 text-gray-400" />
-              </a>
-            </div>
-          </div>
-        </div>
-      </AppLayout>
-    )
-  }
+  const hasActiveFilters =
+    Boolean(dateFrom || dateTo) || selectedStatuses.size > 0 || clientId != null
 
   return (
     <AppLayout>
       <div>
         {companySlug && (
-          <MissionsPanel companySlug={companySlug} className="mb-5 sm:mb-6" />
+          <MissionsPanel companySlug={companySlug} className="mb-3 sm:mb-4" />
         )}
         <div className="flex items-center justify-between gap-3 mb-5 sm:mb-6">
           <div className="min-w-0">
@@ -580,8 +499,43 @@ export default function InvoicesListPage() {
           </div>
         ) : invoices.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-2xl p-8 sm:p-12 text-center">
-            <p className="text-sm font-medium text-gray-900 mb-1">{t('app.invoicesList.empty', 'No invoices match your filters.')}</p>
-            <p className="text-xs text-gray-500">{t('app.invoicesList.emptyHint', 'Try widening the date range or clearing filters.')}</p>
+            {hasActiveFilters ? (
+              <>
+                <p className="text-sm font-medium text-gray-900 mb-1">
+                  {t('app.invoicesList.empty', 'No invoices match your filters.')}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {t('app.invoicesList.emptyHint', 'Try widening the date range or clearing filters.')}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-gray-900 mb-1">
+                  {t('app.invoicesList.emptyFirst', 'No invoices yet')}
+                </p>
+                <p className="mx-auto max-w-sm text-xs text-gray-500">
+                  {t(
+                    'app.invoicesList.emptyFirstHint',
+                    'Create an invoice from completed jobs. If you have no completed work yet, finish a job on the schedule first.',
+                  )}
+                </p>
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+                  <Link
+                    href={`${base}/new`}
+                    className="inline-flex items-center gap-2 rounded-xl bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                  >
+                    <PlusIcon className="h-4 w-4" />
+                    {t('app.invoicesList.newInvoice', 'New invoice')}
+                  </Link>
+                  <Link
+                    href={`/${companySlug}/jobs`}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    {t('app.invoicesList.goToSchedule', 'Go to schedule')}
+                  </Link>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <>

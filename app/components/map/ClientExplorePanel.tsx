@@ -28,7 +28,8 @@ import {
 import type { UserRoute } from '@/app/components/RouteMap'
 import { colorForUserId, initialsFromName } from '@/app/components/RouteMap'
 import CreateJobSlideout from '@/app/components/CreateJobSlideout'
-import CreateSubscription from '@/app/components/CreateSubscription'
+import CreateJob from '@/app/components/CreateJob'
+import CreateOfferModal from '@/app/components/offers/CreateOfferModal'
 import {
   addDaysStr,
   todayStr,
@@ -369,6 +370,7 @@ export default function ClientExplorePanel({
 }) {
   const [client, setClient] = useState<MapClient | null>(null)
   const [createJobOpen, setCreateJobOpen] = useState(false)
+  const [createOfferOpen, setCreateOfferOpen] = useState(false)
   const [createSubOpen, setCreateSubOpen] = useState(false)
   const [nearestRefresh, setNearestRefresh] = useState(0)
 
@@ -480,8 +482,9 @@ export default function ClientExplorePanel({
                 <ActionRow
                   icon={<SparklesIcon className="w-4 h-4" strokeWidth={2} />}
                   title="Create offer"
-                  subtitle="Send a quote for this location"
-                  comingSoon
+                  subtitle="Quote this client"
+                  disabled={!client}
+                  onClick={() => setCreateOfferOpen(true)}
                 />
                 <ActionRow
                   icon={<CalendarDaysIcon className="w-4 h-4" strokeWidth={2} />}
@@ -593,10 +596,28 @@ export default function ClientExplorePanel({
         initialAssignedUserId={scheduleUserId ?? null}
       />
 
-      <CreateSubscription
+      <CreateOfferModal
+        isOpen={createOfferOpen}
+        onClose={() => setCreateOfferOpen(false)}
+        lockClient
+        prefill={client ? {
+          clientId: client.id,
+          clientName: fullName,
+          email: client.email,
+          phone: client.phone,
+          address: client.address || '',
+          zip_code: client.zip_code || '',
+          city: client.city || '',
+          lat: client.lat ?? null,
+          lng: client.lng ?? null,
+        } : undefined}
+      />
+
+      <CreateJob
         isOpen={createSubOpen}
+        mode="subscription"
         onClose={() => setCreateSubOpen(false)}
-        onSubscriptionCreated={() => {
+        onJobCreated={() => {
           setCreateSubOpen(false)
           onJobsChanged?.()
         }}

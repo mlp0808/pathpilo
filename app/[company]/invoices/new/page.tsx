@@ -92,6 +92,14 @@ interface CompletedJob {
   scheduled_date?: string | null
 }
 
+type JobServiceLine = {
+  id: number
+  title: string
+  quantity: number
+  unitPrice: number
+  lineTotal: number
+}
+
 function clientFullName(c: Client | null | undefined): string {
   if (!c) return '—'
   if (String(c.client_type || '').toLowerCase() === 'company') {
@@ -109,14 +117,14 @@ interface JobPickerProps {
   loading: boolean
   error: string | null
   currency: string
+  companySlug: string
   onAdd: (jobId: number) => void
   tr: (key: MessageKey, fallback?: string) => string
 }
 
 /**
  * Searchable combobox used inside the line-items area to add a completed,
- * uninvoiced job. The field stays openable so users always get feedback —
- * including when there are no more jobs left to add.
+ * uninvoiced job. When there are no invoiceable jobs, show a clear next step.
  */
 function JobPicker({
   availableJobs,
@@ -125,6 +133,7 @@ function JobPicker({
   loading,
   error,
   currency,
+  companySlug,
   onAdd,
   tr,
 }: JobPickerProps) {
@@ -168,7 +177,7 @@ function JobPicker({
     if (noJobsAtAll) {
       return tr(
         'invoice.new.picker.noJobsDetail',
-        'No completed, uninvoiced jobs for this client. Complete a job first, then add it here.',
+        'This client has no completed jobs that can be invoiced yet. Complete a job on the schedule first, then come back here.',
       )
     }
     if (allAdded || availableJobs.length === 0) {
@@ -188,6 +197,28 @@ function JobPicker({
     } else {
       requestAnimationFrame(() => inputRef.current?.focus())
     }
+  }
+
+  if (noJobsAtAll) {
+    return (
+      <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/50 px-5 py-6 text-center">
+        <p className="text-sm font-medium text-gray-900">
+          {tr('invoice.new.noInvoiceableJobs', 'No completed jobs to invoice')}
+        </p>
+        <p className="mx-auto mt-1.5 max-w-md text-xs leading-relaxed text-gray-600">
+          {tr(
+            'invoice.new.noInvoiceableJobsHelp',
+            'Invoices are built from completed work. Open the schedule, finish a job for this client, then return here to add it.',
+          )}
+        </p>
+        <Link
+          href={`/${companySlug}/jobs`}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+        >
+          {tr('invoice.new.goToSchedule', 'Go to schedule')}
+        </Link>
+      </div>
+    )
   }
 
   return (
@@ -276,6 +307,7 @@ function JobPicker({
   )
 }
 
+
 function NewInvoicePageContent() {
   const params = useParams()
   const router = useRouter()
@@ -338,6 +370,9 @@ function NewInvoicePageContent() {
   const [selectedJobIds, setSelectedJobIds] = useState<Set<number>>(
     () => new Set(initialJobIds),
   )
+  /** Completed services per selected job — powers Qty / unit price on the form. */
+  const [jobLinesById, setJobLinesById] = useState<Record<number, JobServiceLine[]>>({})
+  const jobLinesFetchRef = useRef<Set<number>>(new Set())
 
   // ── Invoice form ───────────────────────────────────────────────────────────
   const [submitting, setSubmitting] = useState(false)
@@ -370,9 +405,6 @@ function NewInvoicePageContent() {
   // let them create an invoice — otherwise we'd silently start them at #1
   // even if they're migrating from a system already at #847.
   const [numberingConfigured, setNumberingConfigured] = useState(false)
-  // Master invoicing gate. null = unknown; false = feature off → bounce the
-  // admin to settings (mirrors the server-side create gate).
-  const [invoicingEnabled, setInvoicingEnabled] = useState<boolean | null>(null)
 
   // ── Payment options (snapshot for THIS invoice) ────────────────────────────
   // We fetch the company-level enabled methods once, then the admin can
@@ -388,7 +420,7 @@ function NewInvoicePageContent() {
   // provider → enabled-for-this-invoice. Defaults to ON when first loaded.
   const [paymentMethodOn, setPaymentMethodOn] = useState<Record<string, boolean>>({})
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null)
-  const [invoiceNextNumber, setInvoiceNextNumber] = useState<number | null>(null)
+  const [invoiceNextNumber, setInvoiceNextNumber] = useState<string | null>(null)
   const [draftInvoiceNumber, setDraftInvoiceNumber] = useState<string | null>(null)
   const [clientSavingField, setClientSavingField] = useState<string | null>(null)
   const [invoiceEmail, setInvoiceEmail] = useState('')
@@ -440,7 +472,6 @@ function NewInvoicePageContent() {
       .then((data) => {
         const d = data?.defaults
         if (!d) return
-        setInvoicingEnabled(Boolean(d.invoicingEnabled))
         const savedTerms =
           typeof d.invoiceDefaultPaymentTerms === 'string' ? d.invoiceDefaultPaymentTerms.trim() : ''
         // Treat non-empty terms (including the API starter template) as available
@@ -454,9 +485,12 @@ function NewInvoicePageContent() {
         // Falls back to "yes" if none of these are present, so an
         // out-of-date api-server response doesn't show a stale red banner.
         // The server still enforces the real gate on POST.
-        const nextNumber = Number(d.invoiceNextNumber) || 0
+        const nextNumberRaw = d.invoiceNextNumber
+        const nextNumber = nextNumberRaw != null && String(nextNumberRaw).trim() !== ''
+          ? String(nextNumberRaw).replace(/\D/g, '')
+          : ''
         const maxIssued = Number(d.maxNumericInvoice) || 0
-        if (nextNumber > 0) setInvoiceNextNumber(nextNumber)
+        if (nextNumber) setInvoiceNextNumber(nextNumber)
         // Multi-signal "is numbering configured" check.
         //   • Reality wins: if a starting number above the schema default
         //     of 1 is saved, OR an invoice has actually been issued, then
@@ -465,13 +499,13 @@ function NewInvoicePageContent() {
         //   • Otherwise trust the explicit boolean from the API.
         //   • Last resort: an unknown nextNumber === 0 means we don't know,
         //     so don't block.
-        const realityConfigured = nextNumber > 1 || maxIssued > 0
+        const realityConfigured = Number(nextNumber) > 1 || maxIssued > 0
         const configured =
           realityConfigured
             ? true
             : typeof d.invoiceNumberingConfigured === 'boolean'
               ? d.invoiceNumberingConfigured
-              : nextNumber === 0
+              : !nextNumber
         setNumberingConfigured(configured)
         setForm((prev) => ({
           ...prev,
@@ -493,15 +527,6 @@ function NewInvoicePageContent() {
       .catch(() => {})
       .finally(() => setDefaultsLoaded(true))
   }, [])
-
-  // If invoicing is switched off for this company, this page must not be
-  // usable — send the admin to the invoice settings to turn it on.
-  useEffect(() => {
-    if (invoicingEnabled === false) {
-      const settingsHref = company ? `/${company}/settings/invoice-options` : '/settings/invoice-options'
-      router.replace(settingsHref)
-    }
-  }, [invoicingEnabled, company, router])
 
   // Fetch active payment options (only those that can pay an invoice and
   // are enabled at company level). The admin can still turn each one off
@@ -613,6 +638,51 @@ function NewInvoicePageContent() {
       .catch(() => setJobsError('Failed to load completed jobs'))
       .finally(() => setJobsLoading(false))
   }, [])
+
+  // Fetch completed services (with quantity) for every selected job.
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    const ids = [...selectedJobIds]
+
+    for (const id of ids) {
+      if (jobLinesFetchRef.current.has(id)) continue
+      jobLinesFetchRef.current.add(id)
+      fetch(apiUrl(`/jobs/${id}`), { headers: { Authorization: `Bearer ${token}` } })
+        .then((r) => r.json())
+        .then((data) => {
+          const services = Array.isArray(data?.job?.services) ? data.job.services : []
+          const lines: JobServiceLine[] = services
+            .filter((s: any) => String(s.status || '') === 'completed' || s.is_completed)
+            .map((s: any) => {
+              const quantity = Math.max(0, Number(s.quantity) || 1)
+              const unitPrice = Number(s.price ?? s.custom_price ?? 0) || 0
+              return {
+                id: Number(s.id),
+                title: String(s.service_name || s.custom_title || s.title || 'Service'),
+                quantity,
+                unitPrice,
+                lineTotal: unitPrice * quantity,
+              }
+            })
+          setJobLinesById((prev) => ({ ...prev, [id]: lines }))
+        })
+        .catch(() => {
+          jobLinesFetchRef.current.delete(id)
+        })
+    }
+
+    setJobLinesById((prev) => {
+      const next: Record<number, JobServiceLine[]> = {}
+      for (const id of ids) {
+        if (prev[id]) next[id] = prev[id]
+      }
+      for (const key of Object.keys(prev)) {
+        if (!selectedJobIds.has(Number(key))) jobLinesFetchRef.current.delete(Number(key))
+      }
+      return next
+    })
+  }, [selectedJobIds])
 
   // Legacy compat: when arriving with ?jobIds= but no ?clientId=, derive the
   // client from the first matching job once jobs have loaded.
@@ -840,6 +910,12 @@ function NewInvoicePageContent() {
     }
     return map
   }, [completedJobs])
+
+  const totalInvoiceableJobs = useMemo(() => {
+    let n = 0
+    for (const count of invoiceableCountByClient.values()) n += count
+    return n
+  }, [invoiceableCountByClient])
 
   const due_date = useMemo(() => {
     const d = new Date(form.issue_date)
@@ -1335,6 +1411,29 @@ function NewInvoicePageContent() {
               </p>
             </div>
 
+            {!clientsLoading &&
+              !jobsLoading &&
+              clients.length > 0 &&
+              totalInvoiceableJobs === 0 && (
+                <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-4 text-center sm:text-left">
+                  <p className="text-sm font-medium text-amber-950">
+                    {tr('invoice.new.noCompletedJobsAnywhere', 'No completed jobs yet')}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-900/90">
+                    {tr(
+                      'invoice.new.noCompletedJobsAnywhereHelp',
+                      'Invoices are built from completed work. Finish a job on the schedule first — then you can pick that client and create an invoice.',
+                    )}
+                  </p>
+                  <Link
+                    href={`/${company}/jobs`}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                  >
+                    {tr('invoice.new.goToSchedule', 'Go to schedule')}
+                  </Link>
+                </div>
+              )}
+
             <div className="mt-8 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="relative">
                 <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
@@ -1372,14 +1471,17 @@ function NewInvoicePageContent() {
                       {tr('invoice.new.noClientsTitle', "You don't have any clients yet.")}
                     </p>
                     <p className="mt-1 text-xs text-gray-500">
-                      {tr('invoice.new.noClientsHelp', 'Add a client first, then come back here to invoice them.')}
+                      {tr(
+                        'invoice.new.noClientsHelp',
+                        'You need at least one client before you can create an invoice. Add a client, complete a job for them, then come back here.',
+                      )}
                     </p>
                     <Link
                       href={`/${company}/clients`}
                       className="mt-4 inline-flex items-center gap-2 rounded-xl bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
                     >
                       <PlusIcon className="h-4 w-4" />
-                      {tr('invoice.new.addClient', 'Add a client')}
+                      {tr('invoice.new.addClient', '+ New client')}
                     </Link>
                   </div>
                 ) : filteredClients.length === 0 ? (
@@ -1422,7 +1524,7 @@ function NewInvoicePageContent() {
                                     : tr('invoice.new.jobReadyMany', 'jobs ready')}
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500">
+                                <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs text-amber-800 ring-1 ring-amber-100">
                                   {tr('invoice.new.noCompletedJobs', 'No completed jobs')}
                                 </span>
                               )}
@@ -1729,6 +1831,7 @@ function NewInvoicePageContent() {
                   loading={jobsLoading}
                   error={jobsError}
                   currency={form.currency}
+                  companySlug={company}
                   onAdd={addJob}
                   tr={tr}
                 />
@@ -1738,38 +1841,61 @@ function NewInvoicePageContent() {
                 <div className="flex items-center justify-center py-12">
                   <div className="h-7 w-7 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
                 </div>
-              ) : selectedJobs.length === 0 ? (
+              ) : selectedJobs.length === 0 && clientInvoiceableJobs.length > 0 ? (
                 <p className="border-t border-dashed border-gray-200 py-10 text-center text-sm text-gray-400">
                   {tr(
                     'invoice.new.noJobsAddedYet',
-                    'No jobs added yet. Use the search field above to add completed jobs.',
+                    'No jobs added yet. Use Add jobs above to pick completed work for this invoice.',
                   )}
                 </p>
-              ) : (
+              ) : selectedJobs.length > 0 ? (
                 <div className="border-t border-gray-100">
-                  <div className="hidden grid-cols-[1fr,7rem,7rem,2rem] gap-3 border-b border-gray-100 py-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:grid">
+                  <div className="hidden grid-cols-[1fr,4.5rem,7rem,7rem,2rem] gap-3 border-b border-gray-100 py-3 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:grid">
                     <span>{tr('invoice.new.previewDescription', 'Description')}</span>
+                    <span className="text-right">{tr('invoice.qty', 'Qty')}</span>
                     <span className="text-right">{tr('invoice.new.discount', 'Discount')}</span>
                     <span className="text-right">{tr('invoice.new.previewAmount', 'Amount')}</span>
                     <span />
                   </div>
                   {selectedJobs.map((job) => {
                     const discount = form.discounts[job.id] ?? 0
-                    const lineTotal = Math.max(0, (Number(job.total_price) || 0) - discount)
+                    const lines = jobLinesById[job.id] || []
+                    const jobGross = Number(job.total_price) || 0
+                    const lineTotal = Math.max(0, jobGross - discount)
+                    const primary = lines.length === 1 ? lines[0] : null
+                    const qty = primary
+                      ? primary.quantity
+                      : lines.length > 0
+                        ? lines.reduce((s, l) => s + l.quantity, 0)
+                        : null
+                    const underTitle = primary
+                      ? `${formatMoney(primary.unitPrice, form.currency)}`
+                      : lines.length > 1
+                        ? lines
+                            .map((l) => `${l.title} · ${l.quantity} × ${formatMoney(l.unitPrice, form.currency)}`)
+                            .join(' · ')
+                        : formatMoney(jobGross, form.currency)
+
                     return (
                       <div
                         key={job.id}
-                        className="grid grid-cols-1 items-center gap-2 border-b border-gray-100 py-4 sm:grid-cols-[1fr,7rem,7rem,2rem] sm:gap-3"
+                        className="grid grid-cols-1 items-center gap-2 border-b border-gray-100 py-4 sm:grid-cols-[1fr,4.5rem,7rem,7rem,2rem] sm:gap-3"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-gray-900">
-                            {job.title || tr('invoice.new.untitledJob', 'Untitled job')}
+                            {job.title || primary?.title || tr('invoice.new.untitledJob', 'Untitled job')}
                           </p>
-                          <p className="mt-0.5 text-xs text-gray-400">
-                            {formatMoney(Number(job.total_price) || 0, form.currency)}
+                          <p className="mt-0.5 truncate text-xs text-gray-400">
+                            {underTitle}
                             {discount > 0 ? ` − ${formatMoney(discount, form.currency)}` : ''}
                           </p>
                         </div>
+                        <p className="text-sm tabular-nums text-gray-700 sm:text-right">
+                          <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 sm:hidden">
+                            {tr('invoice.qty', 'Qty')}
+                          </span>
+                          {qty != null ? qty : '—'}
+                        </p>
                         <input
                           type="number"
                           min={0}
@@ -1777,6 +1903,7 @@ function NewInvoicePageContent() {
                           value={discount || ''}
                           onChange={(e) => handleDiscountChange(job.id, parseFloat(e.target.value) || 0)}
                           placeholder="0"
+                          aria-label={tr('invoice.new.discount', 'Discount')}
                           className="w-full rounded-md bg-gray-50 px-2 py-1.5 text-right text-sm tabular-nums text-gray-900 ring-1 ring-inset ring-gray-200 focus:bg-white focus:ring-2 focus:ring-accent-500/30"
                         />
                         <p className="text-right text-sm font-semibold tabular-nums text-gray-900">
@@ -1794,7 +1921,7 @@ function NewInvoicePageContent() {
                     )
                   })}
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Terms + payment + totals */}
@@ -1853,12 +1980,23 @@ function NewInvoicePageContent() {
                       {tr('invoice.new.paymentOptions', 'Payment option')}
                     </p>
                     {paymentLoaded && paymentOptions.length === 0 ? (
-                      <Link
-                        href={invoiceSettingsHref}
-                        className="inline-flex text-xs font-semibold text-amber-800 underline"
-                      >
-                        {tr('invoice.new.setupPaymentOptions', 'Set up payment options')}
-                      </Link>
+                      <div className="rounded-md border border-dashed border-amber-200 bg-amber-50/60 px-3 py-3">
+                        <p className="text-xs font-medium text-amber-950">
+                          {tr('invoice.new.noPaymentMethodsTitle', 'No payment options set up')}
+                        </p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-amber-900/90">
+                          {tr(
+                            'invoice.new.noPaymentMethodsHelp',
+                            'Turn on at least one payment option in invoice settings before you can create an invoice, so clients know how to pay.',
+                          )}
+                        </p>
+                        <Link
+                          href={invoiceSettingsHref}
+                          className="mt-2 inline-flex text-xs font-semibold text-amber-900 underline underline-offset-2"
+                        >
+                          {tr('invoice.new.setupPaymentOptions', 'Set up payment options')}
+                        </Link>
+                      </div>
                     ) : (
                       <div className="space-y-1.5">
                         {paymentOptions.map((opt) => {
@@ -2011,22 +2149,43 @@ function NewInvoicePageContent() {
               {(() => {
                 if (defaultsLoaded && !numberingConfigured) {
                   return (
-                    <p className="mt-3 text-xs text-red-700">
-                      {tr('invoice.new.gateNumberingNotSet', 'Set your invoice number start first.')}
+                    <p className="mt-3 text-xs leading-relaxed text-amber-800">
+                      {tr(
+                        'invoice.new.gateNumberingNotSet',
+                        'Set your next invoice number in invoice settings before creating an invoice.',
+                      )}{' '}
+                      <Link
+                        href={`/${company}/settings/invoice-options`}
+                        className="font-medium underline underline-offset-2"
+                      >
+                        {tr('invoice.new.openInvoiceSettings', 'Open settings')}
+                      </Link>
                     </p>
                   )
                 }
                 if (hasNoCompanyMethods || allMethodsOff) {
                   return (
-                    <p className="mt-3 text-xs text-amber-700">
-                      {tr('invoice.new.gateNoMethods', 'Activate a payment option first.')}
+                    <p className="mt-3 text-xs leading-relaxed text-amber-800">
+                      {tr(
+                        'invoice.new.gateNoMethods',
+                        'Turn on at least one payment option in invoice settings so clients know how to pay.',
+                      )}{' '}
+                      <Link
+                        href={`/${company}/settings/invoice-options`}
+                        className="font-medium underline underline-offset-2"
+                      >
+                        {tr('invoice.new.openInvoiceSettings', 'Open settings')}
+                      </Link>
                     </p>
                   )
                 }
                 if (selectedJobs.length === 0) {
                   return (
-                    <p className="mt-3 text-xs text-gray-500">
-                      {tr('invoice.new.gateNoJobs', 'Add at least one job.')}
+                    <p className="mt-3 text-xs leading-relaxed text-gray-500">
+                      {tr(
+                        'invoice.new.gateNoJobs',
+                        'Add at least one completed job to this invoice. If none show up, complete a job on the schedule first.',
+                      )}
                     </p>
                   )
                 }

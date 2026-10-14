@@ -835,7 +835,7 @@ async function createSchema() {
       -- service_id is nullable to support invoicing ad-hoc job tasks
       service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
       description TEXT NOT NULL,
-      quantity INTEGER NOT NULL DEFAULT 1,
+      quantity NUMERIC(12,3) NOT NULL DEFAULT 1,
       unit_price DECIMAL(10,2) NOT NULL,
       line_total DECIMAL(10,2) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

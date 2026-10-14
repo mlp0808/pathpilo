@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon, PlusIcon, UserIcon, ClockIcon, DocumentTextIcon, CalendarDaysIcon, ArrowLeftIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
+import { XMarkIcon, PlusIcon, UserIcon, DocumentTextIcon, CalendarDaysIcon, ArrowLeftIcon, ArrowPathIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
@@ -19,7 +19,7 @@ import {
   type ClientStandardNoteRow,
 } from './ClientStandardNotesPicker'
 import InlineServiceCreateSheet, { type InlineServiceCreateResult } from './InlineServiceCreateSheet'
-import DashedPickerTrigger from './DashedPickerTrigger'
+import DashedPickerTrigger, { DashedPickerHistoryButton } from './DashedPickerTrigger'
 import JobFormAttachmentBar from './JobFormAttachmentBar'
 import { SchedulePanel } from './SubscriptionPanels'
 import {
@@ -421,19 +421,24 @@ interface Client {
 
 interface PastJob {
   id: number
-  title: string
-  scheduled_date: string
+  title?: string | null
+  scheduled_date?: string | null
+  created_at?: string | null
   status: string
   service_count?: number
   total_duration?: number
   total_price?: number
   services?: Array<{
-    service_id: number
-    custom_price: number
-    custom_duration_minutes: number
-    title: string
-    price: number
-    duration_minutes: number
+    id?: number
+    service_id?: number | null
+    service_title?: string | null
+    custom_title?: string | null
+    title?: string | null
+    price?: number
+    custom_price?: number | null
+    duration_minutes?: number
+    custom_duration_minutes?: number | null
+    quantity?: number
   }>
 }
 
@@ -482,6 +487,9 @@ interface CreateJobProps {
   /** Start the "new client" flow with these fields prefilled (e.g. picked a map location). */
   initialNewClient?: {
     name?: string
+    last_name?: string
+    email?: string
+    phone?: string
     address?: string
     zip_code?: string
     city?: string
@@ -570,6 +578,10 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const [editingTitle, setEditingTitle] = useState<number | null>(null)
   const [pastJobs, setPastJobs] = useState<PastJob[]>([])
   const [selectedPastJob, setSelectedPastJob] = useState<PastJob | null>(null)
+  const [showServiceHistory, setShowServiceHistory] = useState(false)
+  const [pastJobsLoading, setPastJobsLoading] = useState(false)
+  const serviceHistoryTriggerRef = useRef<HTMLDivElement>(null)
+  const [serviceHistoryRect, setServiceHistoryRect] = useState<DOMRect | null>(null)
   const [isAddingNewClient, setIsAddingNewClient] = useState(false)
   const [newClientData, setNewClientData] = useState({
     client_type: 'person' as 'person' | 'company',
@@ -656,6 +668,8 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
         : { client: true, job: false, schedule: false, recurring: false })
       setJobType('new')
       setSelectedPastJob(null)
+      setPastJobs([])
+      setShowServiceHistory(false)
       setEditingPrice(null)
       setEditingDuration(null)
       // Map location without a client → guest (Guest#…) so a job can be
@@ -672,13 +686,47 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
   
   useEffect(() => {
-    if (selectedClient && jobType === 'redo') {
-      fetchPastJobs(selectedClient.id)
+    const clientId = selectedClient?.id
+    if (clientId && clientId > 0) {
+      fetchPastJobs(clientId)
     } else {
       setPastJobs([])
       setSelectedPastJob(null)
+      setShowServiceHistory(false)
     }
-  }, [selectedClient, jobType])
+  }, [selectedClient?.id])
+
+  useEffect(() => {
+    if (!showServiceHistory) {
+      setServiceHistoryRect(null)
+      return
+    }
+    const update = () => {
+      if (serviceHistoryTriggerRef.current) {
+        setServiceHistoryRect(serviceHistoryTriggerRef.current.getBoundingClientRect())
+      }
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [showServiceHistory])
+
+  useEffect(() => {
+    if (!showServiceHistory) return
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (serviceHistoryTriggerRef.current?.contains(t)) return
+      const portal = document.querySelector('[data-service-history-menu="1"]')
+      if (portal?.contains(t)) return
+      setShowServiceHistory(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [showServiceHistory])
 
   useEffect(() => {
     if (!showNoteInput || !selectedClient?.id || selectedClient.id < 1) {
@@ -827,7 +875,24 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
           const match = fetched.find(c => c.id === initialClientId)
           if (match) {
             setSelectedClient(match)
-            setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
+            const missingAddress = !String(match.address || '').trim()
+            if (missingAddress && !lockClient) {
+              setIsEditingClient(true)
+              setEditingClientData({
+                client_type: match.client_type || 'person',
+                name: match.name || '',
+                last_name: match.last_name || '',
+                company_number: match.company_number || '',
+                address: match.address || '',
+                zip_code: match.zip_code || '',
+                city: match.city || '',
+                email: match.email || '',
+                phone: match.phone || '',
+              })
+              setExpandedSections({ client: true, job: false, schedule: false, recurring: false })
+            } else {
+              setExpandedSections({ client: false, job: true, schedule: false, recurring: false })
+            }
           }
         }
       }
@@ -858,15 +923,63 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
 
   const fetchPastJobs = async (clientId: number) => {
     try {
+      setPastJobsLoading(true)
       const token = localStorage.getItem('token')
       const response = await fetch(apiUrl(`/clients/${clientId}/jobs`), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
-      if (response.ok) setPastJobs(data.jobs || [])
+      if (response.ok) {
+        const jobs = (Array.isArray(data.jobs) ? data.jobs : []).filter(
+          (j: PastJob) => Array.isArray(j.services) && j.services.length > 0,
+        )
+        setPastJobs(jobs)
+      } else {
+        setPastJobs([])
+      }
     } catch (error) {
       console.error('Error fetching past jobs:', error)
+      setPastJobs([])
+    } finally {
+      setPastJobsLoading(false)
     }
+  }
+
+  const recentClientJobs = useMemo(() => pastJobs.slice(0, 5), [pastJobs])
+
+  const applyPastJobServices = (job: PastJob) => {
+    const mapped: SelectedService[] = (job.services || []).map((s, i) => {
+      const isCustom = s.service_id == null
+      const title = String(s.service_title || s.title || s.custom_title || 'Service').trim() || 'Service'
+      const price = Number(s.price ?? s.custom_price ?? 0) || 0
+      const duration = Number(s.duration_minutes ?? s.custom_duration_minutes ?? 0) || 0
+      const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+      return {
+        id: s.service_id && s.service_id > 0 ? Number(s.service_id) : -(Date.now() + i),
+        title,
+        price,
+        duration_minutes: duration,
+        customPrice: String(price),
+        customDuration: duration,
+        quantity: qty,
+        hasQuantity: qty !== 1,
+        hasDuration: duration > 0,
+        isCustom,
+        customTitle: isCustom ? title : undefined,
+      }
+    })
+    setSelectedServices(mapped)
+    setShowServiceHistory(false)
+    setShowServiceDropdown(false)
+    setServiceSearch('')
+  }
+
+  const formatPastJobDate = (job: PastJob) => {
+    const raw = job.scheduled_date || job.created_at
+    if (!raw) return ''
+    const d = new Date(String(raw).slice(0, 10) + 'T12:00:00')
+    if (isNaN(d.getTime())) return String(raw).slice(0, 10)
+    return d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
   }
 
   const addService = (service: Service) => {
@@ -966,6 +1079,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   }
 
   const openServicePicker = () => {
+    setShowServiceHistory(false)
     setShowServiceDropdown(true)
     requestAnimationFrame(() => {
       serviceSearchInputRef.current?.focus()
@@ -1088,6 +1202,69 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
     // If adding new client, we need to validate the form
     if (isAddingNewClient && !newClientData.name.trim()) {
       return
+    }
+
+    // Jobs need a street address for the schedule and routing.
+    const addressForJob = isAddingNewClient
+      ? String(newClientData.address || '').trim()
+      : isEditingClient
+        ? String(editingClientData.address || '').trim()
+        : String(selectedClient?.address || newClientData.address || '').trim()
+    if (!addressForJob) {
+      alert(t('app.createJob.errAddressRequired', 'Add an address before creating a job'))
+      if (!lockClient) {
+        setExpandedSections((prev) => ({ ...prev, client: true }))
+        if (selectedClient && !isAddingNewClient) {
+          setIsEditingClient(true)
+          setEditingClientData({
+            client_type: selectedClient.client_type || 'person',
+            name: selectedClient.name || '',
+            last_name: selectedClient.last_name || '',
+            company_number: selectedClient.company_number || '',
+            address: selectedClient.address || '',
+            zip_code: selectedClient.zip_code || '',
+            city: selectedClient.city || '',
+            email: selectedClient.email || '',
+            phone: selectedClient.phone || '',
+          })
+        }
+      }
+      return
+    }
+
+    // If the address was just typed in edit mode, save the client before creating the job.
+    if (!isAddingNewClient && selectedClient && isEditingClient && addressForJob !== String(selectedClient.address || '').trim()) {
+      try {
+        const token = localStorage.getItem('token')
+        const saveRes = await fetch(apiUrl(`/clients/${selectedClient.id}`), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            client_type: editingClientData.client_type,
+            name: editingClientData.name,
+            last_name: editingClientData.last_name,
+            company_number: editingClientData.company_number || null,
+            address: editingClientData.address || null,
+            zip_code: editingClientData.zip_code || null,
+            city: editingClientData.city || null,
+            email: editingClientData.email || null,
+            phone: editingClientData.phone || null,
+          }),
+        })
+        const saveData = await saveRes.json()
+        if (!saveRes.ok) {
+          alert(saveData.error || t('app.createJob.errAddressRequired', 'Add an address before creating a job'))
+          return
+        }
+        setSelectedClient(saveData.client)
+        setIsEditingClient(false)
+      } catch {
+        alert(t('app.createJob.errAddressRequired', 'Add an address before creating a job'))
+        return
+      }
     }
     
     // If not adding new client, we need a selected client
@@ -1479,6 +1656,17 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                     )}
                     {services.length === 0 && selectedServices.length === 0 ? (
                       /* No catalog services yet — show inline create fields directly */
+                      <div className="space-y-3">
+                        {selectedClient && selectedClient.id > 0 && (
+                          <div ref={serviceHistoryTriggerRef} className="flex justify-end">
+                            <DashedPickerHistoryButton
+                              onClick={() => setShowServiceHistory((v) => !v)}
+                              active={showServiceHistory}
+                              loading={pastJobsLoading}
+                              label={t('app.createJob.pastJobs', 'Reuse past job services')}
+                            />
+                          </div>
+                        )}
                       <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
                         <p className="text-xs font-medium text-gray-500">
                           {t('app.createJob.noServicesHint', "You don't have any services yet — add one to this job:")}
@@ -1540,30 +1728,49 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                             : t('app.inlineService.addService', 'Add service')}
                         </button>
                       </div>
+                      </div>
                     ) : (
                       /* Has catalog services (or already picked one) — show normal search picker */
                       <>
-                        <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
-                          {showServiceDropdown || serviceSearch ? (
-                            <input
-                              ref={serviceSearchInputRef}
-                              type="text"
-                              value={serviceSearch}
-                              onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
-                              onFocus={() => {
-                                setShowServiceDropdown(true)
-                                if (serviceDropdownTriggerRef.current) {
-                                  scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+                        <div className="relative" ref={serviceHistoryTriggerRef}>
+                          <div className="relative dropdown-container" ref={serviceDropdownTriggerRef}>
+                            {showServiceDropdown || serviceSearch ? (
+                              <input
+                                ref={serviceSearchInputRef}
+                                type="text"
+                                value={serviceSearch}
+                                onChange={e => { setServiceSearch(e.target.value); setShowServiceDropdown(true) }}
+                                onFocus={() => {
+                                  setShowServiceDropdown(true)
+                                  if (serviceDropdownTriggerRef.current) {
+                                    scrollCreateJobSheetForKeyboard(createJobScrollRef.current, serviceDropdownTriggerRef.current)
+                                  }
+                                }}
+                                placeholder={t('app.createJob.searchServices', 'Search for services...')}
+                                className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
+                              />
+                            ) : (
+                              <DashedPickerTrigger
+                                onClick={openServicePicker}
+                                size={selectedServices.length > 0 ? 'md' : 'lg'}
+                                trailing={
+                                  selectedClient && selectedClient.id > 0 ? (
+                                    <DashedPickerHistoryButton
+                                      onClick={() => {
+                                        setShowServiceHistory((v) => !v)
+                                        setShowServiceDropdown(false)
+                                      }}
+                                      active={showServiceHistory}
+                                      loading={pastJobsLoading}
+                                      label={t('app.createJob.pastJobs', 'Reuse past job services')}
+                                    />
+                                  ) : undefined
                                 }
-                              }}
-                              placeholder={t('app.createJob.searchServices', 'Search for services...')}
-                              className="w-full px-4 py-3.5 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 text-sm bg-white shadow-sm hover:border-gray-300"
-                            />
-                          ) : (
-                            <DashedPickerTrigger onClick={openServicePicker} size={selectedServices.length > 0 ? 'md' : 'lg'}>
-                              {t('app.createJob.addServices', 'Add services')}
-                            </DashedPickerTrigger>
-                          )}
+                              >
+                                {t('app.createJob.addServices', 'Add services')}
+                              </DashedPickerTrigger>
+                            )}
+                          </div>
                         </div>
                         {typeof document !== 'undefined' && showServiceDropdown && serviceDropdownRect && createPortal(
                           <div
@@ -1601,6 +1808,97 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                         )}
                       </>
                     )}
+                    {typeof document !== 'undefined' &&
+                      showServiceHistory &&
+                      serviceHistoryRect &&
+                      createPortal(
+                        <div
+                          data-service-history-menu="1"
+                          className="overflow-hidden rounded-2xl border border-gray-200/90 bg-white shadow-2xl shadow-gray-900/10"
+                          style={{
+                            position: 'fixed',
+                            zIndex: 9999,
+                            ...getFixedDropdownPlacement(serviceHistoryRect, 360),
+                            maxHeight: 420,
+                          }}
+                        >
+                          <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50 via-white to-accent-50/30 px-4 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-gray-400">
+                              {t('app.createJob.pastJobsEyebrow', 'From earlier jobs')}
+                            </p>
+                            <p className="mt-0.5 text-sm font-semibold text-gray-900">
+                              {t('app.createJob.pastJobsTitle', 'Copy services from a past visit')}
+                            </p>
+                          </div>
+                          <div className="max-h-[340px] overflow-y-auto p-2">
+                            {pastJobsLoading ? (
+                              <div className="px-3 py-8 text-center text-sm text-gray-400">
+                                {t('app.common.loading', 'Loading...')}
+                              </div>
+                            ) : recentClientJobs.length === 0 ? (
+                              <div className="px-3 py-8 text-center text-sm text-gray-500">
+                                {t('app.createJob.pastJobsEmpty', 'No earlier jobs with services for this client yet.')}
+                              </div>
+                            ) : (
+                              recentClientJobs.map((job) => {
+                                const jobServices = job.services || []
+                                const total = Number(job.total_price) || jobServices.reduce((sum, s) => {
+                                  const q = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+                                  return sum + (Number(s.price) || 0) * q
+                                }, 0)
+                                return (
+                                  <button
+                                    key={job.id}
+                                    type="button"
+                                    onClick={() => applyPastJobServices(job)}
+                                    className="group mb-1.5 w-full rounded-xl border border-transparent bg-white px-3 py-3 text-left transition-all hover:border-accent-200 hover:bg-accent-50/40 last:mb-0"
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-gray-900">
+                                          {formatPastJobDate(job) || t('app.createJob.pastJobNoDate', 'Earlier job')}
+                                        </p>
+                                        <ul className="mt-1.5 space-y-1">
+                                          {jobServices.slice(0, 4).map((s, i) => {
+                                            const title = s.service_title || s.title || s.custom_title || 'Service'
+                                            const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+                                            const price = Number(s.price) || 0
+                                            return (
+                                              <li key={`${job.id}-${i}`} className="flex items-baseline justify-between gap-3 text-xs text-gray-600">
+                                                <span className="min-w-0 truncate">
+                                                  {qty !== 1 ? <span className="text-gray-400">{qty} × </span> : null}
+                                                  {title}
+                                                </span>
+                                                <span className="flex-none tabular-nums text-gray-500">
+                                                  {formatMoney(price * qty, companyCountryCode)}
+                                                </span>
+                                              </li>
+                                            )
+                                          })}
+                                          {jobServices.length > 4 && (
+                                            <li className="text-[11px] text-gray-400">
+                                              +{jobServices.length - 4} {t('app.createJob.moreServices', 'more')}
+                                            </li>
+                                          )}
+                                        </ul>
+                                      </div>
+                                      <div className="flex-none text-right">
+                                        <p className="text-sm font-bold tabular-nums text-gray-900">
+                                          {formatMoney(total, companyCountryCode)}
+                                        </p>
+                                        <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-accent-600 opacity-0 transition-opacity group-hover:opacity-100">
+                                          {t('app.createJob.useThese', 'Use these')}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </button>
+                                )
+                              })
+                            )}
+                          </div>
+                        </div>,
+                        document.body
+                      )}
               </div>
               </div>
 
@@ -1736,6 +2034,22 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
                       visitsPerYear={visitsPerYear}
                       revenuePerYear={revenuePerYear}
                       countryCode={companyCountryCode}
+                      forecastTitle={
+                        selectedServices
+                          .map((s) => (s.customTitle || s.title || '').trim())
+                          .filter(Boolean)
+                          .join(', ') ||
+                        (isSubscriptionFlow
+                          ? t('app.subscription.newSubscription', 'New subscription')
+                          : t('app.createJob.untitledJob', 'Untitled job'))
+                      }
+                      forecastTimeFrom={jobTimeFrom}
+                      forecastTimeTo={jobTimeTo}
+                      forecastUser={
+                        selectedUserId
+                          ? users.find((u) => u.id === selectedUserId) ?? null
+                          : null
+                      }
                     />
                   </div>
                 </div>

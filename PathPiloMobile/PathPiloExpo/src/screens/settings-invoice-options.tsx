@@ -44,7 +44,8 @@ async function ensureAuthHeader(): Promise<void> {
 type InvoiceDefaultsForm = {
   invoiceDefaultDueDays: number;
   invoiceDefaultPaymentTerms: string;
-  invoiceNextNumber: number;
+  /** Digit string; may include leading zeros ("00001"). */
+  invoiceNextNumber: string;
   maxNumericInvoice: number;
   invoiceNumberingConfigured: boolean;
 };
@@ -105,7 +106,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
   const [form, setForm] = useState<InvoiceDefaultsForm>({
     invoiceDefaultDueDays: 14,
     invoiceDefaultPaymentTerms: '',
-    invoiceNextNumber: 1,
+    invoiceNextNumber: '1',
     maxNumericInvoice: 0,
     invoiceNumberingConfigured: false,
   });
@@ -137,7 +138,11 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
       const defsRes = await apiClient.get('/companies/invoice-defaults');
       const d = defsRes.data?.defaults;
       if (d) {
-        const nextNumber = d.invoiceNextNumber ?? 1;
+        const nextNumberRaw = d.invoiceNextNumber;
+        const nextNumber =
+          nextNumberRaw != null && String(nextNumberRaw).trim() !== ''
+            ? String(nextNumberRaw).replace(/\D/g, '')
+            : '1';
         const maxIssued = d.maxNumericInvoice ?? 0;
         const realityConfigured =
           Number(nextNumber) > 1 || Number(maxIssued) > 0;
@@ -153,7 +158,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
           invoiceDefaultPaymentTerms: savedTerms.trim()
             ? savedTerms
             : 'Payment is due no later than {due_date}. Please use invoice number {invoice_number} as the payment reference.\n\nIf payment is not received by the due date, we reserve the right to charge interest on overdue amounts in accordance with applicable law, and to recover reasonable costs of collection.',
-          invoiceNextNumber: Math.max(1, Number(nextNumber) || 1),
+          invoiceNextNumber: nextNumber || '1',
           maxNumericInvoice: Number(maxIssued) || 0,
           invoiceNumberingConfigured: configured,
         });
@@ -226,7 +231,11 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
       });
       const d = res.data?.defaults;
       if (d) {
-        const nextNumber = d.invoiceNextNumber ?? 1;
+        const nextNumberRaw = d.invoiceNextNumber;
+        const nextNumber =
+          nextNumberRaw != null && String(nextNumberRaw).trim() !== ''
+            ? String(nextNumberRaw).replace(/\D/g, '')
+            : '1';
         const maxIssued = d.maxNumericInvoice ?? 0;
         const realityConfigured =
           Number(nextNumber) > 1 || Number(maxIssued) > 0;
@@ -237,7 +246,7 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
         setForm({
           invoiceDefaultDueDays: d.invoiceDefaultDueDays ?? 14,
           invoiceDefaultPaymentTerms: d.invoiceDefaultPaymentTerms ?? '',
-          invoiceNextNumber: Math.max(1, Number(nextNumber) || 1),
+          invoiceNextNumber: nextNumber || '1',
           maxNumericInvoice: Number(maxIssued) || 0,
           invoiceNumberingConfigured: configured,
         });
@@ -379,16 +388,25 @@ export function MobileInvoiceOptionsSettingsScreen(props: any) {
               ) : null}
               <Text style={styles.fieldLbl}>{padAndroidText('Next number')}</Text>
               <TextInput
-                value={String(form.invoiceNextNumber)}
+                value={form.invoiceNextNumber}
                 onChangeText={(t) => {
                   if (!canEdit) return;
-                  const n = Math.max(1, parseInt(t.replace(/\D/g, '') || '1', 10));
-                  setForm((f) => ({ ...f, invoiceNextNumber: n }));
+                  const digits = t.replace(/\D/g, '').slice(0, 18);
+                  setForm((f) => ({ ...f, invoiceNextNumber: digits }));
                 }}
                 editable={canEdit}
                 keyboardType="number-pad"
                 style={styles.input}
+                placeholder="00001"
               />
+              {form.invoiceNextNumber.length > 1 &&
+              form.invoiceNextNumber.startsWith('0') ? (
+                <Text style={[styles.sectionHint, { marginTop: 8 }]}>
+                  {padAndroidText(
+                    'Leading zeros are kept (00001 → 00002 → 00003).',
+                  )}
+                </Text>
+              ) : null}
             </View>
 
             <View style={styles.card}>

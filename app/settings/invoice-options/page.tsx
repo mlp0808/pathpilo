@@ -36,10 +36,10 @@ import {
 type InvoiceDefaults = {
   invoiceDefaultDueDays: number | ''
   invoiceDefaultPaymentTerms: string
-  invoiceNextNumber: number | ''
+  /** Digits only; may include leading zeros (e.g. "00001"). */
+  invoiceNextNumber: string
   maxNumericInvoice: number
   invoiceNumberingConfigured: boolean
-  invoicingEnabled: boolean
   /** null = not yet configured (use country default); true/false = explicit */
   invoiceVatEnabled: boolean | null
   /** null = not yet configured (use country default) */
@@ -73,39 +73,9 @@ type SavableInvoiceDefaults = Pick<
   | 'invoiceDefaultTaxRate'
 >
 
-type ActivationFieldErrors = {
-  nextNumber: boolean
-  bankTransfer: boolean
-}
 
 const DEFAULT_DUE_DAYS = 14
 
-const INPUT_ERROR_CLASS = 'border-red-400 ring-1 ring-red-400'
-const ROW_ERROR_CLASS = 'rounded-lg ring-2 ring-red-400/80 ring-inset'
-
-function isPositiveInt(value: number | ''): value is number {
-  return value !== '' && Number.isFinite(value) && value >= 1
-}
-
-function validateActivationRequirements(
-  form: Pick<InvoiceDefaults, 'invoiceNextNumber'>,
-  paymentDrafts: Record<string, PaymentDraft>,
-  countryCode: string,
-): ActivationFieldErrors {
-  const bank = paymentDrafts.bank_transfer
-  const bankOk =
-    Boolean(bank?.enabled) &&
-    isBankTransferConfigComplete(bank?.config || {}, countryCode)
-
-  return {
-    nextNumber: !isPositiveInt(form.invoiceNextNumber),
-    bankTransfer: !bankOk,
-  }
-}
-
-function hasActivationErrors(errors: ActivationFieldErrors) {
-  return errors.nextNumber || errors.bankTransfer
-}
 
 export default function InvoiceOptionsPage() {
   const { t } = useAppI18n()
@@ -114,7 +84,6 @@ export default function InvoiceOptionsPage() {
   const [defaultsLoading, setDefaultsLoading] = useState(true)
   const [defaultsSaving, setDefaultsSaving] = useState(false)
   const [defaultsError, setDefaultsError] = useState('')
-  const [activationSaving, setActivationSaving] = useState(false)
   const savedDefaultsRef = useRef<SavableInvoiceDefaults>({
     invoiceDefaultDueDays: DEFAULT_DUE_DAYS,
     invoiceDefaultPaymentTerms: '',
@@ -128,13 +97,8 @@ export default function InvoiceOptionsPage() {
     invoiceNextNumber: '',
     maxNumericInvoice: 0,
     invoiceNumberingConfigured: false,
-    invoicingEnabled: false,
     invoiceVatEnabled: null,
     invoiceDefaultTaxRate: null,
-  })
-  const [activationFieldErrors, setActivationFieldErrors] = useState<ActivationFieldErrors>({
-    nextNumber: false,
-    bankTransfer: false,
   })
   const [expandBankTransfer, setExpandBankTransfer] = useState(false)
 
@@ -142,8 +106,6 @@ export default function InvoiceOptionsPage() {
   const [paymentError, setPaymentError] = useState('')
   const [paymentOptions, setPaymentOptions] = useState<PaymentOption[]>([])
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, PaymentDraft>>({})
-
-  const enabled = form.invoicingEnabled
 
   const defaultsDirty = useMemo(() => {
     const saved = savedDefaultsRef.current
@@ -197,7 +159,11 @@ export default function InvoiceOptionsPage() {
           : typeof data.defaults.invoiceNumberingConfigured === 'boolean'
             ? data.defaults.invoiceNumberingConfigured
             : false
-        const nextNumber = nextNumberRaw != null ? Number(nextNumberRaw) : ''
+        // Keep as digit string so leading zeros ("00001") survive the round-trip.
+        const nextNumber =
+          nextNumberRaw != null && String(nextNumberRaw).trim() !== ''
+            ? String(nextNumberRaw).replace(/\D/g, '')
+            : ''
         const dueDays =
           dueDaysRaw != null && Number.isFinite(Number(dueDaysRaw))
             ? Number(dueDaysRaw)
@@ -212,7 +178,6 @@ export default function InvoiceOptionsPage() {
           invoiceNextNumber: nextNumber,
           maxNumericInvoice: maxIssued,
           invoiceNumberingConfigured: configured,
-          invoicingEnabled: Boolean(data.defaults.invoicingEnabled),
           invoiceVatEnabled: vatEnabled,
           invoiceDefaultTaxRate: taxRate,
         })
@@ -270,96 +235,6 @@ export default function InvoiceOptionsPage() {
     loadPaymentOptions()
   }, [loadDefaults, loadPaymentOptions])
 
-  const handleToggleInvoicing = async (next: boolean) => {
-    if (!next) {
-      setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
-      setForm((f) => ({ ...f, invoicingEnabled: false }))
-      setActivationSaving(true)
-      setDefaultsError('')
-      try {
-        const token = localStorage.getItem('token')
-        if (!token) return
-        const res = await fetch(apiUrl('/companies/invoice-defaults'), {
-          method: 'PUT',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoicingEnabled: false }),
-        })
-        const data = await res.json()
-        if (!res.ok) {
-          setForm((f) => ({ ...f, invoicingEnabled: true }))
-          setDefaultsError(data.error || t('settings.invoices.errSave', 'Failed to save'))
-        }
-      } catch {
-        setForm((f) => ({ ...f, invoicingEnabled: true }))
-        setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
-      } finally {
-        setActivationSaving(false)
-      }
-      return
-    }
-
-    const errors = validateActivationRequirements(form, paymentDrafts, countryCode)
-    if (hasActivationErrors(errors)) {
-      setActivationFieldErrors(errors)
-      if (errors.bankTransfer) setExpandBankTransfer(true)
-      if (errors.bankTransfer) {
-        const bank = paymentDrafts.bank_transfer
-        if (bank?.enabled) {
-          const bankErr = validateBankTransferForEnable(bank.config || {}, countryCode)
-          setDefaultsError(
-            bankErr ||
-              t(
-                'settings.invoices.activate.missingRequired',
-                'Fill in the required settings highlighted below before turning invoicing on.',
-              ),
-          )
-        } else {
-          setDefaultsError(
-            t(
-              'settings.invoices.activate.bankRequired',
-              'Enable bank transfer and fill your account details before turning invoicing on.',
-            ),
-          )
-        }
-      } else {
-        setDefaultsError(
-          t(
-            'settings.invoices.activate.missingRequired',
-            'Fill in the required settings highlighted below before turning invoicing on.',
-          ),
-        )
-      }
-      return
-    }
-
-    setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
-    setDefaultsError('')
-    setActivationSaving(true)
-
-    try {
-      const saved = await handleSaveAll()
-      if (!saved) return
-
-      const token = localStorage.getItem('token')
-      if (!token) return
-      const res = await fetch(apiUrl('/companies/invoice-defaults'), {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoicingEnabled: true }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setDefaultsError(data.error || t('settings.invoices.errSave', 'Failed to save'))
-        return
-      }
-      setForm((f) => ({ ...f, invoicingEnabled: true }))
-    } catch {
-      setDefaultsError(t('settings.invoices.errNetwork', 'Network error'))
-    } finally {
-      setActivationSaving(false)
-    }
-  }
-
   const handleSaveAll = async (): Promise<boolean> => {
     setDefaultsSaving(true)
     setDefaultsError('')
@@ -405,7 +280,9 @@ export default function InvoiceOptionsPage() {
         savedDefaultsRef.current = nextSaved
         if (data.defaults) {
           const savedNext =
-            data.defaults.invoiceNextNumber != null ? Number(data.defaults.invoiceNextNumber) : nextSaved.invoiceNextNumber
+            data.defaults.invoiceNextNumber != null && String(data.defaults.invoiceNextNumber).trim() !== ''
+              ? String(data.defaults.invoiceNextNumber).replace(/\D/g, '')
+              : nextSaved.invoiceNextNumber
           const savedDue =
             data.defaults.invoiceDefaultDueDays != null
               ? Number(data.defaults.invoiceDefaultDueDays)
@@ -491,13 +368,9 @@ export default function InvoiceOptionsPage() {
     )
     setDefaultsError('')
     setPaymentError('')
-    setActivationFieldErrors({ nextNumber: false, bankTransfer: false })
   }
 
   const updatePaymentDraft = (provider: string, patch: Partial<PaymentDraft>) => {
-    if (provider === 'bank_transfer') {
-      setActivationFieldErrors((prev) => ({ ...prev, bankTransfer: false }))
-    }
     setPaymentDrafts((prev) => {
       const current = prev[provider] ?? { enabled: false, config: {} }
       return {
@@ -523,32 +396,10 @@ export default function InvoiceOptionsPage() {
       <div className="mx-auto max-w-2xl">
         <SettingsHeader
           title={t('settings.invoices.title', 'Invoices')}
-          description={
-            enabled
-              ? t(
-                  'settings.invoices.introActive',
-                  'Configure how invoices are numbered and sent, then set up how clients pay you and get reminded.',
-                )
-              : t(
-                  'settings.invoices.introInactive',
-                  'Set up your invoice defaults below, then turn invoicing on when you are ready.',
-                )
-          }
-          action={
-            <>
-              {activationSaving && (
-                <span className="text-[13px] text-gray-400">
-                  {t('settings.invoices.saving', 'Saving…')}
-                </span>
-              )}
-              <SettingsToggle
-                checked={enabled}
-                onChange={handleToggleInvoicing}
-                disabled={activationSaving}
-                label={t('settings.invoices.activate.title', 'Invoicing')}
-              />
-            </>
-          }
+          description={t(
+            'settings.invoices.introActive',
+            'Configure how invoices are numbered and sent, then set up how clients pay you and get reminded.',
+          )}
         />
 
         {defaultsError && (
@@ -565,44 +416,43 @@ export default function InvoiceOptionsPage() {
               'Choose the first invoice number your account will use. Every new invoice after that counts up automatically, so you never have to assign numbers by hand.',
             )}
           >
-            <div className={activationFieldErrors.nextNumber ? ROW_ERROR_CLASS : undefined}>
-              <SettingsRow
-                htmlFor="next-invoice-number"
-                title={t('settings.invoices.numbering.next', 'Next invoice number')}
-                description={t(
-                  'settings.invoices.numbering.subtitle',
-                  'The number on your very next invoice. If you are moving from another system, set this one step above your highest existing number.',
-                )}
-                control={
-                  <SettingsInput
-                    id="next-invoice-number"
-                    type="number"
-                    min={1}
-                    className={`w-28 text-right ${activationFieldErrors.nextNumber ? INPUT_ERROR_CLASS : ''}`}
-                    value={form.invoiceNextNumber}
-                    placeholder="—"
-                    onChange={(e) => {
-                      setActivationFieldErrors((prev) => ({ ...prev, nextNumber: false }))
-                      const raw = e.target.value
-                      if (!raw) {
-                        setForm((f) => ({ ...f, invoiceNextNumber: '' }))
-                        return
-                      }
-                      const parsed = parseInt(raw, 10)
-                      setForm((f) => ({
-                        ...f,
-                        invoiceNextNumber: Number.isFinite(parsed) && parsed >= 1 ? parsed : '',
-                      }))
-                    }}
-                  />
-                }
-              />
-            </div>
+            <SettingsRow
+              htmlFor="next-invoice-number"
+              title={t('settings.invoices.numbering.next', 'Next invoice number')}
+              description={t(
+                'settings.invoices.numbering.subtitle',
+                'The number on your very next invoice. Leading zeros are kept (e.g. 00001 → 00002 → 00003). If you are moving from another system, set this one step above your highest existing number.',
+              )}
+              control={
+                <SettingsInput
+                  id="next-invoice-number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="off"
+                  className="w-28 text-right tabular-nums"
+                  value={form.invoiceNextNumber}
+                  placeholder="—"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 18)
+                    setForm((f) => ({ ...f, invoiceNextNumber: digits }))
+                  }}
+                />
+              }
+            />
             {!form.invoiceNumberingConfigured && (
               <SettingsHint>
                 {t(
                   'settings.invoices.numbering.required',
                   'You must save a starting number before anyone can create an invoice. If you already have invoices elsewhere, pick a number that does not overlap.',
+                )}
+              </SettingsHint>
+            )}
+            {form.invoiceNextNumber.length > 1 && form.invoiceNextNumber.startsWith('0') && (
+              <SettingsHint>
+                {t(
+                  'settings.invoices.numbering.leadingZerosHint',
+                  'Leading zeros will be kept on every invoice number until the count grows past this length.',
                 )}
               </SettingsHint>
             )}
@@ -797,7 +647,6 @@ export default function InvoiceOptionsPage() {
                     }
                   }
                   onDraftChange={(patch) => updatePaymentDraft(opt.provider, patch)}
-                  invalid={opt.provider === 'bank_transfer' && activationFieldErrors.bankTransfer}
                   expandRequested={opt.provider === 'bank_transfer' && expandBankTransfer}
                   countryCode={countryCode}
                   t={t}

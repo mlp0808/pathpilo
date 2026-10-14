@@ -29,6 +29,7 @@ import SidebarAccountPanel from './SidebarAccountPanel'
 import SidebarSmsBar from './SidebarSmsBar'
 import { isOverwatchActive, stopOverwatchSession } from '../utils/overwatch'
 import { useCompanyPlan } from '../hooks/useCompanyPlan'
+import { useNotifications } from '../hooks/useNotifications'
 import CrownIcon from './icons/CrownIcon'
 import {
   buildSettingsNavSections,
@@ -81,6 +82,7 @@ export default function MobileNavDrawer({
   const { t } = useAppI18n()
   const pathname = usePathname()
   const { loading: planLoading, hasProAccess } = useCompanyPlan()
+  const { attention } = useNotifications()
   const [activeTab, setActiveTab] = useState<MobileNavTab>('menu')
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
@@ -103,6 +105,7 @@ export default function MobileNavDrawer({
   const displayName = `${user.firstName} ${user.lastName}`.trim()
   const displayCompany = activeCompany?.name || user.companies?.[0]?.name || ''
 
+  const companyBase = companySlug ? `/${companySlug}` : ''
   const jobsBase = companySlug ? `/${companySlug}/jobs` : '/jobs'
   const teamHref = companySlug ? `/${companySlug}/team` : '/team'
   const recurringBase = companySlug ? `/${companySlug}/recurring` : '/recurring'
@@ -112,6 +115,8 @@ export default function MobileNavDrawer({
     icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
     proOnly?: boolean
     beta?: boolean
+    badge?: number
+    match?: string[]
     children?: Array<{ name: string; href: string }>
   }
   const navigation: NavItem[] = [
@@ -129,7 +134,13 @@ export default function MobileNavDrawer({
     },
     { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
     { name: t('app.nav.invoices', 'Invoices'), href: companySlug ? `/${companySlug}/invoices` : '/invoices', icon: DocumentTextIcon },
-    { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
+    {
+      name: t('app.nav.pipeline', 'Pipeline'),
+      href: `${companyBase}/pipeline`,
+      icon: InboxIcon,
+      badge: attention.leads + attention.offers + attention.bookings,
+      match: [`${companyBase}/leads`, `${companyBase}/offers`],
+    },
     { name: t('app.nav.team', 'Team'), href: teamHref, icon: UsersIcon, proOnly: true },
     { name: t('app.nav.items', 'Items'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
@@ -307,7 +318,9 @@ export default function MobileNavDrawer({
                   {navigation.map((item) => {
                     const Icon = item.icon
                     const sectionActive =
-                      pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
+                      pathname === item.href ||
+                      (item.href !== '/' && pathname.startsWith(item.href)) ||
+                      !!item.match?.some(m => pathname.startsWith(m))
                     const hasChildren = !!item.children?.length
                     return (
                       <div key={item.name}>
@@ -340,6 +353,11 @@ export default function MobileNavDrawer({
                             {item.proOnly && showTeamProBadge && (
                               <span className="ml-1.5 inline-flex flex-shrink-0" title={t('app.proGate.proFeature', 'Pro feature')}>
                                 <CrownIcon className="h-3.5 w-3.5 text-amber-400" />
+                              </span>
+                            )}
+                            {!!item.badge && item.badge > 0 && (
+                              <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-500 px-1.5 text-[10px] font-bold text-white">
+                                {item.badge > 99 ? '99+' : item.badge}
                               </span>
                             )}
                           </span>

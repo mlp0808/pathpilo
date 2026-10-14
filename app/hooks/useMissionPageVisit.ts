@@ -11,8 +11,11 @@ export default function useMissionPageVisit() {
   const lastSent = useRef<string>('')
 
   useEffect(() => {
-    const segment = pathname.split('/').filter(Boolean)[1] || ''
-    const page = PATH_TO_VISIT[segment]
+    const parts = pathname.split('/').filter(Boolean)
+    // /{company}/{segment}[/{sub}] — settings pages are matched as "settings/sub".
+    const segment = parts[1] || ''
+    const sub = parts[2] || ''
+    const page = (sub && PATH_TO_VISIT[`${segment}/${sub}`]) || PATH_TO_VISIT[segment]
     if (!page) return
     const token = localStorage.getItem('token')
     if (!token) return

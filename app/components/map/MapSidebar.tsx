@@ -32,6 +32,7 @@ import {
 import type { UserRoute } from '@/app/components/RouteMap'
 import { colorForUserId, initialsFromName } from '@/app/components/RouteMap'
 import CreateJobSlideout from '@/app/components/CreateJobSlideout'
+import CreateOfferModal from '@/app/components/offers/CreateOfferModal'
 import { addDaysStr, clientDateRange, locationBase, mondayOfWeek, todayStr, weekRangeContaining, withReturnTo, type MapMode } from './mapMode'
 import { BusyBar, fmtDate, fmtMinutes, type RouteDayKey } from './NearestRoutesList'
 import MapMonthCalendar, {
@@ -511,6 +512,7 @@ function ClientContextPanel({
   const [client, setClient] = useState<MapClient | null>(null)
   const [rows, setRows] = useState<ClientRouteRow[] | null>(null)
   const [createJobOpen, setCreateJobOpen] = useState(false)
+  const [createOfferOpen, setCreateOfferOpen] = useState(false)
   const [expandedKey, setExpandedKey] = useState<RouteDayKey | null>(null)
   /** `${date}:${userId}` → day load for busy bar */
   const [loadByKey, setLoadByKey] = useState<Record<string, { used: number; capacity: number }>>({})
@@ -753,22 +755,11 @@ function ClientContextPanel({
         </button>
         <button
           type="button"
-          disabled={!client || !hasCoords}
-          onClick={() => {
-            if (!client || !hasCoords) return
-            navigate({
-              kind: 'location',
-              lat: Number(client.lat),
-              lng: Number(client.lng),
-              label: addressLine || fullName,
-              ...(client.address ? { address: String(client.address) } : {}),
-              ...(client.zip_code ? { zip_code: String(client.zip_code) } : {}),
-              ...(client.city ? { city: String(client.city) } : {}),
-            })
-          }}
+          disabled={!client}
+          onClick={() => setCreateOfferOpen(true)}
           className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-[13px] font-semibold text-gray-800 hover:bg-gray-50 transition-colors disabled:opacity-50"
         >
-          <MapPinIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          <SparklesIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
           Create offer
         </button>
       </div>
@@ -971,6 +962,25 @@ function ClientContextPanel({
           clientName={fullName}
           initialDate={scheduleFromPreview.date}
           initialAssignedUserId={scheduleFromPreview.userId}
+        />
+      )}
+
+      {client && (
+        <CreateOfferModal
+          isOpen={createOfferOpen}
+          onClose={() => setCreateOfferOpen(false)}
+          lockClient
+          prefill={{
+            clientId: client.id,
+            clientName: fullName,
+            email: client.email,
+            phone: client.phone,
+            address: client.address || '',
+            zip_code: client.zip_code || '',
+            city: client.city || '',
+            lat: client.lat ?? null,
+            lng: client.lng ?? null,
+          }}
         />
       )}
     </PanelShell>

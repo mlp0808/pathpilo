@@ -6,11 +6,14 @@
  */
 
 import { CheckCircleIcon, CalendarDaysIcon } from '@heroicons/react/24/outline'
+import { useMemo, useState } from 'react'
 import {
   ordinal,
   fmtDate,
   fmtMoney,
   ScheduleState,
+  buildWeeklyForecast,
+  buildMonthlyForecast,
 } from '../utils/subscriptionHelpers'
 import { useAppI18n } from './I18nProvider'
 
@@ -40,6 +43,11 @@ interface SchedulePanelProps extends Omit<ScheduleState, 'startingDate'> {
   countryCode?: string
   /** `job` matches Create Job modal; `compact` is the same look scaled for the round sidebar. */
   variant?: 'default' | 'job' | 'compact'
+  /** Optional labels for the expandable forecast list. */
+  forecastTitle?: string
+  forecastTimeFrom?: string
+  forecastTimeTo?: string
+  forecastUser?: { first_name: string; last_name: string } | null
 }
 
 export function SchedulePanel({
@@ -56,8 +64,13 @@ export function SchedulePanel({
   pricePerVisit = 0, durationPerVisit = 0, visitsPerYear = 0, revenuePerYear = 0,
   countryCode = 'DK',
   variant = 'default',
+  forecastTitle = '',
+  forecastTimeFrom = '',
+  forecastTimeTo = '',
+  forecastUser = null,
 }: SchedulePanelProps) {
   const { t, locale } = useAppI18n()
+  const [showForecast, setShowForecast] = useState(false)
   const hasStats = pricePerVisit > 0 || durationPerVisit > 0
   const dateLocale = locale === 'da' ? 'da-DK' : 'en-GB'
   const isJob = variant === 'job' || variant === 'compact'
@@ -67,6 +80,14 @@ export function SchedulePanel({
   )
   const weekDayShort = Array.from({ length: 7 }).map((_, idx) =>
     new Date(2024, 0, 7 + idx).toLocaleDateString(dateLocale, { weekday: 'short' })
+  )
+
+  const forecastDates = useMemo(
+    () =>
+      recurrenceType === 'monthly'
+        ? buildMonthlyForecast(effectiveStartingDate, dayOfMonth, intervalMonths, 16)
+        : buildWeeklyForecast(effectiveStartingDate, dayOfWeek, intervalWeeks, 16),
+    [effectiveStartingDate, recurrenceType, dayOfWeek, intervalWeeks, dayOfMonth, intervalMonths],
   )
 
   const weeklyPreview =
@@ -324,8 +345,21 @@ export function SchedulePanel({
               : 'rounded-lg border border-gray-200 bg-gray-50/50 p-4'
         }
       >
-        <div className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${isJob ? 'text-gray-400' : 'text-gray-500'}`}>
-          {t('app.subscription.schedule.schedulePreview')}
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className={`text-[11px] font-semibold uppercase tracking-wide ${isJob ? 'text-gray-400' : 'text-gray-500'}`}>
+            {t('app.subscription.schedule.schedulePreview')}
+          </div>
+          {!isCompact && (
+            <button
+              type="button"
+              onClick={() => setShowForecast((v) => !v)}
+              className="text-xs font-semibold text-accent-600 transition-colors hover:text-accent-700"
+            >
+              {showForecast
+                ? t('app.subscription.schedule.hideForecast', 'Hide forecast')
+                : t('app.subscription.schedule.viewForecast', 'View forecast')}
+            </button>
+          )}
         </div>
         <div className="space-y-1.5">
           <div className={`text-sm font-semibold ${isJob ? 'text-gray-900' : 'text-gray-900'}`}>
@@ -357,6 +391,26 @@ export function SchedulePanel({
             </div>
           )}
         </div>
+
+        {showForecast && !isCompact && (
+          <div className={`mt-3 border-t pt-3 ${isJob ? 'border-gray-100' : 'border-gray-200/80'}`}>
+            <ForecastPanel
+              forecastDates={forecastDates}
+              pastJobs={[]}
+              pricePerVisit={pricePerVisit}
+              durationPerVisit={durationPerVisit}
+              visitsPerYear={visitsPerYear}
+              revenuePerYear={revenuePerYear}
+              originalPricePerVisit={pricePerVisit}
+              subscriptionTitle={forecastTitle}
+              selectedUser={forecastUser}
+              timeFrom={forecastTimeFrom}
+              timeTo={forecastTimeTo}
+              countryCode={countryCode}
+              hideStats={isJob}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -379,6 +433,8 @@ interface ForecastPanelProps {
   timeFrom: string
   timeTo: string
   countryCode?: string
+  /** Hide the top stats grid when already shown in Schedule preview. */
+  hideStats?: boolean
 }
 
 export function ForecastPanel({
@@ -394,6 +450,7 @@ export function ForecastPanel({
   timeFrom,
   timeTo,
   countryCode = 'DK',
+  hideStats = false,
 }: ForecastPanelProps) {
   const { t, locale } = useAppI18n()
   const priceChanged = Math.abs(pricePerVisit - originalPricePerVisit) > 0.01
@@ -404,6 +461,7 @@ export function ForecastPanel({
 
   return (
     <div className="space-y-5">
+      {!hideStats && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: t('app.subscription.forecast.perVisit'), value: fmtMoney(pricePerVisit, countryCode) },
@@ -417,6 +475,7 @@ export function ForecastPanel({
           </div>
         ))}
       </div>
+      )}
 
       {priceChanged && originalPricePerVisit > 0 && (
         <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">

@@ -15,6 +15,7 @@ import {
   ClipboardDocumentListIcon,
   DocumentTextIcon,
   PlusIcon,
+  SparklesIcon,
   UserPlusIcon,
 } from '@heroicons/react/24/outline'
 import { useAppI18n } from './I18nProvider'
@@ -22,8 +23,9 @@ import { requestMissionsRefresh } from '@/app/config/missions'
 
 const CreateJob = dynamic(() => import('./CreateJob'), { ssr: false })
 const AddClientModal = dynamic(() => import('./AddClientModal'), { ssr: false })
+const CreateOfferModal = dynamic(() => import('./offers/CreateOfferModal'), { ssr: false })
 
-type Flow = 'job' | 'subscription' | 'client'
+type Flow = 'job' | 'subscription' | 'client' | 'offer'
 
 export default function QuickAddMenu({ companySlug }: { companySlug: string }) {
   const { t } = useAppI18n()
@@ -99,6 +101,13 @@ export default function QuickAddMenu({ companySlug }: { companySlug: string }) {
         router.push(companySlug ? `/${companySlug}/invoices/new` : '/invoices/new')
       },
     },
+    {
+      key: 'offer',
+      label: t('app.quickAdd.offer', 'New offer'),
+      hint: t('app.quickAdd.offerHint', 'Quote a client and send a link'),
+      icon: SparklesIcon,
+      onSelect: () => start('offer'),
+    },
   ]
 
   return (
@@ -150,7 +159,8 @@ export default function QuickAddMenu({ companySlug }: { companySlug: string }) {
       )}
 
       {/* The header is its own stacking context — portal the modals out of it. */}
-      {flow && typeof document !== 'undefined'
+      {flow === 'offer' && <CreateOfferModal isOpen onClose={closeFlow} />}
+      {flow && flow !== 'offer' && typeof document !== 'undefined'
         ? createPortal(
             flow === 'client' ? (
               <AddClientModal isOpen onClose={closeFlow} onClientAdded={finishFlow} />

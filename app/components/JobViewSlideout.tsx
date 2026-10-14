@@ -11,6 +11,7 @@ import { apiUrl } from '../utils/api'
 import { formatMoney, getCountryRule } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import ConfirmModal from './ConfirmModal'
+import PendingBookingBanner from './pipeline/PendingBookingBanner'
 import TimePicker from './TimePicker'
 import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
@@ -673,6 +674,8 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
   const companySlugFromRoute = (params as any)?.company as string | undefined
   const [jobDetails, setJobDetails] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [bookingConfirmed, setBookingConfirmed] = useState(false)
+  useEffect(() => setBookingConfirmed(false), [job?.id])
   const [editingAddress, setEditingAddress] = useState(false)
   const [addrDraft, setAddrDraft] = useState<{ address: string; zip_code: string; city: string; lat?: number | null; lng?: number | null }>({ address: '', zip_code: '', city: '' })
   const [addrSaving, setAddrSaving] = useState(false)
@@ -2906,6 +2909,15 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
             </div>
           ) : jobDetails || job ? (
             <>
+              {(jobDetails || job)?.booking_status === 'pending' && (jobDetails || job)?.offer_id && !bookingConfirmed && (
+                <PendingBookingBanner
+                  offerId={Number((jobDetails || job).offer_id)}
+                  onConfirmed={() => {
+                    setBookingConfirmed(true)
+                    onJobUpdated?.({ jobId: (jobDetails || job)?.id })
+                  }}
+                />
+              )}
               {/* Schedule & Location */}
               <div>
                 <h3 className="text-base font-semibold text-primary-500 mb-4">{t('app.jobView.scheduleLocation')}</h3>

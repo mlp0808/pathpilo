@@ -11,7 +11,6 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import {
   ArrowLeftIcon,
   CalendarDaysIcon,
-  ClipboardDocumentIcon,
   DocumentTextIcon,
   MapIcon,
   MapPinIcon,
@@ -20,10 +19,10 @@ import {
 import AddClientModal from '@/app/components/AddClientModal'
 import CreateJob from '@/app/components/CreateJob'
 import CreateJobSlideout from '@/app/components/CreateJobSlideout'
+import CreateOfferModal from '@/app/components/offers/CreateOfferModal'
 import NearestRoutesList, { fmtDate, type RouteDayKey } from './NearestRoutesList'
 import type { CalendarDayMark } from './MapMonthCalendar'
 import {
-  createOffer,
   invalidateMapCaches,
   parsePlaceLabel,
   type MapClient,
@@ -31,7 +30,7 @@ import {
   type NearestRouteRow,
 } from './useMapData'
 
-export type ProspectExploreLayer = 'dashboard' | 'nearest' | 'offer'
+export type ProspectExploreLayer = 'dashboard' | 'nearest'
 
 function BackButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
@@ -128,25 +127,13 @@ export default function ProspectPanel({
   /** When set, shows Map back on the dashboard (explore-sidebar mode). */
   onBackToMap?: () => void
 }) {
-  const serviceMinutes = 30
   const [layer, setLayer] = useState<ProspectExploreLayer>('dashboard')
   const [showAddClient, setShowAddClient] = useState(false)
   const [createJobOpen, setCreateJobOpen] = useState(false)
+  const [createOfferOpen, setCreateOfferOpen] = useState(false)
   const [clientAddedNote, setClientAddedNote] = useState(false)
   const [routeRows, setRouteRows] = useState<NearestRouteRow[] | null>(null)
   const [routesRefreshKey, setRoutesRefreshKey] = useState(0)
-
-  const [offerSelection, setOfferSelection] = useState<Map<RouteDayKey, NearestRouteRow>>(new Map())
-  const [offerTitle, setOfferTitle] = useState('')
-  const [offerMessage, setOfferMessage] = useState('')
-  const [offerPrice, setOfferPrice] = useState('')
-  const [contactName, setContactName] = useState('')
-  const [contactEmail, setContactEmail] = useState('')
-  const [contactPhone, setContactPhone] = useState('')
-  const [sending, setSending] = useState(false)
-  const [offerError, setOfferError] = useState<string | null>(null)
-  const [offerLink, setOfferLink] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     onNearestClientsLoaded(null)
@@ -155,9 +142,6 @@ export default function ProspectPanel({
 
   useEffect(() => {
     setLayer('dashboard')
-    setOfferLink(null)
-    setOfferSelection(new Map())
-    setOfferError(null)
     setRouteRows(null)
   }, [lat, lng, label])
 
@@ -206,45 +190,6 @@ export default function ProspectPanel({
     onSelectRouteDay({ date, userId: row.user_id })
   }, [onSelectRouteDay, onSetPreviewRouteDays, previewKeys])
 
-  const selectedRows = useMemo(() => Array.from(offerSelection.values()), [offerSelection])
-
-  const toggleOfferDate = (row: NearestRouteRow) => {
-    setOfferSelection(prev => {
-      const next = new Map(prev)
-      const key: RouteDayKey = `${row.date}:${row.user_id}`
-      if (next.has(key)) next.delete(key)
-      else if (next.size < 4) next.set(key, row)
-      return next
-    })
-  }
-
-  const handleSendOffer = async () => {
-    setOfferError(null)
-    if (selectedRows.length === 0) { setOfferError('Pick at least one date from the list'); return }
-    if (!linkedClient && !contactName.trim()) { setOfferError('Add the recipient name'); return }
-    setSending(true)
-    try {
-      const { offer } = await createOffer({
-        client_id: linkedClient?.id ?? null,
-        title: offerTitle.trim() || 'Service offer',
-        message: offerMessage.trim() || null,
-        contact_name: linkedClient ? null : contactName.trim(),
-        contact_email: contactEmail.trim() || null,
-        contact_phone: contactPhone.trim() || null,
-        address: label,
-        lat, lng,
-        service_minutes: serviceMinutes,
-        price: offerPrice ? parseFloat(offerPrice) : null,
-        proposed_dates: selectedRows.map(r => ({ date: r.date, user_id: r.user_id, user_name: r.user_name })),
-      })
-      setOfferLink(`${window.location.origin}/o/${offer.token}`)
-    } catch (e: any) {
-      setOfferError(e?.message || 'Failed to create offer')
-    } finally {
-      setSending(false)
-    }
-  }
-
   const linkedName = linkedClient
     ? `${linkedClient.name}${linkedClient.last_name ? ` ${linkedClient.last_name}` : ''}`
     : ''
@@ -274,7 +219,7 @@ export default function ProspectPanel({
     .filter(Boolean)
     .join(', ')
 
-  const slideIndex = layer === 'dashboard' ? 0 : layer === 'nearest' ? 1 : 2
+  const slideIndex = layer === 'dashboard' ? 0 : 1
 
   const newClientPrefill = {
     address: resolvedAddress.address,
@@ -290,12 +235,12 @@ export default function ProspectPanel({
         <div
           className="flex transition-transform duration-300 ease-out"
           style={{
-            width: '300%',
-            transform: `translateX(-${(slideIndex / 3) * 100}%)`,
+            width: '200%',
+            transform: `translateX(-${(slideIndex / 2) * 100}%)`,
           }}
         >
           {/* ── Dashboard ─────────────────────────────────────────── */}
-          <div className="w-1/3 flex-shrink-0 pr-1 space-y-3">
+          <div className="w-1/2 flex-shrink-0 pr-1 space-y-3">
             {onBackToMap && <BackButton onClick={onBackToMap} label="Map" />}
 
             <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
@@ -353,15 +298,15 @@ export default function ProspectPanel({
                 <ActionRow
                   icon={<DocumentTextIcon className="w-4 h-4" strokeWidth={2} />}
                   title="Create offer"
-                  subtitle="Propose nearby dates to a prospect"
-                  onClick={() => setLayer('offer')}
+                  subtitle="Quote this place"
+                  onClick={() => setCreateOfferOpen(true)}
                 />
               </div>
             </div>
           </div>
 
           {/* ── Nearest routes ────────────────────────────────────── */}
-          <div className="w-1/3 flex-shrink-0 px-1 space-y-3">
+          <div className="w-1/2 flex-shrink-0 px-1 space-y-3">
             <BackButton onClick={() => setLayer('dashboard')} label="Location" />
             <div>
               <h2 className="text-sm font-bold text-gray-900">Nearest routes</h2>
@@ -383,140 +328,6 @@ export default function ProspectPanel({
             </div>
           </div>
 
-          {/* ── Create offer ──────────────────────────────────────── */}
-          <div className="w-1/3 flex-shrink-0 pl-1 space-y-3">
-            <BackButton onClick={() => setLayer('dashboard')} label="Location" />
-            <div className="rounded-xl bg-white border border-gray-200 p-3.5">
-              {offerLink ? (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-800 mb-1">Offer created</h3>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Send this link to the {linkedClient ? 'client' : 'prospect'} — they pick one of the proposed dates and the
-                    job is scheduled automatically.
-                  </p>
-                  <div className="flex items-center gap-2 rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
-                    <span className="text-xs text-gray-600 truncate flex-1">{offerLink}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(offerLink).then(() => {
-                          setCopied(true)
-                          setTimeout(() => setCopied(false), 2000)
-                        })
-                      }}
-                      className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-gray-900 text-white text-[11px] font-semibold px-2.5 py-1.5 hover:bg-gray-800"
-                    >
-                      <ClipboardDocumentIcon className="w-3.5 h-3.5" /> {copied ? 'Copied' : 'Copy'}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { setOfferLink(null); setOfferSelection(new Map()) }}
-                    className="mt-3 text-xs font-semibold text-gray-500 hover:text-gray-700"
-                  >
-                    Create another offer
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-800 mb-1">Propose dates</h3>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Tick up to 4 nearby route-days. The recipient picks one and it lands on that employee&apos;s route.
-                  </p>
-
-                  {selectedRows.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-3">
-                      {selectedRows.map(r => (
-                        <button
-                          key={`${r.date}:${r.user_id}`}
-                          type="button"
-                          onClick={() => toggleOfferDate(r)}
-                          className="inline-flex items-center gap-1 rounded-full bg-accent-500/10 text-accent-700 text-[11px] font-semibold px-2.5 py-1 hover:bg-accent-500/20"
-                          title="Remove"
-                        >
-                          {fmtDate(r.date, { day: 'numeric', month: 'short' })} · {r.user_name.split(' ')[0]} ✕
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <NearestRoutesList
-                    lat={lat}
-                    lng={lng}
-                    selectable
-                    selected={selectedRows.map(r => `${String(r.date).slice(0, 10)}:${r.user_id}`)}
-                    onToggleSelect={toggleOfferDate}
-                    onSelectRoute={handleSelectRoute}
-                    onRowsChange={handleRowsChange}
-                    previewKeys={previewKeys}
-                    previewRoutesByKey={previewRoutesByKey}
-                    previewLoading={previewLoading}
-                    onHoverJob={onHoverJob}
-                    expandable={false}
-                    refreshKey={routesRefreshKey}
-                  />
-
-                  <div className="mt-4 space-y-2">
-                    {!linkedClient && (
-                      <>
-                        <input
-                          value={contactName}
-                          onChange={e => setContactName(e.target.value)}
-                          placeholder="Recipient name *"
-                          className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500"
-                        />
-                        <div className="flex gap-2">
-                          <input
-                            value={contactEmail}
-                            onChange={e => setContactEmail(e.target.value)}
-                            placeholder="Email"
-                            className="flex-1 min-w-0 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500"
-                          />
-                          <input
-                            value={contactPhone}
-                            onChange={e => setContactPhone(e.target.value)}
-                            placeholder="Phone"
-                            className="flex-1 min-w-0 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500"
-                          />
-                        </div>
-                      </>
-                    )}
-                    <input
-                      value={offerTitle}
-                      onChange={e => setOfferTitle(e.target.value)}
-                      placeholder="Offer title (e.g. Window cleaning)"
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    />
-                    <input
-                      value={offerPrice}
-                      onChange={e => setOfferPrice(e.target.value.replace(/[^\d.,]/g, ''))}
-                      placeholder="Price (optional)"
-                      inputMode="decimal"
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500"
-                    />
-                    <textarea
-                      value={offerMessage}
-                      onChange={e => setOfferMessage(e.target.value)}
-                      placeholder="Message to the recipient (optional)"
-                      rows={2}
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-accent-500 resize-none"
-                    />
-                  </div>
-
-                  {offerError && <div className="mt-2 text-xs text-red-500">{offerError}</div>}
-
-                  <button
-                    type="button"
-                    onClick={handleSendOffer}
-                    disabled={sending}
-                    className="mt-3 w-full rounded-full bg-accent-500 text-white text-sm font-semibold py-2.5 hover:bg-accent-600 transition-colors disabled:opacity-60"
-                  >
-                    {sending ? 'Creating…' : `Create offer link${selectedRows.length > 0 ? ` (${selectedRows.length} date${selectedRows.length > 1 ? 's' : ''})` : ''}`}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       </div>
 
@@ -564,6 +375,25 @@ export default function ProspectPanel({
           initialNewClient={newClientPrefill}
         />
       )}
+
+      <CreateOfferModal
+        isOpen={createOfferOpen}
+        onClose={() => setCreateOfferOpen(false)}
+        lockClient={Boolean(linkedClient)}
+        prefill={{
+          clientId: linkedClient?.id ?? null,
+          clientName: linkedClient
+            ? `${linkedClient.name}${linkedClient.last_name ? ` ${linkedClient.last_name}` : ''}`
+            : '',
+          email: linkedClient?.email,
+          phone: linkedClient?.phone,
+          address: resolvedAddress.address,
+          zip_code: resolvedAddress.zip_code,
+          city: resolvedAddress.city,
+          lat,
+          lng,
+        }}
+      />
     </div>
   )
 }

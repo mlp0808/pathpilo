@@ -233,6 +233,7 @@ app.use('/api/route-planner', routePlannerRoutes);
 app.use('/api/map', mapToolRoutes);
 app.use('/api/offers', offerRoutes);
 app.use('/api/public/offers', publicOfferRoutes);
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/guest-route', guestRouteRoutes);
 app.use('/api/employee-leave', employeeLeaveRoutes);
 app.use('/api/appointments', appointmentRoutes);
@@ -363,6 +364,10 @@ process.on('SIGINT', () => {
 
     ensureSchedulingSchema().catch((e) =>
       console.warn('[routePlanner] scheduling schema migration failed:', e.message || e)
+    );
+
+    require('./utils/pipelineSchema').ensurePipelineSchema(pool).catch((e) =>
+      console.warn('[pipelineSchema] migration failed:', e.message || e)
     );
 
     // Company onboarding answers (industry, usage goals) + dashboard checklist flag.

@@ -27,6 +27,16 @@ function getAppBaseUrl() {
   return `https://${trimmed}`;
 }
 
+/** Same-app relative path only ("/slug/team"); anything else is dropped. */
+function sanitizeNextPath(value) {
+  if (typeof value !== 'string') return null;
+  const path = value.trim();
+  if (!path || path.length > 200) return null;
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return null;
+  if (/[\r\n]/.test(path)) return null;
+  return path;
+}
+
 function stripeErrorMessage(err) {
   if (!err) return 'Failed to create checkout session';
   if (err.message === 'STRIPE_SECRET_KEY is not configured') {
@@ -385,6 +395,11 @@ router.post('/checkout', authenticateToken, async (req, res) => {
     const billingPath = slug ? `/${slug}/settings/billing` : '/settings/billing';
     const appBase = getAppBaseUrl();
 
+    // Optional in-app page to land on after checkout (e.g. the Team guide returns
+    // the user to /team). Only same-app relative paths are accepted.
+    const nextPath = sanitizeNextPath(req.body?.nextPath);
+    const successNext = nextPath ? `&next=${encodeURIComponent(nextPath)}` : '';
+
     // 14-day free trial only if the company has never used one (monthly OR annual).
     // Card is always collected up-front so we can auto-charge when the trial ends.
     const includeStripeTrial = isTrialEligible(company) && !company.stripe_subscription_id;
@@ -393,8 +408,8 @@ router.post('/checkout', authenticateToken, async (req, res) => {
       mode: 'subscription',
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appBase}${billingPath}?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appBase}${billingPath}?cancelled=true`,
+      success_url: `${appBase}${billingPath}?success=true&session_id={CHECKOUT_SESSION_ID}${successNext}`,
+      cancel_url: nextPath ? `${appBase}${nextPath}` : `${appBase}${billingPath}?cancelled=true`,
       metadata: { companyId: String(company.id), interval },
       // Always capture a payment method, even during the free trial.
       payment_method_collection: 'always',

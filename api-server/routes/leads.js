@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../utils/database');
+const { ensurePipelineSchema, LEAD_STATUSES } = require('../utils/pipelineSchema');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -54,10 +55,12 @@ async function ensureLeadColumns() {
     .query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL')
     .catch(() => {});
   await pool.query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS converted_at TIMESTAMP NULL').catch(() => {});
+  await ensurePipelineSchema(pool);
   columnsEnsured = true;
 }
 
-const VALID_STATUSES = ['new', 'contacted', 'won', 'lost'];
+// quoted = an offer is out; won = booked; lost = archived.
+const VALID_STATUSES = LEAD_STATUSES;
 // Columns an authenticated admin is allowed to edit directly.
 const EDITABLE_FIELDS = [
   'status',
@@ -71,6 +74,7 @@ const EDITABLE_FIELDS = [
   'email',
   'phone',
   'message',
+  'client_id',
 ];
 
 // GET /api/leads?status=new — list leads for the active company
@@ -101,7 +105,7 @@ router.get('/', async (req, res) => {
       `SELECT status, COUNT(*)::int AS n FROM leads WHERE company_id = $1 GROUP BY status`,
       [companyId]
     );
-    const byStatus = { new: 0, contacted: 0, won: 0, lost: 0 };
+    const byStatus = Object.fromEntries(VALID_STATUSES.map((s) => [s, 0]));
     counts.rows.forEach((r) => {
       if (byStatus[r.status] !== undefined) byStatus[r.status] = r.n;
     });
@@ -117,9 +121,47 @@ router.get('/', async (req, res) => {
   }
 });
 
+// POST /api/leads — admin-entered lead (phone call, walk-in, …)
+router.post('/', async (req, res) => {
+  try {
+    await ensureLeadColumns();
+    const resolved = await resolveCompanyId(req);
+    if (resolved.error) {
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
+    const body = req.body || {};
+    const str = (v, max = 500) => {
+      const s = typeof v === 'string' ? v.trim().slice(0, max) : '';
+      return s || null;
+    };
+    const firstName = str(body.first_name, 120);
+    const phone = str(body.phone, 60);
+    const email = str(body.email, 200);
+    if (!firstName && !phone && !email) {
+      return res.status(400).json({ error: 'Add a name, phone or email' });
+    }
+    const status = VALID_STATUSES.includes(String(body.status)) ? String(body.status) : 'new';
+    const result = await pool.query(
+      `INSERT INTO leads (company_id, source, status, first_name, last_name, email, phone,
+                          address, zip_code, city, message)
+       VALUES ($1, 'manual', $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        resolved.companyId, status, firstName, str(body.last_name, 120), email, phone,
+        str(body.address), str(body.zip_code, 20), str(body.city, 100), str(body.message, 4000),
+      ]
+    );
+    res.status(201).json({ lead: result.rows[0] });
+  } catch (error) {
+    console.error('Error creating lead:', error);
+    res.status(500).json({ error: 'Failed to create lead' });
+  }
+});
+
 // PUT /api/leads/:leadId — update an allowlisted set of fields
 router.put('/:leadId', async (req, res) => {
   try {
+    await ensureLeadColumns();
     const { leadId } = req.params;
     const updates = req.body || {};
 
@@ -146,6 +188,24 @@ router.put('/:leadId', async (req, res) => {
       if (key === 'status' && !VALID_STATUSES.includes(String(updates[key]))) {
         return res.status(400).json({ error: 'Invalid status' });
       }
+      if (key === 'client_id') {
+        const cid = updates[key] == null || updates[key] === '' ? null : Number(updates[key]);
+        if (cid != null) {
+          if (!Number.isFinite(cid)) {
+            return res.status(400).json({ error: 'Invalid client' });
+          }
+          const owned = await pool.query(
+            'SELECT id FROM clients WHERE id = $1 AND company_id = $2',
+            [cid, companyId]
+          );
+          if (owned.rows.length === 0) {
+            return res.status(400).json({ error: 'Client not found' });
+          }
+        }
+        fields.push(`${key} = $${p++}`);
+        values.push(cid);
+        continue;
+      }
       fields.push(`${key} = $${p++}`);
       values.push(updates[key]);
     }
@@ -167,7 +227,8 @@ router.put('/:leadId', async (req, res) => {
   }
 });
 
-// POST /api/leads/:leadId/convert — create a client from the lead
+// POST /api/leads/:leadId/convert — create a client from the lead. Status is
+// left alone: the lead only counts as won once a job is actually booked.
 router.post('/:leadId/convert', async (req, res) => {
   try {
     await ensureLeadColumns();
@@ -202,6 +263,13 @@ router.post('/:leadId/convert', async (req, res) => {
 
     const name = (lead.first_name && lead.first_name.trim()) || (lead.email && lead.email.trim()) || 'New client';
 
+    if (!String(lead.address || '').trim()) {
+      return res.status(400).json({
+        error: 'Address is required to book a job for this lead',
+        code: 'LEAD_ADDRESS_REQUIRED',
+      });
+    }
+
     const clientResult = await pool.query(
       `
       INSERT INTO clients
@@ -224,7 +292,7 @@ router.post('/:leadId/convert', async (req, res) => {
     const client = clientResult.rows[0];
 
     const updatedLead = await pool.query(
-      `UPDATE leads SET client_id = $1, converted_at = NOW(), status = 'won', updated_at = NOW()
+      `UPDATE leads SET client_id = $1, converted_at = NOW(), updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [client.id, leadId]
     );

@@ -191,6 +191,10 @@ export default function BillingSettingsPage() {
     const cardCancelled = qs.get('card_cancelled') === 'true'
     const smsSuccess = qs.get('sms_success') === 'true'
     const smsCancelled = qs.get('sms_cancelled') === 'true'
+    // In-app page to return to after a confirmed checkout (e.g. the Team guide).
+    const rawNext = qs.get('next') || ''
+    const returnTo =
+      rawNext.startsWith('/') && !rawNext.startsWith('//') && !rawNext.includes('\\') ? rawNext : ''
     window.history.replaceState({}, '', window.location.pathname)
 
     const token = localStorage.getItem('token')
@@ -242,8 +246,13 @@ export default function BillingSettingsPage() {
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, ...billingBody }),
           })
-          if (res.ok) setFlash('success')
-          else {
+          if (res.ok) {
+            setFlash('success')
+            if (returnTo) {
+              window.location.replace(returnTo)
+              return
+            }
+          } else {
             const d = await res.json().catch(() => ({}))
             setError(d.error || 'Payment succeeded but we could not activate your plan. Contact support.')
           }

@@ -437,7 +437,48 @@ export default function LeadFormBuilderPage() {
 
           {/* Notifications */}
           <SectionTitle className="mt-14">{t('settings.leads.section.notify', 'Notifications')}</SectionTitle>
-          <div className="space-y-3">
+          <div className="space-y-8">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-gray-800">
+                    {t('settings.leads.confirmEmail', 'Confirmation email to client')}
+                  </div>
+                  <p className="mt-0.5 text-[13px] text-gray-500">
+                    {t(
+                      'settings.leads.confirmEmailHint',
+                      'Send an automatic reply when someone submits the form. Uses their email field.',
+                    )}
+                  </p>
+                </div>
+                <SettingsToggle
+                  checked={config.confirmEmailEnabled}
+                  onChange={(v) => patch({ confirmEmailEnabled: v })}
+                  label={t('settings.leads.confirmEmail', 'Confirmation email to client')}
+                />
+              </div>
+              {config.confirmEmailEnabled && (
+                <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+                  <LabeledInput
+                    label={t('settings.leads.confirmSubject', 'Subject')}
+                    value={config.confirmEmailSubject}
+                    onChange={(v) => patch({ confirmEmailSubject: v })}
+                    placeholder="We received your request"
+                  />
+                  <LabeledTextarea
+                    label={t('settings.leads.confirmBody', 'Message')}
+                    value={config.confirmEmailBody}
+                    onChange={(v) => patch({ confirmEmailBody: v })}
+                    placeholder="Thanks for getting in touch…"
+                    rows={5}
+                    hint={t(
+                      'settings.leads.confirmTokens',
+                      'Use {name} for their first name and {company} for your business name.',
+                    )}
+                  />
+                </div>
+              )}
+            </div>
             <LabeledInput
               type="email"
               label={t('settings.leads.notifyEmail', 'Email me at')}
@@ -582,22 +623,27 @@ function LabeledTextarea({
   value,
   onChange,
   placeholder,
+  rows = 2,
+  hint,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   placeholder?: string
+  rows?: number
+  hint?: string
 }) {
   return (
     <div>
       <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>
       <textarea
-        rows={2}
+        rows={rows}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 outline-none transition focus:border-gray-400"
       />
+      {hint && <p className="mt-1.5 text-[13px] text-gray-500">{hint}</p>}
     </div>
   )
 }

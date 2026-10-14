@@ -18,7 +18,6 @@ import {
   DocumentTextIcon,
   QuestionMarkCircleIcon,
   MapPinIcon,
-  BellIcon,
   BoltIcon,
   ArrowPathRoundedSquareIcon,
 } from '@heroicons/react/24/outline'
@@ -26,6 +25,8 @@ import { apiUrl } from '../utils/api'
 import { useAppI18n } from './I18nProvider'
 import VideoGuideModal from './VideoGuideModal'
 import { useCompanyPlan } from '../hooks/useCompanyPlan'
+import { useNotifications } from '../hooks/useNotifications'
+import NotificationBell from './notifications/NotificationBell'
 import CrownIcon from './icons/CrownIcon'
 
 interface Company {
@@ -64,6 +65,7 @@ export default function Sidebar({ user }: SidebarProps) {
   const { t } = useAppI18n()
   const pathname = usePathname()
   const { loading: planLoading, hasProAccess } = useCompanyPlan()
+  const { attention } = useNotifications()
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
   const [isVideoGuideOpen, setIsVideoGuideOpen] = useState(false)
@@ -153,15 +155,20 @@ export default function Sidebar({ user }: SidebarProps) {
   const activeCompany = user.activeCompany || (user.companies && user.companies.length > 0 ? user.companies[0] : null)
   const companySlug = (activeCompany as any)?.slug || (user.companies?.[0] as any)?.slug || ''
 
+  const companyBase = companySlug ? `/${companySlug}` : ''
   const jobsBase = companySlug ? `/${companySlug}/jobs` : '/jobs'
   const teamHref = companySlug ? `/${companySlug}/team` : '/team'
   const recurringBase = companySlug ? `/${companySlug}/recurring` : '/recurring'
+  const pipelineBadge = attention.leads + attention.offers + attention.bookings
   type NavItem = {
     name: string
     href: string
     icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
     proOnly?: boolean
     beta?: boolean
+    badge?: number
+    /** Extra path prefixes that light this entry up. */
+    match?: string[]
     children?: Array<{ name: string; href: string }>
   }
   const navigation: NavItem[] = [
@@ -179,7 +186,13 @@ export default function Sidebar({ user }: SidebarProps) {
     },
     { name: t('app.nav.clients', 'Clients'), href: companySlug ? `/${companySlug}/clients` : '/clients', icon: UserGroupIcon },
     { name: t('app.nav.invoices', 'Invoices'), href: companySlug ? `/${companySlug}/invoices` : '/invoices', icon: DocumentTextIcon },
-    { name: t('app.nav.leads', 'Leads'), href: companySlug ? `/${companySlug}/leads` : '/leads', icon: InboxIcon },
+    {
+      name: t('app.nav.pipeline', 'Pipeline'),
+      href: `${companyBase}/pipeline`,
+      icon: InboxIcon,
+      badge: pipelineBadge,
+      match: [`${companyBase}/leads`, `${companyBase}/offers`],
+    },
     { name: t('app.nav.team', 'Team'), href: teamHref, icon: UsersIcon, proOnly: true },
     { name: t('app.nav.items', 'Items'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
   ]
@@ -194,7 +207,6 @@ export default function Sidebar({ user }: SidebarProps) {
     icon: React.ComponentType<{ className?: string }>
     label: string
   }> = [
-    { key: 'notifications', icon: BellIcon, label: t('app.sidebar.notifications', 'Notifications') },
     { key: 'activity', icon: BoltIcon, label: t('app.sidebar.activity', 'Activity') },
   ]
   const comingSoon = t('app.sidebar.comingSoon', 'Coming soon')
@@ -216,6 +228,7 @@ export default function Sidebar({ user }: SidebarProps) {
           </Link>
 
           <div className="flex flex-shrink-0 items-center gap-1">
+            <NotificationBell companySlug={companySlug} variant="sidebar" />
             {upcoming.map(item => {
               const Icon = item.icon
               return (
@@ -237,7 +250,10 @@ export default function Sidebar({ user }: SidebarProps) {
       <nav className="flex-1 px-0 pt-1 pb-4 overflow-y-auto">
         {navigation.map((item) => {
           const Icon = item.icon
-          const sectionActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
+          const sectionActive =
+            pathname === item.href ||
+            (item.href !== '/' && pathname.startsWith(item.href)) ||
+            !!item.match?.some(m => pathname.startsWith(m))
           const hasChildren = !!item.children?.length
           return (
             <div key={item.name}>
@@ -273,6 +289,11 @@ export default function Sidebar({ user }: SidebarProps) {
                       aria-label={t('app.proGate.proFeature', 'Pro feature')}
                     >
                       <CrownIcon className="h-3.5 w-3.5 text-amber-400" />
+                    </span>
+                  )}
+                  {!!item.badge && item.badge > 0 && (
+                    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-500 px-1.5 text-[10px] font-bold text-white">
+                      {item.badge > 99 ? '99+' : item.badge}
                     </span>
                   )}
                 </span>

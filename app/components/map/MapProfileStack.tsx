@@ -6,13 +6,12 @@
  * scroll; each closes only via its own X (and removes its map pin).
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import {
   ArrowTopRightOnSquareIcon,
   CalendarDaysIcon,
-  ClipboardDocumentIcon,
   DocumentTextIcon,
   HomeIcon,
   MapIcon,
@@ -25,13 +24,11 @@ import {
 import AddClientModal from '@/app/components/AddClientModal'
 import CreateJob from '@/app/components/CreateJob'
 import CreateJobSlideout from '@/app/components/CreateJobSlideout'
-import NearestRoutesList, { fmtDate, type RouteDayKey } from './NearestRoutesList'
+import CreateOfferModal from '@/app/components/offers/CreateOfferModal'
 import {
-  createOffer,
   fetchClient,
   parsePlaceLabel,
   type MapClient,
-  type NearestRouteRow,
 } from './useMapData'
 import type { MapOverlay, MapOverlayClient, MapOverlayEmployee, MapOverlayLocation } from './mapOverlays'
 
@@ -121,20 +118,9 @@ function LocationCardBody({
 }) {
   const [showAddClient, setShowAddClient] = useState(false)
   const [createJobOpen, setCreateJobOpen] = useState(false)
-  const [showOffer, setShowOffer] = useState(false)
+  const [createOfferOpen, setCreateOfferOpen] = useState(false)
   const [clientAddedNote, setClientAddedNote] = useState(false)
   const [linkedClient, setLinkedClient] = useState<MapClient | null>(null)
-
-  const [offerSelection, setOfferSelection] = useState<Map<RouteDayKey, NearestRouteRow>>(new Map())
-  const [offerTitle, setOfferTitle] = useState('')
-  const [offerMessage, setOfferMessage] = useState('')
-  const [offerPrice, setOfferPrice] = useState('')
-  const [contactName, setContactName] = useState('')
-  const [contactEmail, setContactEmail] = useState('')
-  const [sending, setSending] = useState(false)
-  const [offerError, setOfferError] = useState<string | null>(null)
-  const [offerLink, setOfferLink] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
 
   const parsed = useMemo(
     () => parsePlaceLabel(overlay.label),
@@ -157,63 +143,6 @@ function LocationCardBody({
     })
     return () => { alive = false }
   }, [overlay.linkedClientId])
-
-  useEffect(() => {
-    setShowOffer(false)
-    setOfferLink(null)
-    setOfferSelection(new Map())
-    setOfferError(null)
-  }, [overlay.key])
-
-  const selectedRows = useMemo(() => Array.from(offerSelection.values()), [offerSelection])
-
-  const toggleOfferDate = useCallback((row: NearestRouteRow) => {
-    const key: RouteDayKey = `${String(row.date).slice(0, 10)}:${row.user_id}`
-    setOfferSelection(prev => {
-      const next = new Map(prev)
-      if (next.has(key)) next.delete(key)
-      else if (next.size < 4) next.set(key, row)
-      return next
-    })
-  }, [])
-
-  const submitOffer = async () => {
-    if (selectedRows.length === 0) {
-      setOfferError('Pick at least one nearby route-day.')
-      return
-    }
-    if (!linkedClient && !contactName.trim()) {
-      setOfferError('Add the recipient name.')
-      return
-    }
-    setSending(true)
-    setOfferError(null)
-    try {
-      const { offer } = await createOffer({
-        client_id: linkedClient?.id ?? null,
-        title: offerTitle.trim() || 'Service offer',
-        message: offerMessage.trim() || null,
-        contact_name: linkedClient ? null : contactName.trim(),
-        contact_email: contactEmail.trim() || null,
-        contact_phone: null,
-        address: overlay.label,
-        lat: overlay.lat,
-        lng: overlay.lng,
-        service_minutes: 30,
-        price: offerPrice ? parseFloat(offerPrice) : null,
-        proposed_dates: selectedRows.map(r => ({
-          date: r.date,
-          user_id: r.user_id,
-          user_name: r.user_name,
-        })),
-      })
-      setOfferLink(`${window.location.origin}/o/${offer.token}`)
-    } catch (e: any) {
-      setOfferError(e?.message || 'Could not create offer.')
-    } finally {
-      setSending(false)
-    }
-  }
 
   return (
     <>
@@ -298,101 +227,11 @@ function LocationCardBody({
             key: 'offer',
             label: 'Offer',
             icon: <DocumentTextIcon className="h-3 w-3" />,
-            onClick: () => setShowOffer(v => !v),
-            active: showOffer,
+            onClick: () => setCreateOfferOpen(true),
+            active: createOfferOpen,
           },
         ]}
       />
-
-      {showOffer && (
-        <div className="mt-3 rounded-xl border border-gray-200/80 bg-white p-3">
-          {offerLink ? (
-            <div>
-              <p className="text-[12px] font-bold text-gray-900">Offer created</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-gray-500">
-                Send this link — they pick a date and it lands on that route.
-              </p>
-              <div className="mt-2 flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2">
-                <span className="flex-1 truncate text-[11px] text-gray-600">{offerLink}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard?.writeText(offerLink).then(() => {
-                      setCopied(true)
-                      setTimeout(() => setCopied(false), 2000)
-                    })
-                  }}
-                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold text-white"
-                  style={{ background: BRAND }}
-                >
-                  <ClipboardDocumentIcon className="h-3 w-3" />
-                  {copied ? 'Copied' : 'Copy'}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              <p className="text-[11px] leading-relaxed text-gray-500">
-                Tick up to 4 nearby route-days. The recipient picks one.
-              </p>
-              {selectedRows.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {selectedRows.map(r => (
-                    <button
-                      key={`${r.date}:${r.user_id}`}
-                      type="button"
-                      onClick={() => toggleOfferDate(r)}
-                      className="inline-flex items-center rounded-full bg-primary-500/10 px-2 py-0.5 text-[10px] font-semibold text-primary-500"
-                    >
-                      {fmtDate(String(r.date), { day: 'numeric', month: 'short' })} · {r.user_name.split(' ')[0]} ✕
-                    </button>
-                  ))}
-                </div>
-              )}
-              <NearestRoutesList
-                lat={overlay.lat}
-                lng={overlay.lng}
-                selectable
-                selected={Array.from(offerSelection.keys())}
-                onToggleSelect={toggleOfferDate}
-                expandable={false}
-              />
-              {!linkedClient && (
-                <>
-                  <input
-                    value={contactName}
-                    onChange={e => setContactName(e.target.value)}
-                    placeholder="Recipient name *"
-                    className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-primary-500/40"
-                  />
-                  <input
-                    value={contactEmail}
-                    onChange={e => setContactEmail(e.target.value)}
-                    placeholder="Email"
-                    className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-primary-500/40"
-                  />
-                </>
-              )}
-              <input
-                value={offerTitle}
-                onChange={e => setOfferTitle(e.target.value)}
-                placeholder="Offer title"
-                className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-[12px] outline-none focus:border-primary-500/40"
-              />
-              {offerError && <p className="text-[11px] font-medium text-red-500">{offerError}</p>}
-              <button
-                type="button"
-                disabled={sending}
-                onClick={submitOffer}
-                className="w-full rounded-xl py-2 text-[12px] font-bold text-white disabled:opacity-60"
-                style={{ background: BRAND }}
-              >
-                {sending ? 'Creating…' : 'Create offer link'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
 
       <button
         type="button"
@@ -461,6 +300,28 @@ function LocationCardBody({
         ),
         document.body,
       )}
+
+      {typeof document !== 'undefined' && createPortal(
+        <CreateOfferModal
+          isOpen={createOfferOpen}
+          onClose={() => setCreateOfferOpen(false)}
+          lockClient={Boolean(linkedClient)}
+          prefill={{
+            clientId: linkedClient?.id ?? overlay.linkedClientId ?? null,
+            clientName: linkedClient
+              ? `${linkedClient.name}${linkedClient.last_name ? ` ${linkedClient.last_name}` : ''}`
+              : '',
+            email: linkedClient?.email,
+            phone: linkedClient?.phone,
+            address: address || overlay.label,
+            zip_code: zip_code || '',
+            city: city || '',
+            lat: overlay.lat,
+            lng: overlay.lng,
+          }}
+        />,
+        document.body,
+      )}
     </>
   )
 }
@@ -508,6 +369,7 @@ function ClientCardBody({
   onClose: () => void
 }) {
   const [createJobOpen, setCreateJobOpen] = useState(false)
+  const [createOfferOpen, setCreateOfferOpen] = useState(false)
   const [resolved, setResolved] = useState<MapClient | null>(null)
 
   useEffect(() => {
@@ -577,6 +439,13 @@ function ClientCardBody({
             icon: <CalendarDaysIcon className="h-3 w-3" />,
             onClick: () => setCreateJobOpen(true),
           },
+          {
+            key: 'offer',
+            label: 'Offer',
+            icon: <DocumentTextIcon className="h-3 w-3" />,
+            onClick: () => setCreateOfferOpen(true),
+            active: createOfferOpen,
+          },
           ...(onRoute && onAddToRoute
             ? [{
                 key: 'add-to-route',
@@ -632,6 +501,26 @@ function ClientCardBody({
           clientName={name}
           initialDate={scheduleDate || undefined}
           initialAssignedUserId={scheduleUserId ?? null}
+        />,
+        document.body,
+      )}
+
+      {typeof document !== 'undefined' && createPortal(
+        <CreateOfferModal
+          isOpen={createOfferOpen}
+          onClose={() => setCreateOfferOpen(false)}
+          lockClient
+          prefill={{
+            clientId: overlay.clientId,
+            clientName: name,
+            email: resolved?.email,
+            phone: resolved?.phone,
+            address: resolved?.address || overlay.address || '',
+            zip_code: resolved?.zip_code || overlay.zip_code || '',
+            city: resolved?.city || overlay.city || '',
+            lat: resolved?.lat ?? overlay.lat ?? null,
+            lng: resolved?.lng ?? overlay.lng ?? null,
+          }}
         />,
         document.body,
       )}

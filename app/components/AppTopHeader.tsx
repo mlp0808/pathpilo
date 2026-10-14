@@ -15,6 +15,7 @@ import { clearClientLocaleStorage } from '../i18n'
 import { isOverwatchActive, stopOverwatchSession } from '../utils/overwatch'
 import AppBreadcrumbs from './AppBreadcrumbs'
 import QuickAddMenu from './QuickAddMenu'
+import NotificationBell from './notifications/NotificationBell'
 import SidebarAccountPanel from './SidebarAccountPanel'
 import MapSearch from './map/MapSearch'
 import { MAP_ADD_TO_ROUTE_EVENT, MAP_SEARCH_PICK_EVENT, modeToQuery } from './map/mapMode'
@@ -246,6 +247,10 @@ export default function AppTopHeader({
               <MagnifyingGlassIcon className="h-5 w-5" />
             )}
           </button>
+
+          <div className="lg:hidden">
+            <NotificationBell companySlug={companySlug} variant="header" />
+          </div>
 
           <QuickAddMenu companySlug={companySlug} />
 

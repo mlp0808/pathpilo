@@ -111,7 +111,7 @@ export default function ClientsPage() {
         {companySlug && (
           <MissionsPanel
             companySlug={companySlug}
-            className="mb-5 sm:mb-6"
+            className="mb-3 sm:mb-4"
             onLaunch={(kind) => {
               if (kind !== 'add_client') return false
               setIsAddModalOpen(true)

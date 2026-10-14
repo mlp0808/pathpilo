@@ -3,6 +3,8 @@
 import { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useUser } from '@/app/hooks/useUser'
+import { refreshNotifications } from '@/app/hooks/useNotifications'
+import { OffersOutPill, offersOutFor, useOffersOutByDate } from '@/app/components/pipeline/OffersOut'
 import AppLayout from '@/app/components/AppLayout'
 import MissionsPanel from '@/app/components/missions/MissionsPanel'
 import { requestMissionsRefresh } from '@/app/config/missions'
@@ -31,7 +33,7 @@ import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { useAppI18n } from '@/app/components/I18nProvider'
-import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon, ArchiveBoxArrowDownIcon } from '@heroicons/react/24/outline'
+import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon, ArchiveBoxArrowDownIcon, UserIcon } from '@heroicons/react/24/outline'
 import type { UserRoute, RouteJob, IsolatedRouteSeg } from '@/app/components/RouteMap'
 import {
   buildDayJobsFingerprint,
@@ -306,6 +308,7 @@ function JobsPageContent() {
   const { user, loading: userLoading } = useUser()
   const companyCountryCode = useCompanyCountryCode(user)
   const companySlug = (params?.company as string) || ''
+  const offersOutByDate = useOffersOutByDate()
   
   // Format a Date as YYYY-MM-DD in local time (avoids timezone shifting from toISOString)
   const toLocalDateString = (d: Date) => {
@@ -1278,7 +1281,11 @@ function JobsPageContent() {
                   const filteredJobs = allJobs.filter((job: any) => {
                     // Check if job is assigned to the selected user (both real and projected jobs)
                     const jobUserId = job.assigned_user_id
-                    if (jobUserId === null || jobUserId === undefined) return false
+                    // Pending accept bookings are often unassigned until verified — keep them
+                    // visible on every employee view so they don't flash then vanish.
+                    if (jobUserId === null || jobUserId === undefined) {
+                      return job.booking_status === 'pending'
+                    }
                     return Number(jobUserId) === Number(userIdNum)
                   })
                   const projectedCount = filteredJobs.filter((job: any) => job.is_projected).length
@@ -2306,6 +2313,28 @@ function JobsPageContent() {
         setViewingJob(job)
         setIsViewModalOpen(true)
     }
+
+  /** Offer-booked visit waiting for the admin's final OK. */
+  const handleConfirmBooking = async (job: any) => {
+    if (!job.offer_id) return
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(apiUrl(`/offers/${job.offer_id}/confirm`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+      if (!response.ok) throw new Error('Failed to confirm booking')
+      const applyPatch = (prev: any[]) =>
+        prev.map((j: any) => (j.id === job.id ? { ...j, booking_status: null } : j))
+      setJobs(applyPatch)
+      setAllJobs(applyPatch)
+      setViewingJob((v: any) => (v && v.id === job.id ? { ...v, booking_status: null } : v))
+      refreshNotifications()
+    } catch (error) {
+      console.error('Failed to confirm booking from calendar:', error)
+    }
+  }
 
   const handleToggleJobCompletion = async (job: any) => {
     try {
@@ -4056,6 +4085,11 @@ function JobsPageContent() {
                                         {/* Appointments + Job cards. Appointments render first so they
                                             remain visible when there are many jobs on the day. */}
                                         <div className="flex-1 overflow-y-auto space-y-1.5" style={{ maxHeight: '200px' }}>
+                                            <OffersOutPill
+                                                offers={offersOutFor(offersOutByDate[dateString], selectedUserId)}
+                                                companySlug={companySlug}
+                                                compact
+                                            />
                                             {(() => {
                                                 const dayAppts = appointmentsByDate[dateString] || []
                                                 // In single-user view, scope to just that user. In all-team view, show everyone's.
@@ -4106,12 +4140,18 @@ function JobsPageContent() {
                                                                     ? 'bg-gray-50 border-gray-200 opacity-35 cursor-pointer'
                                                                     : isJobCancelled
                                                                     ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
+                                                                    : job.booking_status === 'pending'
+                                                                    ? 'bg-amber-50 border-amber-300 hover:border-amber-400 cursor-pointer'
                                                                     : isDayBlocked
                                                                         ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
                                                                         : 'bg-[#fff] border-[#F1F8F4] hover:border-[#E0EDE4] cursor-pointer'
                                                             } ${draggedJob?.id === job.id ? 'opacity-50' : ''}`}
+                                                            title={job.booking_status === 'pending' ? t('app.pipeline.toConfirm', 'Accepted') : undefined}
                                                         >
                                                             <div className="font-semibold text-gray-800 truncate flex items-center gap-1">
+                                                                {job.booking_status === 'pending' && !isJobInactive && (
+                                                                    <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" />
+                                                                )}
                                                                 {job.invoice_id != null && (
                                                                     <span
                                                                       className="inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded bg-primary-500/10 text-primary-700"
@@ -4548,6 +4588,10 @@ function JobsPageContent() {
                                                     </div>
                                                 ) : (
                                                     <div className="space-y-2">
+                                                        <OffersOutPill
+                                                            offers={offersOutFor(offersOutByDate[dateString], selectedUserId)}
+                                                            companySlug={companySlug}
+                                                        />
                                                         {/* Appointments for this day. Rendered above jobs so they're
                                                             always visible, and scoped to the selected user when a
                                                             specific user is active. */}
@@ -4636,6 +4680,44 @@ function JobsPageContent() {
                                                                     </button>
                                                                   )
                                                                 })}
+                                                              {dayJobs
+                                                                .filter((job: any) => job.booking_status === 'pending' && job.status !== 'cancelled' && job.status !== 'deleted')
+                                                                .map((job: any) => (
+                                                                  <div
+                                                                    key={`pending-${job.id}`}
+                                                                    data-job-id={String(job.id)}
+                                                                    onClick={() => handleJobClick(job)}
+                                                                    className="w-full cursor-pointer rounded-xl border border-amber-300 bg-amber-50 p-3 transition-all hover:border-amber-400"
+                                                                  >
+                                                                    <span className="mb-1 inline-flex max-w-full items-center gap-1 truncate rounded-full bg-[#d6f5e3] px-1.5 py-0.5 text-[10px] font-semibold text-[#1f7a46]">
+                                                                      <UserIcon className="h-3 w-3 flex-shrink-0" />
+                                                                      {t('app.pipeline.toConfirm', 'Accepted')}
+                                                                    </span>
+                                                                    <div className="truncate text-sm font-semibold text-gray-800">
+                                                                      {[job.name || job.first_name, job.last_name].filter(Boolean).join(' ') || t('app.jobsPage.client')}
+                                                                    </div>
+                                                                    {getAddressDisplay(job) && (
+                                                                      <div className="mt-1 truncate text-xs text-gray-600">{getAddressDisplay(job)}</div>
+                                                                    )}
+                                                                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-amber-200 pt-1.5">
+                                                                      <span className="flex min-w-0 items-center gap-2 truncate text-[11px] text-gray-500">
+                                                                        <span className="truncate">
+                                                                          {users.find((u) => Number(u.id) === Number(job.assigned_user_id))?.first_name
+                                                                            || t('app.pipeline.unassigned', 'Unassigned')}
+                                                                        </span>
+                                                                        {getJobDisplayPrice(job) > 0 && <span className="flex-shrink-0">{formatPrice(getJobDisplayPrice(job))}</span>}
+                                                                      </span>
+                                                                      <button
+                                                                        type="button"
+                                                                        onClick={(e) => { e.stopPropagation(); handleConfirmBooking(job) }}
+                                                                        className="inline-flex flex-shrink-0 items-center gap-1 rounded-md bg-accent-500 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-accent-600"
+                                                                      >
+                                                                        <CheckIcon className="h-3 w-3" />
+                                                                        {t('app.pipeline.action.confirmShort', 'Verify job')}
+                                                                      </button>
+                                                                    </div>
+                                                                  </div>
+                                                                ))}
                                                             </>
                                                           )
                                                           : (() => {
@@ -4647,6 +4729,7 @@ function JobsPageContent() {
                                                             const isJobCancelled = job.status === 'cancelled'
                                                             const isJobDeleted = job.status === 'deleted'
                                                             const isJobInactive = isJobCancelled || isJobDeleted
+                                                            const isPendingBooking = job.booking_status === 'pending' && !isJobInactive
                                                             const taskCount = visit.totalTaskCount || getJobTaskCount(job)
                                                             const jobDisplayPrice = visit.jobs.reduce((sum, j) => sum + getJobDisplayPrice(j as any), 0)
                                                             const noteCount = visit.jobs.reduce((sum, j) => sum + Number((j as any).note_count ?? 0), 0)
@@ -4677,6 +4760,8 @@ function JobsPageContent() {
                                                                                 ? 'bg-gray-50 border-gray-200 opacity-35 cursor-pointer'
                                                                                 : isJobCancelled
                                                                                 ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed'
+                                                                                : isPendingBooking
+                                                                                ? 'bg-amber-50 border-amber-300 hover:border-amber-400 cursor-pointer'
                                                                                 : isDayBlocked
                                                                                     ? 'bg-gray-50 border-dashed border-gray-300 hover:border-gray-400 cursor-pointer'
                                                                                     : inRound
@@ -4700,6 +4785,12 @@ function JobsPageContent() {
                                                                                 </span>
                                                                             )}
                                                                         </div>
+                                                                        {isPendingBooking && (
+                                                                            <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#d6f5e3] px-1.5 py-0.5 text-[10px] font-semibold text-[#1f7a46]">
+                                                                                <UserIcon className="h-3 w-3" />
+                                                                                {t('app.pipeline.toConfirm', 'Accepted')}
+                                                                            </span>
+                                                                        )}
                                                                         {noteCount > 0 && (
                                                                             <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full text-[10px] font-bold text-white bg-orange-500 gap-0.5">
                                                                                 <DocumentTextIcon className="w-3 h-3" />
@@ -4723,7 +4814,7 @@ function JobsPageContent() {
                                                                         </div>
                                                                     )}
 
-                                                                    <div className="mt-1.5 pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2">
+                                                                    <div className={`mt-1.5 pt-1.5 border-t flex items-center justify-between gap-2 ${isPendingBooking ? 'border-amber-200' : 'border-gray-100'}`}>
                                                                         <div className="flex items-center gap-3 text-[11px] text-gray-500 min-w-0">
                                                                             <span className="flex items-center gap-1 flex-shrink-0">
                                                                                 <DocumentTextIcon className="w-3.5 h-3.5" />
@@ -4763,6 +4854,15 @@ function JobsPageContent() {
                                                                                     </span>
                                                                                 )}
                                                                             </div>
+                                                                        ) : isPendingBooking ? (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={(e) => { e.stopPropagation(); handleConfirmBooking(job) }}
+                                                                                className="flex-shrink-0 inline-flex items-center gap-1 rounded-md bg-accent-500 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-accent-600"
+                                                                            >
+                                                                                <CheckIcon className="w-3 h-3" />
+                                                                                {t('app.pipeline.action.confirmShort', 'Verify job')}
+                                                                            </button>
                                                                         ) : typeof job.status !== 'undefined' && (
                                                                             <div className="flex items-center gap-1.5 flex-shrink-0">
                                                                                 {job.invoice_id != null && (

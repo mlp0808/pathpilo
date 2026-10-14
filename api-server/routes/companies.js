@@ -9,6 +9,10 @@ const {
 const { getDefaultPaymentTerms } = require('../utils/companyInvoiceEmailLocale');
 const { ensureCompanyOnboardingSchema } = require('../utils/companyOnboardingSchema');
 const { normalizeIndustry, normalizeUsageGoals } = require('../utils/companyOnboardingOptions');
+const {
+  formatInvoiceSequenceNumber,
+  parseInvoiceNextNumberInput,
+} = require('../utils/invoiceNumberAllocation');
 
 const router = express.Router();
 const DEFAULT_COUNTRY_CODE = 'DK';
@@ -701,6 +705,45 @@ const ROADMAP_COUNT_QUERIES = {
                   WHERE company_id = $1 AND COALESCE(is_system, FALSE) = FALSE`,
   cancellation_fee: `SELECT COUNT(*)::int AS n FROM companies
                      WHERE id = $1 AND cancellation_fee_enabled = TRUE`,
+  invoices_sent: `SELECT COUNT(*)::int AS n FROM invoices
+                  WHERE company_id = $1
+                    AND (sent_at IS NOT NULL OR status IN ('sent', 'paid', 'overdue'))`,
+  // Sales pipeline: lead form → leads → offers → confirmed bookings.
+  lead_form_enabled: `SELECT CASE WHEN COALESCE(leads_enabled, FALSE) THEN 1 ELSE 0 END::int AS n
+                      FROM companies WHERE id = $1`,
+  leads: `SELECT COUNT(*)::int AS n FROM leads WHERE company_id = $1`,
+  leads_handled: `SELECT COUNT(*)::int AS n FROM leads
+                  WHERE company_id = $1 AND COALESCE(status, 'new') <> 'new'`,
+  offers_sent: `SELECT COUNT(*)::int AS n FROM offers
+                WHERE company_id = $1
+                  AND (sent_at IS NOT NULL OR status IN ('sent', 'accepted', 'declined'))`,
+  offers_accepted: `SELECT COUNT(*)::int AS n FROM offers
+                    WHERE company_id = $1 AND status = 'accepted'`,
+  bookings_confirmed: `SELECT COUNT(*)::int AS n FROM offers
+                       WHERE company_id = $1 AND status = 'accepted' AND confirmed_at IS NOT NULL`,
+  // Team features: 1 when the company has Pro access (paid, trialing or comped).
+  // Mirrors hasProPlanAccessFromCompany in utils/companyPlanAccess.js.
+  pro_access: `SELECT CASE
+                 WHEN plan = 'pro'
+                  AND (stripe_subscription_id IS NOT NULL
+                       OR expires_at IS NULL
+                       OR expires_at > NOW())
+                 THEN 1 ELSE 0 END::int AS n
+               FROM companies WHERE id = $1`,
+  // Employees who joined plus invitations still waiting to be accepted.
+  team_members: `SELECT (
+                   (SELECT COUNT(*) FROM user_companies WHERE company_id = $1 AND role <> 'owner')
+                   + (SELECT COUNT(*) FROM company_invitations
+                      WHERE company_id = $1 AND status = 'pending' AND expires_at > NOW())
+                 )::int AS n`,
+  // Jobs handed to someone other than the owner.
+  team_assigned_jobs: `SELECT COUNT(*)::int AS n FROM jobs j
+                       JOIN companies c ON c.id = j.company_id
+                       WHERE j.company_id = $1
+                         AND j.assigned_user_id IS NOT NULL
+                         AND j.assigned_user_id <> c.owner_id
+                         AND COALESCE(j.status, '') <> 'cancelled'
+                         AND COALESCE(j.job_kind, 'standard') = 'standard'`,
 };
 
 const ROADMAP_STEP_IDS = [
@@ -712,9 +755,45 @@ const ROADMAP_STEP_IDS = [
   'job_complete',
   'invoice_first',
   'subscription_first',
+  'lead_form_on',
+  'lead_first',
+  'lead_handled',
+  'offer_sent',
+  'offer_accepted',
+  'booking_confirmed',
+  'round_first',
+  'map_look',
+  'team_trial',
+  'team_invite',
+  'team_assign',
+  'invoice_settings',
+  'invoice_sent',
+  'custom_group',
+  'cancellation_fee',
+  'notifications_look',
 ];
-const MISSION_IDS = ['get_started', 'route_planning', 'invoicing', 'subscriptions'];
-const VISIT_KEYS = ['clients', 'services', 'jobs', 'map', 'invoices'];
+const MISSION_IDS = [
+  'get_started',
+  'win_work',
+  'book_deliver',
+  'subscriptions',
+  'route_planning',
+  'team',
+  'invoicing',
+  'level_up',
+];
+const VISIT_KEYS = [
+  'clients',
+  'services',
+  'jobs',
+  'map',
+  'invoices',
+  'pipeline',
+  'offers',
+  'team',
+  'invoice_settings',
+  'notifications_settings',
+];
 
 /** Treats a missing table or column (fresh install) as zero rather than a 500. */
 async function countOrZero(sql, companyId) {
@@ -1505,16 +1584,18 @@ async function ensureCompanyInvoiceSettingsColumns() {
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_subject TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_reminder_default_body TEXT');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_next_number BIGINT NOT NULL DEFAULT 1');
+  // Leading-zero width for issued numbers (e.g. 5 → 00001, 00002). 0 = no padding.
+  await pool.query(
+    'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_number_pad_width INTEGER NOT NULL DEFAULT 0'
+  );
   // VAT / tax settings (NULL = fall back to country-specific default)
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_vat_enabled BOOLEAN DEFAULT NULL');
   await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_default_tax_rate DECIMAL(5,2) DEFAULT NULL');
   await pool.query(
     'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_numbering_configured BOOLEAN NOT NULL DEFAULT FALSE'
   );
-  // Master on/off switch for the whole invoicing feature. Defaults to FALSE so
-  // invoicing is opt-in: the company must explicitly activate it in settings
-  // before the invoices area becomes usable. This is purely a UI/route gate —
-  // it never mutates existing invoices or saved invoice settings.
+  // Legacy column kept for older installs. Invoicing is always available in the
+  // product UI; missing numbering / payment setup is guided at create time.
   await pool.query(
     'ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoicing_enabled BOOLEAN NOT NULL DEFAULT FALSE'
   );
@@ -1583,6 +1664,7 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
         invoice_next_number,
+        COALESCE(invoice_number_pad_width, 0) AS invoice_number_pad_width,
         invoice_numbering_configured,
         invoicing_enabled,
         invoice_vat_enabled,
@@ -1612,6 +1694,8 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
     const savedTerms = String(row.invoice_default_payment_terms || '').trim();
     const paymentTerms =
       savedTerms || getDefaultPaymentTerms(row.country_code || DEFAULT_COUNTRY_CODE);
+    const padWidth = Number(row.invoice_number_pad_width) || 0;
+    const nextRaw = row.invoice_next_number != null ? Number(row.invoice_next_number) : 1;
 
     const defaults = {
       invoiceDefaultDueDays: dueDaysRaw != null ? Number(dueDaysRaw) : 14,
@@ -1620,11 +1704,11 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
       invoiceEmailDefaultBody: row.invoice_email_default_body || '',
       invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
       invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
+      // Preserve leading zeros for the settings field (e.g. "00001").
       invoiceNextNumber: numberingConfigured
-        ? row.invoice_next_number != null
-          ? Number(row.invoice_next_number)
-          : 1
+        ? formatInvoiceSequenceNumber(Number.isFinite(nextRaw) && nextRaw >= 1 ? nextRaw : 1, padWidth)
         : null,
+      invoiceNumberPadWidth: padWidth,
       invoiceNumberingConfigured: numberingConfigured,
       invoicingEnabled: invoicingOn,
       maxNumericInvoice,
@@ -1701,21 +1785,37 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
       values.push(String(invoiceReminderDefaultBody ?? ''));
     }
     if (invoiceNextNumber != null && invoiceNextNumber !== '') {
-      const n = parseInt(String(invoiceNextNumber), 10);
-      if (Number.isNaN(n) || n < 1) {
-        return res.status(400).json({ error: 'Next invoice number must be a positive integer' });
+      const parsed = parseInvoiceNextNumberInput(invoiceNextNumber);
+      if (parsed.error) {
+        return res.status(400).json({ error: parsed.error });
       }
+      const { n, padWidth, display } = parsed;
       const dup = await pool.query(
-        `SELECT 1 FROM invoices WHERE company_id = $1 AND invoice_number = $2 LIMIT 1`,
-        [companyId, String(n)]
+        `
+        SELECT 1 FROM invoices
+        WHERE company_id = $1
+          AND invoice_number IS NOT NULL
+          AND (
+            invoice_number = $2
+            OR (
+              invoice_number ~ '^[0-9]+$'
+              AND LENGTH(invoice_number::text) <= 18
+              AND CAST(invoice_number AS BIGINT) = $3
+            )
+          )
+        LIMIT 1
+        `,
+        [companyId, display, n]
       );
       if (dup.rows.length > 0) {
         return res.status(400).json({
-          error: `Invoice number ${n} already exists. Choose a next number that is not already used.`,
+          error: `Invoice number ${display} already exists. Choose a next number that is not already used.`,
         });
       }
       updates.push(`invoice_next_number = $${p++}`);
       values.push(n);
+      updates.push(`invoice_number_pad_width = $${p++}`);
+      values.push(padWidth);
       // The user has now explicitly chosen their starting number, so unlock
       // invoice creation. We never flip this flag back to FALSE — once
       // configured, always configured.
@@ -1759,6 +1859,7 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoice_reminder_default_subject,
         invoice_reminder_default_body,
         invoice_next_number,
+        COALESCE(invoice_number_pad_width, 0) AS invoice_number_pad_width,
         invoice_numbering_configured,
         invoicing_enabled,
         invoice_vat_enabled,
@@ -1782,6 +1883,8 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
     );
     const maxNumericInvoice = Number(maxRow.rows[0].max_num) || 0;
     const savedTermsPut = String(row.invoice_default_payment_terms || '').trim();
+    const padWidthPut = Number(row.invoice_number_pad_width) || 0;
+    const nextRawPut = row.invoice_next_number != null ? Number(row.invoice_next_number) : 1;
 
     res.json({
       defaults: {
@@ -1794,10 +1897,12 @@ router.put('/invoice-defaults', authenticateToken, async (req, res) => {
         invoiceReminderDefaultSubject: row.invoice_reminder_default_subject || DEFAULT_INVOICE_REMINDER_SUBJECT,
         invoiceReminderDefaultBody: row.invoice_reminder_default_body || '',
         invoiceNextNumber: row.invoice_numbering_configured
-          ? row.invoice_next_number != null
-            ? Number(row.invoice_next_number)
-            : 1
+          ? formatInvoiceSequenceNumber(
+              Number.isFinite(nextRawPut) && nextRawPut >= 1 ? nextRawPut : 1,
+              padWidthPut,
+            )
           : null,
+        invoiceNumberPadWidth: padWidthPut,
         invoiceNumberingConfigured: Boolean(row.invoice_numbering_configured),
         invoicingEnabled: Boolean(row.invoicing_enabled),
         maxNumericInvoice,

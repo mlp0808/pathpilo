@@ -22,6 +22,7 @@ const {
   computeNextSequenceNumber,
   resolveInvoiceNumberDisplay,
   allocateInvoiceNumberIfDraft,
+  ensureInvoiceNumberNullable,
 } = require('../utils/invoiceNumberAllocation');
 const { resolveInvoiceParties } = require('../utils/invoiceSnapshot');
 const { t: tI18n, tInterp: tInterpI18n } = require('../utils/invoiceI18n');
@@ -1344,6 +1345,7 @@ router.put('/:invoiceId', authenticateToken, async (req, res) => {
     } = req.body;
 
     dbClient = await pool.connect();
+    await ensureInvoiceNumberNullable(dbClient);
     await dbClient.query('BEGIN');
 
     const check = await dbClient.query(
@@ -1430,24 +1432,27 @@ router.put('/:invoiceId', authenticateToken, async (req, res) => {
 
         let jobTotal = 0;
         for (const service of jobServices.rows) {
+          const quantity = Math.max(0, Number(service.quantity) || 1);
           const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0) || 0;
-          jobTotal += unitPrice;
+          jobTotal += unitPrice * quantity;
         }
         const jobDiscount = Number(safeDiscounts[job.id]) || 0;
 
         for (const service of jobServices.rows) {
+          const quantity = Math.max(0, Number(service.quantity) || 1);
           const unitPrice = parseFloat(service.custom_price ?? service.price ?? 0) || 0;
-          const proportion = jobTotal > 0 ? unitPrice / jobTotal : 0;
+          const lineGross = unitPrice * quantity;
+          const proportion = jobTotal > 0 ? lineGross / jobTotal : 0;
           const serviceDiscount = jobDiscount * proportion;
-          const finalUnitPrice = unitPrice - serviceDiscount;
-          const lineTotal = Math.max(0, finalUnitPrice);
+          const lineTotal = Math.max(0, lineGross - serviceDiscount);
+          const finalUnitPrice = quantity > 0 ? lineTotal / quantity : 0;
           subtotal += lineTotal;
 
           itemsToInsert.push({
             job_id: job.id,
             service_id: service.service_id ?? null,
             description: service.service_title || 'Service',
-            quantity: 1,
+            quantity,
             unit_price: finalUnitPrice,
             line_total: lineTotal,
           });

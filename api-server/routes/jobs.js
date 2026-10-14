@@ -1341,14 +1341,20 @@ router.post('/', async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
-    // Verify client belongs to user's company
+    // Verify client belongs to user's company and has an address (needed for schedule / routing)
     const clientCheck = await pool.query(
-      'SELECT id FROM clients WHERE id = $1 AND company_id = $2',
+      'SELECT id, address FROM clients WHERE id = $1 AND company_id = $2',
       [client_id, companyId]
     );
 
     if (clientCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Client not found or access denied' });
+    }
+    if (!String(clientCheck.rows[0].address || '').trim()) {
+      return res.status(400).json({
+        error: 'Client address is required to create a job',
+        code: 'JOB_ADDRESS_REQUIRED',
+      });
     }
 
     // Verify assigned user belongs to user's company (when not "Any")

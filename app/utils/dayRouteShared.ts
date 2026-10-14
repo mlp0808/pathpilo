@@ -81,6 +81,7 @@ export function buildDayRoutesFromJobs(dayJobs: any[], users: RouteUserLike[]): 
         is_projected: !!(job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))),
         is_cancelled: job.status === 'cancelled' || job.status === 'deleted',
         is_deleted: job.status === 'deleted',
+        is_pending_booking: job.booking_status === 'pending',
         // True only when the job row itself has coords — NOT the client fallback.
         // Used to decide whether geocoding should run to get a more accurate pin position.
         has_own_coords: coordOrNull(job.lat) != null && coordOrNull(job.lng) != null,
