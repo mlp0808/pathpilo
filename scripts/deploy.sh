@@ -14,6 +14,7 @@ npm install
 echo "→ Building web app..."
 npm run build
 
+
 echo "→ Installing API dependencies..."
 cd api-server && npm install && cd ..
 
@@ -23,7 +24,13 @@ grep -E '^NEXT_PUBLIC_HOTJAR_' .env > marketing/.env 2>/dev/null || true
 echo "→ Building marketing site..."
 cd marketing && npm install && npm run build && cd ..
 
+echo "→ Installing blog MCP connector (Grok)..."
+cd marketing/mcp-blog && npm install && cd ../..
+
 echo "→ Restarting PM2 apps..."
-pm2 restart vevago-frontend vevago-api pathpilo-marketing
+pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
+  || pm2 restart vevago-frontend vevago-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
+  || pm2 start ecosystem.config.js
 
 echo "→ Done. Check: pm2 status"
+echo "  Blog connector: https://pathpilo.com/blog-mcp/health"

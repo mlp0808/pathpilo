@@ -1,0 +1,25 @@
+{
+  "name": "pathpilo-blog-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sandboxed MCP server for PathPilo marketing blog management (no app code access).",
+  "type": "module",
+  "bin": {
+    "pathpilo-blog-mcp": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "start:http": "node src/http.js",
+    "inspect": "npx @modelcontextprotocol/inspector node src/index.js --stdio"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.0",
+    "dotenv": "^18.0.8",
+    "express": "^5.3.0",
+    "gray-matter": "^4.0.3",
+    "zod": "^3.25.0"
+  }
+}

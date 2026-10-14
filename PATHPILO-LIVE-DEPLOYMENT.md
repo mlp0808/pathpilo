@@ -124,7 +124,17 @@ pm2 startup   # run the command it prints to start on reboot
 pm2 status
 ```
 
-You should see: `vevago-frontend` (3005), `vevago-api` (3003), `pathpilo-marketing` (3004).
+You should see: `pathpilo-frontend` (3005), `pathpilo-api`, `pathpilo-marketing` (3004), and optionally `pathpilo-blog-mcp` (8787 — Grok blog connector).
+
+### Blog MCP for Grok (optional)
+
+Give Grok **link + password** only:
+
+- Link: `https://pathpilo.com/blog-mcp/mcp`
+- Password: `BLOG_MCP_TOKEN` from your server `.env`
+
+Add to `.env`: `BLOG_MCP_TOKEN=…`, `BLOG_MCP_ALLOWED_HOSTS=pathpilo.com,www.pathpilo.com`.  
+Proxy `/blog-mcp/` → `127.0.0.1:8787` on the pathpilo.com Nginx site (see `marketing/mcp-blog/README.md`).
 
 ---
 

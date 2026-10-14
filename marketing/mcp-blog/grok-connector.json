@@ -1,0 +1,35 @@
+{
+  "name": "PathPilo Blog",
+  "server_label": "pathpilo-blog",
+  "server_description": "Manage PathPilo marketing blog posts: create/edit articles, SEO meta, categories, tags, and cover images. No application source code access.",
+  "server_url": "https://pathpilo.com/blog-mcp/mcp",
+  "transport": "streamable-http",
+  "authorization": "Bearer YOUR_BLOG_MCP_TOKEN",
+  "how_to_add": [
+    "On the live server: set BLOG_MCP_TOKEN in .env, pm2 start pathpilo-blog-mcp, Nginx /blog-mcp/ → :8787.",
+    "In Grok: Connectors → New → Custom → paste https://pathpilo.com/blog-mcp/mcp",
+    "Password / auth: the same BLOG_MCP_TOKEN value.",
+    "Or tell the bot: Add this MCP server: https://pathpilo.com/blog-mcp/mcp"
+  ],
+  "allowed_tools": [
+    "blog_sandbox_info",
+    "blog_list_taxonomy",
+    "blog_list_mdx_components",
+    "blog_get_guide",
+    "blog_get_index",
+    "blog_get_template",
+    "blog_list_articles",
+    "blog_get_article",
+    "blog_create_article",
+    "blog_update_article",
+    "blog_update_meta",
+    "blog_update_taxonomy",
+    "blog_set_status",
+    "blog_set_cover",
+    "blog_delete_article",
+    "blog_list_images",
+    "blog_upload_image",
+    "blog_delete_image",
+    "blog_refresh_index"
+  ]
+}

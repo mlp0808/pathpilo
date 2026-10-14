@@ -55,6 +55,26 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "1G"
+    },
+    {
+      // Grok custom connector — public URL: https://pathpilo.com/blog-mcp/mcp
+      name: "pathpilo-blog-mcp",
+      script: "src/http.js",
+      cwd: path.join(root, "marketing", "mcp-blog"),
+      env: {
+        NODE_ENV: "production",
+        BLOG_MCP_PORT: 8787,
+        BLOG_MCP_HOST: "127.0.0.1",
+        BLOG_MCP_ALLOWED_HOSTS: "pathpilo.com,www.pathpilo.com"
+        // BLOG_MCP_TOKEN is loaded from marketing/mcp-blog/.env or repo-root .env
+      },
+      error_file: path.join(root, "logs", "blog-mcp-error.log"),
+      out_file: path.join(root, "logs", "blog-mcp-out.log"),
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      merge_logs: true,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "300M"
     }
   ]
 };
