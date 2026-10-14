@@ -18,6 +18,7 @@
     "db:setup": "node setup-database.js --seed",
     "db:reset": "node setup-database.js --reset --seed",
     "generate-test-data": "node generate-test-data.js",
+    "demo:seed": "node public-demo-seed.js",
     "i18n:check": "node scripts/check-i18n-keys.js"
   },
   "dependencies": {

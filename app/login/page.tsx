@@ -222,7 +222,8 @@ function LoginForm() {
     )
   }
 
-  const showDemo = process.env.NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS === 'true'
+  // Always show the public demo credentials (seeded via `node public-demo-seed.js`).
+  const showDemo = true
 
   return (
     <DarkAuthShell>
@@ -452,10 +453,15 @@ function LoginForm() {
 
               {showDemo && (
                 <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Demo accounts</p>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Try the demo</p>
                   <div className="space-y-1 text-xs text-gray-400">
-                    <p><span className="font-medium text-gray-300">Owner:</span> admin@glasklart.dk / demo1234</p>
-                    <p><span className="font-medium text-gray-300">Employee:</span> mikkel@glasklart.dk / demo1234</p>
+                    <p>
+                      <span className="font-medium text-gray-300">Email:</span> demo@pathpilo.com
+                    </p>
+                    <p>
+                      <span className="font-medium text-gray-300">Password:</span> demo1234
+                    </p>
+                    <p className="pt-1 text-gray-500">One-person service company with a full 2026 schedule.</p>
                   </div>
                 </div>
               )}
