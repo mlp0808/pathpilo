@@ -4,11 +4,15 @@ Give Grok a **link** and a **password**. That’s it.
 
 | | |
 | --- | --- |
-| **Link** | `https://pathpilo.com/blog-mcp/mcp` |
+| **Link (preferred if auth fails)** | `https://pathpilo.com/blog-mcp/mcp?token=YOUR_TOKEN` |
+| **Link (standard)** | `https://pathpilo.com/blog-mcp/mcp` |
 | **Password** | the value of `BLOG_MCP_TOKEN` on the server |
 
-In Grok: **Connectors → New → Custom**, paste the link, enter the password when asked.  
-Or tell the bot: `Add this MCP server: https://pathpilo.com/blog-mcp/mcp`
+If Grok says “Bearer token required” even with a password, the proxy is dropping
+`Authorization`. Put the token in the URL (`?token=…`) and leave/reuse the password.
+
+In Grok: **Connectors → New → Custom**, paste the link (with `?token=` if needed).  
+Probe: `https://pathpilo.com/blog-mcp/auth-probe` — shows whether auth headers arrive.
 
 The bot can then create/edit blog posts, titles, meta descriptions, categories, tags, and images. It **cannot** touch app code.
 
@@ -90,7 +94,9 @@ location /blog-mcp/ {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    # Critical — without this, some setups drop the header and MCP returns 401
     proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Api-Key $http_x_api_key;
     proxy_pass_header Authorization;
 }
 ```

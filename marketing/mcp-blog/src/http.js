@@ -38,11 +38,9 @@ if (!TOKEN) {
   process.exit(1)
 }
 
-function tokenOk(headerValue) {
-  if (!headerValue || typeof headerValue !== 'string') return false
-  const m = headerValue.match(/^Bearer\s+(.+)$/i)
-  const provided = (m ? m[1] : headerValue).trim()
-  const a = Buffer.from(provided)
+function tokensEqual(provided) {
+  if (!provided || typeof provided !== 'string') return false
+  const a = Buffer.from(provided.trim())
   const b = Buffer.from(TOKEN)
   if (a.length !== b.length) return false
   try {
@@ -52,12 +50,52 @@ function tokenOk(headerValue) {
   }
 }
 
+/**
+ * Pull the shared secret from several places.
+ * Cloudflare/Nginx sometimes drop Authorization; custom headers + ?token= survive.
+ */
+function extractToken(req) {
+  const auth = req.headers.authorization
+  if (typeof auth === 'string' && auth.trim()) {
+    const bearer = auth.match(/^Bearer\s+(.+)$/i)
+    if (bearer) return bearer[1].trim()
+    const basic = auth.match(/^Basic\s+(.+)$/i)
+    if (basic) {
+      try {
+        const decoded = Buffer.from(basic[1], 'base64').toString('utf8')
+        const colon = decoded.indexOf(':')
+        // Grok / browsers often send "user:password" — password is our token
+        return (colon >= 0 ? decoded.slice(colon + 1) : decoded).trim()
+      } catch {
+        // ignore
+      }
+    }
+    return auth.trim()
+  }
+
+  for (const key of ['x-api-key', 'x-blog-mcp-token', 'x-mcp-token', 'api-key']) {
+    const v = req.headers[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+
+  const q = req.query || {}
+  for (const key of ['token', 'access_token', 'api_key']) {
+    const v = q[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return null
+}
+
 function requireAuth(req, res, next) {
-  if (tokenOk(req.headers.authorization)) return next()
+  if (tokensEqual(extractToken(req))) return next()
   res.setHeader('WWW-Authenticate', 'Bearer')
   res.status(401).json({
     jsonrpc: '2.0',
-    error: { code: -32001, message: 'Unauthorized — Bearer token required' },
+    error: {
+      code: -32001,
+      message:
+        'Unauthorized — token required (Authorization Bearer, X-Api-Key, or ?token=)',
+    },
     id: null,
   })
 }
@@ -80,7 +118,10 @@ const app = createMcpExpressApp({
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Mcp-Session-Id')
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Authorization, Content-Type, Mcp-Session-Id, X-Api-Key, X-Blog-MCP-Token, X-MCP-Token'
+  )
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id')
   if (req.method === 'OPTIONS') return res.status(204).end()
@@ -119,6 +160,34 @@ app.get('/health', async (_req, res) => {
   })
 })
 
+/**
+ * Diagnose proxies that strip Authorization.
+ * Reports which auth channels arrived — never echoes secret values.
+ */
+app.get('/auth-probe', (req, res) => {
+  const auth = req.headers.authorization
+  let scheme = null
+  if (typeof auth === 'string' && auth.trim()) {
+    scheme = (auth.split(/\s+/)[0] || 'raw').slice(0, 32)
+  }
+  const extracted = extractToken(req)
+  res.json({
+    ok: true,
+    codeVersion: 'auth-multi-2026-04-15',
+    authorizationPresent: Boolean(auth),
+    authorizationScheme: scheme,
+    xApiKeyPresent: Boolean(req.headers['x-api-key']),
+    xBlogMcpTokenPresent: Boolean(req.headers['x-blog-mcp-token']),
+    queryTokenPresent: Boolean(req.query?.token || req.query?.access_token),
+    tokenAccepted: tokensEqual(extracted),
+    // Helps confirm nginx forwarded the request to this process
+    writingToLiveTree: String(sandboxInfo().marketingRoot || '').startsWith(
+      '/home/pathpilo/htdocs/pathpilo.com/marketing'
+    ),
+    incomingHeaderNames: Object.keys(req.headers).sort(),
+  })
+})
+
 /** Connector discovery hint for humans / Grok setup UIs */
 app.get('/', (_req, res) => {
   res.type('html').send(`<!doctype html>
@@ -128,11 +197,12 @@ app.get('/', (_req, res) => {
   <p>Custom connector for Grok bots. Blog articles &amp; images only — no app code access.</p>
   <ul>
     <li>MCP endpoint: <code>POST /mcp</code> (Streamable HTTP, JSON responses)</li>
-    <li>Auth: <code>Authorization: Bearer &lt;token&gt;</code></li>
+    <li>Auth: Bearer, Basic, <code>X-Api-Key</code>, or <code>?token=</code> in the URL</li>
     <li>Health: <a href="/health"><code>/health</code></a></li>
+    <li>Auth probe: <a href="/auth-probe"><code>/auth-probe</code></a></li>
   </ul>
-  <p>In Grok: <strong>Connectors → New → Custom</strong>, or tell the bot<br>
-  <code>Add this MCP server: https://&lt;your-host&gt;/mcp</code></p>
+  <p>If Authorization is stripped by a proxy, use this connector URL:<br>
+  <code>https://pathpilo.com/blog-mcp/mcp?token=YOUR_TOKEN</code></p>
 </body></html>`)
 })
 
