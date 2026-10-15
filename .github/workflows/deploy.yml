@@ -326,6 +326,13 @@ jobs:
           MARKETING_PORT="$(detect_marketing_port)"
           echo "==> Marketing upstream port: $MARKETING_PORT"
 
+          # If a previous standalone copy exists, keep its public/ in sync with
+          # live MCP uploads (belt-and-suspenders alongside the blog-media route).
+          if [ -d "$APP/marketing/.next/standalone" ]; then
+            mkdir -p "$APP/marketing/.next/standalone/public/images/articles"
+            rsync -a "$APP/marketing/public/" "$APP/marketing/.next/standalone/public/" || true
+          fi
+
           echo "==> Restoring pathpilo-marketing on port $MARKETING_PORT..."
           pm2 delete pathpilo-marketing 2>/dev/null || true
           PORT="$MARKETING_PORT" pm2 start npm --name pathpilo-marketing \

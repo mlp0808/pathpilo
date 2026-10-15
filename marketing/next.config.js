@@ -24,6 +24,18 @@ const nextConfig = {
       },
     ],
   },
+  // MCP uploads land in public/images/articles after build. beforeFiles rewrite
+  // serves them from disk via /api/blog-media (no rebuild required).
+  async rewrites() {
+    return {
+      beforeFiles: [
+        {
+          source: '/images/articles/:path*',
+          destination: '/api/blog-media/:path*',
+        },
+      ],
+    }
+  },
 }
 
 module.exports = nextConfig
