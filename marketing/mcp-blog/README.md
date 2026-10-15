@@ -44,20 +44,28 @@ BLOG_MCP_ALLOWED_HOSTS=pathpilo.com,www.pathpilo.com
 
 `BLOG_MCP_MARKETING_ROOT` must be the **same** `marketing/` directory the live site runs from (`pm2` cwd for `pathpilo-marketing`).
 
-**Critical on this server:** the live site is
+**Critical on this server:** two Linux users = two PM2 daemons.
 
-`/home/pathpilo/htdocs/pathpilo.com/marketing`
+| | |
+| --- | --- |
+| Live site + correct MCP | user `pathpilo`, tree `/home/pathpilo/htdocs/pathpilo.com/marketing` |
+| Wrong clone (do not run MCP here) | user `ssh-pathpilo`, tree `/home/ssh-pathpilo/pathpilo/marketing` |
 
-not `/home/ssh-pathpilo/pathpilo/marketing`. If MCP runs from the ssh-pathpilo clone, bots “save successfully” but pathpilo.com never sees the files. Always start PM2 from the htdocs tree:
+If MCP is started under **ssh-pathpilo**, it binds `:8787` and Nginx keeps talking to it. Saves look fine, but pathpilo.com never updates.
+
+**As ssh-pathpilo (no sudo), stop the wrong MCP:**
 
 ```bash
-cd /home/pathpilo/htdocs/pathpilo.com
 pm2 delete pathpilo-blog-mcp
-pm2 start ecosystem.config.js --only pathpilo-blog-mcp
 pm2 save
+pm2 status
 ```
 
-Then call `blog_sandbox_info` — `marketingRoot` / `articlesDir` must start with `/home/pathpilo/htdocs/…`.
+Then redeploy (or start MCP as `pathpilo` from htdocs). Check:
+
+`https://pathpilo.com/blog-mcp/health`
+
+Must show `"writingToLiveTree": true` and `articlesDir` under `/home/pathpilo/htdocs/…`.
 
 ### 2. Install + start with PM2
 

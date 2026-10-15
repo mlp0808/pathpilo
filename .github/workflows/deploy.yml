@@ -290,7 +290,26 @@ jobs:
 
           echo "==> Ensure blog MCP runs from htdocs tree only..."
           pm2 delete pathpilo-blog-mcp 2>/dev/null || true
+          # Free port 8787 if a stale process (often ssh-pathpilo's PM2) still holds it
+          if command -v fuser >/dev/null 2>&1; then
+            fuser -k 8787/tcp 2>/dev/null || true
+          fi
+          sleep 1
           pm2 start ecosystem.config.js --only pathpilo-blog-mcp
+
+          # Best-effort: copy bot-written articles from the ssh-pathpilo clone if readable
+          SSH_ARTICLES="/home/ssh-pathpilo/pathpilo/marketing/content/articles"
+          SSH_IMAGES="/home/ssh-pathpilo/pathpilo/marketing/public/images/articles"
+          if [ -r "$SSH_ARTICLES" ]; then
+            echo "==> Syncing articles from ssh-pathpilo clone into live htdocs..."
+            rsync -a "$SSH_ARTICLES/" "$APP/marketing/content/articles/" || true
+          else
+            echo "==> Cannot read $SSH_ARTICLES (expected if permissions block it)."
+            echo "    Stop MCP under ssh-pathpilo, then re-publish via the connector."
+          fi
+          if [ -r "$SSH_IMAGES" ]; then
+            rsync -a "$SSH_IMAGES/" "$APP/marketing/public/images/articles/" || true
+          fi
 
           pm2 save
           pm2 status || true
@@ -298,7 +317,11 @@ jobs:
           echo "==> Local smoke checks..."
           sleep 3
           curl -sS -o /dev/null -w "marketing_local:%{http_code}\n" "http://127.0.0.1:${MARKETING_PORT}/" || true
-          curl -sS -o /dev/null -w "blog_mcp:%{http_code}\n" "http://127.0.0.1:8787/health" || true
+          echo "==> Blog MCP health (must show writingToLiveTree:true):"
+          curl -sS "http://127.0.0.1:8787/health" || true
+          echo ""
+          echo "==> Live article count in htdocs:"
+          ls -1 "$APP/marketing/content/articles"/*.mdx 2>/dev/null | wc -l || true
 
           echo "==> Deploy complete!"
           DEPLOY_SCRIPT

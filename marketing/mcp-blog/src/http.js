@@ -87,8 +87,18 @@ app.use((req, res, next) => {
   next()
 })
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   const info = sandboxInfo()
+  let articleCount = null
+  let sampleSlugs = []
+  try {
+    const { listArticles } = await import('./blogStore.js')
+    const arts = await listArticles({ includeDrafts: true })
+    articleCount = arts.length
+    sampleSlugs = arts.slice(0, 8).map((a) => a.slug)
+  } catch {
+    // ignore — path still useful
+  }
   res.json({
     ok: true,
     service: 'pathpilo-blog-mcp',
@@ -96,6 +106,16 @@ app.get('/health', (_req, res) => {
     endpoint: '/mcp',
     readOnly: info.readOnly,
     allowedWriteRoots: info.allowedWriteRoots,
+    // Public on purpose: proves which folder the live connector writes to
+    marketingRoot: info.marketingRoot,
+    articlesDir: info.articlesDir,
+    imagesDir: info.imagesDir,
+    articleCount,
+    sampleSlugs,
+    expectedLiveRoot: '/home/pathpilo/htdocs/pathpilo.com/marketing',
+    writingToLiveTree: String(info.marketingRoot || '').startsWith(
+      '/home/pathpilo/htdocs/pathpilo.com/marketing'
+    ),
   })
 })
 
