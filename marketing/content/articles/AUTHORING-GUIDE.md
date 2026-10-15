@@ -13,13 +13,14 @@ well, and link into the rest of the site automatically.
 ## 0. The workflow in 4 steps
 
 1. **Read `ARTICLE-INDEX.md`** (in this folder) to see every existing article and
-   its URL. You'll link to a few of these. _If it looks stale, it is regenerated
-   with `npm run articles:index` and automatically before every build._
+   its URL. You'll link to a few of these. _Stale? Call `blog_refresh_index` (or
+   create/update via Blog MCP — the index refreshes automatically)._
 2. **Create a new file** `marketing/content/articles/<slug>.mdx`. Use a short,
    keyword-rich, lowercase-dashed slug.
-3. **Write the frontmatter + body** using the rules below.
-4. Done. The listing page, category page, tag pages, related articles, carousel,
-   sitemap, and SEO tags all update on their own.
+3. **Write the frontmatter + body** using the rules below. Set `draft: false` to
+   publish publicly (drafts stay hidden).
+4. Done. The live marketing site reads articles from disk — no rebuild. Listing,
+   category, tag, related articles, carousel, RSS, and SEO update on the next request.
 
 > Never edit `ARTICLE-INDEX.md` by hand and never invent article URLs — only link
 > to slugs that appear in that index.

@@ -2,13 +2,13 @@ import type { Metadata } from 'next'
 import Header from '../../../components/Header'
 import Footer from '../../../components/Footer'
 import ArticleCard from '../../../components/blog/ArticleCard'
-import { getAllUsedTags, getArticlesByTag } from '../../../lib/blog/articles'
+import { getArticlesByTag } from '../../../lib/blog/articles'
 import { tagLabel } from '../../../lib/blog/taxonomy'
 import { getMarketingSiteUrl } from '../../../lib/siteUrl'
 
-export function generateStaticParams() {
-  return getAllUsedTags().map((tag) => ({ tag }))
-}
+/** Live filesystem reads — bots/MCP can publish without a rebuild. */
+export const dynamic = 'force-dynamic'
+export const dynamicParams = true
 
 export async function generateMetadata({
   params,

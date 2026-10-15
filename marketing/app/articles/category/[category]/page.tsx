@@ -5,12 +5,12 @@ import Footer from '../../../components/Footer'
 import ArticleCard from '../../../components/blog/ArticleCard'
 import CategoryPills from '../../../components/blog/CategoryPills'
 import { getArticlesByCategory } from '../../../lib/blog/articles'
-import { BLOG_CATEGORIES, getCategory } from '../../../lib/blog/taxonomy'
+import { getCategory } from '../../../lib/blog/taxonomy'
 import { getMarketingSiteUrl } from '../../../lib/siteUrl'
 
-export function generateStaticParams() {
-  return BLOG_CATEGORIES.map((c) => ({ category: c.slug }))
-}
+/** Live filesystem reads — bots/MCP can publish without a rebuild. */
+export const dynamic = 'force-dynamic'
+export const dynamicParams = true
 
 export async function generateMetadata({
   params,

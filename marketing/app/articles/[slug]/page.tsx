@@ -15,7 +15,6 @@ import { CTABox } from '../../components/blog/content'
 import { mdxComponents } from '../../components/blog/mdx-components'
 import {
   getArticleBySlug,
-  getArticleSlugs,
   getRelatedArticles,
   getMoreArticles,
 } from '../../lib/blog/articles'
@@ -23,9 +22,9 @@ import { resolveCategory, tagLabel } from '../../lib/blog/taxonomy'
 import { formatArticleDate, readingTimeLabel } from '../../lib/blog/format'
 import { getMarketingSiteUrl } from '../../lib/siteUrl'
 
-export function generateStaticParams() {
-  return getArticleSlugs().map((slug) => ({ slug }))
-}
+/** Live filesystem reads — bots/MCP can publish without a rebuild. */
+export const dynamic = 'force-dynamic'
+export const dynamicParams = true
 
 export async function generateMetadata({
   params,

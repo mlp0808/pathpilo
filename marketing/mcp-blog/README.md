@@ -14,17 +14,35 @@ The bot can then create/edit blog posts, titles, meta descriptions, categories, 
 
 ---
 
+## How publishing works (no daily rebuild)
+
+Marketing and the product app are separate processes. The blog is **file-based** MDX under `marketing/content/articles/`.
+
+1. Bot writes/updates an `.mdx` file via MCP (and optional images under `public/images/articles/`).
+2. The marketing Next site reads those files **live** on each request (fingerprint cache; changes show within seconds).
+3. Set `draft: false` (or omit draft) to publish. Drafts stay off the public site.
+
+You do **not** need to rebuild marketing after every bot post. Rebuild only when you change marketing **code** (layout, components, design).
+
+`blog_refresh_index` updates `ARTICLE-INDEX.md` for internal-link guidance. Creates/updates/deletes also refresh that index automatically.
+
+---
+
 ## One-time setup on the live server (Hetzner)
 
 ### 1. Password
 
-In the server’s root `.env` (same place as other secrets), add:
+In the server’s root `.env` (or `marketing/mcp-blog/.env`), add:
 
 ```bash
 BLOG_MCP_TOKEN=pick-a-long-random-password
 BLOG_MCP_PORT=8787
 BLOG_MCP_ALLOWED_HOSTS=pathpilo.com,www.pathpilo.com
+# Optional override — defaults to the marketing/ folder next to mcp-blog/
+# BLOG_MCP_MARKETING_ROOT=/home/pathpilo/htdocs/pathpilo.com/marketing
 ```
+
+`BLOG_MCP_MARKETING_ROOT` must be the **same** `marketing/` directory the live site runs from (`pm2` cwd for `pathpilo-marketing`).
 
 ### 2. Install + start with PM2
 
@@ -35,7 +53,7 @@ pm2 start ecosystem.config.js --only pathpilo-blog-mcp
 pm2 save
 ```
 
-(Or run a normal `./scripts/deploy.sh` after the deploy script update — it will install and restart this too.)
+(Or run a normal deploy — it installs and restarts this too.)
 
 ### 3. Nginx (pathpilo.com)
 
@@ -59,16 +77,6 @@ Reload Nginx. Check:
 - Open `https://pathpilo.com/blog-mcp/health` → should say `"ok": true`
 - Then give Grok the link + password above
 
-### Important
-
-Blog files live on this server under `marketing/content/articles/`. After the bot publishes, rebuild/restart marketing if your live site doesn’t pick up MDX changes until build:
-
-```bash
-cd marketing && npm run build && pm2 restart pathpilo-marketing
-```
-
-(Or fold that into deploy when you’re ready.)
-
 ---
 
 ## Local testing (optional)
@@ -79,3 +87,5 @@ cp .env.example .env   # set BLOG_MCP_TOKEN
 npm start
 # http://localhost:8787/mcp  + your token
 ```
+
+Run marketing separately (`cd marketing && npm run dev`) so you can see new posts at `/articles` without rebuilding.

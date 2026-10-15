@@ -10,6 +10,9 @@ import { bilingualPageMetadata } from '../../lib/seo'
 import { isMarketingLocale } from '../../lib/i18n'
 import type { MarketingLocale } from '../../lib/i18n'
 
+/** Live filesystem reads — bots/MCP can publish without a rebuild. */
+export const dynamic = 'force-dynamic'
+
 export function generateStaticParams() {
   return [{ lang: 'en' }, { lang: 'da' }]
 }

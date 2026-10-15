@@ -1,8 +1,8 @@
 import { getAllArticles } from '../../lib/blog/articles'
 import { getMarketingSiteUrl } from '../../lib/siteUrl'
 
-export const dynamic = 'force-static'
-export const revalidate = 3600
+/** Live feed — new MCP posts appear without a rebuild. */
+export const dynamic = 'force-dynamic'
 
 function escapeXml(s: string): string {
   return s
@@ -52,7 +52,7 @@ ${items}
   return new Response(xml, {
     headers: {
       'Content-Type': 'application/rss+xml; charset=utf-8',
-      'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+      'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
     },
   })
 }

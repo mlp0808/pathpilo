@@ -65,7 +65,9 @@ module.exports = {
         NODE_ENV: "production",
         BLOG_MCP_PORT: 8787,
         BLOG_MCP_HOST: "127.0.0.1",
-        BLOG_MCP_ALLOWED_HOSTS: "pathpilo.com,www.pathpilo.com,127.0.0.1,localhost"
+        BLOG_MCP_ALLOWED_HOSTS: "pathpilo.com,www.pathpilo.com,127.0.0.1,localhost",
+        // Same tree the marketing Next process reads (live publish, no rebuild).
+        BLOG_MCP_MARKETING_ROOT: path.join(root, "marketing")
         // BLOG_MCP_TOKEN is loaded from marketing/mcp-blog/.env or repo-root .env
       },
       error_file: path.join(root, "logs", "blog-mcp-error.log"),

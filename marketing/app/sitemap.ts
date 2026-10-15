@@ -4,6 +4,10 @@ import { getAllArticles, getAllUsedTags } from './lib/blog/articles'
 import { BLOG_CATEGORIES } from './lib/blog/taxonomy'
 import { INDUSTRIES } from './lib/industries/data'
 import { COMPARISON_PAGES } from './lib/comparisons/data'
+
+/** Include newly published MCP articles without a rebuild. */
+export const dynamic = 'force-dynamic'
+
 const LOCALES = ['en', 'da'] as const
 const ROUTES = [
   '',

@@ -7,6 +7,9 @@ import CategoryPills from '../components/blog/CategoryPills'
 import { getAllArticles, getFeaturedArticle } from '../lib/blog/articles'
 import { getMarketingSiteUrl } from '../lib/siteUrl'
 
+/** Live filesystem reads — bots/MCP can publish without a rebuild. */
+export const dynamic = 'force-dynamic'
+
 export const metadata: Metadata = {
   title: 'Articles — Guides for service businesses',
   description:

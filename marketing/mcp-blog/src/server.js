@@ -158,7 +158,7 @@ export function createBlogMcpServer() {
     {
       title: 'Create article',
       description:
-        'Create a new .mdx article. Defaults to draft:true. Sets title, description, category, tags, SEO fields, cover, and body.',
+        'Create a new .mdx article. Defaults to draft:true. Goes live on pathpilo.com within seconds when draft is false (no rebuild). Sets title, description, category, tags, SEO fields, cover, and body.',
       inputSchema: {
         slug: z.string(),
         title: z.string(),
@@ -290,7 +290,8 @@ export function createBlogMcpServer() {
     'blog_set_status',
     {
       title: 'Publish / draft / feature',
-      description: 'Toggle draft, featured, or dates.',
+      description:
+        'Toggle draft, featured, or dates. draft:false publishes live immediately (no marketing rebuild).',
       inputSchema: {
         slug: z.string(),
         draft: z.boolean().optional(),

@@ -5,11 +5,10 @@ import matter from 'gray-matter'
 import type { Article, ArticleFrontmatter, ArticleSummary } from './types'
 
 /**
- * Server-only data layer for the blog. Reads .mdx files from /content/articles
- * at build/request time, parses frontmatter, and exposes helpers for listing,
- * archives, and related-article suggestions.
+ * Server-only data layer for the blog.
  *
- * Nothing here runs on the client — pages call these in server components.
+ * Reads `.mdx` from /content/articles on each request (with a short
+ * fingerprint cache so bots / MCP can publish without a rebuild).
  */
 
 const ARTICLES_DIR = path.join(process.cwd(), 'content', 'articles')
@@ -21,7 +20,6 @@ function readingMinutesFor(body: string): number {
 }
 
 function isArticleFile(file: string): boolean {
-  // .mdx posts only; underscore-prefixed files (_TEMPLATE) and docs are ignored.
   return file.endsWith('.mdx') && !file.startsWith('_')
 }
 
@@ -29,32 +27,57 @@ function slugFromFile(file: string): string {
   return file.replace(/\.mdx$/, '')
 }
 
-let _cache: Article[] | null = null
-
-/** All articles (including drafts), unsorted. Cached per process. */
-function loadAll(): Article[] {
-  if (_cache) return _cache
-  if (!fs.existsSync(ARTICLES_DIR)) {
-    _cache = []
-    return _cache
-  }
+/** Changes whenever any article file is added/edited/removed. */
+function dirFingerprint(): string {
+  if (!fs.existsSync(ARTICLES_DIR)) return 'missing'
   const files = fs.readdirSync(ARTICLES_DIR).filter(isArticleFile)
-  const articles: Article[] = files.map((file) => {
-    const raw = fs.readFileSync(path.join(ARTICLES_DIR, file), 'utf8')
-    const { data, content } = matter(raw)
-    const fm = data as ArticleFrontmatter
-    return {
-      slug: fm.slug || slugFromFile(file),
-      frontmatter: {
-        ...fm,
-        tags: Array.isArray(fm.tags) ? fm.tags : [],
-      },
-      content,
-      readingMinutes: readingMinutesFor(content),
+  return files
+    .map((f) => {
+      const st = fs.statSync(path.join(ARTICLES_DIR, f))
+      return `${f}:${st.mtimeMs}:${st.size}`
+    })
+    .sort()
+    .join('|')
+}
+
+type Cache = { articles: Article[]; fingerprint: string }
+let _cache: Cache | null = null
+
+/** All articles (including drafts), unsorted. Reloads when files change. */
+function loadAll(): Article[] {
+  const fingerprint = dirFingerprint()
+  if (_cache && _cache.fingerprint === fingerprint) return _cache.articles
+
+  if (!fs.existsSync(ARTICLES_DIR)) {
+    _cache = { articles: [], fingerprint }
+    return _cache.articles
+  }
+
+  const files = fs.readdirSync(ARTICLES_DIR).filter(isArticleFile)
+  const articles: Article[] = []
+
+  for (const file of files) {
+    try {
+      const raw = fs.readFileSync(path.join(ARTICLES_DIR, file), 'utf8')
+      const { data, content } = matter(raw)
+      const fm = data as ArticleFrontmatter
+      articles.push({
+        slug: fm.slug || slugFromFile(file),
+        frontmatter: {
+          ...fm,
+          tags: Array.isArray(fm.tags) ? fm.tags : [],
+        },
+        content,
+        readingMinutes: readingMinutesFor(content),
+      })
+    } catch (err) {
+      // Skip broken files so one bad MCP write doesn't take down the whole blog.
+      console.error(`[blog] Failed to parse ${file}:`, err)
     }
-  })
-  _cache = articles
-  return _cache
+  }
+
+  _cache = { articles, fingerprint }
+  return _cache.articles
 }
 
 function articleLocale(fm: ArticleFrontmatter): 'en' | 'da' {
@@ -157,7 +180,8 @@ export function getRelatedArticles(slug: string, limit = 4): ArticleSummary[] {
 export function getMoreArticles(slug: string, limit = 8): ArticleSummary[] {
   const related = getRelatedArticles(slug, limit)
   if (related.length >= limit) return related
+  const current = getAllArticles().find((a) => a.slug === slug)
   const seen = new Set([slug, ...related.map((r) => r.slug)])
-  const backfill = getAllArticles(current.locale).filter((a) => !seen.has(a.slug))
+  const backfill = getAllArticles(current?.locale).filter((a) => !seen.has(a.slug))
   return [...related, ...backfill].slice(0, limit)
 }
