@@ -11,7 +11,7 @@
  *   grok.com/connectors → New Connector → Custom → paste URL
  *   or tell the bot: "Add this MCP server: https://…/mcp"
  */
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
@@ -29,18 +29,58 @@ dotenv.config({ path: path.join(__dirname, '../../../.env') })
 
 const PORT = Number(process.env.BLOG_MCP_PORT || process.env.PORT || 8787)
 const HOST = process.env.BLOG_MCP_HOST || '0.0.0.0'
-const TOKEN = process.env.BLOG_MCP_TOKEN || ''
+
+/** Strip quotes / CR-LF / spaces that often sneak in via .env or /tmp handoff. */
+function sanitizeToken(raw) {
+  if (raw == null) return ''
+  let t = String(raw).replace(/^\uFEFF/, '').replace(/[\r\n]+/g, '').trim()
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
+    t = t.slice(1, -1).trim()
+  }
+  const placeholders = new Set([
+    '',
+    'replace-with-your-password',
+    'replace-with-a-long-random-secret',
+    'changeme',
+    'your-token',
+    'your-password',
+  ])
+  if (placeholders.has(t.toLowerCase())) return ''
+  return t
+}
+
+const TOKEN = sanitizeToken(process.env.BLOG_MCP_TOKEN)
 
 if (!TOKEN) {
   console.error(
-    '[pathpilo-blog-mcp] Refusing to start: set BLOG_MCP_TOKEN to a long random secret.'
+    '[pathpilo-blog-mcp] Refusing to start: set BLOG_MCP_TOKEN to a long random secret (not a placeholder).'
   )
   process.exit(1)
 }
 
+console.error(
+  `[pathpilo-blog-mcp] Token loaded: length=${TOKEN.length} sha256_8=${createHash('sha256').update(TOKEN).digest('hex').slice(0, 8)}`
+)
+
+function tokenFingerprint(value) {
+  const clean = sanitizeToken(value)
+  if (!clean) {
+    return { length: 0, sha256_8: null, empty: true }
+  }
+  return {
+    length: clean.length,
+    sha256_8: createHash('sha256').update(clean).digest('hex').slice(0, 8),
+    empty: false,
+  }
+}
+
 function tokensEqual(provided) {
-  if (!provided || typeof provided !== 'string') return false
-  const a = Buffer.from(provided.trim())
+  const clean = sanitizeToken(provided)
+  if (!clean) return false
+  const a = Buffer.from(clean)
   const b = Buffer.from(TOKEN)
   if (a.length !== b.length) return false
   try {
@@ -58,30 +98,30 @@ function extractToken(req) {
   const auth = req.headers.authorization
   if (typeof auth === 'string' && auth.trim()) {
     const bearer = auth.match(/^Bearer\s+(.+)$/i)
-    if (bearer) return bearer[1].trim()
+    if (bearer) return sanitizeToken(bearer[1])
     const basic = auth.match(/^Basic\s+(.+)$/i)
     if (basic) {
       try {
         const decoded = Buffer.from(basic[1], 'base64').toString('utf8')
         const colon = decoded.indexOf(':')
         // Grok / browsers often send "user:password" — password is our token
-        return (colon >= 0 ? decoded.slice(colon + 1) : decoded).trim()
+        return sanitizeToken(colon >= 0 ? decoded.slice(colon + 1) : decoded)
       } catch {
         // ignore
       }
     }
-    return auth.trim()
+    return sanitizeToken(auth)
   }
 
   for (const key of ['x-api-key', 'x-blog-mcp-token', 'x-mcp-token', 'api-key']) {
     const v = req.headers[key]
-    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'string' && v.trim()) return sanitizeToken(v)
   }
 
   const q = req.query || {}
   for (const key of ['token', 'access_token', 'api_key']) {
     const v = q[key]
-    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'string' && v.trim()) return sanitizeToken(v)
   }
   return null
 }
@@ -171,16 +211,28 @@ app.get('/auth-probe', (req, res) => {
     scheme = (auth.split(/\s+/)[0] || 'raw').slice(0, 32)
   }
   const extracted = extractToken(req)
+  const provided = tokenFingerprint(extracted)
+  const expected = tokenFingerprint(TOKEN)
   res.json({
     ok: true,
-    codeVersion: 'auth-multi-2026-04-15',
+    codeVersion: 'auth-token-match-2026-04-15',
     authorizationPresent: Boolean(auth),
     authorizationScheme: scheme,
     xApiKeyPresent: Boolean(req.headers['x-api-key']),
     xBlogMcpTokenPresent: Boolean(req.headers['x-blog-mcp-token']),
     queryTokenPresent: Boolean(req.query?.token || req.query?.access_token),
     tokenAccepted: tokensEqual(extracted),
-    // Helps confirm nginx forwarded the request to this process
+    // Compare without revealing secrets — lengths + short hashes must match
+    providedToken: provided,
+    serverToken: expected,
+    lengthMatch: provided.length === expected.length,
+    hashMatch: provided.sha256_8 != null && provided.sha256_8 === expected.sha256_8,
+    hint:
+      provided.empty
+        ? 'No token received on this request.'
+        : provided.sha256_8 === expected.sha256_8
+          ? 'Tokens match.'
+          : 'Tokens differ. Server secret ≠ what you sent. Re-handoff via /tmp and redeploy.',
     writingToLiveTree: String(sandboxInfo().marketingRoot || '').startsWith(
       '/home/pathpilo/htdocs/pathpilo.com/marketing'
     ),

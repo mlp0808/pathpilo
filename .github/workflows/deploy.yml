@@ -174,24 +174,41 @@ jobs:
           DEPLOY_STRIPE_WEBHOOK="$(resolve '${{ secrets.STRIPE_WEBHOOK_SECRET }}' STRIPE_WEBHOOK_SECRET)"
           DEPLOY_STRIPE_MONTHLY="$(resolve '${{ vars.STRIPE_PRICE_MONTHLY }}' STRIPE_PRICE_MONTHLY)"
           DEPLOY_STRIPE_ANNUAL="$(resolve '${{ vars.STRIPE_PRICE_ANNUAL }}' STRIPE_PRICE_ANNUAL)"
-          DEPLOY_BLOG_MCP_TOKEN="$(resolve '${{ secrets.BLOG_MCP_TOKEN }}' BLOG_MCP_TOKEN)"
-          # Extra sources: mcp-blog/.env, and a hand-off file from ssh-pathpilo (/tmp)
+          sanitize_token() {
+            # trim CR/LF/spaces/quotes; drop known placeholders
+            local t
+            t="$(printf '%s' "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            t="$(printf '%s' "$t" | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//')"
+            case "$t" in
+              ''|replace-with-your-password|replace-with-a-long-random-secret|changeme|your-token|your-password)
+                printf ''
+                ;;
+              *)
+                printf '%s' "$t"
+                ;;
+            esac
+          }
+
+          # /tmp handoff from ssh-pathpilo ALWAYS wins when valid (fixes stale
+          # placeholder that was previously written into pathpilo-secrets.env).
+          HANDOFF_TOKEN="$(sanitize_token "$(read_env_key /tmp/pathpilo-blog-mcp-token.env BLOG_MCP_TOKEN)")"
+          DEPLOY_BLOG_MCP_TOKEN="$(sanitize_token "$(resolve '${{ secrets.BLOG_MCP_TOKEN }}' BLOG_MCP_TOKEN)")"
           if [ -z "$DEPLOY_BLOG_MCP_TOKEN" ]; then
-            DEPLOY_BLOG_MCP_TOKEN="$(read_env_key "$APP/marketing/mcp-blog/.env" BLOG_MCP_TOKEN)"
+            DEPLOY_BLOG_MCP_TOKEN="$(sanitize_token "$(read_env_key "$APP/marketing/mcp-blog/.env" BLOG_MCP_TOKEN)")"
           fi
           if [ -z "$DEPLOY_BLOG_MCP_TOKEN" ]; then
-            DEPLOY_BLOG_MCP_TOKEN="$(read_env_key /tmp/pathpilo-blog-mcp-token.env BLOG_MCP_TOKEN)"
+            DEPLOY_BLOG_MCP_TOKEN="$(sanitize_token "$(read_env_key /home/ssh-pathpilo/pathpilo/.env BLOG_MCP_TOKEN)")"
           fi
           if [ -z "$DEPLOY_BLOG_MCP_TOKEN" ]; then
-            DEPLOY_BLOG_MCP_TOKEN="$(read_env_key /home/ssh-pathpilo/pathpilo/.env BLOG_MCP_TOKEN)"
+            DEPLOY_BLOG_MCP_TOKEN="$(sanitize_token "$(read_env_key /home/ssh-pathpilo/pathpilo/marketing/mcp-blog/.env BLOG_MCP_TOKEN)")"
           fi
-          if [ -z "$DEPLOY_BLOG_MCP_TOKEN" ]; then
-            DEPLOY_BLOG_MCP_TOKEN="$(read_env_key /home/ssh-pathpilo/pathpilo/marketing/mcp-blog/.env BLOG_MCP_TOKEN)"
-          fi
-          if [ -n "$DEPLOY_BLOG_MCP_TOKEN" ]; then
+          if [ -n "$HANDOFF_TOKEN" ]; then
+            DEPLOY_BLOG_MCP_TOKEN="$HANDOFF_TOKEN"
+            echo "==> BLOG_MCP_TOKEN: using /tmp handoff (${#DEPLOY_BLOG_MCP_TOKEN} chars) — overrides secrets file"
+          elif [ -n "$DEPLOY_BLOG_MCP_TOKEN" ]; then
             echo "==> BLOG_MCP_TOKEN: present (${#DEPLOY_BLOG_MCP_TOKEN} chars)"
           else
-            echo "==> WARNING: BLOG_MCP_TOKEN missing — blog MCP will exit immediately (502 on /blog-mcp/)"
+            echo "==> WARNING: BLOG_MCP_TOKEN missing/placeholder — blog MCP will not start"
           fi
 
           # Persist resolved secrets back to the stable file so future deploys
