@@ -88,6 +88,8 @@ Add this **inside** the existing `pathpilo.com` server block (above `location /`
 
 ```nginx
 location /blog-mcp/ {
+    # Allow base64 image uploads for blog + Buffer/social assets
+    client_max_body_size 12m;
     proxy_pass http://127.0.0.1:8787/;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -100,6 +102,12 @@ location /blog-mcp/ {
     proxy_pass_header Authorization;
 }
 ```
+
+In **CloudPanel → site pathpilo.com → Nginx Config**, you can also add only:
+
+`client_max_body_size 12m;`
+
+(Node blog-MCP already accepts up to ~12MB JSON / 8MB decoded images. Nginx default is often 1m.)
 
 Reload Nginx. Check:
 

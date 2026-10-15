@@ -15,11 +15,15 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
+import express from 'express'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { createBlogMcpServer } from './server.js'
 import { sandboxInfo } from './blogStore.js'
+
+/** JSON body limit for base64 image uploads (decoded file max is lower). */
+const JSON_BODY_LIMIT = process.env.BLOG_MCP_JSON_LIMIT || '12mb'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // Prefer mcp-blog/.env, then marketing/.env, then repo-root .env
@@ -156,6 +160,18 @@ const app = createMcpExpressApp({
   allowedHosts,
 })
 
+// SDK 1.32 ships express.json() at the Express default (100kb). That rejects
+// social/blog image uploads. Swap it for a larger limit on this service only.
+{
+  const stack = app.router?.stack
+  if (Array.isArray(stack)) {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i]?.name === 'jsonParser') stack.splice(i, 1)
+    }
+  }
+  app.use(express.json({ limit: JSON_BODY_LIMIT }))
+}
+
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader(
@@ -197,6 +213,9 @@ app.get('/health', async (_req, res) => {
     writingToLiveTree: String(info.marketingRoot || '').startsWith(
       '/home/pathpilo/htdocs/pathpilo.com/marketing'
     ),
+    jsonBodyLimit: JSON_BODY_LIMIT,
+    maxImageBytes: 8 * 1024 * 1024,
+    publicImageBase: 'https://pathpilo.com/images/articles/',
   })
 })
 
@@ -356,8 +375,24 @@ app.delete('/mcp', requireAuth, async (req, res) => {
   res.status(204).end()
 })
 
+app.use((err, _req, res, next) => {
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    res.status(413).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: `Payload too large (Node limit ${JSON_BODY_LIMIT}). If this persists, raise nginx client_max_body_size on /blog-mcp/.`,
+      },
+      id: null,
+    })
+    return
+  }
+  next(err)
+})
+
 app.listen(PORT, HOST, () => {
   console.error(`[pathpilo-blog-mcp] Grok connector listening on http://${HOST}:${PORT}`)
   console.error(`[pathpilo-blog-mcp] MCP URL path: /mcp  (auth: Bearer token)`)
+  console.error(`[pathpilo-blog-mcp] JSON body limit: ${JSON_BODY_LIMIT}`)
   console.error(`[pathpilo-blog-mcp] Sandbox: articles + images only`)
 })

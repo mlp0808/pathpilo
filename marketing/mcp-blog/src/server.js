@@ -383,7 +383,7 @@ export function createBlogMcpServer() {
     {
       title: 'Upload article image',
       description:
-        'Write an image into public/images/articles/. Pass base64 (no data: URL prefix). Max 8MB.',
+        'Write an image into public/images/articles/ for blog covers or Buffer/social public URLs. Pass base64 (no data: URL prefix). Max 8MB decoded (~12MB JSON). Returns path like /images/articles/file.jpg → https://pathpilo.com/images/articles/file.jpg',
       inputSchema: {
         filename: z.string().describe('e.g. my-slug.jpg'),
         base64: z.string(),
