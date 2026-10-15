@@ -44,6 +44,21 @@ BLOG_MCP_ALLOWED_HOSTS=pathpilo.com,www.pathpilo.com
 
 `BLOG_MCP_MARKETING_ROOT` must be the **same** `marketing/` directory the live site runs from (`pm2` cwd for `pathpilo-marketing`).
 
+**Critical on this server:** the live site is
+
+`/home/pathpilo/htdocs/pathpilo.com/marketing`
+
+not `/home/ssh-pathpilo/pathpilo/marketing`. If MCP runs from the ssh-pathpilo clone, bots “save successfully” but pathpilo.com never sees the files. Always start PM2 from the htdocs tree:
+
+```bash
+cd /home/pathpilo/htdocs/pathpilo.com
+pm2 delete pathpilo-blog-mcp
+pm2 start ecosystem.config.js --only pathpilo-blog-mcp
+pm2 save
+```
+
+Then call `blog_sandbox_info` — `marketingRoot` / `articlesDir` must start with `/home/pathpilo/htdocs/…`.
+
 ### 2. Install + start with PM2
 
 ```bash

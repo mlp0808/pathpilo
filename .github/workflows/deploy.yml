@@ -117,14 +117,24 @@ jobs:
           tar -xzf /tmp/deployment.tar.gz -C $TEMP_DEPLOY
 
           echo "==> Syncing files..."
+          # Blog MDX + images are written live by the Grok MCP connector.
+          # Exclude them from --delete so bot posts survive deploys; merge from
+          # git afterward (adds/updates without wiping MCP-only files).
           rsync -a --delete \
             --exclude='.env' \
             --exclude='api-server/.env' \
             --exclude='node_modules' \
             --exclude='api-server/node_modules' \
             --exclude='marketing/node_modules' \
+            --exclude='marketing/mcp-blog/node_modules' \
+            --exclude='marketing/content/articles/' \
+            --exclude='marketing/public/images/articles/' \
             --exclude='logs' \
             $TEMP_DEPLOY/ $APP/
+
+          mkdir -p "$APP/marketing/content/articles" "$APP/marketing/public/images/articles"
+          rsync -a "$TEMP_DEPLOY/marketing/content/articles/" "$APP/marketing/content/articles/"
+          rsync -a "$TEMP_DEPLOY/marketing/public/images/articles/" "$APP/marketing/public/images/articles/"
 
           rm -rf $TEMP_DEPLOY
           rm -f /tmp/deployment.tar.gz
@@ -232,14 +242,20 @@ jobs:
           npm ci --omit=dev
           cd api-server && npm ci --omit=dev && cd ..
           cd marketing && npm ci --omit=dev && cd ..
+          if [ -f marketing/mcp-blog/package.json ]; then
+            cd marketing/mcp-blog && npm ci --omit=dev && cd ../..
+          fi
 
           mkdir -p logs
 
-          echo "==> Restarting services..."
-          pm2 restart pathpilo-frontend --update-env
-          pm2 restart pathpilo-api --update-env
-          pm2 restart pathpilo-marketing --update-env
+          echo "==> Restarting services (must use $APP — not ssh-pathpilo clone)..."
+          pm2 delete pathpilo-blog-mcp 2>/dev/null || true
+          pm2 start ecosystem.config.js --only pathpilo-frontend,pathpilo-api,pathpilo-marketing,pathpilo-blog-mcp
+          pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp --update-env
           pm2 save
+
+          echo "==> Blog MCP root (must be htdocs marketing):"
+          node -e "const e=require('./ecosystem.config.js'); const a=e.apps.find(x=>x.name==='pathpilo-blog-mcp'); console.log(a&&a.env&&a.env.BLOG_MCP_MARKETING_ROOT)"
 
           echo "==> Deploy complete!"
           DEPLOY_SCRIPT

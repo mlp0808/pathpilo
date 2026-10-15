@@ -28,7 +28,10 @@ echo "→ Installing blog MCP connector (Grok)..."
 cd marketing/mcp-blog && npm install && cd ../..
 
 echo "→ Restarting PM2 apps..."
-pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
+# Ensure blog MCP cwd/root is this tree (not a separate ssh-pathpilo clone).
+pm2 delete pathpilo-blog-mcp 2>/dev/null || true
+pm2 start ecosystem.config.js --only pathpilo-frontend,pathpilo-api,pathpilo-marketing,pathpilo-blog-mcp 2>/dev/null \
+  || pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
   || pm2 restart vevago-frontend vevago-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
   || pm2 start ecosystem.config.js
 
