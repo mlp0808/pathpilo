@@ -248,14 +248,57 @@ jobs:
 
           mkdir -p logs
 
-          echo "==> Restarting services (must use $APP — not ssh-pathpilo clone)..."
-          pm2 delete pathpilo-blog-mcp 2>/dev/null || true
-          pm2 start ecosystem.config.js --only pathpilo-frontend,pathpilo-api,pathpilo-marketing,pathpilo-blog-mcp
-          pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp --update-env
-          pm2 save
+          echo "==> PM2 status before restart:"
+          pm2 status || true
 
-          echo "==> Blog MCP root (must be htdocs marketing):"
-          node -e "const e=require('./ecosystem.config.js'); const a=e.apps.find(x=>x.name==='pathpilo-blog-mcp'); console.log(a&&a.env&&a.env.BLOG_MCP_MARKETING_ROOT)"
+          # Detect which localhost port Nginx expects for the marketing site.
+          # Never reset frontend/api from ecosystem.config.js — that overwrites
+          # live ports and causes 502s.
+          detect_marketing_port() {
+            local p=""
+            local f
+            for f in \
+              /etc/nginx/sites-enabled/pathpilo.com.conf \
+              /etc/nginx/sites-enabled/pathpilo.com \
+              /etc/nginx/conf.d/pathpilo.com.conf \
+              /home/pathpilo/conf/nginx/pathpilo.com.conf \
+              /etc/nginx/sites-enabled/*; do
+              [ -r "$f" ] || continue
+              p="$(grep -E 'proxy_pass[[:space:]]+http://127\.0\.0\.1:[0-9]+' "$f" 2>/dev/null \
+                | grep -v blog-mcp \
+                | head -1 \
+                | grep -oE '127\.0\.0\.1:[0-9]+' \
+                | cut -d: -f2 || true)"
+              if [ -n "$p" ]; then echo "$p"; return 0; fi
+            done
+            # Historical live port for pathpilo.com on this host
+            echo "3006"
+          }
+
+          MARKETING_PORT="$(detect_marketing_port)"
+          echo "==> Marketing upstream port: $MARKETING_PORT"
+
+          echo "==> Restoring pathpilo-marketing on port $MARKETING_PORT..."
+          pm2 delete pathpilo-marketing 2>/dev/null || true
+          PORT="$MARKETING_PORT" pm2 start npm --name pathpilo-marketing \
+            --cwd "$APP/marketing" \
+            -- start -- -p "$MARKETING_PORT"
+
+          echo "==> Soft-restart app + API (keep existing PM2 env/ports)..."
+          pm2 restart pathpilo-frontend 2>/dev/null || true
+          pm2 restart pathpilo-api 2>/dev/null || true
+
+          echo "==> Ensure blog MCP runs from htdocs tree only..."
+          pm2 delete pathpilo-blog-mcp 2>/dev/null || true
+          pm2 start ecosystem.config.js --only pathpilo-blog-mcp
+
+          pm2 save
+          pm2 status || true
+
+          echo "==> Local smoke checks..."
+          sleep 3
+          curl -sS -o /dev/null -w "marketing_local:%{http_code}\n" "http://127.0.0.1:${MARKETING_PORT}/" || true
+          curl -sS -o /dev/null -w "blog_mcp:%{http_code}\n" "http://127.0.0.1:8787/health" || true
 
           echo "==> Deploy complete!"
           DEPLOY_SCRIPT

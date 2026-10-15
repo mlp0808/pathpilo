@@ -27,13 +27,13 @@ cd marketing && npm install && npm run build && cd ..
 echo "→ Installing blog MCP connector (Grok)..."
 cd marketing/mcp-blog && npm install && cd ../..
 
-echo "→ Restarting PM2 apps..."
-# Ensure blog MCP cwd/root is this tree (not a separate ssh-pathpilo clone).
+echo "→ Restarting PM2 apps (do not reset frontend/api ports from ecosystem)..."
+pm2 restart pathpilo-frontend 2>/dev/null || true
+pm2 restart pathpilo-api 2>/dev/null || true
+pm2 restart pathpilo-marketing 2>/dev/null || true
 pm2 delete pathpilo-blog-mcp 2>/dev/null || true
-pm2 start ecosystem.config.js --only pathpilo-frontend,pathpilo-api,pathpilo-marketing,pathpilo-blog-mcp 2>/dev/null \
-  || pm2 restart pathpilo-frontend pathpilo-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
-  || pm2 restart vevago-frontend vevago-api pathpilo-marketing pathpilo-blog-mcp 2>/dev/null \
-  || pm2 start ecosystem.config.js
+pm2 start ecosystem.config.js --only pathpilo-blog-mcp
+pm2 save
 
 echo "→ Done. Check: pm2 status"
 echo "  Blog connector: https://pathpilo.com/blog-mcp/health"
