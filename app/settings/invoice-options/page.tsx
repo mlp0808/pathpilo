@@ -24,9 +24,10 @@ import {
   SettingsToggle,
   SettingsInput,
   SettingsTextarea,
-  SettingsButton,
   SettingsHint,
   SettingsErrorNote,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
 } from '../../components/settings/SettingsUI'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,8 +392,11 @@ export default function InvoiceOptionsPage() {
     )
   }
 
+  const saveLabel = t('settings.invoices.saveChanges', 'Save changes')
+  const savingLabel = t('settings.invoices.saving', 'Saving…')
+
   return (
-    <div className={`px-6 py-8 ${hasUnsavedChanges ? 'pb-24' : ''}`}>
+    <div className="px-6 py-8 pb-16">
       <div className="mx-auto max-w-2xl">
         <SettingsHeader
           title={t('settings.invoices.title', 'Invoices')}
@@ -400,6 +404,17 @@ export default function InvoiceOptionsPage() {
             'settings.invoices.introActive',
             'Configure how invoices are numbered and sent, then set up how clients pay you and get reminded.',
           )}
+          action={
+            <SettingsSaveButton
+              dirty={hasUnsavedChanges}
+              saving={defaultsSaving}
+              onSave={() => {
+                void handleSaveAll()
+              }}
+              label={saveLabel}
+              savingLabel={savingLabel}
+            />
+          }
         />
 
         {defaultsError && (
@@ -661,34 +676,18 @@ export default function InvoiceOptionsPage() {
         </SettingsSection>
       </div>
 
-      {hasUnsavedChanges && (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] backdrop-blur lg:left-[200px]">
-          <div className="mx-auto flex max-w-2xl items-center justify-between gap-4 px-6 py-3">
-            <p className="text-sm text-gray-600">
-              {t('settings.invoices.unsaved', 'You have unsaved changes')}
-            </p>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handleDiscardAll}
-                disabled={defaultsSaving}
-                className="text-[13px] font-medium text-gray-500 hover:text-gray-800 disabled:opacity-40"
-              >
-                {t('settings.invoices.discard', 'Discard')}
-              </button>
-              <SettingsButton
-                variant="primary"
-                onClick={handleSaveAll}
-                disabled={defaultsSaving}
-              >
-                {defaultsSaving
-                  ? t('settings.invoices.saving', 'Saving…')
-                  : t('settings.invoices.saveChanges', 'Save changes')}
-              </SettingsButton>
-            </div>
-          </div>
-        </div>
-      )}
+      <SettingsScrollSaveBanner
+        dirty={hasUnsavedChanges}
+        saving={defaultsSaving}
+        onSave={() => {
+          void handleSaveAll()
+        }}
+        onDiscard={handleDiscardAll}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={t('settings.invoices.unsaved', 'You have unsaved changes')}
+        discardLabel={t('settings.invoices.discard', 'Discard')}
+      />
     </div>
   )
 }

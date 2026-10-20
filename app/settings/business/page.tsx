@@ -28,6 +28,8 @@ import {
   SettingsHint,
   SettingsSavedNote,
   SettingsErrorNote,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
 } from '../../components/settings/SettingsUI'
 import RouteLocationsSettings from '../../components/settings/RouteLocationsSettings'
 
@@ -387,11 +389,34 @@ export default function BusinessSettingsPage() {
       <span className="text-sm text-gray-600">{(formData as any)[name] || '—'}</span>
     )
 
+  const saveLabel = t('settings.business.save', 'Save changes')
+  const savingLabel = t('settings.business.saving', 'Saving...')
+
   return (
-    <div className="mx-auto max-w-2xl px-6 py-8">
+    <div className="mx-auto max-w-2xl px-6 py-8 pb-16">
       <SettingsHeader
         title={t('settings.business.title', 'Business Settings')}
         description={t('settings.business.subtitle', 'Manage your company information.')}
+        action={
+          isEditing ? (
+            <div className="flex items-center gap-2">
+              <SettingsButton variant="secondary" className="h-8 px-2.5 text-[13px]" onClick={handleCancel}>
+                {t('settings.business.cancel', 'Cancel')}
+              </SettingsButton>
+              <SettingsSaveButton
+                dirty
+                saving={loading}
+                onSave={() => {
+                  void handleSave()
+                }}
+                label={saveLabel}
+                savingLabel={savingLabel}
+              />
+            </div>
+          ) : (
+            <SettingsSaveButton dirty={false} onSave={() => {}} label={saveLabel} />
+          )
+        }
       />
 
       {success && <div className="mb-4"><SettingsSavedNote>{success}</SettingsSavedNote></div>}
@@ -693,6 +718,19 @@ export default function BusinessSettingsPage() {
           {slugSuccess && <SettingsSavedNote>{slugSuccess}</SettingsSavedNote>}
         </div>
       </SettingsSection>
+
+      <SettingsScrollSaveBanner
+        dirty={isEditing}
+        saving={loading}
+        onSave={() => {
+          void handleSave()
+        }}
+        onDiscard={isEditing ? handleCancel : undefined}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={t('settings.invoices.unsaved', 'You have unsaved changes')}
+        discardLabel={t('settings.business.cancel', 'Cancel')}
+      />
     </div>
   )
 }

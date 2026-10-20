@@ -9,6 +9,7 @@ const {
   fetchPendingInvitesForEmail,
 } = require('../utils/userLoginPayload');
 const { initActivitySchema, getRequestMeta, recordLoginEvent } = require('../utils/activityLog');
+const { trackEvent, touchSession, linkAnonymousEvents } = require('../utils/activityEvents');
 const {
   countryCodeFromLanguage,
   generateUniqueGuestCompany,
@@ -78,6 +79,7 @@ const {
   ensureSignupFunnelSchema,
   upsertSignupDraft,
   upsertSignupDraftByEmail,
+  trackSignupStep,
 } = require('../utils/signupFunnel');
 
 ensureSignupFunnelSchema().catch((err) =>
@@ -138,14 +140,45 @@ router.post('/register/signup-progress', async (req, res) => {
          first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), signup_progress_drafts.first_name),
          last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), signup_progress_drafts.last_name),
          email = COALESCE(EXCLUDED.email, signup_progress_drafts.email),
-         step = EXCLUDED.step,
+         step = CASE WHEN signup_progress_drafts.user_id IS NOT NULL THEN signup_progress_drafts.step ELSE EXCLUDED.step END,
          updated_at = NOW()`,
       [sid, fn, ln, em, stepRaw]
     );
+    trackSignupStep({ sessionId: sid, step: stepRaw, email: em, req });
     return res.status(200).json({ ok: true });
   } catch (error) {
     console.error('[auth] register/signup-progress error:', error);
     return res.status(500).json({ error: 'Failed to save progress' });
+  }
+});
+
+// GET /api/auth/register/signup-progress/:sessionId — lets the same browser
+// resume an unfinished signup (prefilled email + name) days later.
+router.get('/register/signup-progress/:sessionId', async (req, res) => {
+  const sid = String(req.params.sessionId || '').trim();
+  if (!sid || sid.length > 128) return res.json({ draft: null });
+  try {
+    const r = await pool.query(
+      `SELECT d.email, d.first_name, d.last_name, d.step, d.user_id,
+              EXISTS (SELECT 1 FROM users u WHERE LOWER(u.email) = LOWER(d.email)) AS has_account
+         FROM signup_progress_drafts d
+        WHERE d.client_session_id = $1`,
+      [sid]
+    );
+    const row = r.rows[0];
+    if (!row || !row.email) return res.json({ draft: null });
+    return res.json({
+      draft: {
+        email: row.email,
+        firstName: row.first_name || '',
+        lastName: row.last_name || '',
+        step: row.step,
+        hasAccount: !!(row.user_id || row.has_account),
+      },
+    });
+  } catch (error) {
+    console.error('[auth] signup-progress lookup error:', error);
+    return res.json({ draft: null });
   }
 });
 
@@ -164,6 +197,7 @@ router.post('/check-email', async (req, res) => {
         email: normalizedEmail,
         step: 'email_entered',
         sessionId: sessionId ? String(sessionId).trim() : undefined,
+        req,
       });
     }
     return res.json({ exists: result.rows.length > 0 });
@@ -209,6 +243,7 @@ router.post('/register/send-code', async (req, res) => {
       firstName,
       lastName,
       step: 'code_sent',
+      req,
     });
 
     await sendEmail({
@@ -304,6 +339,7 @@ router.post('/register/verify-code', async (req, res) => {
       firstName,
       lastName,
       step: 'email_verified',
+      req,
     });
 
     return res.status(200).json({
@@ -323,13 +359,13 @@ router.post('/register', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { firstName, lastName, email, password, invitationToken, trialToken, languageCode, verificationToken, signupSessionId, plan } = req.body;
+    const { firstName, lastName, email, password, invitationToken, languageCode, verificationToken, signupSessionId, plan } = req.body;
     // 'pro' = 14-day trial then auto-demote; 'standard' = no expiry, free forever
     const requestedPlan = (plan === 'pro') ? 'pro' : 'standard';
     const normalizedLanguageCode = String(languageCode || DEFAULT_LANGUAGE_CODE).trim().toLowerCase() || DEFAULT_LANGUAGE_CODE;
     const normalizedEmail = normalizeEmail(email);
 
-    console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken, hasTrial: !!trialToken });
+    console.log('Registration attempt:', { firstName, lastName, email, hasInvitation: !!invitationToken });
 
     // Validate input
     if (!firstName || !lastName || !email || !password || !verificationToken) {
@@ -370,19 +406,6 @@ router.post('/register', async (req, res) => {
         });
       }
       return res.status(400).json({ error: 'An account with this email already exists' });
-    }
-
-    // Validate trial token (if provided) — look up before creating user
-    let trialRecord = null;
-    if (trialToken) {
-      const trialRes = await client.query(
-        'SELECT * FROM trial_invites WHERE token = $1 AND registered_at IS NULL',
-        [trialToken]
-      );
-      if (trialRes.rows.length > 0) {
-        trialRecord = trialRes.rows[0];
-      }
-      // If token not found we just ignore it and register normally
     }
 
     // Hash password
@@ -447,8 +470,7 @@ router.post('/register', async (req, res) => {
       const timezone = ianaTimezoneForCountry(countryCode);
       const guestCompany = await generateUniqueGuestCompany(client);
 
-      // Determine final plan: trial invites always start on pro; otherwise use what was requested
-      const finalPlan = trialRecord ? 'pro' : requestedPlan;
+      const finalPlan = requestedPlan;
 
       // Placeholder company — the owner names it and picks an industry on the
       // company onboarding step, which is what turns this into a real workspace.
@@ -471,22 +493,11 @@ router.post('/register', async (req, res) => {
       // Pro plan: set 14-day trial expiry (auto-demoted to standard after expiry, not suspended)
       // Standard plan: no expiry — free forever
       if (finalPlan === 'pro') {
-        const appliedTrialDays = trialRecord?.trial_days || 14;
         const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + appliedTrialDays);
+        expiresAt.setDate(expiresAt.getDate() + 14);
         await client.query(
           'UPDATE companies SET expires_at = $1 WHERE id = $2',
           [expiresAt, companyId]
-        );
-      }
-
-      // If registration came from a trial invite, mark it consumed
-      if (trialRecord) {
-        await client.query(
-          `UPDATE trial_invites
-           SET registered_at = NOW(), registered_user_id = $1, registered_company_id = $2
-           WHERE id = $3`,
-          [user.id, companyId, trialRecord.id]
         );
       }
     }
@@ -514,6 +525,19 @@ router.post('/register', async (req, res) => {
         companyId,
       }).catch((err) => console.error('[auth] upsertSignupDraft post-register failed (non-fatal):', err.message));
     }
+
+    trackEvent({
+      event: invitationToken ? 'team.joined' : 'signup.account_created',
+      userId: user.id,
+      companyId,
+      anonymousId: signupSid || null,
+      label: normalizedEmail,
+      source: 'signup',
+      req,
+    });
+    linkAnonymousEvents({ anonymousId: signupSid, email: normalizedEmail, userId: user.id, companyId })
+      .catch((err) => console.warn('[auth] linkAnonymousEvents failed:', err.message));
+    touchSession({ userId: user.id, companyId, req, path: '/register' }).catch(() => {});
 
     // Generate JWT token with active company
     const token = jwt.sign(
@@ -701,6 +725,8 @@ router.post('/login', async (req, res) => {
       ip,
       userAgent,
     }).catch((e) => console.warn('[auth] recordLoginEvent failed:', e.message || e));
+    trackEvent({ event: 'auth.login', userId: user.id, companyId: activeCompany?.id ?? null, source: 'app', req });
+    touchSession({ userId: user.id, companyId: activeCompany?.id ?? null, req, path: '/login' }).catch(() => {});
 
     res.status(200).json(responseData);
 

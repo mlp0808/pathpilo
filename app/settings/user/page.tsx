@@ -14,6 +14,8 @@ import {
   SettingsButton,
   SettingsSavedNote,
   SettingsErrorNote,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
 } from '../../components/settings/SettingsUI'
 
 interface UserProfile {
@@ -146,12 +148,36 @@ export default function UserSettingsPage() {
 
   const rightInput = 'w-56 text-right'
 
+  const saveLabel = t('settings.user.save', 'Save Changes')
+  const savingLabel = t('settings.user.saving', 'Saving...')
+
   return (
-    <div className="px-6 py-8">
+    <div className="px-6 py-8 pb-16">
       <div className="mx-auto max-w-2xl">
         <SettingsHeader
           title={t('settings.user.title', 'User Settings')}
           description={t('settings.user.subtitle', 'Manage your personal information and preferences.')}
+          action={
+            isEditing ? (
+              <div className="flex items-center gap-2">
+                <SettingsButton variant="secondary" className="h-8 px-2.5 text-[13px]" onClick={handleCancel}>
+                  {t('settings.user.cancel', 'Cancel')}
+                </SettingsButton>
+                <SettingsSaveButton
+                  dirty
+                  saving={loading}
+                  onSave={() => {
+                    const form = document.getElementById('user-settings-form') as HTMLFormElement | null
+                    form?.requestSubmit()
+                  }}
+                  label={saveLabel}
+                  savingLabel={savingLabel}
+                />
+              </div>
+            ) : (
+              <SettingsSaveButton dirty={false} onSave={() => {}} label={saveLabel} />
+            )
+          }
         />
 
         {success && (
@@ -165,7 +191,7 @@ export default function UserSettingsPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
+        <form id="user-settings-form" onSubmit={handleSubmit}>
           <SettingsSection
             title={t('settings.user.personalInformation', 'Personal Information')}
             action={
@@ -265,18 +291,22 @@ export default function UserSettingsPage() {
             />
           </SettingsSection>
 
-          {isEditing && (
-            <div className="mt-2 flex items-center justify-end gap-3">
-              <SettingsButton variant="secondary" onClick={handleCancel}>
-                {t('settings.user.cancel', 'Cancel')}
-              </SettingsButton>
-              <SettingsButton type="submit" variant="primary" disabled={loading}>
-                {loading ? t('settings.user.saving', 'Saving...') : t('settings.user.save', 'Save Changes')}
-              </SettingsButton>
-            </div>
-          )}
         </form>
       </div>
+
+      <SettingsScrollSaveBanner
+        dirty={isEditing}
+        saving={loading}
+        onSave={() => {
+          const form = document.getElementById('user-settings-form') as HTMLFormElement | null
+          form?.requestSubmit()
+        }}
+        onDiscard={isEditing ? handleCancel : undefined}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={t('settings.invoices.unsaved', 'You have unsaved changes')}
+        discardLabel={t('settings.user.cancel', 'Cancel')}
+      />
     </div>
   )
 }

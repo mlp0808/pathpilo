@@ -3,6 +3,7 @@ import Script from 'next/script'
 import './globals.css'
 import { ClientI18nProvider } from './components/I18nProvider'
 import { CrispChat } from './components/CrispChat'
+import ActivityBeacon from './components/ActivityBeacon'
 
 export const metadata: Metadata = {
   title: 'PathPilo - Client Management for Service Companies',
@@ -91,6 +92,7 @@ fbq('track', 'PageView');`,
           />
         )}
         <CrispChat />
+        <ActivityBeacon />
         <ClientI18nProvider>
           {children}
         </ClientI18nProvider>

@@ -4,7 +4,7 @@ const { getWorkspaceAccess } = require('../utils/companyPlanAccess');
 const SKIP_PREFIXES = [
   '/api/auth',
   '/api/admin',
-  '/api/trial',
+  '/api/events',
   '/api/public',
   '/api/stripe/webhook',
   '/api/invitations',

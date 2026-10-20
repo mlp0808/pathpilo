@@ -45,6 +45,10 @@ const { multiUserWorkspaceGate } = require('./middleware/multiUserWorkspaceGate'
 const { ensureSchedulingSchema } = require('./services/routePlanner/ensureSchedulingSchema');
 app.use(multiUserWorkspaceGate);
 
+const { activityTracker } = require('./middleware/activityTracker');
+const { ensureActivityEventsSchema } = require('./utils/activityEvents');
+app.use(activityTracker);
+
 // Static serving for user-uploaded company assets (logos). Stored on local
 // disk under api-server/uploads/ — easy to migrate to S3 later by swapping
 // this and the multer storage in routes/companies.js.
@@ -187,12 +191,10 @@ const employeeLeaveRoutes = require('./routes/employee-leave');
 const appointmentRoutes = require('./routes/appointments');
 const companyDefaultsRoutes = require('./routes/company-defaults');
 const invitationRoutes = require('./routes/invitations');
-const trialRoutes = require('./routes/trial');
 const publicInvoiceRoutes = require('./routes/public-invoices');
 const stripeRoutes = require('./routes/stripe');
 const { initStripeSchema } = stripeRoutes;
 const { runAutomatedEmailTick } = require('./utils/automatedEmails');
-const { ensureFunnelNudgeSchema, runFunnelNudgeTick } = require('./utils/funnelNudges');
 const { backfillJobAutoTitles } = require('./utils/jobAutoTitle');
 const { ensureSnapshotColumns } = require('./utils/invoiceSnapshot');
 const { ensureWorkHoursSchema } = require('./utils/workHoursSchema');
@@ -213,7 +215,9 @@ app.use('/api/public', publicLeadFormRoutes);
 app.use('/api/public/invoices', publicInvoiceRoutes);
 // Admin routes must be mounted BEFORE /api/admin/users so that
 // GET /api/admin/users hits the admin list endpoint, not the company-users route.
+app.use('/api/admin/insights', require('./routes/admin-insights'));
 app.use('/api/admin', adminRoutes);
+app.use('/api/events', require('./routes/events'));
 app.use('/api/users', companyUsersRoutes); // Company users
 app.use('/api/user', companyUsersRoutes); // User profile (PUT /api/user/profile)
 app.use('/api/services', serviceRoutes);
@@ -239,7 +243,6 @@ app.use('/api/employee-leave', employeeLeaveRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/company-defaults', companyDefaultsRoutes);
 app.use('/api/invitations', invitationRoutes);
-app.use('/api/trial', trialRoutes);
 app.use('/api/stripe', stripeRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
 
@@ -327,11 +330,9 @@ process.on('SIGINT', () => {
       runAutomatedEmailTick(pool);
     }, 60 * 1000);
 
-    // Funnel nudge emails: check every 5 minutes for inactive leads
-    ensureFunnelNudgeSchema().then(() => {
-      runFunnelNudgeTick();
-      setInterval(runFunnelNudgeTick, 5 * 60 * 1000);
-    }).catch(err => console.error('[funnelNudge] schema init failed:', err.message || err));
+    ensureActivityEventsSchema().catch((e) =>
+      console.warn('[activityEvents] schema init failed:', e.message || e)
+    );
 
     // One-shot backfill: rewrite any historical jobs whose title is empty so
     // the UI no longer shows "Untitled job". Deferred a few seconds so it

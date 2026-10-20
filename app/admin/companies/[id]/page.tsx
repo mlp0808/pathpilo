@@ -1,419 +1,382 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import { useRouter, useParams } from 'next/navigation'
-import { apiUrl } from '../../../utils/api'
-import AdminNav from '../../components/AdminNav'
+import { useParams, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import {
+  Area,
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { ArrowLeftIcon, EyeIcon, PauseCircleIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { adminFetch, useAdminData } from '../../_lib/api'
+import { eventCategory, eventLabel } from '../../_lib/events'
+import type { ActivityEvent, DayCell, EventPage } from '../../_lib/types'
+import PlanChip from '../../_components/PlanChip'
+import {
+  Card, Chip, DayCalendar, Empty, ErrorBox, HeatLegend, Kpi, PageHeader, Segmented, Spinner, Timeline,
+  formatDate, timeAgo,
+} from '../../_components/ui'
+import { startOverwatchSession } from '../../../utils/overwatch'
 import BillingPanel from './BillingPanel'
-import { industryLabel, usageGoalLabel } from '../../../config/companyOnboarding'
 
-interface User {
-  id: number
-  first_name: string
-  last_name: string
-  email: string
-  company_role: string
-  created_at: string
+interface CompanyDetail extends EventPage {
+  company: {
+    id: number; name: string; slug: string; industry: string | null; country: string | null; city: string | null
+    website: string | null; createdAt: string; plan: string; billingInterval: string | null
+    hasStripeSubscription: boolean; expiresAt: string | null; suspendedAt: string | null
+    onboardingCompleted: boolean; onboardingStep: string | null; usageGoals: string[]
+    owner: { id: number; name: string; email: string } | null
+  }
+  totals: {
+    clients: number; jobs: number; jobsManual: number; jobsCompleted: number
+    invoices: number; invoicedPaid: number; offers: number; subscriptions: number; services: number
+  }
+  growth: {
+    bucket: 'week' | 'month'
+    points: Array<{
+      bucket: string; clientsNew: number; clientsTotal: number; jobsCreated: number
+      jobsScheduled: number; jobsCompleted: number; invoices: number; offers: number
+    }>
+  }
+  members: Array<{
+    id: number; name: string; email: string; role: string; joinedAt: string
+    lastActiveAt: string | null; actions30d: number; sessions30d: number; actionsTotal: number
+  }>
+  pendingInvites: Array<{ email: string; role: string; created_at: string }>
+  features: Array<{ event: string; last30: number; total: number; lastAt: string }>
+  daily: DayCell[]
 }
 
-interface Company {
-  id: number
-  name: string
-  country: string
-  cvrNumber: string
-  address: string
-  zipCode: string
-  city: string
-  industry: string | null
-  website: string | null
-  usageGoals: string[]
-  createdAt: string
-  updatedAt: string
-  suspendedAt: string | null
-  expiresAt: string | null
-  owner: { firstName: string; lastName: string; email: string }
-}
+/** The features that make PathPilo sticky. Unused ones are where to nudge. */
+const CORE_FEATURES = [
+  { label: 'Added clients', events: ['client.created'] },
+  { label: 'Created jobs', events: ['job.created'] },
+  { label: 'Completed jobs', events: ['job.completed', 'job.status_changed'] },
+  { label: 'Subscriptions', events: ['subscription.created'] },
+  { label: 'Route planning', events: ['route.optimized', 'route.week_optimized', 'route.reordered'] },
+  { label: 'Rounds', events: ['round.created', 'round.scheduled'] },
+  { label: 'Offers', events: ['offer.created', 'offer.sent'] },
+  { label: 'Invoices', events: ['invoice.created', 'invoice.sent'] },
+  { label: 'Leads', events: ['lead.created', 'lead.converted'] },
+  { label: 'Invited team', events: ['team.invite_sent'] },
+  { label: 'Integrations', events: ['settings.integration_updated'] },
+]
+
+const bucketLabel = (b: string, kind: 'week' | 'month') =>
+  new Date(`${b}T12:00:00`).toLocaleDateString('en-GB', kind === 'month' ? { month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' })
 
 export default function CompanyDetailPage() {
-  const router = useRouter()
   const params = useParams()
-  const companyId = params?.id as string
+  const router = useRouter()
+  const companyId = String(params?.id || '')
+  const [range, setRange] = useState<'12' | 'all'>('12')
+  const [memberFilter, setMemberFilter] = useState('')
+  const [pageViews, setPageViews] = useState(false)
 
-  const [company, setCompany] = useState<Company | null>(null)
-  const [users, setUsers] = useState<User[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const query = new URLSearchParams()
+  if (range === 'all') query.set('range', 'all')
+  if (memberFilter) query.set('userId', memberFilter)
+  if (pageViews) query.set('pageViews', '1')
+  const { data, loading, error, reload } = useAdminData<CompanyDetail>(`/admin/insights/companies/${companyId}?${query}`)
 
-  // Hold state
-  const [holdLoading, setHoldLoading] = useState(false)
-  const [holdError, setHoldError] = useState('')
-
-  // Delete state
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
-  const [deleteConfirmText, setDeleteConfirmText] = useState('')
-  const [deleteLoading, setDeleteLoading] = useState(false)
-  const [deleteError, setDeleteError] = useState('')
-  const deleteInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const checkAuth = () => {
-      const token = localStorage.getItem('token')
-      const userData = localStorage.getItem('user')
-      if (!token || !userData) { router.push('/admin'); return false }
-      try {
-        const user = JSON.parse(userData)
-        if (user.role !== 'admin') { router.push('/admin'); return false }
-        return true
-      } catch { router.push('/admin'); return false }
-    }
-    if (checkAuth() && companyId) {
-      setIsAuthenticated(true)
-      fetchCompanyData()
-    }
-  }, [router, companyId])
+  const [events, setEvents] = useState<ActivityEvent[]>([])
+  const [nextBefore, setNextBefore] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
-    if (showDeleteModal) setTimeout(() => deleteInputRef.current?.focus(), 50)
-  }, [showDeleteModal])
+    if (!data) return
+    setEvents(data.events)
+    setNextBefore(data.nextBefore)
+  }, [data])
 
-  const fetchCompanyData = async () => {
-    if (!companyId) return
+  const loadMore = async () => {
+    if (!nextBefore) return
+    setLoadingMore(true)
     try {
-      setLoading(true)
-      const token = localStorage.getItem('token')
-      const [companyRes, usersRes] = await Promise.all([
-        fetch(apiUrl(`/admin/companies/${companyId}`), { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(apiUrl(`/admin/companies/${companyId}/users`), { headers: { Authorization: `Bearer ${token}` } }),
-      ])
-      const companyData = await companyRes.json()
-      const usersData = await usersRes.json()
-      if (companyRes.ok) {
-        const c = companyData.company || companyData
-        setCompany(c)
-      } else {
-        setError(companyData.error || 'Failed to fetch company')
-      }
-      if (usersRes.ok) setUsers(usersData.users || [])
+      const q = new URLSearchParams(query)
+      q.set('before', nextBefore)
+      const more = await adminFetch<CompanyDetail>(`/admin/insights/companies/${companyId}?${q}`)
+      setEvents((prev) => [...prev, ...more.events])
+      setNextBefore(more.nextBefore)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const startOverwatch = async () => {
+    const superPassword = window.prompt('Super password to open this workspace as the owner (Overwatch):')
+    if (!superPassword) return
+    setBusy('overwatch')
+    setActionError('')
+    try {
+      const res = await adminFetch<{ token: string; user: { activeCompany?: { slug?: string } } }>(
+        `/admin/companies/${companyId}/overwatch/start`,
+        { method: 'POST', body: JSON.stringify({ superPassword }) }
+      )
+      startOverwatchSession(res.token, res.user)
+      const slug = res.user?.activeCompany?.slug
+      window.location.href = slug ? `/${slug}/dashboard` : '/select-company'
     } catch (err) {
-      setError('Network error: ' + (err as Error).message)
-    } finally {
-      setLoading(false)
+      setActionError((err as Error).message)
+      setBusy(null)
     }
   }
 
-  const handleToggleHold = async () => {
-    if (!company) return
-    setHoldLoading(true)
-    setHoldError('')
+  const toggleHold = async () => {
+    if (!data) return
+    const putOnHold = !data.company.suspendedAt
+    if (putOnHold && !window.confirm(`Put ${data.company.name} on hold? Nobody in the company can use the app until you lift it.`)) return
+    setBusy('hold')
+    setActionError('')
     try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/admin/companies/${companyId}/hold`), {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setCompany(prev => prev ? { ...prev, suspendedAt: data.company.suspendedAt } : prev)
-      } else {
-        setHoldError(data.error || 'Failed to update status')
-      }
-    } catch {
-      setHoldError('Network error. Please try again.')
+      await adminFetch(`/admin/companies/${companyId}/hold`, { method: 'PATCH' })
+      await reload()
+    } catch (err) {
+      setActionError((err as Error).message)
     } finally {
-      setHoldLoading(false)
+      setBusy(null)
     }
   }
 
-  const handleDelete = async () => {
-    if (!company || deleteConfirmText !== company.name) return
-    setDeleteLoading(true)
-    setDeleteError('')
-    try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(apiUrl(`/admin/companies/${companyId}`), {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirmName: deleteConfirmText }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        router.push('/admin/companies')
-      } else {
-        setDeleteError(data.error || 'Failed to delete company')
-      }
-    } catch {
-      setDeleteError('Network error. Please try again.')
-    } finally {
-      setDeleteLoading(false)
-    }
-  }
-
-  const fmt = (d: string) => new Date(d).toLocaleDateString('en-GB', {
-    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  })
-
-  const roleBadge = (role: string) => ({
-    owner: 'bg-purple-100 text-purple-800 border-purple-200',
-    admin: 'bg-purple-100 text-purple-800 border-purple-200',
-    manager: 'bg-blue-100 text-blue-800 border-blue-200',
-    employee: 'bg-green-100 text-green-800 border-green-200',
-  }[role] || 'bg-gray-100 text-gray-800 border-gray-200')
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-          <p className="mt-2 text-gray-600">Verifying admin access...</p>
-        </div>
-      </div>
+  const deleteCompany = async () => {
+    if (!data) return
+    const typed = window.prompt(
+      `This permanently deletes ${data.company.name} with all clients, jobs, invoices and offers. Users are kept.\n\nType the company name to confirm:`
     )
+    if (typed !== data.company.name) return
+    setBusy('delete')
+    setActionError('')
+    try {
+      await adminFetch(`/admin/companies/${companyId}`, { method: 'DELETE', body: JSON.stringify({ confirmName: typed }) })
+      router.push('/admin/companies')
+    } catch (err) {
+      setActionError((err as Error).message)
+      setBusy(null)
+    }
   }
 
-  const isSuspended = !!company?.suspendedAt
+  if (loading && !data) return <Spinner />
+  if (error && !data) return <ErrorBox message={error} />
+  if (!data) return null
+
+  const { company: c, totals: t, growth } = data
+  const featureMap = new Map(data.features.map((f) => [f.event, f]))
+  const growthPoints = growth.points.map((p) => ({ ...p, label: bucketLabel(p.bucket, growth.bucket) }))
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Nav */}
-      <AdminNav />
+    <div className="flex flex-col gap-6">
+      <Link href="/admin/companies" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900">
+        <ArrowLeftIcon className="h-4 w-4" /> Companies
+      </Link>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <Link href="/admin/companies" className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 mb-6">
-          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-          Back to Companies
-        </Link>
-
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-            <p className="mt-2 text-gray-600">Loading...</p>
-          </div>
-        ) : error ? (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-            <p className="text-red-800">{error}</p>
-            <button onClick={fetchCompanyData} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Try Again</button>
-          </div>
-        ) : company ? (
+      <PageHeader
+        title={
+          <span className="flex flex-wrap items-center gap-3">
+            {c.name}
+            <PlanChip {...c} />
+            {!c.onboardingCompleted && <Chip className="bg-violet-50 text-violet-700 ring-violet-200">Setup: {c.onboardingStep || 'company'}</Chip>}
+          </span>
+        }
+        subtitle={
           <>
-            {/* Header */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="h-14 w-14 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                    <span className="text-2xl font-bold text-blue-600">{company.name.charAt(0).toUpperCase()}</span>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h1 className="text-2xl font-bold text-gray-900">{company.name}</h1>
-                      {isSuspended && (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-200">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
-                          On hold
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-500">ID: {company.id} · Created {fmt(company.createdAt)}</p>
-                    {isSuspended && (
-                      <p className="text-xs text-amber-600 mt-0.5">Suspended {fmt(company.suspendedAt!)}</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  {holdError && <p className="text-xs text-red-600">{holdError}</p>}
-                  <button
-                    onClick={handleToggleHold}
-                    disabled={holdLoading}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50 ${
-                      isSuspended
-                        ? 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
-                        : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
-                    }`}
-                  >
-                    {holdLoading ? 'Saving…' : isSuspended ? 'Reactivate company' : 'Put on hold'}
-                  </button>
-                  <button
-                    onClick={() => { setShowDeleteModal(true); setDeleteConfirmText(''); setDeleteError('') }}
-                    className="px-4 py-2 rounded-lg text-sm font-medium border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
-                  >
-                    Delete company
-                  </button>
-                </div>
-              </div>
-
-              {/* Info grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-gray-100">
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Company info</h3>
-                  <dl className="space-y-2">
-                    <div><dt className="text-xs text-gray-500">CVR</dt><dd className="text-sm font-medium text-gray-900">{company.cvrNumber || '—'}</dd></div>
-                    <div><dt className="text-xs text-gray-500">Address</dt><dd className="text-sm font-medium text-gray-900">{[company.address, company.zipCode, company.city].filter(Boolean).join(', ') || '—'}</dd></div>
-                    <div><dt className="text-xs text-gray-500">Country</dt><dd className="text-sm font-medium text-gray-900">{company.country || '—'}</dd></div>
-                    <div><dt className="text-xs text-gray-500">Industry</dt><dd className="text-sm font-medium text-gray-900">{industryLabel(company.industry) || '—'}</dd></div>
-                    <div><dt className="text-xs text-gray-500">Website</dt><dd className="text-sm font-medium text-gray-900">{company.website || '—'}</dd></div>
-                  </dl>
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Wants PathPilo for</h3>
-                  {company.usageGoals?.length ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {company.usageGoals.map((goal) => (
-                        <span
-                          key={goal}
-                          className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700"
-                        >
-                          {usageGoalLabel(goal)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-400">Not answered</p>
-                  )}
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Owner</h3>
-                  <dl className="space-y-2">
-                    <div><dt className="text-xs text-gray-500">Name</dt><dd className="text-sm font-medium text-gray-900">{company.owner.firstName} {company.owner.lastName}</dd></div>
-                    <div><dt className="text-xs text-gray-500">Email</dt><dd className="text-sm font-medium text-gray-900">{company.owner.email}</dd></div>
-                  </dl>
-                </div>
-              </div>
-            </div>
-
-            {/* Reactivate banner when on hold */}
-            {isSuspended && (
-              <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                </svg>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-amber-900">This company is on hold</p>
-                  <p className="text-xs text-amber-800 mt-0.5">
-                    All users are locked out until you reactivate it. Use <strong>Reactivate company</strong> in the header above.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Plan, billing, invoices & SMS */}
-            <BillingPanel companyId={companyId} onPlanChanged={fetchCompanyData} />
-
-            {/* Users table */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Team members</h2>
-                <p className="text-sm text-gray-500 mt-0.5">{users.length} {users.length === 1 ? 'person' : 'people'}</p>
-              </div>
-              {users.length === 0 ? (
-                <div className="p-8 text-center text-gray-400">No users associated with this company.</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        {['User', 'Email', 'Role', 'Joined'].map(h => (
-                          <th key={h} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {users.map(user => (
-                        <tr key={user.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-xs font-semibold text-blue-600">
-                                {user.first_name[0]}{user.last_name[0]}
-                              </div>
-                              <div>
-                                <div className="text-sm font-medium text-gray-900">{user.first_name} {user.last_name}</div>
-                                <div className="text-xs text-gray-400">ID: {user.id}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{user.email}</td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${roleBadge(user.company_role)}`}>
-                              {user.company_role.charAt(0).toUpperCase() + user.company_role.slice(1)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{fmt(user.created_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            {c.owner ? <Link href={`/admin/people/u-${c.owner.id}`} className="hover:underline">{c.owner.name}</Link> : 'No owner'}
+            {' · '}created {formatDate(c.createdAt)}
+            {c.industry ? ` · ${c.industry}` : ''}
+            {c.city ? ` · ${c.city}` : ''}
+            {' · '}/{c.slug}
           </>
-        ) : null}
+        }
+        actions={
+          <>
+            <button type="button" onClick={startOverwatch} disabled={!!busy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              <EyeIcon className="h-4 w-4" /> {busy === 'overwatch' ? 'Opening…' : 'Overwatch'}
+            </button>
+            <button type="button" onClick={toggleHold} disabled={!!busy}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${c.suspendedAt ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-amber-200 bg-white text-amber-700 hover:bg-amber-50'}`}>
+              <PauseCircleIcon className="h-4 w-4" /> {c.suspendedAt ? 'Lift hold' : 'Put on hold'}
+            </button>
+            <button type="button" onClick={deleteCompany} disabled={!!busy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+              <TrashIcon className="h-4 w-4" /> Delete
+            </button>
+          </>
+        }
+      />
+
+      {actionError && <ErrorBox message={actionError} />}
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <Kpi label="Clients" value={t.clients} />
+        <Kpi label="Jobs by hand" value={t.jobsManual} hint={`${t.jobs} incl. subscriptions`} />
+        <Kpi label="Jobs completed" value={t.jobsCompleted} accent="text-emerald-700" />
+        <Kpi label="Active subscriptions" value={t.subscriptions} />
+        <Kpi label="Invoices" value={t.invoices} hint={t.invoicedPaid ? `${Math.round(t.invoicedPaid).toLocaleString('da-DK')} paid` : undefined} />
+        <Kpi label="Offers" value={t.offers} />
       </div>
 
-      {/* Delete confirmation modal */}
-      {showDeleteModal && company && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
-                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">Delete company</h2>
-                <p className="text-sm text-gray-500">This cannot be undone</p>
-              </div>
-            </div>
-
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-5 text-sm text-red-800 space-y-1">
-              <p className="font-semibold">Everything will be permanently deleted:</p>
-              <ul className="list-disc list-inside text-red-700 space-y-0.5 mt-1">
-                <li>All clients</li>
-                <li>All jobs &amp; schedules</li>
-                <li>All invoices &amp; subscriptions</li>
-                <li>All services, routes and notes</li>
-              </ul>
-              <p className="mt-2 text-red-600">Team members are <strong>not</strong> deleted — they can still log in and create a new company.</p>
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Type <strong className="font-mono">{company.name}</strong> to confirm
-              </label>
-              <input
-                ref={deleteInputRef}
-                type="text"
-                value={deleteConfirmText}
-                onChange={e => { setDeleteConfirmText(e.target.value); setDeleteError('') }}
-                placeholder={company.name}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400"
-                onKeyDown={e => { if (e.key === 'Enter' && deleteConfirmText === company.name) handleDelete() }}
-              />
-              {deleteError && <p className="text-xs text-red-600 mt-1">{deleteError}</p>}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setShowDeleteModal(false); setDeleteError('') }}
-                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleteConfirmText !== company.name || deleteLoading}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                {deleteLoading ? 'Deleting…' : 'Delete permanently'}
-              </button>
-            </div>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card
+          title="Clients over time"
+          subtitle={`Total clients and new clients per ${growth.bucket}`}
+          actions={<Segmented value={range} onChange={setRange} options={[{ value: '12', label: '12 mo' }, { value: 'all', label: 'All' }]} />}
+        >
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={growthPoints} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickLine={false} axisLine={false} minTickGap={16} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="clientsTotal" name="Total clients" fill="#ccfbf1" stroke="#0d9488" strokeWidth={2} />
+                <Bar dataKey="clientsNew" name="New clients" fill="#14b8a6" radius={[3, 3, 0, 0]} />
+              </ComposedChart>
+            </ResponsiveContainer>
           </div>
-        </div>
-      )}
+        </Card>
+
+        <Card title="Jobs over time" subtitle={`Jobs scheduled and completed per ${growth.bucket}, plus jobs created by hand`}>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={growthPoints} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickLine={false} axisLine={false} minTickGap={16} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="jobsScheduled" name="Scheduled" fill="#bbf7d0" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="jobsCompleted" name="Completed" fill="#16a34a" radius={[3, 3, 0, 0]} />
+                <Line type="monotone" dataKey="jobsCreated" name="Created by hand" stroke="#6366f1" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="invoices" name="Invoices" stroke="#e11d48" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card className="xl:col-span-2" title="Activity, last 90 days" subtitle="All members combined" actions={<HeatLegend />}>
+          <DayCalendar daily={data.daily} />
+        </Card>
+
+        <Card title="Feature adoption" subtitle="Has this company ever used it?">
+          <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-1">
+            {CORE_FEATURES.map((f) => {
+              const hits = f.events.map((e) => featureMap.get(e)).filter(Boolean) as CompanyDetail['features']
+              const total = hits.reduce((s, h) => s + h.total, 0)
+              const recent = hits.reduce((s, h) => s + h.last30, 0)
+              return (
+                <li key={f.label} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${total ? (recent ? 'bg-emerald-500' : 'bg-emerald-200') : 'bg-gray-200'}`} />
+                    <span className={total ? 'text-gray-800' : 'text-gray-400'}>{f.label}</span>
+                  </span>
+                  <span className="text-xs tabular-nums text-gray-400">{total ? `${total}× · ${recent} in 30d` : 'never'}</span>
+                </li>
+              )
+            })}
+          </ul>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card className="xl:col-span-2" title="Team" subtitle="Who in this company actually uses it" bodyClassName="p-0">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] uppercase tracking-wider text-gray-400">
+                <th className="px-5 py-2 text-left font-semibold">Member</th>
+                <th className="px-3 py-2 text-left font-semibold">Role</th>
+                <th className="px-3 py-2 text-left font-semibold">Last active</th>
+                <th className="px-3 py-2 text-right font-semibold">Sessions 30d</th>
+                <th className="px-5 py-2 text-right font-semibold">Actions 30d / all</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.members.map((m) => (
+                <tr key={m.id} className="border-t border-gray-50 hover:bg-gray-50">
+                  <td className="px-5 py-2.5">
+                    <Link href={`/admin/people/u-${m.id}`} className="font-semibold text-gray-900 hover:underline">{m.name}</Link>
+                    <p className="text-xs text-gray-400">{m.email}</p>
+                  </td>
+                  <td className="px-3 py-2.5 capitalize text-gray-600">{m.role}</td>
+                  <td className="px-3 py-2.5 text-gray-500">{timeAgo(m.lastActiveAt)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-gray-600">{m.sessions30d}</td>
+                  <td className="px-5 py-2.5 text-right tabular-nums">
+                    <span className="font-semibold text-gray-900">{m.actions30d}</span>
+                    <span className="text-gray-400"> / {m.actionsTotal}</span>
+                  </td>
+                </tr>
+              ))}
+              {data.pendingInvites.map((inv) => (
+                <tr key={inv.email} className="border-t border-gray-50 text-gray-400">
+                  <td className="px-5 py-2.5">{inv.email}</td>
+                  <td className="px-3 py-2.5 capitalize">{inv.role}</td>
+                  <td className="px-3 py-2.5" colSpan={3}>Invited {formatDate(inv.created_at)}, not accepted yet</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card title="Most used" subtitle="All-time actions in this company" bodyClassName="p-0">
+          {data.features.length === 0 ? (
+            <Empty>Nothing yet.</Empty>
+          ) : (
+            <ul className="divide-y divide-gray-50">
+              {data.features.slice(0, 12).map((f) => (
+                <li key={f.event} className="flex items-center justify-between gap-3 px-5 py-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${eventCategory(f.event).dot}`} />
+                    <span className="truncate text-gray-800">{eventLabel(f.event)}</span>
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-gray-500">{f.total}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Plan, free trial &amp; SMS</h2>
+        <BillingPanel companyId={companyId} onPlanChanged={() => { void reload() }} />
+      </div>
+
+      <Card
+        title="Timeline"
+        subtitle="Every change made in this workspace, grouped by day"
+        actions={
+          <>
+            <select
+              value={memberFilter}
+              onChange={(e) => setMemberFilter(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs font-medium text-gray-700"
+            >
+              <option value="">All members</option>
+              {data.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-gray-600">
+              <input type="checkbox" checked={pageViews} onChange={(e) => setPageViews(e.target.checked)} className="rounded border-gray-300" />
+              Page views
+            </label>
+          </>
+        }
+      >
+        {loading ? <Spinner /> : (
+          <Timeline events={events} showCompany={false} nextBefore={nextBefore} onLoadMore={loadMore} loadingMore={loadingMore} />
+        )}
+      </Card>
     </div>
   )
 }

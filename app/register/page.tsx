@@ -74,7 +74,6 @@ function RegisterForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const inviteToken  = searchParams.get('invite')
-  const trialToken   = searchParams.get('trial')
   const guestRoute   = searchParams.get('guestRoute') // route planned in the free marketing tool
   const requestedLang = normalizeLocale(searchParams.get('lang') || undefined)
 
@@ -104,9 +103,9 @@ function RegisterForm() {
   const [isLoading, setIsLoading]       = useState(false)
   const [detailsOpen, setDetailsOpen]   = useState(false)
 
-  // Invitation / trial prefill
+  // Invitation prefill
   const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
-  const [trialDays, setTrialDays]             = useState<number | null>(null)
+  const [resumed, setResumed]                 = useState(false)
 
   useEffect(() => {
     if (!inviteToken) return
@@ -125,19 +124,31 @@ function RegisterForm() {
       .catch(console.error)
   }, [inviteToken, router])
 
+  // Same browser came back to an unfinished signup: pick up where they left off.
   useEffect(() => {
-    if (!trialToken) return
-    fetch(apiUrl(`/trial/${trialToken}`))
+    if (sessionMode !== 'form' || inviteToken) return
+    let existingId: string | null = null
+    try { existingId = localStorage.getItem(SIGNUP_SESSION_STORAGE_KEY) } catch { /* private mode */ }
+    if (!existingId) return
+    let cancelled = false
+    fetch(apiUrl(`/auth/register/signup-progress/${encodeURIComponent(existingId)}`))
       .then(r => r.json())
-      .then(data => {
-        if (data.trial) {
-          setTrialDays(data.trial.trialDays)
-          setEmail(data.trial.email || '')
-          setFormData(prev => ({ ...prev, firstName: data.trial.firstName || '', lastName: data.trial.lastName || '' }))
+      .then((data: { draft?: { email: string; firstName: string; lastName: string; step: string; hasAccount: boolean } | null }) => {
+        const draft = data?.draft
+        if (cancelled || !draft?.email) return
+        if (draft.hasAccount) {
+          router.replace(`/login?email=${encodeURIComponent(draft.email)}`)
+          return
         }
+        setEmail(draft.email)
+        setFormData(prev => ({ ...prev, firstName: draft.firstName || prev.firstName, lastName: draft.lastName || prev.lastName }))
+        setDetailsOpen(true)
+        setStage('form')
+        setResumed(true)
       })
-      .catch(console.error)
-  }, [trialToken])
+      .catch(() => { /* fresh form is fine */ })
+    return () => { cancelled = true }
+  }, [sessionMode, inviteToken, router])
 
   // Hotjar event on form view
   useEffect(() => {
@@ -259,7 +270,6 @@ function RegisterForm() {
           signupSessionId: getSignupSessionId(),
           plan: 'standard',
           ...(inviteToken && { invitationToken: inviteToken }),
-          ...(trialToken  && { trialToken }),
         }),
       })
       const regData = await regRes.json()
@@ -271,12 +281,6 @@ function RegisterForm() {
       }
 
       window.hj?.('event', 'signup_code_verified')
-      void postSignupProgress(apiUrl, {
-        step: 'email_verified',
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        email: email.trim(),
-      })
       pushDataLayer({ event: 'signup_finish' })
 
       // Persist session
@@ -322,7 +326,7 @@ function RegisterForm() {
     } finally {
       setIsLoading(false)
     }
-  }, [email, verificationCode, formData, requestedLang, inviteToken, trialToken, guestRoute, router])
+  }, [email, verificationCode, formData, requestedLang, inviteToken, guestRoute, router])
 
   // ── Already logged in ─────────────────────────────────────────────────────
 
@@ -434,7 +438,7 @@ function RegisterForm() {
     formData.confirmPassword && formData.acceptTerms && formData.password === formData.confirmPassword &&
     formData.password.length >= 8
 
-  const isInviteOrTrial = !!(inviteToken || trialToken)
+  const isInvite = !!inviteToken
 
   return (
     <DarkAuthShell>
@@ -445,11 +449,17 @@ function RegisterForm() {
           <Link href="/"><Image src="/images/brand/logo-header-white.png" alt="PathPilo" width={160} height={50} priority className="h-10 w-auto mx-auto mb-8" /></Link>
           <h1 className="text-2xl font-bold text-white tracking-tight transition-all duration-300">
             {!detailsOpen
-              ? (inviteToken ? 'Accept your invitation' : trialToken && trialDays ? 'Get started with PathPilo' : 'Create your account')
-              : `Welcome, ${formData.firstName || 'there'}`}
+              ? (inviteToken ? 'Accept your invitation' : 'Create your account')
+              : resumed
+                ? `Welcome back${formData.firstName ? `, ${formData.firstName}` : ''}`
+                : `Welcome, ${formData.firstName || 'there'}`}
           </h1>
           <p className="mt-1.5 text-sm text-gray-300 transition-all duration-300">
-            {!detailsOpen ? 'Free to get started. No credit card required.' : 'Just a few more details and you\'re in.'}
+            {!detailsOpen
+              ? 'Free to get started. No credit card required.'
+              : resumed
+                ? 'Pick up where you left off.'
+                : 'Just a few more details and you\'re in.'}
           </p>
         </div>
 
@@ -483,8 +493,8 @@ function RegisterForm() {
                   <input
                     type="email" value={email}
                     onChange={e => { setEmail(e.target.value); if (emailError) setEmailError('') }}
-                    readOnly={detailsOpen || isInviteOrTrial}
-                    className={`input-field ${detailsOpen ? 'bg-gray-50 text-gray-600 cursor-default pr-16' : ''} ${isInviteOrTrial ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                    readOnly={detailsOpen || isInvite}
+                    className={`input-field ${detailsOpen ? 'bg-gray-50 text-gray-600 cursor-default pr-16' : ''} ${isInvite ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                     placeholder="your@email.com" required autoFocus={!detailsOpen}
                   />
                   {detailsOpen && (

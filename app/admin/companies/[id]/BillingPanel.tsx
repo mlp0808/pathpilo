@@ -320,7 +320,7 @@ export default function BillingPanel({
           </div>
           <div className="flex items-center gap-2">
             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${data.plan === 'pro' ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-              {data.plan === 'pro' ? 'Pro' : 'Standard'}
+              {data.plan === 'pro' ? 'Company (pro)' : 'Solo (standard)'}
             </span>
             <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${src.cls}`}>
               {src.label}

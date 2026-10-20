@@ -73,10 +73,6 @@ export default function AdminLoginPage() {
         localStorage.setItem('token', data.token)
         localStorage.setItem('user', JSON.stringify(data.user))
         
-        alert('Admin login successful!')
-        console.log('Admin logged in:', data.user)
-        
-        // Redirect to admin overview page
         router.push('/admin/overview')
       } else {
         setError(data.error || 'Login failed')

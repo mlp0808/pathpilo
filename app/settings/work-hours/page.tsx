@@ -9,7 +9,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
-import { SettingsHeader, SettingsSection, SettingsButton, SettingsHint } from '../../components/settings/SettingsUI'
+import {
+  SettingsHeader,
+  SettingsSection,
+  SettingsHint,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
+} from '../../components/settings/SettingsUI'
 import { invalidateMapCaches, invalidateWorkHoursCache } from '../../components/map/useMapData'
 
 type Weekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
@@ -90,6 +96,7 @@ export default function CompanyWorkHoursSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const [baseline, setBaseline] = useState('')
 
   const loadUsers = useCallback(async () => {
     try {
@@ -124,18 +131,23 @@ export default function CompanyWorkHoursSettingsPage() {
         })
         if (!res.ok) throw new Error('Failed to load defaults')
         const d = await res.json()
-        setSchedule(rowToSchedule(d.defaults || {}))
+        const next = rowToSchedule(d.defaults || {})
+        setSchedule(next)
+        setBaseline(JSON.stringify(next))
       } else {
         const res = await fetch(apiUrl(`/work-hours/${nextScope}`), {
           headers: { Authorization: `Bearer ${token}` },
         })
         if (!res.ok) throw new Error('Failed to load employee hours')
         const d = await res.json()
-        setSchedule(rowToSchedule(d.workHours || {}))
+        const next = rowToSchedule(d.workHours || {})
+        setSchedule(next)
+        setBaseline(JSON.stringify(next))
       }
     } catch {
       setError(t('app.teamMember.errNetwork', 'Network error'))
       setSchedule(DEFAULT_SCHEDULE)
+      setBaseline(JSON.stringify(DEFAULT_SCHEDULE))
     } finally {
       setLoading(false)
     }
@@ -230,6 +242,7 @@ export default function CompanyWorkHoursSettingsPage() {
         } else {
           for (const u of users) invalidateWorkHoursCache(u.id)
         }
+        setBaseline(JSON.stringify(schedule))
         setSaved(true)
         setTimeout(() => setSaved(false), 2500)
       }
@@ -243,8 +256,12 @@ export default function CompanyWorkHoursSettingsPage() {
   const timeInput =
     'text-sm border border-gray-200 rounded-md px-2 py-1 focus:border-gray-400 outline-none'
 
+  const dirty = Boolean(baseline) && JSON.stringify(schedule) !== baseline
+  const saveLabel = t('settings.business.save', 'Save changes')
+  const savingLabel = t('app.common.saving', 'Saving...')
+
   return (
-    <div className="px-6 py-8">
+    <div className="px-6 py-8 pb-16">
       <div className="max-w-2xl mx-auto">
         <SettingsHeader
           title={t('settings.workHours.title', 'Work hours')}
@@ -252,6 +269,17 @@ export default function CompanyWorkHoursSettingsPage() {
             'settings.workHours.subtitle',
             'Set the company default (37h week starting at 08:00), or pick an employee to customize their start time and daily hours. Capacity on the map and jobs calendar always follows these hours.',
           )}
+          action={
+            <SettingsSaveButton
+              dirty={dirty}
+              saving={saving}
+              onSave={() => {
+                void save()
+              }}
+              label={saveLabel}
+              savingLabel={savingLabel}
+            />
+          }
         />
 
         <SettingsSection title={t('settings.workHours.whoTitle', 'Who')}>
@@ -389,15 +417,23 @@ export default function CompanyWorkHoursSettingsPage() {
                 <div className="flex items-center gap-3">
                   {error && <p className="text-sm text-red-600">{error}</p>}
                   {saved && <span className="text-sm text-gray-500">{t('app.teamMember.saved', 'Saved')}</span>}
-                  <SettingsButton type="button" variant="primary" onClick={save} disabled={saving}>
-                    {saving ? t('app.common.saving', 'Saving...') : t('settings.business.save', 'Save changes')}
-                  </SettingsButton>
                 </div>
               </div>
             </>
           )}
         </SettingsSection>
       </div>
+
+      <SettingsScrollSaveBanner
+        dirty={dirty}
+        saving={saving}
+        onSave={() => {
+          void save()
+        }}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={t('settings.invoices.unsaved', 'You have unsaved changes')}
+      />
     </div>
   )
 }

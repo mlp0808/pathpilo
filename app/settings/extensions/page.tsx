@@ -7,11 +7,12 @@ import {
   SettingsSection,
   SettingsLabel,
   SettingsInput,
-  SettingsButton,
   SettingsToggle,
   SettingsHint,
   SettingsSavedNote,
   SettingsErrorNote,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
 } from '../../components/settings/SettingsUI'
 
 type ProviderId = 'bank_transfer' | string
@@ -128,6 +129,15 @@ export default function ExtensionsSettingsPage() {
     setSuccess('')
   }, [selectedIntegration?.provider])
 
+  const dirty = useMemo(() => {
+    if (!selectedIntegration) return false
+    const savedConfig = { ...EMPTY_BANK_CONFIG, ...(selectedIntegration.config || {}) }
+    return (
+      draftEnabled !== Boolean(selectedIntegration.enabled) ||
+      JSON.stringify(draftConfig) !== JSON.stringify(savedConfig)
+    )
+  }, [selectedIntegration, draftEnabled, draftConfig])
+
   const handleSave = async () => {
     if (!selectedIntegration) return
     if (selectedIntegration.provider === 'bank_transfer' && draftEnabled && !canEnableBankTransfer) {
@@ -172,10 +182,21 @@ export default function ExtensionsSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-8">
+    <div className="mx-auto max-w-2xl px-6 py-8 pb-16">
       <SettingsHeader
         title="Extensions"
         description="Manage optional features and provider integrations."
+        action={
+          <SettingsSaveButton
+            dirty={dirty}
+            saving={saving}
+            onSave={() => {
+              void handleSave()
+            }}
+            label="Save"
+            savingLabel="Saving..."
+          />
+        }
       />
 
       {loading ? (
@@ -265,11 +286,6 @@ export default function ExtensionsSettingsPage() {
                     {error && <SettingsErrorNote>{error}</SettingsErrorNote>}
                     {success && <SettingsSavedNote>{success}</SettingsSavedNote>}
 
-                    <div className="flex justify-end">
-                      <SettingsButton variant="primary" onClick={handleSave} disabled={saving}>
-                        {saving ? 'Saving...' : 'Save extension'}
-                      </SettingsButton>
-                    </div>
                   </div>
                 )}
               </div>
@@ -277,6 +293,17 @@ export default function ExtensionsSettingsPage() {
           })}
         </SettingsSection>
       )}
+
+      <SettingsScrollSaveBanner
+        dirty={dirty}
+        saving={saving}
+        onSave={() => {
+          void handleSave()
+        }}
+        label="Save"
+        savingLabel="Saving..."
+        unsavedLabel="Unsaved changes"
+      />
     </div>
   )
 }

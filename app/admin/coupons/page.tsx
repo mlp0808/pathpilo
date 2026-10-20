@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
-import AdminNav from '../components/AdminNav'
 
 interface AdminCoupon {
   id: string
@@ -207,13 +206,11 @@ export default function AdminCouponsPage() {
   const activeCount = coupons.filter((c) => c.active).length
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AdminNav />
-
-      <div className="max-w-7xl mx-auto px-6 py-8">
+    <div>
+      <div>
         <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Discount coupons</h1>
+            <h1 className="text-xl font-bold tracking-tight text-gray-900 sm:text-2xl">Discount coupons</h1>
             <p className="text-gray-600 mt-1 max-w-2xl">
               Create promo codes for Stripe checkout. Customers enter the code once — Stripe
               automatically applies the discount for the number of billing periods you set (e.g. 3

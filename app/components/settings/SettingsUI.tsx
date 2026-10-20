@@ -17,7 +17,10 @@
  *   - Helper text is small and grey so it never competes with the label.
  */
 
-import type { ReactNode, InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { useEffect, useState, type ReactNode, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+
+/** Scroll past this (px) before the bottom save banner appears. */
+const SAVE_BANNER_SCROLL_PX = 72
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Page header — large title + one muted line. No divider of its own; the first
@@ -35,12 +38,118 @@ export function SettingsHeader({
 }) {
   return (
     <header className="mb-10">
-      <div className="flex items-center justify-between gap-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900">{title}</h1>
-        {action && <div className="flex flex-shrink-0 items-center gap-3">{action}</div>}
+      <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-6">
+        <h1 className="min-w-0 text-xl font-semibold tracking-tight text-gray-900 sm:text-2xl">{title}</h1>
+        {action && <div className="flex flex-shrink-0 items-center gap-2 pt-0.5 sm:gap-3">{action}</div>}
       </div>
-      {description && <p className="mt-2 max-w-[60%] text-sm leading-relaxed text-gray-500">{description}</p>}
+      {description && (
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-gray-500 sm:max-w-[60%]">{description}</p>
+      )}
     </header>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Save — compact top-right control + scroll-triggered bottom banner (mobile-friendly).
+// Buttons stay visible but only clickable when `dirty`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function SettingsSaveButton({
+  dirty,
+  saving = false,
+  onSave,
+  label = 'Save',
+  savingLabel = 'Saving…',
+  className = '',
+}: {
+  dirty: boolean
+  saving?: boolean
+  onSave: () => void
+  label?: string
+  savingLabel?: string
+  className?: string
+}) {
+  const canSave = dirty && !saving
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (canSave) onSave()
+      }}
+      disabled={!canSave}
+      aria-disabled={!canSave}
+      className={`inline-flex h-8 items-center justify-center rounded-md px-2.5 text-[13px] font-medium transition-colors ${
+        canSave
+          ? 'bg-gray-900 text-white hover:bg-black'
+          : 'cursor-not-allowed bg-gray-100 text-gray-400'
+      } ${className}`}
+    >
+      {saving ? savingLabel : label}
+    </button>
+  )
+}
+
+/**
+ * Fixed bottom bar that appears after a short scroll. Save sits bottom-right;
+ * only enabled when there are unsaved changes.
+ */
+export function SettingsScrollSaveBanner({
+  dirty,
+  saving = false,
+  onSave,
+  onDiscard,
+  label = 'Save',
+  savingLabel = 'Saving…',
+  unsavedLabel = 'Unsaved changes',
+  discardLabel = 'Discard',
+}: {
+  dirty: boolean
+  saving?: boolean
+  onSave: () => void
+  onDiscard?: () => void
+  label?: string
+  savingLabel?: string
+  unsavedLabel?: string
+  discardLabel?: string
+}) {
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const update = () => setVisible(window.scrollY > SAVE_BANNER_SCROLL_PX)
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    return () => window.removeEventListener('scroll', update)
+  }, [])
+
+  if (!visible) return null
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 shadow-[0_-2px_12px_rgba(0,0,0,0.05)] backdrop-blur-sm lg:left-[200px]">
+      <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-2 sm:px-6">
+        <p className={`min-w-0 truncate text-[12px] ${dirty ? 'text-gray-600' : 'text-transparent'}`}>
+          {dirty ? unsavedLabel : '—'}
+        </p>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {onDiscard && dirty ? (
+            <button
+              type="button"
+              onClick={onDiscard}
+              disabled={saving}
+              className="text-[12px] font-medium text-gray-500 hover:text-gray-800 disabled:opacity-40"
+            >
+              {discardLabel}
+            </button>
+          ) : null}
+          <SettingsSaveButton
+            dirty={dirty}
+            saving={saving}
+            onSave={onSave}
+            label={label}
+            savingLabel={savingLabel}
+          />
+        </div>
+      </div>
+    </div>
   )
 }
 

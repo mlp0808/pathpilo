@@ -5,7 +5,6 @@ import {
   ChatBubbleLeftRightIcon,
   EnvelopeIcon,
   InformationCircleIcon,
-  SparklesIcon,
   ArrowPathIcon,
   ClockIcon,
   XMarkIcon,
@@ -23,6 +22,7 @@ import {
 import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
 import { useAppI18n } from '../../components/I18nProvider'
 import type { MessageKey } from '../../i18n'
+import { SettingsSaveButton, SettingsScrollSaveBanner } from '../../components/settings/SettingsUI'
 
 interface MessagesDraft {
   templates: MessageTemplate[]
@@ -347,8 +347,9 @@ export default function NotificationsPage() {
   })
   const [savedNotice, setSavedNotice] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [isLoadingRemote, setIsLoadingRemote] = useState(false)
+  const [isLoadingRemote, setIsLoadingRemote] = useState(true)
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState('')
 
   // Reset field focus tracking whenever a different template modal opens
   useEffect(() => {
@@ -436,6 +437,14 @@ export default function NotificationsPage() {
     loadRemoteTemplates()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!isLoadingRemote && !baseline) {
+      setBaseline(JSON.stringify(draft))
+    }
+  }, [isLoadingRemote, baseline, draft])
+
+  const dirty = Boolean(baseline) && JSON.stringify(draft) !== baseline
 
   const manualTemplates = useMemo(
     () => draft.templates.filter((t) => t.kind === 'template'),
@@ -591,6 +600,7 @@ export default function NotificationsPage() {
               : t
           ),
         }))
+        setBaseline(JSON.stringify(draft))
         setSavedNotice(tr('app.messages.savedNotice', 'Messages saved.'))
       } catch {
         setSavedNotice(tr('app.messages.saveError', 'Could not save messages right now.'))
@@ -659,8 +669,11 @@ export default function NotificationsPage() {
     </div>
   )
 
+  const saveLabel = tr('app.messages.save', 'Save')
+  const savingLabel = tr('app.messages.saving', 'Saving...')
+
   return (
-    <div className="max-w-3xl mx-auto p-6">
+    <div className="max-w-3xl mx-auto p-6 pb-16">
       <div>
         <div className="pb-6">
           <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
@@ -679,19 +692,18 @@ export default function NotificationsPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleResetDefaults}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-[13px] font-medium text-gray-700 hover:bg-gray-50"
               >
-                <ArrowPathIcon className="w-4 h-4" />
+                <ArrowPathIcon className="w-3.5 h-3.5" />
                 {tr('app.messages.resetAllDefaults', 'Reset all defaults')}
               </button>
-              <button
-                onClick={handleSaveDraft}
-                disabled={isSaving}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <SparklesIcon className="w-4 h-4" />
-                {isSaving ? tr('app.messages.saving', 'Saving...') : tr('app.messages.save', 'Save')}
-              </button>
+              <SettingsSaveButton
+                dirty={dirty}
+                saving={isSaving}
+                onSave={handleSaveDraft}
+                label={saveLabel}
+                savingLabel={savingLabel}
+              />
             </div>
           </div>
 
@@ -1112,6 +1124,15 @@ export default function NotificationsPage() {
           </div>
         </div>
       )}
+
+      <SettingsScrollSaveBanner
+        dirty={dirty}
+        saving={isSaving}
+        onSave={handleSaveDraft}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={tr('settings.invoices.unsaved', 'You have unsaved changes')}
+      />
     </div>
   )
 }

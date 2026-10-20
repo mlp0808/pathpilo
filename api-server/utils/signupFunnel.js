@@ -1,4 +1,29 @@
 const { pool } = require('./database');
+const { trackEvent, isDuplicate } = require('./activityEvents');
+
+/** Pre-account steps that become `signup.*` events in the activity stream. */
+const PRE_ACCOUNT_EVENT_NAMES = {
+  name_entered: 'signup.name_entered',
+  email_entered: 'signup.email_entered',
+  details_ready: 'signup.details_entered',
+  code_sent: 'signup.code_sent',
+  code_verified: 'signup.email_verified',
+  email_verified: 'signup.email_verified',
+};
+
+function trackSignupStep({ sessionId, step, email, req }) {
+  const name = PRE_ACCOUNT_EVENT_NAMES[step];
+  const sid = String(sessionId || '').trim();
+  if (!name || !sid) return;
+  if (isDuplicate(`signup|${sid}|${name}`)) return;
+  trackEvent({
+    event: name,
+    anonymousId: sid,
+    label: email ? normalizeEmail(email) : null,
+    source: 'signup',
+    req,
+  });
+}
 
 /**
  * Pre-account + post-account funnel stages shown in superadmin.
@@ -80,11 +105,13 @@ async function upsertSignupDraft({
   step,
   userId = null,
   companyId = null,
+  req = null,
 }) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid.length > 128) return;
   const stepRaw = String(step || 'email_entered').trim();
   if (!SIGNUP_FUNNEL_STEPS.has(stepRaw)) return;
+  if (!userId) trackSignupStep({ sessionId: sid, step: stepRaw, email, req });
 
   const fn = firstName != null ? String(firstName).trim().slice(0, 255) : '';
   const ln = lastName != null ? String(lastName).trim().slice(0, 255) : '';
@@ -100,7 +127,11 @@ async function upsertSignupDraft({
        first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), signup_progress_drafts.first_name),
        last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), signup_progress_drafts.last_name),
        email = COALESCE(EXCLUDED.email, signup_progress_drafts.email),
-       step = EXCLUDED.step,
+       step = CASE
+         WHEN signup_progress_drafts.user_id IS NOT NULL AND EXCLUDED.user_id IS NULL
+           THEN signup_progress_drafts.step
+         ELSE EXCLUDED.step
+       END,
        user_id = COALESCE(EXCLUDED.user_id, signup_progress_drafts.user_id),
        company_id = COALESCE(EXCLUDED.company_id, signup_progress_drafts.company_id),
        updated_at = NOW()`,
@@ -116,6 +147,7 @@ async function upsertSignupDraftByEmail({
   userId = null,
   companyId = null,
   sessionId = null,
+  req = null,
 }) {
   const em = normalizeEmail(email);
   if (!em || !SIGNUP_FUNNEL_STEPS.has(step)) return;
@@ -141,6 +173,7 @@ async function upsertSignupDraftByEmail({
     step,
     userId,
     companyId,
+    req,
   });
 }
 
@@ -167,34 +200,6 @@ async function advanceCompanyOnboardingStep(companyId, targetStep) {
   return next;
 }
 
-function funnelStepForCompanyRow(row) {
-  if (row.onboarding_completed) {
-    return row.plan === 'pro' ? 'plan_company' : 'plan_solo';
-  }
-  return (row.onboarding_step || 'company') === 'goals' ? 'wizard_goals' : 'wizard_company';
-}
-
-/**
- * Maps a combined funnel entry to a numeric funnel step (1–5) for the admin
- * Lead Funnel page.
- *
- * Step definitions:
- *   1 – Enter Email       (email entered, no account yet)
- *   2 – Create Account    (code sent / pending verification)
- *   3 – Company Details   (companies.onboarding_step = 'company')
- *   4 – Usage Goals       (onboarding_step = 'goals')
- *   5 – Complete          (onboarding_completed = true)
- */
-function leadFunnelStep(entry) {
-  if (entry.onboarding_completed) return 5;
-  if (entry.onboarding_step === 'goals') return 4;
-  if (entry.onboarding_step === 'company') return 3;
-  // Pre-account
-  if (entry.draft_step === 'code_sent') return 2;
-  if (entry.kind === 'verification') return 2;
-  return 1;
-}
-
 module.exports = {
   SIGNUP_FUNNEL_STEPS,
   ONBOARDING_WIZARD_STEPS,
@@ -202,8 +207,7 @@ module.exports = {
   ensureSignupFunnelSchema,
   upsertSignupDraft,
   upsertSignupDraftByEmail,
+  trackSignupStep,
   advanceCompanyOnboardingStep,
-  funnelStepForCompanyRow,
-  leadFunnelStep,
   wizardStepIndex,
 };

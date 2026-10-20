@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import AdminNav from '../components/AdminNav'
 import {
   PlusIcon,
   PencilSquareIcon,
@@ -237,10 +236,8 @@ export default function AdminVideoGuidesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AdminNav />
-
-      <div className="max-w-4xl mx-auto px-6 py-8">
+    <div>
+      <div className="max-w-4xl">
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Video Guides</h1>

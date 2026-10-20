@@ -7,6 +7,8 @@ import {
   SettingsHeader,
   SettingsToggle,
   SettingsButton,
+  SettingsSaveButton,
+  SettingsScrollSaveBanner,
 } from '@/app/components/settings/SettingsUI'
 import LeadFormRenderer from '@/app/components/leads/LeadFormRenderer'
 import {
@@ -228,8 +230,11 @@ export default function LeadFormBuilderPage() {
     )
   }
 
+  const saveLabel = t('settings.leads.save', 'Save form')
+  const savingLabel = t('settings.leads.savingShort', 'Saving…')
+
   return (
-    <div className="px-6 py-8 pb-28"><div className="mx-auto max-w-7xl">
+    <div className="px-6 py-8 pb-16"><div className="mx-auto max-w-7xl">
       <SettingsHeader
         title={t('settings.leads.title', 'Lead form')}
         description={
@@ -246,6 +251,15 @@ export default function LeadFormBuilderPage() {
         action={
           <>
             {activationSaving && <span className="text-[13px] text-gray-400">{t('settings.leads.saving', 'Saving…')}</span>}
+            <SettingsSaveButton
+              dirty={dirty}
+              saving={saving}
+              onSave={() => {
+                void saveForm()
+              }}
+              label={saveLabel}
+              savingLabel={savingLabel}
+            />
             <SettingsToggle
               checked={enabled}
               onChange={toggleEnabled}
@@ -557,21 +571,16 @@ export default function LeadFormBuilderPage() {
       </div>
       </div>
 
-      {/* Sticky save bar */}
-      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/90 backdrop-blur lg:left-[200px]">
-        <div className="mx-auto flex max-w-5xl items-center justify-end gap-3 px-6 py-3">
-          {savedAt > 0 && !dirty && (
-            <span className="inline-flex items-center gap-1 text-[13px] text-gray-500">
-              <CheckIcon className="h-4 w-4 text-accent-600" />
-              {t('settings.leads.saved', 'Saved')}
-            </span>
-          )}
-          {dirty && <span className="text-[13px] text-gray-400">{t('settings.leads.unsaved', 'Unsaved changes')}</span>}
-          <SettingsButton variant="primary" onClick={saveForm} disabled={saving || !dirty}>
-            {saving ? t('settings.leads.savingShort', 'Saving…') : t('settings.leads.save', 'Save form')}
-          </SettingsButton>
-        </div>
-      </div>
+      <SettingsScrollSaveBanner
+        dirty={dirty}
+        saving={saving}
+        onSave={() => {
+          void saveForm()
+        }}
+        label={saveLabel}
+        savingLabel={savingLabel}
+        unsavedLabel={t('settings.leads.unsaved', 'Unsaved changes')}
+      />
     </div>
   )
 }
