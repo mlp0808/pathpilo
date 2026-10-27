@@ -11,6 +11,7 @@ import AddClientInlineForm, {
   guestClientFromLocation,
   generateGuestClientName,
   initialNewClientData,
+  type NewClientData,
 } from './AddClientInlineForm'
 import TimePicker from './TimePicker'
 import { useAppI18n } from './I18nProvider'
@@ -583,19 +584,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
   const serviceHistoryTriggerRef = useRef<HTMLDivElement>(null)
   const [serviceHistoryRect, setServiceHistoryRect] = useState<DOMRect | null>(null)
   const [isAddingNewClient, setIsAddingNewClient] = useState(false)
-  const [newClientData, setNewClientData] = useState({
-    client_type: 'person' as 'person' | 'company',
-    name: '',
-    last_name: '',
-    company_number: '',
-    address: '',
-    zip_code: '',
-    city: '',
-    lat: null as number | null,
-    lng: null as number | null,
-    email: '',
-    phone: ''
-  })
+  const [newClientData, setNewClientData] = useState<NewClientData>({ ...initialNewClientData })
   
   const toggleSection = (section: 'client' | 'job' | 'schedule' | 'recurring') => {
     setExpandedSections(prev => {
@@ -1296,6 +1285,7 @@ export default function CreateJob({ isOpen, onClose, onJobCreated, initialDate, 
             address: dataToUse.address || null,
             zip_code: dataToUse.zip_code || null,
             city: dataToUse.city || null,
+            state: dataToUse.state || null,
             lat: dataToUse.lat ?? null,
             lng: dataToUse.lng ?? null,
             email: dataToUse.email || null,

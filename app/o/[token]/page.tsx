@@ -111,7 +111,7 @@ export default function PublicOfferPage() {
   const isExpired = !isAccepted && !isDeclined && !!doc.validUntil && String(doc.validUntil).slice(0, 10) < todayYmd()
   const isOpen = !isAccepted && !isDeclined && !isExpired
   const canAccept = isOpen && (doc.days.length === 0 || !!selected)
-  const total = formatDocMoney(doc.total, doc.currency, doc.locale)
+  const total = formatDocMoney(doc.total, doc.currency, doc.moneyLocale || doc.locale)
   const acceptLabel = doc.days.length > 0 && selected
     ? `${L('acceptOn')} ${formatDay(selected, doc.locale, { weekday: 'short', day: 'numeric', month: 'short' })}`
     : L('accept')

@@ -16,7 +16,14 @@ import {
   mapLogoServerError,
   type LogoUploadError,
 } from '../../utils/logoUpload'
-import { countryRules, getCountryRule } from '../../config/countryRules'
+import {
+  SUPPORTED_COUNTRIES,
+  getCountryRule,
+  isSupportedCountry,
+  stateName,
+  type LocalityField,
+} from '../../config/countryRules'
+import { rememberCompanyCountryCode } from '../../utils/companyCountry'
 import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
 import {
   SettingsHeader,
@@ -51,6 +58,8 @@ interface CompanyProfile {
   address: string
   city: string
   zipCode: string
+  /** State / region code; only used by countries with states (US). */
+  state: string
   /** Contact details rendered on every invoice. Hidden if empty. */
   email: string
   phone: string
@@ -63,15 +72,6 @@ type SlugStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid'
 
 function slugify(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-}
-
-const COUNTRY_NAME_BY_CODE: Record<string, string> = {
-  DK: 'Denmark',
-  SE: 'Sweden',
-  NO: 'Norway',
-  DE: 'Germany',
-  GB: 'United Kingdom',
-  US: 'United States',
 }
 
 export default function BusinessSettingsPage() {
@@ -92,6 +92,7 @@ export default function BusinessSettingsPage() {
     address: '',
     city: '',
     zipCode: '',
+    state: '',
     email: '',
     phone: '',
     website: '',
@@ -132,6 +133,7 @@ export default function BusinessSettingsPage() {
           address: c.address || '',
           city: c.city || '',
           zipCode: c.zipCode || '',
+          state: c.state || '',
           email: c.email || '',
           phone: c.phone || '',
           website: c.website || '',
@@ -255,13 +257,20 @@ export default function BusinessSettingsPage() {
     setFormData(prev => ({ ...prev, [name]: value }))
   }
 
+  const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+  }
+
   const handleCountryCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const nextCode = e.target.value
+    const nextRule = getCountryRule(nextCode)
     setFormData(prev => ({
       ...prev,
       countryCode: nextCode,
-      country: COUNTRY_NAME_BY_CODE[nextCode] || prev.country || '',
+      country: nextRule.countryName || prev.country || '',
       timezone: getDefaultTimezoneForCountry(nextCode),
+      state: nextRule.address.states?.some(([code]) => code === prev.state) ? prev.state : '',
     }))
   }
 
@@ -352,6 +361,7 @@ export default function BusinessSettingsPage() {
         throw new Error(errorData.error || 'Failed to update company profile')
       }
 
+      rememberCompanyCountryCode(formData.countryCode, formData.id)
       setSuccess(t('settings.business.updateSuccess', 'Company profile updated successfully!'))
       setIsEditing(false)
     } catch (err) {
@@ -388,6 +398,45 @@ export default function BusinessSettingsPage() {
     ) : (
       <span className="text-sm text-gray-600">{(formData as any)[name] || '—'}</span>
     )
+
+  const renderLocalityRow = (field: LocalityField) => {
+    if (field === 'state') {
+      return (
+        <SettingsRow
+          key={field}
+          title={countryRule.address.stateLabel || t('settings.business.state', 'State')}
+          control={
+            isEditing ? (
+              <select name="state" value={formData.state} onChange={handleSelectChange} className={selectClass}>
+                <option value="">{t('settings.business.selectState', 'Select…')}</option>
+                {countryRule.address.states?.map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-sm text-gray-600">{stateName(formData.countryCode, formData.state) || '—'}</span>
+            )
+          }
+        />
+      )
+    }
+    if (field === 'zip') {
+      return (
+        <SettingsRow
+          key={field}
+          title={countryRule.address.postalLabel}
+          control={readOrInput('zipCode', 'text', isEditing ? countryRule.address.postalPlaceholder : '')}
+        />
+      )
+    }
+    return (
+      <SettingsRow
+        key={field}
+        title={countryRule.address.cityLabel || t('settings.business.city', 'City')}
+        control={readOrInput('city', 'text', isEditing ? countryRule.address.cityPlaceholder : '')}
+      />
+    )
+  }
 
   const saveLabel = t('settings.business.save', 'Save changes')
   const savingLabel = t('settings.business.saving', 'Saving...')
@@ -436,38 +485,53 @@ export default function BusinessSettingsPage() {
       >
         <SettingsRow title={t('settings.business.companyName', 'Company Name')} control={readOrInput('name')} />
         <SettingsRow
-          title={countryRule.companyNumberLabel || t('settings.business.companyNumber', 'Company Number')}
-          control={readOrInput('cvrNumber')}
+          title={t('settings.business.country', 'Country')}
+          description={
+            isEditing
+              ? t(
+                  'settings.business.countryHelp',
+                  'Sets your currency, default tax, address format and map search area.',
+                )
+              : undefined
+          }
+          control={
+            isEditing ? (
+              <select name="countryCode" value={formData.countryCode} onChange={handleCountryCodeChange} className={selectClass}>
+                {!isSupportedCountry(formData.countryCode) && formData.countryCode && (
+                  <option value={formData.countryCode}>{formData.country || formData.countryCode}</option>
+                )}
+                {SUPPORTED_COUNTRIES.map((rule) => (
+                  <option key={rule.countryCode} value={rule.countryCode}>
+                    {rule.flag} {rule.countryName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-sm text-gray-600">
+                {isSupportedCountry(formData.countryCode)
+                  ? `${countryRule.flag} ${countryRule.countryName}`
+                  : formData.country || formData.countryCode || '—'}
+              </span>
+            )
+          }
         />
-        {/* VAT number — shown for any country where a separate VAT reg. number exists.
-            UK example: Companies House number goes in the field above; GB123456789 here. */}
-        {(formData.vatNumber || isEditing) && (
+        <SettingsRow
+          title={countryRule.companyNumberLabel || t('settings.business.companyNumber', 'Company Number')}
+          control={readOrInput('cvrNumber', 'text', isEditing ? countryRule.companyNumberPlaceholder : '')}
+        />
+        {/* VAT number — for countries where it differs from the company number
+            (e.g. UK: Companies House number above, GB123456789 here). */}
+        {(formData.vatNumber || (isEditing && countryRule.showVatNumber)) && (
           <SettingsRow
-            title={t('settings.business.vatNumber', 'VAT Number')}
+            title={countryRule.vatNumberLabel || t('settings.business.vatNumber', 'VAT Number')}
             description={
               formData.countryCode === 'GB'
                 ? t('settings.business.vatNumberHelpGB', 'Your HMRC VAT registration number (e.g. GB123456789). Leave blank if you are not VAT registered.')
                 : t('settings.business.vatNumberHelp', 'Your VAT registration number. Leave blank if you are not VAT registered.')
             }
-            control={readOrInput('vatNumber')}
+            control={readOrInput('vatNumber', 'text', isEditing ? countryRule.vatNumberPlaceholder : '')}
           />
         )}
-        <SettingsRow
-          title={t('settings.business.countryCode', 'Country code')}
-          control={
-            isEditing ? (
-              <select name="countryCode" value={formData.countryCode} onChange={handleCountryCodeChange} className={selectClass}>
-                {Object.values(countryRules).map((rule) => (
-                  <option key={rule.countryCode} value={rule.countryCode}>
-                    {rule.countryName} ({rule.countryCode})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span className="text-sm text-gray-600">{formData.countryCode || '—'}</span>
-            )
-          }
-        />
         <SettingsRow
           title={t('settings.business.timezone', 'Time zone')}
           description={t(
@@ -476,7 +540,7 @@ export default function BusinessSettingsPage() {
           )}
           control={
             isEditing ? (
-              <select name="timezone" value={formData.timezone} onChange={handleInputChange} className={selectClass}>
+              <select name="timezone" value={formData.timezone} onChange={handleSelectChange} className={selectClass}>
                 <optgroup label={t('settings.business.timezoneSuggested', 'Suggested for your country')}>
                   {tzSelect.suggested.map((opt) => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -495,10 +559,11 @@ export default function BusinessSettingsPage() {
             )
           }
         />
-        <SettingsRow title={t('settings.business.country', 'Country')} control={readOrInput('country')} />
-        <SettingsRow title={t('settings.business.city', 'City')} control={readOrInput('city')} />
-        <SettingsRow title={t('settings.business.address', 'Address')} control={readOrInput('address')} />
-        <SettingsRow title={countryRule.postalCodeLabel} control={readOrInput('zipCode')} />
+        <SettingsRow
+          title={t('settings.business.address', 'Address')}
+          control={readOrInput('address', 'text', isEditing ? countryRule.address.streetPlaceholder : '')}
+        />
+        {countryRule.address.order.map(renderLocalityRow)}
       </SettingsSection>
 
       {/* ── Contact details on invoices ── */}
@@ -515,7 +580,7 @@ export default function BusinessSettingsPage() {
         />
         <SettingsRow
           title={t('settings.business.invoiceContact.phone', 'Contact phone')}
-          control={readOrInput('phone', 'tel', isEditing ? '+45 12 34 56 78' : '')}
+          control={readOrInput('phone', 'tel', isEditing ? countryRule.phonePlaceholder : '')}
         />
         <SettingsRow
           title={t('settings.business.invoiceContact.website', 'Website')}

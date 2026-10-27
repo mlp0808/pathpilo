@@ -10,6 +10,8 @@ import { SettingsToggle } from '@/app/components/settings/SettingsUI'
 import { DigitalInvoiceView, type PublicInvoicePayload } from '@/app/components/DigitalInvoiceView'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import type { MessageKey } from '@/app/i18n'
+import { getCountryRule } from '@/app/config/countryRules'
+import { getStoredCompanyCountryCode } from '@/app/utils/companyCountry'
 
 function formatDate(value: string | undefined): string {
   if (!value) return '—'
@@ -476,7 +478,7 @@ export default function InvoicePage() {
   }
 
   const total = Number(invoice.total) || 0
-  const currency = invoice.currency || 'DKK'
+  const currency = invoice.currency || getCountryRule(getStoredCompanyCountryCode()).defaultCurrency
   const transactions = invoice.transactions || []
   const balance = invoice.balance !== undefined && invoice.balance !== null
     ? Number(invoice.balance)

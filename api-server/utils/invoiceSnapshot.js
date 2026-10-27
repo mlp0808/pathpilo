@@ -20,6 +20,8 @@
  * without rewriting old invoices.
  */
 
+const { getCountry, currencyForCountry, DEFAULT_COUNTRY_CODE } = require('./countryRules');
+
 const COUNTRY_COMPANY_NUMBER_LABELS = {
   DK: 'CVR no.',
   SE: 'Org.nr',
@@ -81,22 +83,30 @@ const COUNTRY_INVOICE_LOCALE = {
 
 function invoiceLocaleFor(countryCode) {
   if (!countryCode) return 'en';
+  const supported = getCountry(countryCode);
+  if (supported) return supported.invoiceLocale;
   return COUNTRY_INVOICE_LOCALE[String(countryCode).toUpperCase()] || 'en';
 }
 
 function companyNumberLabelFor(countryCode) {
   if (!countryCode) return 'Company no.';
+  const supported = getCountry(countryCode);
+  if (supported) return supported.companyNumber.documentLabel;
   return COUNTRY_COMPANY_NUMBER_LABELS[String(countryCode).toUpperCase()] || 'Company no.';
 }
 
 function taxLabelFor(countryCode) {
   if (!countryCode) return 'VAT';
+  const supported = getCountry(countryCode);
+  if (supported) return supported.tax.documentLabel;
   return COUNTRY_TAX_LABELS[String(countryCode).toUpperCase()] || 'VAT';
 }
 
 function currencyFor(countryCode) {
-  if (!countryCode) return 'DKK';
-  return COUNTRY_CURRENCY_DEFAULTS[String(countryCode).toUpperCase()] || 'DKK';
+  if (!countryCode) return currencyForCountry(DEFAULT_COUNTRY_CODE);
+  const supported = getCountry(countryCode);
+  if (supported) return supported.currency;
+  return COUNTRY_CURRENCY_DEFAULTS[String(countryCode).toUpperCase()] || currencyForCountry(DEFAULT_COUNTRY_CODE);
 }
 
 /**
@@ -117,6 +127,11 @@ async function ensureSnapshotColumns(pool) {
     // Separate VAT registration number (UK: GB123456789, EU: country-prefix format).
     // Distinct from cvr_number (Companies House / trade register number).
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_number TEXT`,
+    // State / region for countries whose addresses use one (US).
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS state TEXT`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS state TEXT`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS billing_state TEXT`,
+    `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_state TEXT`,
     // Optional client-side fields used by Danish public-sector invoicing.
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS ean_number TEXT`,
     // Optional service-side bookkeeping account code, used when exporting to
@@ -175,6 +190,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
            co.address        AS company_address,
            co.zip_code       AS company_zip_code,
            co.city           AS company_city,
+           co.state          AS company_state,
            co.country        AS company_country,
            co.country_code   AS company_country_code,
            co.cvr_number     AS company_cvr,
@@ -229,6 +245,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
       currency                  = $17,
       invoice_locale            = $18,
       from_vat_number           = $19,
+      from_state                = $20,
       frozen_at                 = CURRENT_TIMESTAMP,
       updated_at                = CURRENT_TIMESTAMP
     WHERE id = $1
@@ -253,6 +270,7 @@ async function snapshotInvoiceOnIssue(dbClient, invoiceId) {
       currency,
       locale,
       r.company_vat_number || null,
+      r.company_state || null,
     ],
   );
 }
@@ -279,6 +297,7 @@ function resolveInvoiceParties(row) {
     address: pick(row.from_address, row.company_address),
     zipCode: pick(row.from_zip_code, row.company_zip_code),
     city: pick(row.from_city, row.company_city),
+    state: row.frozen_at ? String(row.from_state || '') : pick(row.from_state, row.company_state),
     country: pick(row.from_country, row.company_country),
     countryCode: fromCountryCode,
     companyNumber: pick(row.from_company_number, row.company_cvr_number),

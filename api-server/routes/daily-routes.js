@@ -303,13 +303,15 @@ async function ensureCompanyGeoColumns() {
 }
 
 // One-shot geocode with Mapbox → returns { lat, lng } or null.
-async function mapboxGeocode(address, mapboxToken) {
+async function mapboxGeocode(address, mapboxToken, countryCode) {
   if (!address || !mapboxToken) return null;
   try {
     const encoded = encodeURIComponent(address);
+    const cc = String(countryCode || '').trim().toLowerCase();
+    const countryParam = /^[a-z]{2}$/.test(cc) ? `&country=${cc}` : '';
     const url =
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json` +
-      `?limit=1&access_token=${mapboxToken}`;
+      `?limit=1&access_token=${mapboxToken}${countryParam}`;
     const r = await fetch(url);
     if (!r.ok) return null;
     const body = await r.json();
@@ -326,7 +328,7 @@ async function mapboxGeocode(address, mapboxToken) {
 async function resolveCompanyCoords(companyId, mapboxToken) {
   await ensureCompanyGeoColumns();
   const r = await pool.query(
-    `SELECT address_lat, address_lng, address, zip_code, city, country
+    `SELECT address_lat, address_lng, address, zip_code, city, state, country, country_code
        FROM companies
       WHERE id = $1
       LIMIT 1`,
@@ -339,10 +341,10 @@ async function resolveCompanyCoords(companyId, mapboxToken) {
     return { lat: Number(row.address_lat), lng: Number(row.address_lng) };
   }
 
-  const addressParts = [row.address, row.zip_code, row.city, row.country].filter(Boolean);
+  const addressParts = [row.address, row.zip_code, row.city, row.state, row.country].filter(Boolean);
   if (addressParts.length === 0 || !mapboxToken) return null;
   const query = addressParts.join(', ');
-  const geo = await mapboxGeocode(query, mapboxToken);
+  const geo = await mapboxGeocode(query, mapboxToken, row.country_code);
   if (!geo) return null;
 
   try {

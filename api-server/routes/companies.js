@@ -15,7 +15,12 @@ const {
 } = require('../utils/invoiceNumberAllocation');
 
 const router = express.Router();
-const DEFAULT_COUNTRY_CODE = 'DK';
+const {
+  DEFAULT_COUNTRY_CODE,
+  isSupportedCountry,
+  normalizeState,
+  timezoneForCountry,
+} = require('../utils/countryRules');
 const DEFAULT_LANGUAGE_CODE = 'en';
 
 function normalizeCountryCode(value) {
@@ -1382,6 +1387,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
         address: company.address,
         city: company.city,
         zipCode: company.zip_code,
+        state: company.state || '',
         // Contact details rendered on every invoice. Hidden on the
         // invoice when empty, per product spec.
         email: company.email || '',
@@ -1441,6 +1447,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
       address,
       city,
       zipCode,
+      state,
       email,
       phone,
       website,
@@ -1506,6 +1513,15 @@ router.put('/profile', authenticateToken, async (req, res) => {
       effectiveCountry = countryNameFromCode(normalizeCountryCode(countryCode));
     }
 
+    let stateParam = null;
+    let hasStateKey = Object.prototype.hasOwnProperty.call(req.body, 'state');
+    if (hasStateKey || countryCode != null) {
+      const current = await pool.query('SELECT country_code, state FROM companies WHERE id = $1', [companyId]);
+      const nextCountry = countryCode != null ? normalizeCountryCode(countryCode) : current.rows[0]?.country_code;
+      stateParam = normalizeState(nextCountry, hasStateKey ? state : current.rows[0]?.state) || null;
+      hasStateKey = true;
+    }
+
     // COALESCE on every nullable field so a partial PATCH-like PUT (frontend
     // only sends what changed) doesn't accidentally wipe the others.
     await pool.query(
@@ -1528,6 +1544,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         vat_number     = COALESCE($18, vat_number),
         industry       = COALESCE($19, industry),
         usage_goals    = COALESCE($20::jsonb, usage_goals),
+        state          = CASE WHEN $22::boolean THEN $21 ELSE state END,
         updated_at     = CURRENT_TIMESTAMP
       WHERE id = $13`,
       [
@@ -1551,6 +1568,8 @@ router.put('/profile', authenticateToken, async (req, res) => {
         vatNumber != null ? String(vatNumber).trim() : null,
         nextIndustry,
         nextUsageGoals ? JSON.stringify(nextUsageGoals) : null,
+        stateParam,
+        hasStateKey,
       ]
     );
 
@@ -2171,12 +2190,17 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       address,
       city,
       zipCode,
+      state,
       slug: requestedSlug,
       timezone,
       industry,
       website,
     } = req.body;
     const userId = req.user.userId;
+
+    if (countryCode != null && !isSupportedCountry(countryCode)) {
+      return res.status(400).json({ error: 'Please choose a supported country' });
+    }
 
     try {
       await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)');
@@ -2243,11 +2267,23 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       }
     }
 
+    const nextCountryCode = countryCode != null
+      ? normalizeCountryCode(countryCode)
+      : (currentCompany.country_code || DEFAULT_COUNTRY_CODE);
+    const countryChanged = nextCountryCode !== (currentCompany.country_code || DEFAULT_COUNTRY_CODE);
+    if (countryChanged && !Object.prototype.hasOwnProperty.call(req.body, 'timezone')) {
+      nextTimezone = timezoneForCountry(nextCountryCode);
+    }
+    const nextState = Object.prototype.hasOwnProperty.call(req.body, 'state') || countryChanged
+      ? (normalizeState(nextCountryCode, state ?? currentCompany.state) || null)
+      : (currentCompany.state || null);
+
     // Auto-derive country display name from code when not explicitly provided.
     let wizardCountry = country != null ? String(country).trim() : null;
     if (!wizardCountry && countryCode) {
       wizardCountry = countryNameFromCode(normalizeCountryCode(countryCode));
     }
+    if (wizardCountry == null) wizardCountry = currentCompany.country || null;
 
     let nextIndustry = null;
     if (industry != null && String(industry).trim() !== '') {
@@ -2260,11 +2296,13 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
     const result = await pool.query(`
       UPDATE companies
       SET name = $1, slug = $2, country = $3, country_code = COALESCE($4, country_code, '${DEFAULT_COUNTRY_CODE}'),
-          cvr_number = $5, address = $6, city = $7, zip_code = $8, timezone = $9,
-          industry = COALESCE($11, industry), website = COALESCE($12, website), updated_at = NOW()
+          cvr_number = COALESCE($5, cvr_number), address = COALESCE($6, address),
+          city = COALESCE($7, city), zip_code = COALESCE($8, zip_code), timezone = $9,
+          industry = COALESCE($11, industry), website = COALESCE($12, website),
+          state = $13, updated_at = NOW()
       WHERE id = $10
       RETURNING id, name, slug, country, country_code, timezone, cvr_number as "cvrNumber",
-                address, city, zip_code as "zipCode", industry, website
+                address, city, zip_code as "zipCode", state, industry, website
     `, [
       newName,
       slug,
@@ -2278,6 +2316,7 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
       companyId,
       nextIndustry,
       website != null ? String(website).trim() : null,
+      nextState,
     ]);
 
     const { normalizeCompanyTimezone } = require('../utils/companyTimezone');
@@ -2297,6 +2336,7 @@ router.put('/:companyId', authenticateToken, async (req, res) => {
         address: company.address,
         city: company.city,
         zipCode: company.zipCode,
+        state: company.state || '',
         industry: company.industry || '',
         website: company.website || ''
       }

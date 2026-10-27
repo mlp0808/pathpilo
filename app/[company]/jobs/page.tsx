@@ -26,6 +26,7 @@ import WeekPlanPanel from '@/app/components/WeekPlanPanel'
 import WorkDriveDayBar from '@/app/components/jobs/WorkDriveDayBar'
 import CreateAppointment, { CATEGORY_OPTIONS as APPT_CATEGORY_OPTIONS, type AppointmentPayload } from '@/app/components/CreateAppointment'
 import { apiUrl } from '@/app/utils/api'
+import { mapboxCountryParam } from '@/app/utils/companyCountry'
 import { forceReLogin, refreshSession } from '@/app/utils/sessionRefresh'
 import { groupJobsIntoVisits, visitSiblingsFor } from '@/app/utils/visitMerge'
 import { formatMoney } from '@/app/config/countryRules'
@@ -1622,10 +1623,9 @@ function JobsPageContent() {
         const dateString = toLocalDateString(date)
         const dayJobs = jobs.filter(job => {
           if (toDateOnlyString(job.scheduled_date) !== dateString) return false
-          if (
-            (job.status === 'cancelled' || job.status === 'deleted')
-            && archivedJobIds.has(String(job.id))
-          ) {
+          // Soft-deleted jobs stay in the DB for history, but never on the schedule.
+          if (job.status === 'deleted') return false
+          if (job.status === 'cancelled' && archivedJobIds.has(String(job.id))) {
             return false
           }
           return true
@@ -2412,7 +2412,7 @@ function JobsPageContent() {
         const encoded = encodeURIComponent(item.address)
         const res = await fetch(
           // types=address,place â broader than just "address" so partial/unnumbered addresses also match
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}`
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}${mapboxCountryParam()}`
         )
         const data = await res.json()
         if (data.features?.[0]) {
@@ -2523,7 +2523,9 @@ function JobsPageContent() {
     if (viewMode !== 'day') return
     const dayDate = currentWeek
     const dateStr = toLocalDateString(dayDate)
-    const dayJobs = allJobs.filter(j => toDateOnlyString(j.scheduled_date) === dateStr)
+    const dayJobs = allJobs.filter(j =>
+      toDateOnlyString(j.scheduled_date) === dateStr && j.status !== 'deleted'
+    )
     // Use ref (not state) so drag-reassigns don't trigger a full rebuild here.
     const dayJobsWithPending = dayJobs.map(j => ({
       ...j,

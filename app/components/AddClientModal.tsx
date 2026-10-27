@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import { apiUrl } from '../utils/api'
 import AddressAutocomplete from './AddressAutocomplete'
-import { getCountryRule } from '../config/countryRules'
+import LocalityInputs from './LocalityInputs'
+import { getCountryRule, DEFAULT_COUNTRY_CODE, type LocalityField } from '../config/countryRules'
+import { getStoredCompanyCountryCode } from '../utils/companyCountry'
 import { useAppI18n } from './I18nProvider'
 
 interface Client {
@@ -17,6 +19,7 @@ interface Client {
   address: string
   zip_code: string
   city: string
+  state: string
   lat?: number | null
   lng?: number | null
   email: string
@@ -24,6 +27,7 @@ interface Client {
   billing_address: string
   billing_zip_code: string
   billing_city: string
+  billing_state: string
   billing_email: string
   billing_phone: string
 }
@@ -40,6 +44,15 @@ interface AddClientModalProps {
   initialLng?: number | null
 }
 
+const BILLING_KEY: Record<LocalityField, 'billing_zip_code' | 'billing_city' | 'billing_state'> = {
+  zip: 'billing_zip_code',
+  city: 'billing_city',
+  state: 'billing_state',
+}
+
+const billingInputCls =
+  'w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400'
+
 const emptyClient = (): Client => ({
   client_type: 'person',
   name: '',
@@ -50,6 +63,7 @@ const emptyClient = (): Client => ({
   address: '',
   zip_code: '',
   city: '',
+  state: '',
   lat: null,
   lng: null,
   email: '',
@@ -57,6 +71,7 @@ const emptyClient = (): Client => ({
   billing_address: '',
   billing_zip_code: '',
   billing_city: '',
+  billing_state: '',
   billing_email: '',
   billing_phone: '',
 })
@@ -72,15 +87,7 @@ export default function AddClientModal({
   initialLng = null,
 }: AddClientModalProps) {
   const { t } = useAppI18n()
-  const userCountryCode = (() => {
-    if (typeof window === 'undefined') return 'DK'
-    try {
-      const user = JSON.parse(localStorage.getItem('user') || '{}')
-      return user?.activeCompany?.countryCode || 'DK'
-    } catch {
-      return 'DK'
-    }
-  })()
+  const userCountryCode = getStoredCompanyCountryCode() || DEFAULT_COUNTRY_CODE
   const countryRule = getCountryRule(userCountryCode)
   const [currentClient, setCurrentClient] = useState<Client>(emptyClient)
   const [separateBillingAddress, setSeparateBillingAddress] = useState(false)
@@ -129,6 +136,7 @@ export default function AddClientModal({
         address: currentClient.address,
         zip_code: currentClient.zip_code,
         city: currentClient.city,
+        state: currentClient.state,
         lat: currentClient.lat || null,
         lng: currentClient.lng || null,
         email: currentClient.email,
@@ -136,6 +144,7 @@ export default function AddClientModal({
         billing_address: separateBillingAddress ? currentClient.billing_address : null,
         billing_zip_code: separateBillingAddress ? currentClient.billing_zip_code : null,
         billing_city: separateBillingAddress ? currentClient.billing_city : null,
+        billing_state: separateBillingAddress ? currentClient.billing_state : null,
         billing_email: separateBillingContact ? currentClient.billing_email : null,
         billing_phone: separateBillingContact ? currentClient.billing_phone : null
       }
@@ -153,26 +162,7 @@ export default function AddClientModal({
       
       if (response.ok) {
         // Reset form
-        setCurrentClient({
-          client_type: 'person',
-          name: '',
-          last_name: '',
-          company_number: '',
-          contact_name: '',
-          country: '',
-          address: '',
-          zip_code: '',
-          city: '',
-          lat: null,
-          lng: null,
-          email: '',
-          phone: '',
-          billing_address: '',
-          billing_zip_code: '',
-          billing_city: '',
-          billing_email: '',
-          billing_phone: ''
-        })
+        setCurrentClient(emptyClient())
         setSeparateBillingAddress(false)
         setSeparateBillingContact(false)
         setIncludeContactPerson(false)
@@ -194,24 +184,7 @@ export default function AddClientModal({
 
   const handleClose = () => {
     // Reset form when closing
-    setCurrentClient({
-      client_type: 'person',
-      name: '',
-      last_name: '',
-      company_number: '',
-      contact_name: '',
-      country: '',
-      address: '',
-      zip_code: '',
-      city: '',
-      email: '',
-      phone: '',
-      billing_address: '',
-      billing_zip_code: '',
-      billing_city: '',
-      billing_email: '',
-      billing_phone: ''
-    })
+    setCurrentClient(emptyClient())
     setSeparateBillingAddress(false)
     setSeparateBillingContact(false)
     setIncludeContactPerson(false)
@@ -319,7 +292,7 @@ export default function AddClientModal({
                       value={currentClient.company_number}
                       onChange={handleInputChange}
                       className="w-full px-4 py-3 text-sm bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400 hover:border-slate-300"
-                      placeholder="e.g. CVR 12345678"
+                      placeholder={`e.g. ${countryRule.companyNumberPlaceholder}`}
                     />
                   </div>
                 </div>
@@ -403,6 +376,7 @@ export default function AddClientModal({
               address={currentClient.address}
               zip_code={currentClient.zip_code}
               city={currentClient.city}
+              state={currentClient.state}
               lat={currentClient.lat}
               lng={currentClient.lng}
               onChange={(data) =>
@@ -411,13 +385,13 @@ export default function AddClientModal({
                   address: data.address,
                   zip_code: data.zip_code,
                   city: data.city,
+                  state: data.state ?? prev.state,
                   lat: data.lat ?? null,
                   lng: data.lng ?? null,
                 }))
               }
-              placeholder="e.g. Main Street 123"
+              placeholder={`e.g. ${countryRule.address.streetPlaceholder}`}
               countryCode={userCountryCode}
-              zipLabel={countryRule.postalCodeLabel}
             />
 
             {/* Separate Billing Address Checkbox */}
@@ -441,8 +415,8 @@ export default function AddClientModal({
 
             {/* Billing Address Fields */}
             {separateBillingAddress && (
-              <div className="grid grid-cols-12 gap-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
-                <div className="col-span-6 group">
+              <div className="space-y-4 p-4 bg-accent-50 rounded-xl border border-accent-200">
+                <div className="group">
                   <label htmlFor="billing_address" className="block text-sm font-medium text-primary-900 mb-2">
                     {t('app.clients.add.billingAddress')}
                   </label>
@@ -452,38 +426,22 @@ export default function AddClientModal({
                     name="billing_address"
                     value={currentClient.billing_address}
                     onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder="e.g. Business Street 456"
+                    className={billingInputCls}
+                    placeholder={`e.g. ${countryRule.address.streetPlaceholder}`}
                   />
                 </div>
-                <div className="col-span-3 group">
-                  <label htmlFor="billing_zip_code" className="block text-sm font-medium text-primary-900 mb-2">
-                    {countryRule.postalCodeLabel}
-                  </label>
-                  <input
-                    type="text"
-                    id="billing_zip_code"
-                    name="billing_zip_code"
-                    value={currentClient.billing_zip_code}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder={t('app.clients.add.billingPostalPlaceholder')}
-                  />
-                </div>
-                <div className="col-span-3 group">
-                  <label htmlFor="billing_city" className="block text-sm font-medium text-primary-900 mb-2">
-                    {t('app.clients.add.billingCity')}
-                  </label>
-                  <input
-                    type="text"
-                    id="billing_city"
-                    name="billing_city"
-                    value={currentClient.billing_city}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-3 text-sm bg-white border border-accent-200 rounded-xl focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500 transition-all duration-200 placeholder-slate-400"
-                    placeholder={t('app.clients.add.billingCityPlaceholder')}
-                  />
-                </div>
+                <LocalityInputs
+                  countryCode={userCountryCode}
+                  idPrefix="billing"
+                  zip={currentClient.billing_zip_code}
+                  city={currentClient.billing_city}
+                  state={currentClient.billing_state}
+                  onChange={(field: LocalityField, value) =>
+                    setCurrentClient(prev => ({ ...prev, [BILLING_KEY[field]]: value }))
+                  }
+                  inputClassName={billingInputCls}
+                  labelClassName="block text-sm font-medium text-primary-900 mb-2"
+                />
               </div>
             )}
 

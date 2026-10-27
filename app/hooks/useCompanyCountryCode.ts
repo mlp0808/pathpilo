@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect } from 'react'
 import { apiUrl } from '../utils/api'
+import { getStoredCompanyCountryCode, rememberCompanyCountryCode } from '../utils/companyCountry'
 
 export type CompanyCountryUser = {
   companyId?: number | null
@@ -17,25 +18,8 @@ export function useCompanyCountryCode(user?: CompanyCountryUser): string {
   const [countryCode, setCountryCode] = useState('DK')
 
   useLayoutEffect(() => {
-    try {
-      const rawCompany = localStorage.getItem('company')
-      if (rawCompany) {
-        const c = JSON.parse(rawCompany)
-        if (c?.countryCode) {
-          setCountryCode(String(c.countryCode))
-          return
-        }
-      }
-      const u = JSON.parse(localStorage.getItem('user') || '{}')
-      const code =
-        u.activeCompany?.countryCode ||
-        (Array.isArray(u.companies)
-          ? u.companies.find((co: { id?: number }) => co?.id === u.companyId)?.countryCode
-          : undefined)
-      if (code) setCountryCode(String(code))
-    } catch {
-      /* ignore */
-    }
+    const code = getStoredCompanyCountryCode()
+    if (code) setCountryCode(code)
   }, [])
 
   useEffect(() => {
@@ -47,8 +31,9 @@ export function useCompanyCountryCode(user?: CompanyCountryUser): string {
         })
         if (!res.ok) return
         const data = await res.json()
-        const code = data.company?.countryCode || 'DK'
-        setCountryCode(String(code))
+        const code = String(data.company?.countryCode || 'DK').toUpperCase()
+        setCountryCode(code)
+        rememberCompanyCountryCode(code, data.company?.id)
       } catch {
         /* keep cached */
       }

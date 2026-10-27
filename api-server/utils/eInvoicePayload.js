@@ -1,5 +1,13 @@
 const { resolveClientInvoiceContact } = require('./invoiceClientDisplay');
 const { t: tI18n, tInterp: tInterpI18n } = require('./invoiceI18n');
+const {
+  DEFAULT_COUNTRY_CODE,
+  currencyForCountry,
+  displayLocaleForCountry,
+  documentTaxLabelForCountry,
+  formatLocality,
+  vatNumberLabelForCountry,
+} = require('./countryRules');
 
 /**
  * Turn a relative logo path into an absolute URL so it renders in emails
@@ -213,7 +221,12 @@ function buildPublicInvoicePayload(invoice, bankRow) {
   }
 
   const paymentMethods = buildPaymentOptions(companyId, invoice, bankRow);
-  const billTo = resolveClientInvoiceContact(invoice);
+  const docCountry = invoice.company_country_code || DEFAULT_COUNTRY_CODE;
+  const billTo = resolveClientInvoiceContact(invoice, docCountry);
+  const companyLocality = formatLocality(
+    { zip: invoice.company_zip_code, city: invoice.company_city, state: invoice.company_state },
+    docCountry,
+  );
 
   return {
     invoiceNumber: effectiveInvoiceNumber(invoice),
@@ -221,7 +234,9 @@ function buildPublicInvoicePayload(invoice, bankRow) {
     description: invoice.description || '',
     issueDate: invoice.issue_date,
     dueDate: invoice.due_date,
-    currency: invoice.currency || 'DKK',
+    currency: invoice.currency || currencyForCountry(docCountry),
+    // Number/currency formatting locale for the company country (e.g. da-DK, en-US).
+    moneyLocale: displayLocaleForCountry(docCountry),
     subtotal: Number(invoice.subtotal) || 0,
     taxRate: Number(invoice.tax_rate) || 0,
     taxAmount: Number(invoice.tax_amount) || 0,
@@ -247,22 +262,20 @@ function buildPublicInvoicePayload(invoice, bankRow) {
     company: {
       name: invoice.company_name || null,
       address: invoice.company_address || null,
-      zipCity:
-        [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ') || null,
-      addressLine: [invoice.company_address, invoice.company_zip_code, invoice.company_city]
-        .filter(Boolean)
-        .join(' \u00b7 ') || null,
+      zipCity: companyLocality || null,
+      addressLine: [invoice.company_address, companyLocality].filter(Boolean).join(' \u00b7 ') || null,
       country: invoice.company_country || null,
       countryCode: invoice.company_country_code || null,
       cvr: invoice.company_cvr_number || null,
       cvrLabel: invoice.company_number_label || tr('invoice.companyNoFallback', 'Company no.'),
       vatNumber: invoice.company_vat_number || null,
+      vatNumberLabel: vatNumberLabelForCountry(docCountry),
       email: invoice.company_email || null,
       phone: invoice.company_phone || null,
       website: invoice.company_website || null,
       logoUrl: resolveLogoUrl(invoice.company_logo_url),
     },
-    taxLabel: invoice.tax_label || tr('invoice.vatFallback', 'VAT'),
+    taxLabel: invoice.tax_label || documentTaxLabelForCountry(docCountry),
     referenceText:
       invoice.reference_text != null && String(invoice.reference_text).trim() !== ''
         ? String(invoice.reference_text).trim()

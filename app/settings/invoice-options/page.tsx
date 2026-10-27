@@ -6,7 +6,7 @@ import { apiUrl } from '../../utils/api'
 import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
 import {
   isBankTransferConfigComplete,
-  usesUkBankFields,
+  bankSchemeFor,
   validateBankTransferForEnable,
   type BankTransferConfig,
 } from '../../utils/bankTransfer'
@@ -715,7 +715,7 @@ function PaymentOptionRow({
   t: (key: string, fallback: string) => string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const isUkBank = usesUkBankFields(countryCode)
+  const bankScheme = bankSchemeFor(countryCode)
 
   useEffect(() => {
     if (expandRequested) setExpanded(true)
@@ -779,15 +779,25 @@ function PaymentOptionRow({
           {isBankTransfer && (
             <>
               <SettingsHint>
-                {isUkBank
+                {bankScheme === 'gb'
                   ? t(
                       'settings.invoices.payment.ukHelp',
                       'UK bank transfers use a 6-digit sort code (e.g. 12-34-56) and a 6–10 digit account number. IBAN is optional.',
                     )
-                  : t(
-                      'settings.invoices.payment.euHelp',
-                      'Clients will see these details on your invoices when they pay by bank transfer.',
-                    )}
+                  : bankScheme === 'us'
+                    ? t(
+                        'settings.invoices.payment.usHelp',
+                        'US bank transfers (ACH / wire) use your 9-digit routing number and your account number.',
+                      )
+                    : bankScheme === 'dk'
+                      ? t(
+                          'settings.invoices.payment.dkHelp',
+                          'Danish clients pay with reg. no. and account number. Add an IBAN too if you have clients abroad.',
+                        )
+                      : t(
+                          'settings.invoices.payment.euHelp',
+                          'Clients will see these details on your invoices when they pay by bank transfer.',
+                        )}
               </SettingsHint>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field
@@ -796,7 +806,45 @@ function PaymentOptionRow({
                   value={String(draft.config.accountHolder || '')}
                   onChange={(v) => onDraftChange({ config: { accountHolder: v } })}
                 />
-                {isUkBank ? (
+                {bankScheme === 'us' ? (
+                  <>
+                    <Field
+                      label={t('settings.invoices.payment.routingNumber', 'Routing number')}
+                      required
+                      placeholder="021000021"
+                      value={String(draft.config.registrationNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                      required
+                      placeholder="000123456789"
+                      value={String(draft.config.accountNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
+                    />
+                  </>
+                ) : bankScheme === 'dk' ? (
+                  <>
+                    <Field
+                      label={t('settings.invoices.payment.regNumber', 'Reg. no.')}
+                      placeholder="1234"
+                      value={String(draft.config.registrationNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                      placeholder="1234567890"
+                      value={String(draft.config.accountNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.ibanOptional', 'IBAN (optional)')}
+                      placeholder="DK50 0040 0440 1162 43"
+                      value={String(draft.config.iban || '')}
+                      onChange={(v) => onDraftChange({ config: { iban: v } })}
+                    />
+                  </>
+                ) : bankScheme === 'gb' ? (
                   <>
                     <Field
                       label={t('settings.invoices.payment.sortCode', 'Sort code')}

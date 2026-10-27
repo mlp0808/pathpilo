@@ -3,6 +3,8 @@
 import { MapPinIcon } from '@heroicons/react/24/outline'
 import AddressAutocomplete from './AddressAutocomplete'
 import { useAppI18n } from './I18nProvider'
+import { formatLocality, getCountryRule } from '../config/countryRules'
+import { getStoredCompanyCountryCode } from '../utils/companyCountry'
 
 export interface NewClientData {
   client_type: 'person' | 'company'
@@ -12,6 +14,8 @@ export interface NewClientData {
   address: string
   zip_code: string
   city: string
+  /** State / region code for countries that use one (US). */
+  state?: string
   lat?: number | null
   lng?: number | null
   email: string
@@ -35,6 +39,7 @@ export const initialNewClientData: NewClientData = {
   address: '',
   zip_code: '',
   city: '',
+  state: '',
   lat: null,
   lng: null,
   email: '',
@@ -50,6 +55,7 @@ export function guestClientFromLocation(loc?: {
   address?: string
   zip_code?: string
   city?: string
+  state?: string
   lat?: number | null
   lng?: number | null
 } | null): NewClientData {
@@ -63,6 +69,7 @@ export function guestClientFromLocation(loc?: {
     address: loc?.address || '',
     zip_code: loc?.zip_code || '',
     city: loc?.city || '',
+    state: loc?.state || '',
     lat: loc?.lat ?? null,
     lng: loc?.lng ?? null,
   }
@@ -95,7 +102,12 @@ export default function AddClientInlineForm({
   // autocomplete selection). Typing into the search must not replace the input
   // with a static chip after the first word.
   const hasConfirmedLocation = data.lat != null && data.lng != null
-  const locationLine = [data.address, [data.zip_code, data.city].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
+  const effectiveCountry = countryCode || getStoredCompanyCountryCode()
+  const countryRule = getCountryRule(effectiveCountry)
+  const locationLine = [
+    data.address,
+    formatLocality({ zip: data.zip_code, city: data.city, state: data.state }, effectiveCountry),
+  ].filter(Boolean).join(' · ')
   const nameIsGuest = isGuestClientName(data.name)
 
   const inputBase =
@@ -156,6 +168,7 @@ export default function AddClientInlineForm({
                 address: '',
                 zip_code: '',
                 city: '',
+                state: '',
                 lat: null,
                 lng: null,
               })
@@ -207,14 +220,14 @@ export default function AddClientInlineForm({
         ) : (
           <div>
             <label className="block text-[10px] font-semibold text-gray-500 mb-1">
-              {t('app.createJob.companyNumber', 'Company number')}
+              {countryRule.companyNumberLabel || t('app.createJob.companyNumber', 'Company number')}
             </label>
             <input
               type="text"
               value={data.company_number}
               onChange={(e) => onChange({ ...data, company_number: e.target.value })}
               className={inputBase}
-              placeholder="CVR / org. no."
+              placeholder={countryRule.companyNumberPlaceholder}
             />
           </div>
         )}
@@ -229,9 +242,10 @@ export default function AddClientInlineForm({
             address={data.address}
             zip_code={data.zip_code}
             city={data.city}
+            state={data.state}
             lat={data.lat}
             lng={data.lng}
-            countryCode={countryCode}
+            countryCode={effectiveCountry}
             label=""
             hidePostalFields
             onChange={(addr) =>
@@ -240,6 +254,7 @@ export default function AddClientInlineForm({
                 address: addr.address,
                 zip_code: addr.zip_code,
                 city: addr.city,
+                state: addr.state ?? '',
                 lat: addr.lat ?? null,
                 lng: addr.lng ?? null,
               })

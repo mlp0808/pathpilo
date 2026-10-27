@@ -53,6 +53,7 @@ type ClientRow = {
   address?: string | null
   zip_code?: string | null
   city?: string | null
+  state?: string | null
   lat?: number | null
   lng?: number | null
 }
@@ -206,6 +207,7 @@ function OfferModalInner({ onClose, prefill, lockClient = false, onCreated, exis
         address: existing.address,
         zip_code: existing.zip_code,
         city: existing.city,
+        state: existing.state ?? existing.client_state ?? null,
         lat: existing.lat ?? null,
         lng: existing.lng ?? null,
       }
@@ -316,6 +318,7 @@ function OfferModalInner({ onClose, prefill, lockClient = false, onCreated, exis
           address: prev.address || full.address,
           zip_code: prev.zip_code || full.zip_code,
           city: prev.city || full.city,
+          state: prev.state || full.state,
           lat: prev.lat ?? full.lat ?? null,
           lng: prev.lng ?? full.lng ?? null,
         }
@@ -353,6 +356,7 @@ function OfferModalInner({ onClose, prefill, lockClient = false, onCreated, exis
         address: selectedClient.address || '',
         zip_code: selectedClient.zip_code || '',
         city: selectedClient.city || '',
+        state: selectedClient.state || '',
         lat: selectedClient.lat ?? null,
         lng: selectedClient.lng ?? null,
       }
@@ -366,6 +370,7 @@ function OfferModalInner({ onClose, prefill, lockClient = false, onCreated, exis
         address: newClient.address,
         zip_code: newClient.zip_code,
         city: newClient.city,
+        state: newClient.state || '',
         lat: newClient.lat ?? null,
         lng: newClient.lng ?? null,
       }
@@ -533,6 +538,7 @@ function OfferModalInner({ onClose, prefill, lockClient = false, onCreated, exis
       address: recipient.address || null,
       zip_code: recipient.zip_code || null,
       city: recipient.city || null,
+      state: recipient.state || null,
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
       items: lines.map(l => ({

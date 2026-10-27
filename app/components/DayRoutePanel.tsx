@@ -688,10 +688,7 @@ function UserRoutePanel({
 
   const activeJobs = route.jobs.filter(j => !j.is_cancelled)
   const cancelledJobs = route.jobs.filter(
-    j => j.is_cancelled && !(j as any).is_deleted && !archivedIds.has(String(j.id)),
-  )
-  const deletedJobs = route.jobs.filter(
-    j => (j as any).is_deleted && !archivedIds.has(String(j.id)),
+    j => j.is_cancelled && !archivedIds.has(String(j.id)),
   )
   const startJob = activeJobs.find(j => j.is_home && String(j.id).startsWith('start-'))
     ?? (activeJobs.length > 0 && activeJobs[0].is_home ? activeJobs[0] : null)
@@ -768,10 +765,10 @@ function UserRoutePanel({
       const newIdx = middleJobs.findIndex(j => j.id === over.id)
       if (oldIdx === -1 || newIdx === -1) return
       const newMiddle = arrayMove(middleJobs, oldIdx, newIdx)
-      const fullOrder = [...(startJob ? [startJob] : []), ...newMiddle, ...(endJob ? [endJob] : []), ...cancelledJobs, ...deletedJobs]
+      const fullOrder = [...(startJob ? [startJob] : []), ...newMiddle, ...(endJob ? [endJob] : []), ...cancelledJobs]
       onReorder(route.userId, fullOrder)
     },
-    [middleJobs, startJob, endJob, cancelledJobs, deletedJobs, route.userId, onReorder]
+    [middleJobs, startJob, endJob, cancelledJobs, route.userId, onReorder]
   )
 
   return (
@@ -940,7 +937,7 @@ function UserRoutePanel({
         !jobsFirst && <div className="h-px bg-gray-100 mb-3" />
       )}
 
-      {activeJobs.length === 0 && cancelledJobs.length === 0 && deletedJobs.length === 0 ? (
+      {activeJobs.length === 0 && cancelledJobs.length === 0 ? (
         onAddJob ? (
           <div className="py-6 px-0.5">
             <button
@@ -1178,51 +1175,6 @@ function UserRoutePanel({
                       </button>
                       <span className="text-[9px] font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
                         {t('app.jobsPage.cancelled', 'Cancelled')}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Soft-deleted jobs — still visible until archived from the planner */}
-          {deletedJobs.length > 0 && (
-            <div className="mt-5">
-              <p className="text-[9px] font-bold uppercase tracking-widest mb-2.5 text-gray-400">
-                {t('app.jobsPage.deletedSection', 'Deleted')} ({deletedJobs.length})
-              </p>
-              <div className="space-y-1.5 overflow-hidden">
-                {deletedJobs.map(job => {
-                  const exiting = exitingIds.has(String(job.id))
-                  return (
-                    <div
-                      key={job.id}
-                      className={`rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 bg-gray-50 border border-gray-100 opacity-35 transition-all duration-300 ease-out ${
-                        exiting
-                          ? '-translate-x-[120%] opacity-0 max-h-0 !py-0 !my-0 border-transparent overflow-hidden'
-                          : 'translate-x-0 max-h-24'
-                      }`}
-                    >
-                      <div className="w-5 h-5 rounded-full bg-gray-200 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-gray-500 truncate">{job.label}</p>
-                        {job.address && <p className="text-[10px] text-gray-400 truncate">{job.address}</p>}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          dismissInactiveJob(job.id)
-                        }}
-                        className="flex-shrink-0 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-200/80 transition-colors"
-                        title={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
-                        aria-label={t('app.jobsPage.archiveFromPlanner', 'Hide from planner')}
-                      >
-                        <ArchiveBoxArrowDownIcon className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="text-[9px] font-semibold text-gray-600 bg-gray-200 px-1.5 py-0.5 rounded">
-                        {t('app.jobsPage.deleted', 'Deleted')}
                       </span>
                     </div>
                   )

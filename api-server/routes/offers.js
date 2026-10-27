@@ -37,6 +37,12 @@ const {
   invoiceLocaleFor,
   companyNumberLabelFor,
 } = require('../utils/invoiceSnapshot');
+const {
+  formatLocality,
+  DEFAULT_COUNTRY_CODE,
+  displayLocaleForCountry,
+  documentDateLocale,
+} = require('../utils/countryRules');
 
 const router = express.Router();
 const publicRouter = express.Router();
@@ -153,6 +159,7 @@ async function ensureOffersSchema() {
     `ALTER TABLE offers ADD COLUMN IF NOT EXISTS decline_reason TEXT`,
     `ALTER TABLE offers ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP`,
     `ALTER TABLE offers ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`,
+    `ALTER TABLE offers ADD COLUMN IF NOT EXISTS state TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_offers_company ON offers(company_id)`,
     `CREATE INDEX IF NOT EXISTS idx_offers_token ON offers(token)`,
     `CREATE INDEX IF NOT EXISTS idx_offers_lead ON offers(lead_id)`,
@@ -288,7 +295,7 @@ function recipientName(offer) {
 
 async function loadCompany(companyId) {
   const res = await pool.query(
-    `SELECT id, name, slug, address, zip_code, city, country, country_code, cvr_number,
+    `SELECT id, name, slug, address, zip_code, city, state, country, country_code, cvr_number,
             vat_number, email, phone, website, logo_url
      FROM companies WHERE id = $1`,
     [companyId]
@@ -298,12 +305,12 @@ async function loadCompany(companyId) {
 
 /** Shape shared by the public page, admin detail and email. */
 function buildDocument(offer, company) {
-  const countryCode = company?.country_code || 'DK';
+  const countryCode = company?.country_code || DEFAULT_COUNTRY_CODE;
   const totals = computeTotals(parseJsonArray(offer.items), offer.tax_rate);
   const proposed = parseJsonArray(offer.proposed_dates);
   const clientAddress = [
     offer.address,
-    [offer.zip_code, offer.city].filter(Boolean).join(' '),
+    formatLocality({ zip: offer.zip_code, city: offer.city, state: offer.state || offer.client_state }, countryCode),
   ].filter(Boolean).join('\n');
 
   return {
@@ -320,6 +327,8 @@ function buildDocument(offer, company) {
     confirmedAt: offer.confirmed_at || null,
     declinedAt: offer.declined_at || null,
     locale: invoiceLocaleFor(countryCode),
+    moneyLocale: displayLocaleForCountry(countryCode),
+    dateLocale: documentDateLocale(countryCode),
     countryCode,
     currency: currencyFor(countryCode),
     taxLabel: taxLabelFor(countryCode),
@@ -331,7 +340,7 @@ function buildDocument(offer, company) {
     company: {
       name: company?.name || '',
       address: company?.address || '',
-      zipCity: [company?.zip_code, company?.city].filter(Boolean).join(' '),
+      zipCity: formatLocality({ zip: company?.zip_code, city: company?.city, state: company?.state }, countryCode),
       cvr: company?.cvr_number || '',
       cvrLabel: companyNumberLabelFor(countryCode),
       vatNumber: company?.vat_number || '',
@@ -361,7 +370,7 @@ function buildDocument(offer, company) {
 const OFFER_SELECT = `
   SELECT o.*,
          c.name AS client_name, c.last_name AS client_last_name,
-         c.email AS client_email, c.phone AS client_phone,
+         c.email AS client_email, c.phone AS client_phone, c.state AS client_state,
          j.scheduled_date AS job_date, j.booking_status AS job_booking_status,
          j.status AS job_status, j.assigned_user_id AS job_user_id,
          NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS job_user_name,
@@ -478,7 +487,7 @@ const LOCALE_TAG = { en: 'en-GB', da: 'da-DK' };
 
 function moneyFmt(amount, currency, locale) {
   try {
-    return new Intl.NumberFormat(LOCALE_TAG[locale] || 'en-GB', {
+    return new Intl.NumberFormat(LOCALE_TAG[locale] || locale || 'en-GB', {
       style: 'currency',
       currency,
       minimumFractionDigits: 2,
@@ -494,14 +503,14 @@ function dateFmt(value, locale, opts) {
   const s = String(value instanceof Date ? ymd(value) : value).slice(0, 10);
   const [y, m, d] = s.split('-').map(Number);
   if (!y) return '—';
-  return new Date(y, m - 1, d).toLocaleDateString(LOCALE_TAG[locale] || 'en-GB', opts || {
+  return new Date(y, m - 1, d).toLocaleDateString(LOCALE_TAG[locale] || locale || 'en-GB', opts || {
     day: 'numeric', month: 'short', year: 'numeric',
   });
 }
 
 function buildOfferEmail(doc, link) {
   const ui = EMAIL_UI[doc.locale] || EMAIL_UI.en;
-  const money = (n) => escapeHtml(moneyFmt(n, doc.currency, doc.locale));
+  const money = (n) => escapeHtml(moneyFmt(n, doc.currency, doc.moneyLocale));
   const logo = absoluteLogoUrl(doc.company.logoUrl);
   const company = escapeHtml(doc.company.name);
   const firstName = escapeHtml(String(doc.client.name || '').split(/\s+/)[0] || '');
@@ -527,7 +536,7 @@ function buildOfferEmail(doc, link) {
     ? `<div style="margin:0 0 28px;">
         <p style="${label}${cell}">${escapeHtml(ui.days)}</p>
         <div>
-          ${doc.days.map((d) => `<span style="display:inline-block;margin:0 6px 6px 0;padding:7px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#ffffff;color:#111827;font-size:13px;font-weight:500;${cell}">${escapeHtml(dateFmt(d.date, doc.locale, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>`).join('')}
+          ${doc.days.map((d) => `<span style="display:inline-block;margin:0 6px 6px 0;padding:7px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#ffffff;color:#111827;font-size:13px;font-weight:500;${cell}">${escapeHtml(dateFmt(d.date, doc.dateLocale, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>`).join('')}
         </div>
       </div>`
     : '';
@@ -580,11 +589,11 @@ ${lead}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td width="50%" style="vertical-align:top;padding-right:12px;">
           <p style="${label}${cell}">${escapeHtml(ui.date)}</p>
-          <p style="margin:0;font-size:14px;color:#374151;${cell}">${escapeHtml(dateFmt(doc.sentAt || doc.createdAt, doc.locale))}</p>
+          <p style="margin:0;font-size:14px;color:#374151;${cell}">${escapeHtml(dateFmt(doc.sentAt || doc.createdAt, doc.dateLocale))}</p>
         </td>
         <td width="50%" style="vertical-align:top;padding-left:12px;">
           <p style="${label}${cell}">${escapeHtml(ui.validUntil)}</p>
-          <p style="margin:0;font-size:14px;color:#374151;${cell}">${escapeHtml(doc.validUntil ? dateFmt(doc.validUntil, doc.locale) : ui.forever)}</p>
+          <p style="margin:0;font-size:14px;color:#374151;${cell}">${escapeHtml(doc.validUntil ? dateFmt(doc.validUntil, doc.dateLocale) : ui.forever)}</p>
         </td>
       </tr></table>
     </td>
@@ -643,9 +652,9 @@ ${daysBlock}
     '',
     doc.message || ui.lead(doc.company.name),
     '',
-    ...doc.items.map((it) => `${it.quantity !== 1 ? `${it.quantity} × ` : ''}${it.title} — ${moneyFmt(it.lineTotal, doc.currency, doc.locale)}`),
+    ...doc.items.map((it) => `${it.quantity !== 1 ? `${it.quantity} × ` : ''}${it.title} — ${moneyFmt(it.lineTotal, doc.currency, doc.moneyLocale)}`),
     '',
-    `${ui.total}: ${moneyFmt(doc.total, doc.currency, doc.locale)}`,
+    `${ui.total}: ${moneyFmt(doc.total, doc.currency, doc.moneyLocale)}`,
     '',
     `${ui.cta}: ${link}`,
   ].join('\n');
@@ -673,11 +682,11 @@ async function notifyCompanyAccepted(offer, company, chosenDate) {
   const doc = buildDocument({ ...offer, status: 'accepted', accepted_date: chosenDate }, company);
   const ui = EMAIL_UI[doc.locale] || EMAIL_UI.en;
   const name = doc.client.name || '';
-  const when = chosenDate ? `${ui.booked} ${dateFmt(chosenDate, doc.locale, { weekday: 'long', day: 'numeric', month: 'long' })}` : '';
+  const when = chosenDate ? `${ui.booked} ${dateFmt(chosenDate, doc.dateLocale, { weekday: 'long', day: 'numeric', month: 'long' })}` : '';
   const link = pipelineLink(company, offer.id);
   const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#111827;">
     <p style="margin:0 0 8px;"><strong>${escapeHtml(name)}</strong> ${escapeHtml(ui.acceptedBody)}${doc.number ? ` #${escapeHtml(doc.number)}` : ''}.</p>
-    <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#193434;">${escapeHtml(moneyFmt(doc.total, doc.currency, doc.locale))}</p>
+    <p style="margin:0 0 8px;font-size:20px;font-weight:700;color:#193434;">${escapeHtml(moneyFmt(doc.total, doc.currency, doc.moneyLocale))}</p>
     ${when ? `<p style="margin:0 0 6px;color:#374151;">${escapeHtml(when)}</p>` : ''}
     <p style="margin:0 0 16px;color:#6b7280;font-size:13px;">${escapeHtml(ui.confirmHint)}</p>
     <a href="${escapeHtml(link)}" style="display:inline-block;padding:10px 20px;background:#193434;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">${escapeHtml(ui.openInApp)}</a>
@@ -721,7 +730,7 @@ async function sendBookingConfirmedEmail(offer, company, jobDate) {
   const ui = EMAIL_UI[doc.locale] || EMAIL_UI.en;
   const firstName = escapeHtml(String(doc.client.name || '').split(/\s+/)[0] || '');
   const logo = absoluteLogoUrl(doc.company.logoUrl);
-  const when = jobDate ? dateFmt(jobDate, doc.locale, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  const when = jobDate ? dateFmt(jobDate, doc.dateLocale, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '';
   const where = doc.client.address.replace(/\n/g, ', ');
   const label = 'font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;';
   const inner = `
@@ -731,7 +740,7 @@ ${logo ? `<div style="margin:0 0 18px;"><img src="${escapeHtml(logo)}" alt="${es
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:22px;border:1px solid #e5e7eb;border-radius:12px;">
   ${when ? `<tr><td style="padding:14px 18px;border-bottom:1px solid #f3f4f6;"><div style="${label}">${escapeHtml(ui.when)}</div><div style="font-size:15px;font-weight:700;color:#111827;">${escapeHtml(when)}</div></td></tr>` : ''}
   ${where ? `<tr><td style="padding:14px 18px;border-bottom:1px solid #f3f4f6;"><div style="${label}">${escapeHtml(ui.where)}</div><div style="font-size:14px;color:#111827;">${escapeHtml(where)}</div></td></tr>` : ''}
-  <tr><td style="padding:14px 18px;"><div style="${label}">${escapeHtml(ui.total)}</div><div style="font-size:15px;font-weight:600;color:#111827;">${escapeHtml(moneyFmt(doc.total, doc.currency, doc.locale))}</div></td></tr>
+  <tr><td style="padding:14px 18px;"><div style="${label}">${escapeHtml(ui.total)}</div><div style="font-size:15px;font-weight:600;color:#111827;">${escapeHtml(moneyFmt(doc.total, doc.currency, doc.moneyLocale))}</div></td></tr>
 </table>
 <p style="margin:0;font-size:14px;line-height:1.55;color:#111827;">${escapeHtml(ui.signOff)}<br/><strong>${escapeHtml(doc.company.name)}</strong></p>`;
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
@@ -774,6 +783,7 @@ function readBody(body, existing) {
     address: pick('address', existing?.address ?? null) || null,
     zip_code: pick('zip_code', existing?.zip_code ?? null) || null,
     city: pick('city', existing?.city ?? null) || null,
+    state: String(pick('state', existing?.state ?? '') || '').trim().slice(0, 40) || null,
     lat: Number.isFinite(Number(pick('lat', existing?.lat))) && pick('lat', existing?.lat) != null ? Number(pick('lat', existing?.lat)) : null,
     lng: Number.isFinite(Number(pick('lng', existing?.lng))) && pick('lng', existing?.lng) != null ? Number(pick('lng', existing?.lng)) : null,
     message: String(pick('message', existing?.message ?? '') || '').trim() || null,
@@ -827,16 +837,16 @@ router.post('/', async (req, res) => {
           contact_name, contact_email, contact_phone,
           address, zip_code, city, lat, lng,
           service_minutes, price, items, proposed_dates,
-          offer_number, tax_rate, valid_until, sent_at, lead_id)
+          offer_number, tax_rate, valid_until, sent_at, lead_id, state)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19,$20,$21,
-               CASE WHEN $22::boolean THEN NOW() ELSE NULL END, $23)
+               CASE WHEN $22::boolean THEN NOW() ELSE NULL END, $23, $24)
        RETURNING *`,
       [
         companyId, fields.client_id, token, status, title, fields.message,
         fields.contact_name, fields.contact_email, fields.contact_phone,
         fields.address, fields.zip_code, fields.city, fields.lat, fields.lng,
         totals.minutes || null, totals.total, JSON.stringify(items), JSON.stringify(dates),
-        offerNumber, taxRate, validUntil, status === 'sent', leadId,
+        offerNumber, taxRate, validUntil, status === 'sent', leadId, fields.state,
       ]
     );
 
@@ -931,6 +941,7 @@ router.patch('/:id', async (req, res) => {
          tax_rate = $16, valid_until = $17, status = $18::text,
          sent_at = CASE WHEN $18::text = 'sent' AND sent_at IS NULL THEN NOW() ELSE sent_at END,
          declined_at = CASE WHEN $18::text = 'declined' THEN declined_at ELSE NULL END,
+         state = $21,
          updated_at = NOW()
        WHERE id = $19 AND company_id = $20`,
       [
@@ -939,7 +950,7 @@ router.patch('/:id', async (req, res) => {
         fields.address, fields.zip_code, fields.city, fields.lat, fields.lng,
         totals.minutes || null, totals.total, JSON.stringify(items), JSON.stringify(dates),
         taxRate, validUntil, status,
-        existing.id, companyAccess.companyId,
+        existing.id, companyAccess.companyId, fields.state,
       ]
     );
     const offer = await loadOffer(companyAccess.companyId, existing.id);
@@ -1189,14 +1200,14 @@ publicRouter.post('/:token/accept', async (req, res) => {
       if (!clientId) {
         const clientResult = await dbClient.query(
           `INSERT INTO clients
-             (company_id, name, client_type, address, zip_code, city, email, phone, lat, lng)
-           VALUES ($1, $2, 'person', $3, $4, $5, $6, $7, $8, $9)
+             (company_id, name, client_type, address, zip_code, city, email, phone, lat, lng, state)
+           VALUES ($1, $2, 'person', $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id`,
           [
             offer.company_id, offer.contact_name || 'New client',
             offer.address, offer.zip_code, offer.city,
             offer.contact_email, offer.contact_phone,
-            offer.lat, offer.lng,
+            offer.lat, offer.lng, offer.state || null,
           ]
         );
         clientId = clientResult.rows[0].id;

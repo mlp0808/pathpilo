@@ -26,6 +26,15 @@ const {
 } = require('../utils/invoiceNumberAllocation');
 const { resolveInvoiceParties } = require('../utils/invoiceSnapshot');
 const { t: tI18n, tInterp: tInterpI18n } = require('../utils/invoiceI18n');
+const {
+  DEFAULT_COUNTRY_CODE,
+  currencyForCountry,
+  documentTaxLabelForCountry,
+  formatLocality,
+  formatMoneyForCountry,
+  vatNumberLabelForCountry,
+} = require('../utils/countryRules');
+const { bankSchemeFor } = require('../utils/bankTransfer');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -200,18 +209,21 @@ async function getInvoiceWithItems(invoiceId, companyId) {
            c.address,
            c.zip_code,
            c.city,
+           c.state,
            c.email,
            c.phone,
            c.ean_number       AS client_ean,
            c.billing_address,
            c.billing_zip_code,
            c.billing_city,
+           c.billing_state,
            c.billing_email,
            c.billing_phone,
            co.name            AS company_name,
            co.address         AS company_address,
            co.city            AS company_city,
            co.zip_code        AS company_zip_code,
+           co.state           AS company_state,
            co.country         AS company_country,
            co.country_code    AS company_country_code,
            co.cvr_number      AS company_cvr_number,
@@ -243,7 +255,7 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     WHERE ii.invoice_id = $1
     ORDER BY ii.id ASC
   `, [invoiceId]);
-  const contact = resolveClientInvoiceContact(row);
+  const contact = resolveClientInvoiceContact(row, parties.from.countryCode || row.company_country_code);
   const nextPreview = await computeNextSequenceNumber(pool, companyId);
   const invoice_number_display = resolveInvoiceNumberDisplay(row, nextPreview);
   return {
@@ -251,6 +263,8 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     client_name,
     items: itemsResult.rows,
     invoice_to_address: contact.addressLine,
+    invoice_to_street: contact.street,
+    invoice_to_locality: contact.locality,
     invoice_to_email: contact.email,
     invoice_to_phone: contact.phone,
     invoice_number_display,
@@ -264,6 +278,7 @@ async function getInvoiceWithItems(invoiceId, companyId) {
     company_address: parties.from.address || row.company_address,
     company_city: parties.from.city || row.company_city,
     company_zip_code: parties.from.zipCode || row.company_zip_code,
+    company_state: parties.from.state || '',
     company_country: parties.from.country || row.company_country,
     company_country_code: parties.from.countryCode || row.company_country_code,
     company_cvr_number: parties.from.companyNumber || row.company_cvr_number,
@@ -344,7 +359,8 @@ function buildInvoicePdf(invoice, bankRow = null) {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      const currency = invoice.currency || 'DKK';
+      const docCountry = invoice.company_country_code || DEFAULT_COUNTRY_CODE;
+      const currency = invoice.currency || currencyForCountry(docCountry);
       // Language of the invoice — snapshot on issued invoices, derived from
       // company country on drafts. Every customer-facing label below is
       // translated through this locale.
@@ -364,12 +380,7 @@ function buildInvoicePdf(invoice, bankRow = null) {
       const gray700 = '#374151';
       const gray900 = '#111827';
 
-      const formatMoney = (n) => {
-        const v = Number(n) || 0;
-        const [intPart, dec] = v.toFixed(2).split('.');
-        const withSep = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        return `${withSep}.${dec} ${currency}`;
-      };
+      const formatMoney = (n) => formatMoneyForCountry(n, currency, docCountry, { pdfSafe: true });
       const formatIban = (iban) =>
         iban ? String(iban).replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim() : '';
       const hairline = (y) => {
@@ -385,7 +396,7 @@ function buildInvoicePdf(invoice, bankRow = null) {
       // snapshot lens (resolveInvoiceParties) has already filled these in for
       // frozen invoices; for drafts we read live values.
       const cvrLabel = invoice.company_number_label || 'Company no.';
-      const taxLabel = invoice.tax_label || 'VAT';
+      const taxLabel = invoice.tax_label || documentTaxLabelForCountry(docCountry);
       const invoiceNumber = String(
         invoice.invoice_number_display || invoice.invoice_number || invoice.id,
       );
@@ -450,28 +461,29 @@ function buildInvoicePdf(invoice, bankRow = null) {
         return y;
       };
 
+      const companyLocality = formatLocality(
+        { zip: invoice.company_zip_code, city: invoice.company_city, state: invoice.company_state },
+        docCountry,
+      );
       const companyLines = [
         invoice.company_name
           ? { text: invoice.company_name, bold: true, size: 11, color: brand, after: 4 }
           : null,
         invoice.company_address ? { text: invoice.company_address } : null,
-        [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ')
-          ? { text: [invoice.company_zip_code, invoice.company_city].filter(Boolean).join(' ') }
-          : null,
+        companyLocality ? { text: companyLocality } : null,
         invoice.company_country ? { text: invoice.company_country } : null,
         invoice.company_cvr_number
           ? { text: `${cvrLabel} ${invoice.company_cvr_number}`, after: 1.5 }
           : null,
-        invoice.company_vat_number ? { text: `VAT ${invoice.company_vat_number}` } : null,
+        invoice.company_vat_number
+          ? { text: `${vatNumberLabelForCountry(docCountry)} ${invoice.company_vat_number}` }
+          : null,
         invoice.company_email ? { text: invoice.company_email } : null,
         invoice.company_phone ? { text: invoice.company_phone } : null,
       ].filter(Boolean);
 
-      const billStreet =
-        (invoice.invoice_to_address && String(invoice.invoice_to_address).trim()) ||
-        invoice.address ||
-        null;
-      const billZipCity = [invoice.zip_code, invoice.city].filter(Boolean).join(', ');
+      const billStreet = invoice.invoice_to_street || null;
+      const billZipCity = invoice.invoice_to_locality || '';
       const billEan = invoice.bill_to_ean || invoice.client_ean;
       const billEmail = invoice.invoice_to_email || invoice.email;
       const billPhone = invoice.invoice_to_phone || invoice.phone;
@@ -638,7 +650,9 @@ function buildInvoicePdf(invoice, bankRow = null) {
       const bankMethod = paymentMethods.find((m) => m.type === 'bank_transfer');
       if (bankMethod?.bank && balanceDue > 0) {
         const bank = bankMethod.bank;
-        const isUk = String(invoice.company_country_code || '').toUpperCase() === 'GB';
+        const bankScheme = bankSchemeFor(invoice.company_country_code);
+        const isUk = bankScheme === 'gb';
+        const isUs = bankScheme === 'us';
 
         hairline(doc.y);
         doc.y += 20;
@@ -669,10 +683,12 @@ function buildInvoicePdf(invoice, bankRow = null) {
             value: bank.accountHolder,
           });
         }
-        if (isUk) {
+        if (isUk || isUs) {
           if (bank.registrationNumber) {
             bankRows.push({
-              label: tr('invoice.sortCode', 'Sort code'),
+              label: isUs
+                ? tr('invoice.routingNumber', 'Routing number')
+                : tr('invoice.sortCode', 'Sort code'),
               value: bank.registrationNumber,
               mono: true,
             });
@@ -1534,9 +1550,9 @@ router.put('/:invoiceId', authenticateToken, async (req, res) => {
       updates.push(`tax_rate = $${idx++}`);
       values.push(Number(tax_rate) || 0);
     }
-    if (currency !== undefined) {
+    if (currency != null && String(currency).trim()) {
       updates.push(`currency = $${idx++}`);
-      values.push(String(currency).slice(0, 10) || 'DKK');
+      values.push(String(currency).trim().slice(0, 10));
     }
     if (payment_terms !== undefined) {
       updates.push(`payment_terms = $${idx++}`);

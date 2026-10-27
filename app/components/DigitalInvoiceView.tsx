@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { resolveAssetUrl } from '@/app/utils/api'
+import { bankSchemeFor } from '@/app/utils/bankTransfer'
 import Link from 'next/link'
 import {
   CheckCircleIcon,
@@ -33,6 +34,8 @@ export type PublicInvoicePayload = {
    * logged-in admin's dashboard is in English.
    */
   locale?: string
+  /** Number/currency formatting locale of the company country (e.g. da-DK, en-US). */
+  moneyLocale?: string
   showCompletedDate: boolean
   paymentTermsResolved: string
   /** Country-aware tax label: VAT / Moms / MVA / USt / etc. */
@@ -62,6 +65,8 @@ export type PublicInvoicePayload = {
     cvrLabel?: string
     /** Separate VAT registration number (e.g. GB123456789 for UK). */
     vatNumber?: string | null
+    /** Country-aware label for the VAT number ("VAT reg. no.", "USt-IdNr.", …). */
+    vatNumberLabel?: string
     email?: string | null
     phone?: string | null
     website?: string | null
@@ -110,9 +115,19 @@ export type PublicInvoicePayload = {
   }>
 }
 
-export function formatMoney(n: number, currency: string) {
+/** Same output as the PDF (api-server/utils/countryRules.js formatMoneyForCountry). */
+export function formatMoney(n: number, currency: string, locale = 'en-GB') {
   const v = Number(n) || 0
-  return `${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(v)
+  } catch {
+    return `${v.toFixed(2)} ${currency}`
+  }
 }
 
 // Locale-aware short date on the digital view. Kept in lockstep with the
@@ -321,7 +336,9 @@ export function DigitalInvoiceView({
                     {cvrLabel} {inv.company.cvr}
                   </p>
                 )}
-                {inv.company.vatNumber && <p>VAT {inv.company.vatNumber}</p>}
+                {inv.company.vatNumber && (
+                  <p>{inv.company.vatNumberLabel || 'VAT'} {inv.company.vatNumber}</p>
+                )}
                 {inv.company.email && <p>{inv.company.email}</p>}
                 {inv.company.phone && <p>{inv.company.phone}</p>}
               </div>
@@ -368,17 +385,17 @@ export function DigitalInvoiceView({
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-gray-900">{row.description}</p>
                       <p className="mt-0.5 text-xs text-gray-400 sm:hidden">
-                        {row.quantity} × {formatMoney(row.unitPrice, inv.currency)}
+                        {row.quantity} × {formatMoney(row.unitPrice, inv.currency, inv.moneyLocale)}
                       </p>
                     </div>
                     <p className="hidden text-right text-sm tabular-nums text-gray-600 sm:block">
                       {row.quantity}
                     </p>
                     <p className="hidden text-right text-sm tabular-nums text-gray-600 sm:block">
-                      {formatMoney(row.unitPrice, inv.currency)}
+                      {formatMoney(row.unitPrice, inv.currency, inv.moneyLocale)}
                     </p>
                     <p className="text-sm font-semibold tabular-nums text-gray-900 sm:text-right">
-                      {formatMoney(row.lineTotal, inv.currency)}
+                      {formatMoney(row.lineTotal, inv.currency, inv.moneyLocale)}
                     </p>
                   </div>
                 ))}
@@ -403,24 +420,24 @@ export function DigitalInvoiceView({
               <div className="space-y-2 text-sm sm:ml-auto sm:w-full sm:max-w-xs">
                 <div className="flex justify-between text-gray-600">
                   <span>{tr('invoice.subtotal', 'Subtotal')}</span>
-                  <span className="tabular-nums">{formatMoney(inv.subtotal, inv.currency)}</span>
+                  <span className="tabular-nums">{formatMoney(inv.subtotal, inv.currency, inv.moneyLocale)}</span>
                 </div>
                 {inv.taxRate > 0 && (
                   <div className="flex justify-between text-gray-600">
                     <span>
                       {taxLabel} ({inv.taxRate}%)
                     </span>
-                    <span className="tabular-nums">{formatMoney(inv.taxAmount, inv.currency)}</span>
+                    <span className="tabular-nums">{formatMoney(inv.taxAmount, inv.currency, inv.moneyLocale)}</span>
                   </div>
                 )}
                 <div className="flex justify-between border-t border-gray-100 pt-2 text-base font-bold text-gray-900">
                   <span>{tr('invoice.total', 'Total')}</span>
-                  <span className="tabular-nums">{formatMoney(inv.total, inv.currency)}</span>
+                  <span className="tabular-nums">{formatMoney(inv.total, inv.currency, inv.moneyLocale)}</span>
                 </div>
                 {inv.balance > 0 && inv.balance !== inv.total && (
                   <div className="flex justify-between pt-1 text-sm font-semibold text-[#193434]">
                     <span>{tr('invoice.amountDue', 'Amount due')}</span>
-                    <span className="tabular-nums">{formatMoney(inv.balance, inv.currency)}</span>
+                    <span className="tabular-nums">{formatMoney(inv.balance, inv.currency, inv.moneyLocale)}</span>
                   </div>
                 )}
                 {inv.transactions.length > 0 && (
@@ -440,7 +457,7 @@ export function DigitalInvoiceView({
                               : 'tabular-nums text-amber-700'
                           }
                         >
-                          {t.type === 'payment' ? '−' : '+'} {formatMoney(t.amount, inv.currency)}
+                          {t.type === 'payment' ? '−' : '+'} {formatMoney(t.amount, inv.currency, inv.moneyLocale)}
                         </span>
                       </div>
                     ))}
@@ -460,7 +477,9 @@ export function DigitalInvoiceView({
                       <p className="mt-0.5 text-xs text-gray-500">{m.description}</p>
                     ) : null}
                     {m.type === 'bank_transfer' && m.bank && (() => {
-                      const isUk = inv.company.countryCode?.toUpperCase() === 'GB'
+                      const bankScheme = bankSchemeFor(inv.company.countryCode)
+                      const isUs = bankScheme === 'us'
+                      const isUk = bankScheme === 'gb' || isUs
                       const detailRows: { label: string; value: string; mono?: boolean }[] = []
                       if (m.bank.accountHolder) {
                         detailRows.push({
@@ -471,7 +490,9 @@ export function DigitalInvoiceView({
                       if (isUk) {
                         if (m.bank.registrationNumber) {
                           detailRows.push({
-                            label: tr('invoice.sortCode', 'Sort code'),
+                            label: isUs
+                              ? tr('invoice.routingNumber', 'Routing number')
+                              : tr('invoice.sortCode', 'Sort code'),
                             value: m.bank.registrationNumber,
                             mono: true,
                           })

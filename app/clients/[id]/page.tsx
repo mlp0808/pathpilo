@@ -14,6 +14,8 @@ import CreateOfferModal from '../../components/offers/CreateOfferModal'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
 import type { MessageKey } from '../../i18n'
+import { formatAddressLine, getCountryRule } from '../../config/countryRules'
+import { getStoredCompanyCountryCode } from '../../utils/companyCountry'
 
 interface Client {
   id: number
@@ -24,11 +26,13 @@ interface Client {
   address: string | null
   zip_code: string | null
   city: string | null
+  state?: string | null
   email: string | null
   phone: string | null
   billing_address: string | null
   billing_zip_code: string | null
   billing_city: string | null
+  billing_state?: string | null
   billing_email: string | null
   billing_phone: string | null
   ean_number: string | null
@@ -52,8 +56,17 @@ type TabId = 'jobs' | 'subscriptions' | 'invoices' | 'settings'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function fmtMoney(amount: number, currency = 'DKK') {
-  return new Intl.NumberFormat('da-DK', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
+function fmtMoney(amount: number, currency?: string | null) {
+  const rule = getCountryRule(getStoredCompanyCountryCode())
+  try {
+    return new Intl.NumberFormat(rule.currencyDisplayLocale, {
+      style: 'currency',
+      currency: currency || rule.defaultCurrency,
+      maximumFractionDigits: 0,
+    }).format(Number(amount) || 0)
+  } catch {
+    return `${Math.round(Number(amount) || 0)} ${currency || rule.defaultCurrency}`
+  }
 }
 
 function getInitials(name: string, lastName?: string | null) {
@@ -542,12 +555,16 @@ export default function ClientDetailPage() {
     ? t('app.clientDetail.anonymizedLabel') || 'Deleted client'
     : `${client.name}${client.last_name ? ' ' + client.last_name : ''}`
   const initials = isAnonymized ? '—' : getInitials(client.name, client.last_name)
+  const companyCountry = getStoredCompanyCountryCode()
   const location = isAnonymized
     ? ''
-    : [client.address, client.zip_code, client.city].filter(Boolean).join(', ')
+    : formatAddressLine({ address: client.address, zip: client.zip_code, city: client.city, state: client.state }, companyCountry)
   const billingLocation = isAnonymized
     ? ''
-    : [client.billing_address, client.billing_zip_code, client.billing_city].filter(Boolean).join(', ')
+    : formatAddressLine(
+        { address: client.billing_address, zip: client.billing_zip_code, city: client.billing_city, state: client.billing_state },
+        companyCountry,
+      )
 
   const fmtDate = (d: string) => {
     if (!d) return '—'
@@ -1245,7 +1262,7 @@ export default function ClientDetailPage() {
                 <InfoRow label="Name" value={fullName} />
                 {client.email && <InfoRow label="Email" value={client.email} />}
                 {client.phone && <InfoRow label="Phone" value={client.phone} />}
-                {client.address && <InfoRow label="Address" value={[client.address, client.zip_code, client.city, client.country].filter(Boolean).join(', ')} />}
+                {client.address && <InfoRow label="Address" value={[location, client.country].filter(Boolean).join(', ')} />}
               </dl>
             </div>
 

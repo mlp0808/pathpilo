@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { mapboxCountryParam } from '../utils/companyCountry'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
 
@@ -65,8 +66,7 @@ export default function AddressSearchInput({
     setIsLoading(true)
     try {
       const encoded = encodeURIComponent(q)
-      const countryFilter = String(countryCode || '').trim().toLowerCase()
-      const countryParam = countryFilter.length === 2 ? `&country=${encodeURIComponent(countryFilter)}` : ''
+      const countryParam = mapboxCountryParam(countryCode)
       const res = await fetch(
         `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address,place&limit=6${countryParam}`
       )

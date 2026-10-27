@@ -550,14 +550,14 @@ function applyTemplate(text, data) {
     .replace(/{Job time range}/g, data.jobTimeRange || '');
 }
 
+const countryRules = require('./countryRules');
+
 function currencyForCountry(countryCode) {
-  const m = { DK: 'DKK', SE: 'SEK', NO: 'NOK', DE: 'EUR', FR: 'EUR', US: 'USD', GB: 'GBP' };
-  return m[(countryCode || 'DK').toUpperCase()] || 'DKK';
+  return countryRules.currencyForCountry(countryCode);
 }
 
 function localeForCountry(countryCode) {
-  const m = { DK: 'da-DK', SE: 'sv-SE', NO: 'nb-NO', DE: 'de-DE', FR: 'fr-FR', US: 'en-US', GB: 'en-GB' };
-  return m[(countryCode || 'DK').toUpperCase()] || 'da-DK';
+  return countryRules.displayLocaleForCountry(countryCode);
 }
 
 function formatMoneyForEmail(countryCode, amount) {

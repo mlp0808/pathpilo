@@ -1,5 +1,6 @@
 const { STANDARD_FOOTER_PLACEHOLDER } = require('./email');
 const { invoiceCustomerEmailLang } = require('./companyInvoiceEmailLocale');
+const { currencyForCountry, documentDateLocale, formatMoneyForCountry } = require('./countryRules');
 
 function escapeHtml(s) {
   if (s == null || s === '') return '';
@@ -179,24 +180,18 @@ function getInvoiceCustomerEmailUi(countryCode) {
   return invoiceCustomerEmailLang(countryCode) === 'da' ? UI.da : UI.en;
 }
 
-function formatMoneyAmount(amount, currency) {
+function formatMoneyAmount(amount, currency, countryCode) {
   const n = Number(amount);
   if (!Number.isFinite(n)) return '—';
-  const cur = (currency && String(currency).trim()) || 'DKK';
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n);
-  } catch {
-    return `${n.toFixed(2)} ${cur}`;
-  }
+  const cur = (currency && String(currency).trim()) || currencyForCountry(countryCode);
+  return formatMoneyForCountry(n, cur, countryCode);
 }
 
 function formatDisplayDate(value, countryCode) {
   if (!value) return '—';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '—';
-  const lang = countryToLang(countryCode);
-  const localeMap = { en: 'en-GB', da: 'da-DK', sv: 'sv-SE', nb: 'nb-NO', de: 'de-DE' };
-  const loc = localeMap[lang] || 'en-GB';
+  const loc = documentDateLocale(countryCode);
   try {
     return d.toLocaleDateString(loc, { day: 'numeric', month: 'short', year: 'numeric' });
   } catch {
@@ -244,6 +239,7 @@ function buildInvoiceEmailInnerHtml({
   taxRate,
   taxAmountFormatted,
   currency,
+  countryCode,
   eInvoiceUrl,
   customMessagePlain,
   items,
@@ -285,7 +281,7 @@ function buildInvoiceEmailInnerHtml({
     const row = slice[i];
     const desc = escapeHtml(truncateEmailLineText(lineItemDescription(row), 80));
     const qty = escapeHtml(String(row.quantity != null ? row.quantity : '—'));
-    const lineTot = formatMoneyAmount(row.line_total, currency);
+    const lineTot = formatMoneyAmount(row.line_total, currency, countryCode);
     const amt = escapeHtml(lineTot);
     const bg = i % 2 === 0 ? '#ffffff' : '#f9fafb';
     lineRowsHtml += `<tr>
@@ -455,6 +451,7 @@ function buildPlainText({
   customMessagePlain,
   items,
   currency,
+  countryCode,
 }) {
   const rawFirst = clientFirstName && String(clientFirstName).trim();
   const nameStr = rawFirst || ui.fallbackName || '';
@@ -473,7 +470,7 @@ function buildPlainText({
   for (let i = 0; i < Math.min(list.length, maxPlain); i++) {
     const row = list[i];
     const desc = truncateEmailLineText(lineItemDescription(row), 70);
-    const amt = formatMoneyAmount(row.line_total, currency);
+    const amt = formatMoneyAmount(row.line_total, currency, countryCode);
     itemLines.push(`  • ${desc}  ${amt}`);
   }
   if (list.length > maxPlain) {
@@ -522,7 +519,7 @@ function buildPlainText({
  */
 function buildInvoiceCustomerEmailPayload({ invoice, companyName, countryCode, eInvoiceUrl, messagePlain }) {
   const ui = getInvoiceCustomerEmailUi(countryCode);
-  const dateCc = invoiceCustomerEmailLang(countryCode) === 'da' ? 'DK' : 'US';
+  const dateCc = countryCode;
   const clientFirstName = invoice.name && String(invoice.name).trim();
   const clientDisplayName =
     (invoice.client_name && String(invoice.client_name).trim()) ||
@@ -532,9 +529,9 @@ function buildInvoiceCustomerEmailPayload({ invoice, companyName, countryCode, e
   const issueDateDisplay = formatDisplayDate(invoice.issue_date || invoice.created_at, dateCc);
   const dueDateDisplay = formatDisplayDate(invoice.due_date, dateCc);
   const cur = invoice.currency;
-  const totalFormatted = formatMoneyAmount(invoice.total, cur);
-  const subtotalFormatted = formatMoneyAmount(invoice.subtotal, cur);
-  const taxAmountFormatted = formatMoneyAmount(invoice.tax_amount, cur);
+  const totalFormatted = formatMoneyAmount(invoice.total, cur, countryCode);
+  const subtotalFormatted = formatMoneyAmount(invoice.subtotal, cur, countryCode);
+  const taxAmountFormatted = formatMoneyAmount(invoice.tax_amount, cur, countryCode);
   const taxRate = invoice.tax_rate;
   const items = invoice.items || [];
 
@@ -551,6 +548,7 @@ function buildInvoiceCustomerEmailPayload({ invoice, companyName, countryCode, e
     taxRate,
     taxAmountFormatted,
     currency: cur,
+    countryCode,
     eInvoiceUrl,
     customMessagePlain: messagePlain,
     items,
@@ -573,6 +571,7 @@ function buildInvoiceCustomerEmailPayload({ invoice, companyName, countryCode, e
     customMessagePlain: messagePlain,
     items,
     currency: cur,
+    countryCode,
   });
 
   return { html, text };

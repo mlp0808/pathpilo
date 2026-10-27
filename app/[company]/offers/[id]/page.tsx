@@ -235,10 +235,10 @@ export default function OfferDetailPage() {
             <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
               <div className="border-b border-gray-100 bg-gray-50 px-5 py-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">{t('app.offers.total', 'Total')}</p>
-                <p className="mt-0.5 text-2xl font-bold tabular-nums text-gray-900">{formatDocMoney(doc.total, doc.currency, locale)}</p>
+                <p className="mt-0.5 text-2xl font-bold tabular-nums text-gray-900">{formatDocMoney(doc.total, doc.currency, doc.moneyLocale || locale)}</p>
                 {doc.taxRate > 0 && (
                   <p className="text-xs text-gray-500">
-                    {t('app.offers.incl', 'incl.')} {doc.taxLabel} {formatDocMoney(doc.taxAmount, doc.currency, locale)}
+                    {t('app.offers.incl', 'incl.')} {doc.taxLabel} {formatDocMoney(doc.taxAmount, doc.currency, doc.moneyLocale || locale)}
                   </p>
                 )}
               </div>

@@ -1052,7 +1052,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
     if (jobId == null) return
 
     const confirmed = confirm(
-      'Delete this job? It will stay on the calendar as deleted (faded) so you can still see what happened. This can be reviewed later.',
+      'Delete this job? It will be removed from the schedule and route planning.',
     )
     if (!confirmed) return
 

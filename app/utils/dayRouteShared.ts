@@ -9,6 +9,7 @@
 import type { RouteJob, UserRoute } from '@/app/components/RouteMap'
 import { colorForUserId, initialsFromName } from '@/app/components/RouteMap'
 import { formatRouteTime } from '@/app/utils/routeDirections'
+import { mapboxCountryParam } from '@/app/utils/companyCountry'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
@@ -44,6 +45,8 @@ export interface RouteUserLike {
 export function buildDayRoutesFromJobs(dayJobs: any[], users: RouteUserLike[]): UserRoute[] {
   const byUser: Record<number, any[]> = {}
   dayJobs.forEach(job => {
+    // Soft-deleted jobs stay in the DB for history, but never on routes / maps.
+    if (job?.status === 'deleted') return
     const uid = Number(job.assigned_user_id)
     if (!byUser[uid]) byUser[uid] = []
     byUser[uid].push(job)
@@ -79,8 +82,8 @@ export function buildDayRoutesFromJobs(dayJobs: any[], users: RouteUserLike[]): 
             : formatRouteTime(job.scheduled_time_from)
           : undefined,
         is_projected: !!(job.is_projected || (typeof job.id === 'string' && job.id.startsWith('subscription-'))),
-        is_cancelled: job.status === 'cancelled' || job.status === 'deleted',
-        is_deleted: job.status === 'deleted',
+        is_cancelled: job.status === 'cancelled',
+        is_deleted: false,
         is_pending_booking: job.booking_status === 'pending',
         // True only when the job row itself has coords — NOT the client fallback.
         // Used to decide whether geocoding should run to get a more accurate pin position.
@@ -146,10 +149,14 @@ export function injectHomeWaypoints(route: UserRoute, startAddr: string, endAddr
   return { ...route, jobs, routeGeometry: undefined, totalMinutes: undefined, totalKm: undefined }
 }
 
-/** Geocode one address via Mapbox. Optional proximity [lng, lat] biases the result. */
+/**
+ * Geocode one address via Mapbox, limited to the company's country.
+ * Optional proximity [lng, lat] biases the result.
+ */
 export async function geocodeAddress(
   address: string,
   proximity?: [number, number] | null,
+  countryCode?: string | null,
 ): Promise<{ lat: number; lng: number } | null> {
   if (!MAPBOX_TOKEN || !address.trim()) return null
   const proximityParam = proximity
@@ -158,7 +165,7 @@ export async function geocodeAddress(
   try {
     const res = await fetch(
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address.trim())}.json` +
-      `?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}`
+      `?access_token=${MAPBOX_TOKEN}&types=address,place&limit=1${proximityParam}${mapboxCountryParam(countryCode)}`
     )
     const data = await res.json()
     const center = data.features?.[0]?.center

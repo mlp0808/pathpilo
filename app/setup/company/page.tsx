@@ -5,13 +5,16 @@ import { useRouter } from 'next/navigation'
 import { apiUrl } from '../../utils/api'
 import { useUser } from '../../hooks/useUser'
 import AddressAutocomplete, { AddressData } from '@/app/components/AddressAutocomplete'
-import { getCountryRule } from '../../config/countryRules'
+import { getCountryRule, isSupportedCountry } from '../../config/countryRules'
 import SetupWizardLayout, {
   setupFieldInputClass,
   setupFieldLabelClass,
 } from '@/app/components/setup/SetupWizardLayout'
 import IndustrySelect from '@/app/components/setup/IndustrySelect'
+import CountrySelect from '@/app/components/setup/CountrySelect'
 import { advanceOnboardingProgress, patchSessionOnboardingStep } from '../../utils/onboardingClient'
+
+const EMPTY_ADDRESS = { address: '', city: '', zipCode: '', state: '' }
 
 export default function CompanySetupPage() {
   const { user } = useUser()
@@ -20,11 +23,10 @@ export default function CompanySetupPage() {
     name: '',
     industry: '',
     website: '',
-    address: '',
-    city: '',
-    zipCode: '',
+    ...EMPTY_ADDRESS,
   })
-  const [countryCode, setCountryCode] = useState('DK')
+  /** Empty until the owner picks one; the address fields depend on it. */
+  const [countryCode, setCountryCode] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [showErrors, setShowErrors] = useState(false)
@@ -52,16 +54,22 @@ export default function CompanySetupPage() {
         const data = await res.json()
         const c = data.company
         if (!c) return
-        setCountryCode((c.countryCode || 'DK') as string)
         if (formTouchedRef.current) return
+        const isPlaceholder = /^guest[- ]/i.test(c.name || '')
+        // Only a company the owner already named (returning to this step) has a chosen country;
+        // the signup placeholder's country is just a guess from the UI language.
+        if (!isPlaceholder && isSupportedCountry(c.countryCode)) {
+          setCountryCode(String(c.countryCode).toUpperCase())
+        }
         setFormData((prev) => ({
           ...prev,
-          name: /^guest[- ]/i.test(c.name || '') ? prev.name : c.name || prev.name,
+          name: isPlaceholder ? prev.name : c.name || prev.name,
           industry: c.industry || prev.industry,
           website: c.website || prev.website,
           address: c.address || prev.address,
           city: c.city || prev.city,
           zipCode: c.zipCode || prev.zipCode,
+          state: c.state || prev.state,
         }))
       } catch (e: unknown) {
         if (e instanceof Error && e.name === 'AbortError') return
@@ -82,10 +90,23 @@ export default function CompanySetupPage() {
   const countryRule = getCountryRule(countryCode)
   const nameMissing = !formData.name.trim()
   const industryMissing = !formData.industry
+  const countryMissing = !countryCode
+  const hasAddress = Boolean(formData.address.trim() || formData.city.trim() || formData.zipCode.trim())
+  const stateMissing = Boolean(
+    countryCode && countryRule.address.stateRequired && hasAddress && !formData.state,
+  )
+
+  const handleCountryChange = (next: string) => {
+    markFormTouched()
+    if (next === countryCode) return
+    setCountryCode(next)
+    // An address typed for one country doesn't fit another country's fields.
+    setFormData((prev) => ({ ...prev, ...EMPTY_ADDRESS }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (nameMissing || industryMissing) {
+    if (nameMissing || industryMissing || countryMissing || stateMissing) {
       setShowErrors(true)
       setError('')
       return
@@ -104,9 +125,11 @@ export default function CompanySetupPage() {
           name: formData.name.trim(),
           industry: formData.industry,
           website: formData.website.trim(),
+          countryCode,
           address: formData.address,
           city: formData.city,
           zipCode: formData.zipCode,
+          state: formData.state,
         }),
       })
 
@@ -184,6 +207,23 @@ export default function CompanySetupPage() {
           )}
         </div>
 
+        {/* Website */}
+        <div>
+          <label htmlFor="website" className={setupFieldLabelClass}>
+            Company website{' '}
+            <span className="normal-case tracking-normal text-gray-400">(optional)</span>
+          </label>
+          <input
+            type="text"
+            id="website"
+            name="website"
+            value={formData.website}
+            onChange={handleInputChange}
+            className={setupFieldInputClass}
+            placeholder="e.g. www.cleanwindows.co"
+          />
+        </div>
+
         {/* Industry */}
         <div>
           <label htmlFor="industry" className={setupFieldLabelClass}>
@@ -202,44 +242,57 @@ export default function CompanySetupPage() {
           )}
         </div>
 
-        {/* Address */}
-        <AddressAutocomplete
-          label="Company address"
-          address={formData.address}
-          zip_code={formData.zipCode}
-          city={formData.city}
-          lat={undefined}
-          lng={undefined}
-          countryCode={countryCode}
-          zipLabel={countryRule.postalCodeLabel}
-          placeholder="Start typing an address…"
-          onChange={(data: AddressData) => {
-            markFormTouched()
-            setFormData((prev) => ({
-              ...prev,
-              address: data.address,
-              zipCode: data.zip_code,
-              city: data.city,
-            }))
-          }}
-        />
-
-        {/* Website */}
+        {/* Business country */}
         <div>
-          <label htmlFor="website" className={setupFieldLabelClass}>
-            Website{' '}
-            <span className="normal-case tracking-normal text-gray-400">(optional)</span>
+          <label className={setupFieldLabelClass}>
+            Business country <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
-            id="website"
-            name="website"
-            value={formData.website}
-            onChange={handleInputChange}
-            className={setupFieldInputClass}
-            placeholder="e.g. www.cleanwindows.co"
+          <CountrySelect
+            value={countryCode}
+            invalid={showErrors && countryMissing}
+            onChange={handleCountryChange}
           />
+          {showErrors && countryMissing ? (
+            <p className="mt-1.5 text-xs text-red-600">Please choose the country your business operates in.</p>
+          ) : (
+            <p className="mt-1.5 text-xs text-gray-500">
+              Sets your currency, tax, address format and map search.
+            </p>
+          )}
         </div>
+
+        {/* Address — fields follow the chosen country */}
+        {countryCode && (
+          <div key={countryCode}>
+            <AddressAutocomplete
+              label={`Company address (optional)`}
+              address={formData.address}
+              zip_code={formData.zipCode}
+              city={formData.city}
+              state={formData.state}
+              lat={undefined}
+              lng={undefined}
+              countryCode={countryCode}
+              placeholder={`e.g. ${countryRule.address.streetPlaceholder}`}
+              inputClassName={setupFieldInputClass}
+              onChange={(data: AddressData) => {
+                markFormTouched()
+                setFormData((prev) => ({
+                  ...prev,
+                  address: data.address,
+                  zipCode: data.zip_code,
+                  city: data.city,
+                  state: data.state ?? prev.state,
+                }))
+              }}
+            />
+            {showErrors && stateMissing && (
+              <p className="mt-1.5 text-xs text-red-600">
+                Please choose your {countryRule.address.stateLabel?.toLowerCase() || 'state'}.
+              </p>
+            )}
+          </div>
+        )}
 
         <button
           type="submit"

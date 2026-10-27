@@ -3,20 +3,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { MapPinIcon } from '@heroicons/react/24/outline'
+import { formatAddressLine, getCountryRule, type LocalityField } from '../config/countryRules'
+import { getStoredCompanyCountryCode } from '../utils/companyCountry'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
-
-function formatFullAddress(address: string, zip_code: string, city: string): string {
-  const street = String(address || '').trim()
-  const locality = [String(zip_code || '').trim(), String(city || '').trim()].filter(Boolean).join(' ')
-  if (street && locality) return `${street}, ${locality}`
-  return street || locality
-}
 
 interface AddressSuggestion {
   address: string
   zip_code: string
   city: string
+  state: string
   lat: number
   lng: number
   display: string
@@ -26,6 +22,8 @@ export interface AddressData {
   address: string
   zip_code: string
   city: string
+  /** State code for countries whose addresses use one (US); '' elsewhere. */
+  state?: string
   lat?: number | null
   lng?: number | null
 }
@@ -34,6 +32,7 @@ interface AddressAutocompleteProps {
   address: string
   zip_code: string
   city: string
+  state?: string
   lat?: number | null
   lng?: number | null
   onChange: (data: AddressData) => void
@@ -47,10 +46,24 @@ interface AddressAutocompleteProps {
   hidePostalFields?: boolean
 }
 
+type MapboxContext = { id: string; text: string; short_code?: string }
+
+/** "US-CA" -> "CA"; only for countries that list states. */
+function stateFromContext(context: MapboxContext[] | undefined, countryCode: string): string {
+  const states = getCountryRule(countryCode).address.states
+  if (!states) return ''
+  const region = context?.find((c) => c.id?.startsWith('region'))
+  if (!region) return ''
+  const code = String(region.short_code || '').split('-').pop()?.toUpperCase() || ''
+  if (states.some(([c]) => c === code)) return code
+  return states.find(([, name]) => name.toLowerCase() === region.text.toLowerCase())?.[0] || ''
+}
+
 export default function AddressAutocomplete({
   address,
   zip_code,
   city,
+  state = '',
   lat,
   lng,
   onChange,
@@ -58,10 +71,18 @@ export default function AddressAutocomplete({
   label = 'Address',
   placeholder = 'Start typing an address...',
   countryCode,
-  zipLabel = 'Zip code',
-  cityLabel = 'City',
+  zipLabel,
+  cityLabel,
   hidePostalFields = false,
 }: AddressAutocompleteProps) {
+  const [storedCountry, setStoredCountry] = useState('')
+  useEffect(() => {
+    if (!countryCode) setStoredCountry(getStoredCompanyCountryCode())
+  }, [countryCode])
+  const effectiveCountry = String(countryCode || storedCountry || '').toUpperCase()
+  const rule = getCountryRule(effectiveCountry)
+  const formatFullAddress = (street: string, zip: string, town: string, region = '') =>
+    formatAddressLine({ address: street, zip, city: town, state: region }, rule.countryCode)
   const [query, setQuery] = useState(address || '')
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
   const [isOpen, setIsOpen] = useState(false)
@@ -77,14 +98,15 @@ export default function AddressAutocomplete({
   // Sync visible input when parent state changes (e.g. after picking a suggestion).
   useEffect(() => {
     if (hidePostalFields && lat != null && lng != null) {
-      const formatted = formatFullAddress(address, zip_code, city)
+      const formatted = formatFullAddress(address, zip_code, city, state)
       if (formatted) setQuery(formatted)
       return
     }
     if (!hidePostalFields) {
       setQuery(address || '')
     }
-  }, [address, zip_code, city, lat, lng, hidePostalFields])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, zip_code, city, state, lat, lng, hidePostalFields, rule.countryCode])
 
   const updateDropdownPos = () => {
     if (inputRef.current) {
@@ -106,8 +128,7 @@ export default function AddressAutocomplete({
     setIsLoading(true)
     try {
       const encoded = encodeURIComponent(q)
-      const countryFilter = String(countryCode || '').trim().toLowerCase()
-      const countryParam = countryFilter.length === 2 ? `&country=${encodeURIComponent(countryFilter)}` : ''
+      const countryParam = effectiveCountry.length === 2 ? `&country=${effectiveCountry.toLowerCase()}` : ''
       const res = await fetch(
         `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?access_token=${MAPBOX_TOKEN}&autocomplete=true&types=address&limit=5${countryParam}`
       )
@@ -117,7 +138,7 @@ export default function AddressAutocomplete({
         text?: string
         address?: string
         center: [number, number]
-        context?: Array<{ id: string; text: string }>
+        context?: MapboxContext[]
       }) => {
         const postcode = f.context?.find(c => c.id?.startsWith('postcode'))?.text || ''
         const place = f.context?.find(c => c.id?.startsWith('place'))?.text || ''
@@ -126,6 +147,7 @@ export default function AddressAutocomplete({
           address: streetAddress,
           zip_code: postcode,
           city: place,
+          state: stateFromContext(f.context, effectiveCountry),
           lat: f.center[1],
           lng: f.center[0],
           display: f.place_name || streetAddress,
@@ -138,15 +160,15 @@ export default function AddressAutocomplete({
     } finally {
       setIsLoading(false)
     }
-  }, [countryCode])
+  }, [effectiveCountry])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
     setQuery(val)
     if (hidePostalFields) {
-      onChange({ address: val, zip_code: '', city: '', lat: null, lng: null })
+      onChange({ address: val, zip_code: '', city: '', state: '', lat: null, lng: null })
     } else {
-      onChange({ address: val, zip_code, city, lat, lng })
+      onChange({ address: val, zip_code, city, state, lat, lng })
     }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => fetchSuggestions(val), 400)
@@ -154,7 +176,7 @@ export default function AddressAutocomplete({
 
   const handleSelect = (result: AddressSuggestion) => {
     const displayValue = hidePostalFields
-      ? (result.display || formatFullAddress(result.address, result.zip_code, result.city))
+      ? (result.display || formatFullAddress(result.address, result.zip_code, result.city, result.state))
       : result.address
     setQuery(displayValue)
     setSuggestions([])
@@ -163,9 +185,62 @@ export default function AddressAutocomplete({
       address: result.address,
       zip_code: result.zip_code,
       city: result.city,
+      state: result.state,
       lat: result.lat,
       lng: result.lng,
     })
+  }
+
+  const setField = (field: LocalityField, value: string) => {
+    onChange({
+      address,
+      zip_code: field === 'zip' ? value : zip_code,
+      city: field === 'city' ? value : city,
+      state: field === 'state' ? value : state,
+      lat,
+      lng,
+    })
+  }
+
+  const smallInputCls =
+    'w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400'
+  const localityFields = rule.address.order
+  const localityGridCls = localityFields.length === 3 ? 'grid grid-cols-2 gap-3 sm:grid-cols-[1.4fr_1fr_0.9fr]' : 'grid grid-cols-2 gap-3'
+
+  const renderLocalityField = (field: LocalityField) => {
+    if (field === 'state') {
+      return (
+        <div key={field} className={localityFields.length === 3 ? 'col-span-1' : ''}>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">{rule.address.stateLabel || 'State'}</label>
+          <select
+            value={state}
+            onChange={(e) => setField('state', e.target.value)}
+            className={`${smallInputCls} ${state ? 'text-gray-900' : 'text-gray-400'}`}
+          >
+            <option value="">Select…</option>
+            {rule.address.states?.map(([code, name]) => (
+              <option key={code} value={code}>{name}</option>
+            ))}
+          </select>
+        </div>
+      )
+    }
+    const isZip = field === 'zip'
+    return (
+      <div key={field} className={localityFields.length === 3 && field === 'city' ? 'col-span-2 sm:col-span-1' : ''}>
+        <label className="block text-xs font-medium text-gray-500 mb-1.5">
+          {isZip ? zipLabel || rule.address.postalLabel : cityLabel || rule.address.cityLabel}
+        </label>
+        <input
+          type="text"
+          value={isZip ? zip_code : city}
+          onChange={(e) => setField(field, e.target.value)}
+          autoComplete="off"
+          placeholder={`e.g. ${isZip ? rule.address.postalPlaceholder : rule.address.cityPlaceholder}`}
+          className={smallInputCls}
+        />
+      </div>
+    )
   }
 
   const handleFocus = () => {
@@ -223,34 +298,7 @@ export default function AddressAutocomplete({
       </div>
 
       {!hidePostalFields && (
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">{zipLabel}</label>
-          <input
-            type="text"
-            value={zip_code}
-            onChange={(e) =>
-              onChange({ address, zip_code: e.target.value, city, lat, lng })
-            }
-            autoComplete="off"
-            placeholder="e.g. 2100"
-            className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">{cityLabel}</label>
-          <input
-            type="text"
-            value={city}
-            onChange={(e) =>
-              onChange({ address, zip_code, city: e.target.value, lat, lng })
-            }
-            autoComplete="off"
-            placeholder="e.g. Copenhagen"
-            className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 placeholder-gray-400"
-          />
-        </div>
-      </div>
+        <div className={localityGridCls}>{localityFields.map(renderLocalityField)}</div>
       )}
 
       {/* Dropdown portal */}

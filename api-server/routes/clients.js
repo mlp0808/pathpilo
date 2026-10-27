@@ -37,22 +37,12 @@ async function ensureClientPrivacyColumns() {
 }
 
 const router = express.Router();
-const COUNTRY_TAX_DEFAULTS = {
-  DK: 25,
-  SE: 25,
-  NO: 25,
-  DE: 19,
-  GB: 20,
-  US: 0,
-};
-const COUNTRY_CURRENCY_DEFAULTS = {
-  DK: 'DKK',
-  SE: 'SEK',
-  NO: 'NOK',
-  DE: 'EUR',
-  GB: 'GBP',
-  US: 'USD',
-};
+const {
+  DEFAULT_COUNTRY_CODE,
+  normalizeState,
+  defaultTaxRateForCountry,
+  currencyForCountry,
+} = require('../utils/countryRules');
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -95,9 +85,9 @@ router.get('/invoice-defaults', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
     const companyRes = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyId]);
-    const countryCode = String(companyRes.rows[0]?.country_code || 'DK').toUpperCase();
-    const defaultTaxRate = COUNTRY_TAX_DEFAULTS[countryCode] ?? COUNTRY_TAX_DEFAULTS.DK;
-    const defaultCurrency = COUNTRY_CURRENCY_DEFAULTS[countryCode] || COUNTRY_CURRENCY_DEFAULTS.DK;
+    const countryCode = String(companyRes.rows[0]?.country_code || DEFAULT_COUNTRY_CODE).toUpperCase();
+    const defaultTaxRate = defaultTaxRateForCountry(countryCode);
+    const defaultCurrency = currencyForCountry(countryCode);
     return res.json({ countryCode, defaultTaxRate, defaultCurrency });
   } catch (error) {
     console.error('Error fetching invoice defaults:', error);
@@ -268,6 +258,13 @@ router.post('/', authenticateToken, async (req, res) => {
       lat,
       lng,
       company_number,
+      state,
+      billing_address,
+      billing_zip_code,
+      billing_city,
+      billing_state,
+      billing_email,
+      billing_phone,
     } = req.body;
     const userId = req.user.userId;
 
@@ -283,10 +280,17 @@ router.post('/', authenticateToken, async (req, res) => {
     }
     const companyId = companyAccess.companyId;
 
+    const countryRes = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyId]);
+    const companyCountry = countryRes.rows[0]?.country_code;
+    const clientState = normalizeState(companyCountry, state) || null;
+    const clientBillingState = normalizeState(companyCountry, billing_state) || null;
+    const orNull = (v) => (typeof v === 'string' ? v.trim() || null : v ?? null);
+
     const result = await pool.query(`
       INSERT INTO clients
-      (company_id, name, last_name, client_type, address, zip_code, city, email, phone, lat, lng, company_number)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      (company_id, name, last_name, client_type, address, zip_code, city, email, phone, lat, lng, company_number, state,
+       billing_address, billing_zip_code, billing_city, billing_state, billing_email, billing_phone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *
     `, [
       companyId,
@@ -301,6 +305,13 @@ router.post('/', authenticateToken, async (req, res) => {
       lat || null,
       lng || null,
       company_number || null,
+      clientState,
+      orNull(billing_address),
+      orNull(billing_zip_code),
+      orNull(billing_city),
+      clientBillingState,
+      orNull(billing_email),
+      orNull(billing_phone),
     ]);
 
     res.status(201).json({
@@ -315,6 +326,23 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // PUT /api/clients/:clientId - Update client
+let clientColumnsPromise = null;
+let clientColumnsLoadedAt = 0;
+function getClientColumns() {
+  // Columns are added lazily elsewhere (ADD COLUMN IF NOT EXISTS), so don't cache forever.
+  if (!clientColumnsPromise || Date.now() - clientColumnsLoadedAt > 5 * 60 * 1000) {
+    clientColumnsLoadedAt = Date.now();
+    clientColumnsPromise = pool
+      .query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'clients'`)
+      .then((r) => new Set(r.rows.map((row) => row.column_name)))
+      .catch((err) => {
+        clientColumnsPromise = null;
+        throw err;
+      });
+  }
+  return clientColumnsPromise;
+}
+
 router.put('/:clientId', authenticateToken, async (req, res) => {
   try {
     const { clientId } = req.params;
@@ -338,13 +366,14 @@ router.put('/:clientId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Client not found or access denied' });
     }
 
-    // Build update query
+    // Build update query — only real column names may reach the SQL text.
+    const columns = await getClientColumns();
     const fields = [];
     const values = [];
     let paramCount = 1;
 
     Object.keys(updates).forEach(key => {
-      if (updates[key] !== undefined && key !== 'id' && key !== 'company_id') {
+      if (updates[key] !== undefined && key !== 'id' && key !== 'company_id' && columns.has(key)) {
         fields.push(`${key} = $${paramCount}`);
         values.push(updates[key]);
         paramCount++;
@@ -725,8 +754,8 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       issue_date,
       due_date: dueDateBody,
       due_days,
-      tax_rate = 0,
-      currency = 'DKK',
+      tax_rate: taxRateInput,
+      currency: currencyInput,
       notes,
       payment_terms,
       discounts = {},
@@ -737,6 +766,13 @@ router.post('/:clientId/invoices', authenticateToken, async (req, res) => {
       show_completed_date: showCompletedDate = false,
       enabled_payment_methods: enabledPaymentMethodsInput,
     } = req.body;
+
+    const invoiceCountryRow = await dbClient.query('SELECT country_code FROM companies WHERE id = $1', [companyId]);
+    const invoiceCountryCode = invoiceCountryRow.rows[0]?.country_code;
+    const tax_rate = taxRateInput != null && taxRateInput !== ''
+      ? taxRateInput
+      : defaultTaxRateForCountry(invoiceCountryCode);
+    const currency = currencyInput || currencyForCountry(invoiceCountryCode);
 
     // Invoicing is always available — missing setup is guided in the UI.
     // ── Gate 1: company must have explicitly chosen its starting invoice

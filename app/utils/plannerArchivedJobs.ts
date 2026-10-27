@@ -1,7 +1,7 @@
 /**
- * Frontend-only hide list for cancelled/deleted jobs in the day planner.
- * Soft-deleted/cancelled rows stay in the DB; this only removes them from the
- * planner UI until we add an undo/archive browser later.
+ * Frontend-only hide list for cancelled jobs in the day planner.
+ * Soft-deleted jobs are excluded from schedule/routes entirely; cancelled rows
+ * stay visible until archived here (localStorage only).
  */
 
 const STORAGE_KEY = 'vevago:planner-archived-jobs'

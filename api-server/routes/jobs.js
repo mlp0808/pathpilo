@@ -2443,6 +2443,10 @@ router.get('/:jobId/handoff', async (req, res) => {
       process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
       '';
 
+    const companyCountryRes = await pool.query('SELECT country_code FROM companies WHERE id = $1', [companyId]);
+    const companyCountry = String(companyCountryRes.rows[0]?.country_code || '').trim().toLowerCase();
+    const countryParam = /^[a-z]{2}$/.test(companyCountry) ? `&country=${companyCountry}` : '';
+
     // Geocode an address string → [lng, lat] or null.
     const geocode = async (address) => {
       if (!address || !mapboxToken) return null;
@@ -2450,7 +2454,7 @@ router.get('/:jobId/handoff', async (req, res) => {
         const encoded = encodeURIComponent(address);
         const url =
           `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json` +
-          `?limit=1&access_token=${mapboxToken}`;
+          `?limit=1&access_token=${mapboxToken}${countryParam}`;
         const r = await fetch(url);
         if (!r.ok) return null;
         const body = await r.json();

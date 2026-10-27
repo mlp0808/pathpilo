@@ -7,6 +7,8 @@ import AppLayout from '@/app/components/AppLayout'
 import MissionsPanel from '@/app/components/missions/MissionsPanel'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import { apiUrl } from '@/app/utils/api'
+import { formatMoneyExact, getCountryRule } from '@/app/config/countryRules'
+import { getStoredCompanyCountryCode } from '@/app/utils/companyCountry'
 import { ChevronDownIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline'
 
 type DatePresetId =
@@ -98,12 +100,8 @@ function formatMoney(amount: number | string | undefined, currency: string | und
   if (amount === undefined || amount === null) return '—'
   const n = typeof amount === 'string' ? parseFloat(amount) : amount
   if (isNaN(n)) return '—'
-  const cur = currency || 'DKK'
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n)
-  } catch {
-    return `${n.toFixed(2)} ${cur}`
-  }
+  const countryCode = getStoredCompanyCountryCode()
+  return formatMoneyExact(n, currency || getCountryRule(countryCode).defaultCurrency, countryCode)
 }
 
 function statusLabel(t: (k: string, f: string) => string, status: string): string {

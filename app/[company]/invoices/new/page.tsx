@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback, Suspense, useRef } from 'rea
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
 import { apiUrl, resolveAssetUrl } from '@/app/utils/api'
-import { getCountryRule } from '@/app/config/countryRules'
+import { formatLocality, getCountryRule } from '@/app/config/countryRules'
 import { useUser } from '@/app/hooks/useUser'
 // Admin form labels follow the *user's* language preference (the admin's UI
 // locale), NOT the company invoice locale. The user explicitly called this
@@ -55,6 +55,7 @@ interface Client {
   address?: string | null
   zip_code?: string | null
   city?: string | null
+  state?: string | null
   country?: string | null
   ean_number?: string | null
   company_number?: string | null
@@ -68,6 +69,7 @@ type CompanyProfile = {
   address?: string
   city?: string
   zipCode?: string
+  state?: string
   cvrNumber?: string
   vatNumber?: string
   email?: string
@@ -1719,16 +1721,20 @@ function NewInvoicePageContent() {
                       companyProfile?.zipCode || companyProfile?.city ? 'text-gray-600' : 'text-gray-300'
                     }`}
                   >
-                    {[companyProfile?.zipCode, companyProfile?.city].filter(Boolean).join(' ') ||
-                      tr('invoice.new.missingCity', 'Postal code & city')}
+                    {formatLocality(
+                      { zip: companyProfile?.zipCode, city: companyProfile?.city, state: companyProfile?.state },
+                      countryCode,
+                    ) || tr('invoice.new.missingCity', 'Postal code & city')}
                   </p>
                   {companyProfile?.cvrNumber ? (
                     <p className="text-sm text-gray-600">
-                      {countryRule.taxLabel === 'VAT' ? 'CVR' : 'Reg. no.'} {companyProfile.cvrNumber}
+                      {countryRule.companyNumberLabel} {companyProfile.cvrNumber}
                     </p>
                   ) : null}
                   {companyProfile?.vatNumber ? (
-                    <p className="text-sm text-gray-600">VAT {companyProfile.vatNumber}</p>
+                    <p className="text-sm text-gray-600">
+                      {countryRule.vatNumberLabel} {companyProfile.vatNumber}
+                    </p>
                   ) : null}
                   <p className={`text-sm ${companyProfile?.email ? 'text-gray-600' : 'text-gray-300'}`}>
                     {companyProfile?.email || tr('invoice.new.missingEmail', 'Email')}
@@ -1741,19 +1747,17 @@ function NewInvoicePageContent() {
                 <div className="min-w-0 text-left sm:text-right lg:ml-auto lg:max-w-xs">
                   {(() => {
                     const isCompany = String(selectedClient?.client_type || '').toLowerCase() === 'company'
-                    const zipCityUsStyle = countryCode === 'US'
                     const name = isCompany
                       ? String(selectedClient?.name || '').trim()
                       : clientFullName(selectedClient)
                     const street = String(selectedClient?.address || '').trim()
-                    const zip = String(selectedClient?.zip_code || '').trim()
-                    const city = String(selectedClient?.city || '').trim()
                     const country = String(selectedClient?.country || '').trim()
                     const companyNo = String(selectedClient?.company_number || '').trim()
                     const ean = String(selectedClient?.ean_number || '').trim()
-                    const zipCity = zipCityUsStyle
-                      ? [city, zip].filter(Boolean).join(', ')
-                      : [zip, city].filter(Boolean).join(', ')
+                    const zipCity = formatLocality(
+                      { zip: selectedClient?.zip_code, city: selectedClient?.city, state: selectedClient?.state },
+                      countryCode,
+                    )
 
                     return (
                       <div className="space-y-0.5 text-sm text-gray-600">

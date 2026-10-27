@@ -34,6 +34,8 @@ export type OfferRecord = {
   address: string | null
   zip_code: string | null
   city: string | null
+  state?: string | null
+  client_state?: string | null
   lat?: number | null
   lng?: number | null
   total: number
@@ -77,6 +79,10 @@ export type OfferDocumentData = {
   declinedAt?: string | null
   locale: string
   countryCode: string
+  /** Number formatting of the company country (e.g. da-DK, en-US). */
+  moneyLocale?: string
+  /** Document language written the country's way (e.g. en-US vs en-GB dates). */
+  dateLocale?: string
   currency: string
   taxLabel: string
   taxRate: number
@@ -193,12 +199,13 @@ export function formatDocDate(value: string | null | undefined, locale?: string)
   const s = String(value)
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10)) && s.length <= 10 ? parseYmd(s) : new Date(s)
   if (isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString(LOCALE_TAG[locale || 'en'] || 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return d.toLocaleDateString(LOCALE_TAG[locale || 'en'] || locale || 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
+/** `locale` may be a document language ("en", "da") or a full tag ("en-US"). */
 export function formatDocMoney(amount: number, currency: string, locale?: string): string {
   try {
-    return new Intl.NumberFormat(LOCALE_TAG[locale || 'en'] || 'en-GB', {
+    return new Intl.NumberFormat(LOCALE_TAG[locale || 'en'] || locale || 'en-GB', {
       style: 'currency',
       currency,
       minimumFractionDigits: 2,

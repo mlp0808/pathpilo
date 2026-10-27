@@ -25,7 +25,7 @@ export default function OfferDocument({
   children?: ReactNode
 }) {
   const L = (k: Parameters<typeof offerLabel>[1]) => offerLabel(data.locale, k)
-  const money = (n: number) => formatDocMoney(n, data.currency, data.locale)
+  const money = (n: number) => formatDocMoney(n, data.currency, data.moneyLocale || data.locale)
   const logo = data.company.logoUrl ? resolveAssetUrl(data.company.logoUrl) || data.company.logoUrl : null
   const contacts = [data.company.email, data.company.phone, data.company.website].filter(Boolean)
 
@@ -66,12 +66,12 @@ export default function OfferDocument({
         <dl className="mt-7 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-gray-100 text-sm sm:grid-cols-3">
           <div className="bg-gray-50/80 px-4 py-3">
             <dt className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{L('date')}</dt>
-            <dd className="mt-0.5 font-semibold text-gray-900">{formatDocDate(data.sentAt || data.createdAt, data.locale)}</dd>
+            <dd className="mt-0.5 font-semibold text-gray-900">{formatDocDate(data.sentAt || data.createdAt, data.dateLocale || data.locale)}</dd>
           </div>
           <div className="bg-gray-50/80 px-4 py-3">
             <dt className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{L('validUntil')}</dt>
             <dd className="mt-0.5 font-semibold text-gray-900">
-              {data.validUntil ? formatDocDate(data.validUntil, data.locale) : L('forever')}
+              {data.validUntil ? formatDocDate(data.validUntil, data.dateLocale || data.locale) : L('forever')}
             </dd>
           </div>
           {data.durationMinutes > 0 && (
