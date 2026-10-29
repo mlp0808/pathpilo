@@ -120,6 +120,10 @@ jobs:
           # Blog MDX + images are written live by the Grok MCP connector.
           # Exclude them from --delete so bot posts survive deploys; merge from
           # git afterward (adds/updates without wiping MCP-only files).
+          # Uploads are created at runtime by the API (often owned by a different
+          # user than the deploy SSH account) — never sync/delete them or rsync
+          # exits 23 and aborts the whole deploy.
+          set +e
           rsync -a --delete \
             --exclude='.env' \
             --exclude='api-server/.env' \
@@ -129,12 +133,25 @@ jobs:
             --exclude='marketing/mcp-blog/node_modules' \
             --exclude='marketing/content/articles/' \
             --exclude='marketing/public/images/articles/' \
+            --exclude='api-server/uploads/' \
+            --exclude='uploads/' \
             --exclude='logs' \
             $TEMP_DEPLOY/ $APP/
+          RSYNC_RC=$?
+          set -e
+          if [ "$RSYNC_RC" -eq 23 ]; then
+            echo "==> WARNING: rsync partial transfer (exit 23) — some files on the"
+            echo "    server are not writable by the deploy user (ownership clash)."
+            echo "    App files that could sync did; continuing deploy."
+            echo "    Fix with: chmod -R g+rwX $APP  (as a user in group pathpilo)"
+          elif [ "$RSYNC_RC" -ne 0 ]; then
+            echo "==> rsync failed with exit $RSYNC_RC"
+            exit "$RSYNC_RC"
+          fi
 
           mkdir -p "$APP/marketing/content/articles" "$APP/marketing/public/images/articles"
-          rsync -a "$TEMP_DEPLOY/marketing/content/articles/" "$APP/marketing/content/articles/"
-          rsync -a "$TEMP_DEPLOY/marketing/public/images/articles/" "$APP/marketing/public/images/articles/"
+          rsync -a "$TEMP_DEPLOY/marketing/content/articles/" "$APP/marketing/content/articles/" || true
+          rsync -a "$TEMP_DEPLOY/marketing/public/images/articles/" "$APP/marketing/public/images/articles/" || true
 
           rm -rf $TEMP_DEPLOY
           rm -f /tmp/deployment.tar.gz
