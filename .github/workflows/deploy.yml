@@ -136,6 +136,9 @@ jobs:
             --exclude='api-server/uploads/' \
             --exclude='uploads/' \
             --exclude='logs' \
+            --exclude='.git/' \
+            --exclude='.next/cache/' \
+            --exclude='marketing/.next/cache/' \
             $TEMP_DEPLOY/ $APP/
           RSYNC_RC=$?
           set -e
