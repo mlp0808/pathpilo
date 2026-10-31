@@ -1244,7 +1244,8 @@ function JobsPageContent() {
             }
 
             if (response.ok) {
-                const allJobs = (data.jobs || [])
+                // Soft-deleted jobs must never land in schedule/route state.
+                const allJobs = (data.jobs || []).filter((job: any) => job.status !== 'deleted')
                 console.log(`ð Frontend received ${allJobs.length} total job(s)`)
                 
                 // Log projected jobs

@@ -699,8 +699,10 @@ router.get('/', async (req, res) => {
     `;
     // Fee jobs are billing artifacts — hide from the calendar/planner list,
     // but keep them in the completed/uninvoiced list so they can be invoiced.
+    // Soft-deleted jobs stay in the DB for history, but never on schedule/routes.
     if (!onlyCompleted) {
       query += ` AND COALESCE(j.job_kind, 'standard') <> 'cancellation_fee'`;
+      query += ` AND j.status <> 'deleted'`;
     }
 
     const params = [companyId];

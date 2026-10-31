@@ -293,9 +293,10 @@ export function useRoutePlanner({
           `/jobs?start_date=${date}&end_date=${date}`,
           30_000,
         )
-        dayJobs = (data.jobs || []).filter(
-          j => toDateOnly(j.scheduled_date) === date && j.status !== 'deleted',
-        )
+        dayJobs = (data.jobs || []).filter((j) => {
+          if (j.status === 'deleted') return false
+          return toDateOnly(j.scheduled_date) === date
+        })
       } catch {
         if (alive()) { setRoutes([]); setJobsForDay([]); setLoading(false) }
         return
