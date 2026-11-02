@@ -116,6 +116,12 @@ jobs:
           echo "==> Extracting deployment..."
           tar -xzf /tmp/deployment.tar.gz -C $TEMP_DEPLOY
 
+          DEPLOY_SHA="${{ github.sha }}"
+          DEPLOY_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '%s\n' "{\"sha\":\"$DEPLOY_SHA\",\"deployedAt\":\"$DEPLOY_AT\"}" > "$TEMP_DEPLOY/DEPLOY_SHA.json"
+          mkdir -p "$TEMP_DEPLOY/public"
+          cp "$TEMP_DEPLOY/DEPLOY_SHA.json" "$TEMP_DEPLOY/public/deploy.json"
+
           # Clear previous Next.js build output before sync. A partial rsync left
           # mixed old/new chunks on the server (Permission denied on image cache),
           # which causes "Application error: a client-side exception" site-wide.
@@ -370,57 +376,64 @@ jobs:
             rsync -a "$APP/marketing/public/" "$APP/marketing/.next/standalone/public/" || true
           fi
 
-          echo "==> Restoring pathpilo-marketing on port $MARKETING_PORT..."
-          pm2 delete pathpilo-marketing 2>/dev/null || true
-          PORT="$MARKETING_PORT" pm2 start npm --name pathpilo-marketing \
-            --cwd "$APP/marketing" \
-            -- start -- -p "$MARKETING_PORT"
+          # pathpilo.com is the separate static site (pathpilo-web). Do not
+          # delete/restart legacy pathpilo-marketing — that fought app ports and
+          # made successful GitHub deploys look like they never went live.
+          echo "==> Skipping legacy pathpilo-marketing PM2 (static marketing is separate)."
+          echo "    Old marketing port reference only: $MARKETING_PORT"
 
-          echo "==> Soft-restart app + API (keep existing PM2 env/ports)..."
-          pm2 restart pathpilo-frontend 2>/dev/null || true
-          pm2 restart pathpilo-api 2>/dev/null || true
+          echo "==> Restart app + API (must succeed)..."
+          if ! pm2 describe pathpilo-frontend >/dev/null 2>&1; then
+            echo "==> ERROR: pathpilo-frontend not in this PM2 user — live app NOT restarted."
+            pm2 status || true
+            exit 1
+          fi
+          if ! pm2 describe pathpilo-api >/dev/null 2>&1; then
+            echo "==> ERROR: pathpilo-api not in this PM2 user — live API NOT restarted."
+            pm2 status || true
+            exit 1
+          fi
+          pm2 restart pathpilo-frontend --update-env
+          pm2 restart pathpilo-api --update-env
 
           echo "==> Ensure blog MCP runs from htdocs tree only..."
           pm2 delete pathpilo-blog-mcp 2>/dev/null || true
-          # Free port 8787 if a stale process (often ssh-pathpilo's PM2) still holds it
           if command -v fuser >/dev/null 2>&1; then
             fuser -k 8787/tcp 2>/dev/null || true
           fi
           sleep 1
-          pm2 start ecosystem.config.js --only pathpilo-blog-mcp
+          pm2 start ecosystem.config.js --only pathpilo-blog-mcp || true
 
-          # Best-effort: copy bot-written articles from the ssh-pathpilo clone if readable
           SSH_ARTICLES="/home/ssh-pathpilo/pathpilo/marketing/content/articles"
           SSH_IMAGES="/home/ssh-pathpilo/pathpilo/marketing/public/images/articles"
           if [ -r "$SSH_ARTICLES" ]; then
-            echo "==> Syncing articles from ssh-pathpilo clone into live htdocs..."
             rsync -a "$SSH_ARTICLES/" "$APP/marketing/content/articles/" || true
-          else
-            echo "==> Cannot read $SSH_ARTICLES (expected if permissions block it)."
-            echo "    Stop MCP under ssh-pathpilo, then re-publish via the connector."
           fi
           if [ -r "$SSH_IMAGES" ]; then
             rsync -a "$SSH_IMAGES/" "$APP/marketing/public/images/articles/" || true
           fi
 
-          pm2 save
+          pm2 save || true
           pm2 status || true
 
-          echo "==> Local smoke checks..."
-          sleep 3
-          curl -sS -o /dev/null -w "marketing_local:%{http_code}\n" "http://127.0.0.1:${MARKETING_PORT}/" || true
-          echo "==> Blog MCP health (must show writingToLiveTree:true):"
-          HEALTH_JSON="$(curl -sS "http://127.0.0.1:8787/health" || true)"
-          echo "$HEALTH_JSON"
-          echo ""
-          if ! echo "$HEALTH_JSON" | grep -q '"ok":true'; then
-            echo "==> Blog MCP failed — last logs:"
-            pm2 logs pathpilo-blog-mcp --lines 40 --nostream || true
+          echo "==> Verify deploy SHA on disk..."
+          ON_DISK_SHA="$(node -e "try{console.log(require('$APP/DEPLOY_SHA.json').sha)}catch(e){console.log('')}")"
+          echo "    expected=$DEPLOY_SHA"
+          echo "    on_disk=$ON_DISK_SHA"
+          if [ "$ON_DISK_SHA" != "$DEPLOY_SHA" ]; then
+            echo "==> ERROR: DEPLOY_SHA.json mismatch — sync may have failed (permissions)."
+            ls -la "$APP/DEPLOY_SHA.json" "$APP/.next/BUILD_ID" 2>&1 || true
+            exit 1
           fi
-          echo "==> Live article count in htdocs:"
-          ls -1 "$APP/marketing/content/articles"/*.mdx 2>/dev/null | wc -l || true
 
-          echo "==> Deploy complete!"
+          echo "==> Local smoke checks..."
+          sleep 4
+          HEALTH_JSON="$(curl -sS "http://127.0.0.1:8787/health" || true)"
+          echo "blog_mcp=$HEALTH_JSON"
+          API_HEALTH="$(curl -sS "http://127.0.0.1:3003/api/health" || curl -sS "http://127.0.0.1:3005/api/health" || true)"
+          echo "api_health=$API_HEALTH"
+
+          echo "==> Deploy complete! sha=$DEPLOY_SHA"
           DEPLOY_SCRIPT
 
       - name: Cleanup

@@ -246,12 +246,24 @@ app.use('/api/invitations', invitationRoutes);
 app.use('/api/stripe', stripeRoutes);
 app.use('/api', futureRoutes); // Future endpoints (maps, notifications, etc.)
 
-// Health check endpoint
+// Health check endpoint — includes deploy SHA so we can verify live releases.
 app.get('/api/health', (req, res) => {
+  let deploy = null;
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const deployPath = path.join(__dirname, '..', 'DEPLOY_SHA.json');
+    if (fs.existsSync(deployPath)) {
+      deploy = JSON.parse(fs.readFileSync(deployPath, 'utf8'));
+    }
+  } catch {
+    /* ignore */
+  }
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: '1.0.0',
+    deploy,
   });
 });
 

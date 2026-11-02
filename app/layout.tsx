@@ -91,9 +91,9 @@ fbq('track', 'PageView');`,
             }}
           />
         )}
-        <CrispChat />
-        <ActivityBeacon />
         <ClientI18nProvider>
+          <CrispChat />
+          <ActivityBeacon />
           {children}
         </ClientI18nProvider>
       </body>
