@@ -165,14 +165,27 @@ jobs:
             $TEMP_DEPLOY/ $APP/
           RSYNC_RC=$?
           set -e
-          if [ "$RSYNC_RC" -eq 23 ]; then
-            echo "==> WARNING: rsync partial transfer (exit 23) — some files on the"
-            echo "    server are not writable by the deploy user (ownership clash)."
-            echo "    App files that could sync did; continuing deploy."
-            echo "    Fix with: chmod -R g+rwX $APP  (as a user in group pathpilo)"
-          elif [ "$RSYNC_RC" -ne 0 ]; then
-            echo "==> rsync failed with exit $RSYNC_RC"
+          if [ "$RSYNC_RC" -ne 0 ]; then
+            echo "==> ERROR: rsync failed with exit $RSYNC_RC"
+            if [ "$RSYNC_RC" -eq 23 ]; then
+              echo "    Partial transfer (permission/ownership). Live app would keep old code."
+              echo "    On the server run:  chmod -R g+rwX $APP && chmod -R u+w $APP/.next $APP/api-server"
+            fi
             exit "$RSYNC_RC"
+          fi
+
+          echo "==> Verify critical files actually updated..."
+          EXPECT_BUILD="$(cat "$TEMP_DEPLOY/.next/BUILD_ID" 2>/dev/null || true)"
+          LIVE_BUILD="$(cat "$APP/.next/BUILD_ID" 2>/dev/null || true)"
+          echo "    temp BUILD_ID=$EXPECT_BUILD"
+          echo "    live BUILD_ID=$LIVE_BUILD"
+          if [ -z "$EXPECT_BUILD" ] || [ "$EXPECT_BUILD" != "$LIVE_BUILD" ]; then
+            echo "==> ERROR: .next/BUILD_ID did not update — frontend was NOT deployed."
+            exit 1
+          fi
+          if ! grep -q 'deploy,' "$APP/api-server/server.js" 2>/dev/null && ! grep -q 'DEPLOY_SHA.json' "$APP/api-server/server.js" 2>/dev/null; then
+            echo "==> ERROR: api-server/server.js missing deploy marker — API was NOT deployed."
+            exit 1
           fi
 
           mkdir -p "$APP/marketing/content/articles" "$APP/marketing/public/images/articles"
