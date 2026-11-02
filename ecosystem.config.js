@@ -11,9 +11,12 @@ module.exports = {
       script: "npm",
       args: "start",
       cwd: root,
+      // Live nginx for app.pathpilo.com proxies to 3004. Do not use 3005 —
+      // that port is the API. Wrong PORT here caused endless EADDRINUSE and
+      // left ancient root-owned Node processes serving traffic instead.
       env: {
         NODE_ENV: "production",
-        PORT: 3005
+        PORT: 3004
       },
       error_file: path.join(root, "logs", "frontend-error.log"),
       out_file: path.join(root, "logs", "frontend-out.log"),
@@ -29,7 +32,8 @@ module.exports = {
       cwd: path.join(root, "api-server"),
       env: {
         NODE_ENV: "production",
-        API_PORT: 3005
+        API_PORT: 3005,
+        PORT: 3005
       },
       error_file: path.join(root, "logs", "api-error.log"),
       out_file: path.join(root, "logs", "api-out.log"),
