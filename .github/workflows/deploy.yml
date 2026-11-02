@@ -116,6 +116,23 @@ jobs:
           echo "==> Extracting deployment..."
           tar -xzf /tmp/deployment.tar.gz -C $TEMP_DEPLOY
 
+          # Clear previous Next.js build output before sync. A partial rsync left
+          # mixed old/new chunks on the server (Permission denied on image cache),
+          # which causes "Application error: a client-side exception" site-wide.
+          # Image caches are owned by the runtime user — chmod best-effort, then
+          # remove static/server trees so the new build lands cleanly.
+          echo "==> Clearing previous Next.js builds..."
+          for NEXT_DIR in "$APP/.next" "$APP/marketing/.next"; do
+            if [ -d "$NEXT_DIR" ]; then
+              chmod -R u+w,g+w "$NEXT_DIR" 2>/dev/null || true
+              rm -rf "$NEXT_DIR/static" "$NEXT_DIR/server" "$NEXT_DIR/types" \
+                "$NEXT_DIR/BUILD_ID" "$NEXT_DIR/build-manifest.json" \
+                "$NEXT_DIR/app-build-manifest.json" "$NEXT_DIR/react-loadable-manifest.json" \
+                "$NEXT_DIR/prerender-manifest.json" "$NEXT_DIR/routes-manifest.json" \
+                "$NEXT_DIR/package.json" 2>/dev/null || true
+            fi
+          done
+
           echo "==> Syncing files..."
           # Blog MDX + images are written live by the Grok MCP connector.
           # Exclude them from --delete so bot posts survive deploys; merge from

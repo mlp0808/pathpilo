@@ -12,6 +12,7 @@ interface DynamicTableProps {
 }
 
 export default function DynamicTable({ data, title, emptyMessage, emptyIcon }: DynamicTableProps) {
+  const companyCountryCode = useCompanyCountryCode()
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
 
   // Get all unique keys from all objects (even if data is empty, we'll show headers)

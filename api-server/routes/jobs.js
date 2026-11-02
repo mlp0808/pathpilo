@@ -702,7 +702,7 @@ router.get('/', async (req, res) => {
     // Soft-deleted jobs stay in the DB for history, but never on schedule/routes.
     if (!onlyCompleted) {
       query += ` AND COALESCE(j.job_kind, 'standard') <> 'cancellation_fee'`;
-      query += ` AND j.status <> 'deleted'`;
+      query += ` AND lower(coalesce(j.status::text, '')) <> 'deleted'`;
     }
 
     const params = [companyId];

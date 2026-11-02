@@ -1245,7 +1245,9 @@ function JobsPageContent() {
 
             if (response.ok) {
                 // Soft-deleted jobs must never land in schedule/route state.
-                const allJobs = (data.jobs || []).filter((job: any) => job.status !== 'deleted')
+                const allJobs = (data.jobs || []).filter(
+                  (job: any) => String(job.status || '').toLowerCase() !== 'deleted',
+                )
                 console.log(`ð Frontend received ${allJobs.length} total job(s)`)
                 
                 // Log projected jobs
@@ -1625,8 +1627,9 @@ function JobsPageContent() {
         const dayJobs = jobs.filter(job => {
           if (toDateOnlyString(job.scheduled_date) !== dateString) return false
           // Soft-deleted jobs stay in the DB for history, but never on the schedule.
-          if (job.status === 'deleted') return false
-          if (job.status === 'cancelled' && archivedJobIds.has(String(job.id))) {
+          const status = String(job.status || '').toLowerCase()
+          if (status === 'deleted') return false
+          if (status === 'cancelled' && archivedJobIds.has(String(job.id))) {
             return false
           }
           return true
