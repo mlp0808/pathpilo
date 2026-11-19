@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
 const { pool } = require('./database');
+const { outboundBlockReason } = require('./demoGuard');
 
 const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -212,10 +213,16 @@ function enqueueResendSend(sendFn) {
 async function sendEmail(options) {
   let { to, cc, from, fromName, replyTo, subject, text, html, attachments, companyId, skipFooter } = options;
 
+  const cid = normalizeCompanyIdForEmail(companyId);
+  const blockedBecause = await outboundBlockReason({ companyId: cid, emails: [to, cc] });
+  if (blockedBecause) {
+    console.log(`🛑 [email] Not sent (${blockedBecause}): "${subject || ''}"`);
+    return { blocked: true, id: 'demo-blocked', messageId: 'demo-blocked', data: { id: 'demo-blocked' } };
+  }
+
   let footerContact = null;
   let footerCompanyName = null;
   let footerCountryCode = 'US';
-  const cid = normalizeCompanyIdForEmail(companyId);
   if (cid != null) {
     try {
       const ctx = await fetchCompanyEmailContext(cid);

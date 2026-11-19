@@ -7,6 +7,7 @@ import {
   ArrowRightOnRectangleIcon,
   Bars3Icon,
   BoltIcon,
+  BookOpenIcon,
   BuildingOffice2Icon,
   ChartBarSquareIcon,
   PlayCircleIcon,
@@ -23,6 +24,7 @@ const NAV = [
 ]
 
 const CONTENT_NAV = [
+  { href: '/admin/guides', label: 'Guides', icon: BookOpenIcon },
   { href: '/admin/video-guides', label: 'Video guides', icon: PlayCircleIcon },
   { href: '/admin/coupons', label: 'Coupons', icon: TicketIcon },
 ]

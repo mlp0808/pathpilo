@@ -4,13 +4,12 @@ import { useState, useEffect, useMemo } from 'react'
 import AppLayout from '../../components/AppLayout'
 import ServicesTable from '../../components/ServicesTable'
 import AddServiceModal from '../../components/AddServiceModal'
-import MissionsPanel from '../../components/missions/MissionsPanel'
 import { useParams } from 'next/navigation'
 import CreateItemGroupModal from '../../components/CreateItemGroupModal'
 import CancellationFeeSettings from '../../components/CancellationFeeSettings'
 import { apiUrl } from '../../utils/api'
 import { useAppI18n } from '../../components/I18nProvider'
-import { requestMissionsRefresh } from '../../config/missions'
+import { requestGuidesRefresh } from '../../config/guideEvents'
 
 type ItemGroup = {
   id: number
@@ -32,8 +31,6 @@ function metaLabel(fields: string[]) {
 
 export default function ServicesPage() {
   const { t } = useAppI18n()
-  const params = useParams() as { company?: string }
-  const companySlug = params?.company || ''
   const [groups, setGroups] = useState<ItemGroup[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [loading, setLoading] = useState(true)
@@ -93,19 +90,6 @@ export default function ServicesPage() {
   return (
     <AppLayout>
       <div>
-        {companySlug && (
-          <MissionsPanel
-            companySlug={companySlug}
-            className="mb-3 sm:mb-4"
-            onLaunch={(kind) => {
-              if (kind !== 'add_service') return false
-              const group = groups.find((g) => g.key === 'services') || groups[0]
-              if (!group) return false
-              setAddForGroup(group)
-              return true
-            }}
-          />
-        )}
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
@@ -199,7 +183,7 @@ export default function ServicesPage() {
           onClose={() => setAddForGroup(null)}
           onServiceAdded={() => {
             fetchGroups()
-            requestMissionsRefresh()
+            requestGuidesRefresh()
           }}
           groupId={addForGroup?.id ?? null}
           metaFields={addForGroup?.meta_fields || ['price', 'duration']}

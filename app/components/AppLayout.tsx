@@ -14,10 +14,11 @@ import { getActiveCompanySlugFromSession, getDashboardHref } from '../utils/sess
 import PendingAutomationToasts from './PendingAutomationToasts'
 import NotificationToasts from './notifications/NotificationToasts'
 import WorkspaceAccessGuard from './WorkspaceAccessGuard'
-import useMissionPageVisit from '../hooks/useMissionPageVisit'
+import useGuidePageVisit from '../hooks/useGuidePageVisit'
+import DemoBanner from './DemoBanner'
 
-/** Lazy so AppLayout (every page) doesn't pull CreateJob / guide modals into the shell bundle. */
-const MissionsPanel = dynamic(() => import('./missions/MissionsPanel'), { ssr: false })
+/** Lazy so AppLayout (every page) doesn't pull the guide viewer into the shell bundle. */
+const GuideBanner = dynamic(() => import('./guides/GuideBanner'), { ssr: false })
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -27,7 +28,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const { t } = useAppI18n()
   const { user, loading } = useUser()
   const pathname = usePathname()
-  useMissionPageVisit()
+  useGuidePageVisit()
   const [syncingCompany, setSyncingCompany] = useState(false)
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
   /** Stops hammering POST /companies/switch if the server returns no token or errors. */
@@ -63,17 +64,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const headerHideClass = isMapPage ? 'lg:hidden' : fullBleedTool ? 'hidden' : ''
 
-  // Pages that don't render their own compact guide strip get one here, so an
-  // active guide can follow the user through the whole product (pipeline,
-  // offers, recurring, team and the settings pages guides send you to).
-  const pathParts = pathname.split('/').filter(Boolean)
-  const routeSegment = pathParts[1] || ''
-  const settingsSub = routeSegment === 'settings' ? pathParts[2] || '' : ''
-  const showGuideStrip =
-    Boolean(isCompanyRoute) &&
-    !fullBleedTool &&
-    (['pipeline', 'offers', 'recurring', 'team'].includes(routeSegment) ||
-      ['leads-form', 'invoices', 'notifications', 'business'].includes(settingsSub))
+  // The guide banner follows the user through the whole product, so it lives
+  // in the shell. Full-bleed tools (map, day planner) keep their own chrome.
+  const showGuideBanner = Boolean(isCompanyRoute) && !fullBleedTool && !isMapPage
 
   const targetCompanyId = user?.companies?.find((c: { slug?: string }) => c.slug === urlSlug)?.id
   const activeCompanyId = user?.activeCompany?.id
@@ -159,6 +152,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const dashboardHrefMobile = getDashboardHref(user as Record<string, unknown>)
 
+  const demoCompany = [user.activeCompany, ...(user.companies || [])].find(
+    (c) => (c as { slug?: string; isDemo?: boolean } | null)?.isDemo && (c as { slug?: string }).slug === (activeSlug || urlSlug)
+  ) as { demoExpiresAt?: string } | undefined
+
   const shell = (
     <div className="min-h-screen bg-page flex overflow-x-hidden">
       {/* Desktop side column (lg+). Settings and main app share the same
@@ -196,13 +193,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
         />
 
         <main className="px-4 sm:px-6 lg:px-[40px] pt-1 sm:pt-2 lg:pt-2 pb-4 sm:pb-6 lg:pb-[15px] overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
-          {showGuideStrip && (
-            <MissionsPanel
-              companySlug={activeSlug || urlSlug}
-              variant="active"
-              className="mb-3 flex-none sm:mb-4"
-            />
+          {demoCompany && !fullBleedTool && !isMapPage && (
+            <DemoBanner expiresAt={demoCompany.demoExpiresAt} className="mb-2 sm:mb-3" />
           )}
+          <GuideBanner
+            companySlug={activeSlug || urlSlug}
+            className="mb-3 sm:mb-4"
+            showChrome={showGuideBanner}
+          />
           {children}
         </main>
         <PendingAutomationToasts />

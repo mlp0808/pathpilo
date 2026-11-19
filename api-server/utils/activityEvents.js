@@ -215,6 +215,17 @@ async function flushEvents() {
   }
 }
 
+/** Event names for a company that are still waiting in the buffer. */
+function queuedEventNames(companyId) {
+  const id = toIntOrNull(companyId);
+  const names = new Set();
+  if (!id) return names;
+  for (const row of queue) {
+    if (row.company_id === id && row.source !== 'overwatch') names.add(row.event);
+  }
+  return names;
+}
+
 const flushTimer = setInterval(() => { flushEvents(); }, FLUSH_INTERVAL_MS);
 if (flushTimer.unref) flushTimer.unref();
 
@@ -338,6 +349,7 @@ module.exports = {
   ensureActivityEventsSchema,
   trackEvent,
   flushEvents,
+  queuedEventNames,
   touchSession,
   isDuplicate,
   linkAnonymousEvents,

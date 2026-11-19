@@ -452,8 +452,9 @@ async function runInvoiceReminderTick(pool) {
     await ensureInvoiceReminderSchema(pool);
     const pendingRes = await pool.query(
       `SELECT id AS sched_id, company_id, invoice_id, send_at
-       FROM scheduled_invoice_reminder_sends
+       FROM scheduled_invoice_reminder_sends s
        WHERE send_at <= NOW()
+         AND NOT EXISTS (SELECT 1 FROM companies co WHERE co.id = s.company_id AND co.is_demo)
        ORDER BY send_at ASC
        LIMIT 25`
     );

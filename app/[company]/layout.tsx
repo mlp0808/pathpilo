@@ -138,12 +138,15 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
     }
 
     const resolveAndSwitchCompany = async () => {
+      const ctrl = new AbortController()
+      const timer = window.setTimeout(() => ctrl.abort(), 10000)
       try {
         setIsResolving(true)
         const token = localStorage.getItem('token')
 
         const resolveResponse = await fetch(apiUrl(`/companies/slug/${companySlug}`), {
           headers: { Authorization: `Bearer ${token}` },
+          signal: ctrl.signal,
         })
 
         if (!resolveResponse.ok) {
@@ -235,6 +238,7 @@ function CompanyLayoutContent({ children }: { children: React.ReactNode }) {
       } catch {
         router.replace('/select-company')
       } finally {
+        window.clearTimeout(timer)
         setIsResolving(false)
       }
     }

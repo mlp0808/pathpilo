@@ -38,6 +38,7 @@ import type { ClientExploreLayer } from '@/app/components/map/ClientExplorePanel
 import SandboxPlannerPanel, {
   addStopToRound,
   createPlaygroundRound,
+  removeStopFromRound,
   useSandboxRound,
 } from '@/app/components/map/SandboxPlannerPanel'
 import {
@@ -360,6 +361,9 @@ function MapMultitoolInner() {
 
   // Job slideout + "add job", opened from inside the day/route/round planner.
   const [viewingJob, setViewingJob] = useState<any>(null)
+  /** Stop opened from the round planner — sidebar can take it back off the round. */
+  const [roundStopId, setRoundStopId] = useState<number | null>(null)
+  const [orphanStop, setOrphanStop] = useState<{ id: number; label: string; address: string } | null>(null)
   const onPlannerJobUpdated = useCallback((meta?: { jobId?: number | string; scheduledDate?: string | null }) => {
     const jobId = meta?.jobId
     const nextDate = meta?.scheduledDate != null ? String(meta.scheduledDate).slice(0, 10) : null
@@ -440,8 +444,56 @@ function MapMultitoolInner() {
   const openPlannerJob = useCallback((jobId: number | string) => {
     if (planner.drawMode) return
     const job = planner.jobsForDay.find(j => String(j.id) === String(jobId))
-    if (job) setViewingJob(job)
+    if (job) {
+      setRoundStopId(null)
+      setOrphanStop(null)
+      setViewingJob(job)
+    }
   }, [planner.drawMode, planner.jobsForDay])
+
+  const openRoundStop = useCallback((stopId: number) => {
+    const stop = (sandbox.round?.stops || []).find(s => Number(s.id) === stopId)
+    if (!stop) return
+    setRoundStopId(stopId)
+    const jobId = stop.job_id != null ? Number(stop.job_id) : NaN
+    if (Number.isFinite(jobId)) {
+      setOrphanStop(null)
+      setViewingJob({
+        id: jobId,
+        client_name: stop.client_name || undefined,
+        client_last_name: stop.client_last_name || undefined,
+        address: stop.address || undefined,
+        zip_code: stop.zip_code || undefined,
+        city: stop.city || undefined,
+      })
+      return
+    }
+    const label = [stop.client_name, stop.client_last_name].filter(Boolean).join(' ').trim()
+      || stop.label
+      || `Stop #${stop.id}`
+    const address = [stop.address, stop.zip_code, stop.city].filter(Boolean).join(', ')
+    setViewingJob(null)
+    setOrphanStop({ id: stopId, label, address })
+  }, [sandbox.round])
+
+  const closeJobSidebar = useCallback(() => {
+    setViewingJob(null)
+    setRoundStopId(null)
+    setOrphanStop(null)
+  }, [])
+
+  const removeOpenRoundStop = useCallback(async () => {
+    const roundId = sandbox.round?.id
+    const stopId = roundStopId
+    if (roundId == null || stopId == null) return
+    try {
+      const next = await removeStopFromRound(roundId, stopId)
+      sandbox.setRound(next)
+      closeJobSidebar()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not remove stop')
+    }
+  }, [sandbox.round?.id, sandbox.setRound, roundStopId, closeJobSidebar])
 
   // Prefill date/user from the active day/route when opening "add job" from the panel.
   // Route (employee+day) locks schedule; day-only scheduling stays editable.
@@ -1378,7 +1430,13 @@ function MapMultitoolInner() {
     return out
   }, [mapPhase, modeKind, modeLocKey, routes, previewRoutes, nearClients, allClients, employeeHomes, showClientsBackdrop, showEmployeesBackdrop])
 
-  const focusUserId = mode.kind === 'route' ? mode.userId : mode.kind === 'round' ? -9000 : null
+  const focusUserId = mode.kind === 'route'
+    ? mode.userId
+    : mode.kind === 'round'
+      ? (routes.find(r => r.jobs.some(j => String(j.id).startsWith('stop:')))?.userId
+          ?? routes[0]?.userId
+          ?? -9000)
+      : null
 
   const overlayRouteMeta = useMemo(() => {
     // Planner day/route/round, OR a client/location route preview — so an open
@@ -1476,6 +1534,11 @@ function MapMultitoolInner() {
   const selectedJobId = selectedJobIds[0] ?? null
 
   const handleJobClick = useCallback((jobId: number | string) => {
+    if (typeof jobId === 'string' && jobId.startsWith('stop:')) {
+      const stopId = Number(jobId.slice('stop:'.length))
+      if (Number.isFinite(stopId)) openRoundStop(stopId)
+      return
+    }
     if (
       isPlannerMode
       && !String(jobId).startsWith('home-')
@@ -1545,6 +1608,7 @@ function MapMultitoolInner() {
     planner.drawMode,
     planner.assignDraw,
     openPlannerJob,
+    openRoundStop,
     openOverlayDetail,
     openClientExplore,
     openLocationExplore,
@@ -1591,6 +1655,7 @@ function MapMultitoolInner() {
             onAddStop={() => {
               openAddJobForRound({ action: 'add-round' })
             }}
+            onOpenStop={openRoundStop}
             onSaved={(next) => {
               sandbox.setRound(next)
             }}
@@ -1869,17 +1934,59 @@ function MapMultitoolInner() {
       {/* Planner job slideout — assignee edits are deferred to Save & apply. */}
       <JobViewSlideout
         isOpen={viewingJob != null}
-        onClose={() => setViewingJob(null)}
+        onClose={closeJobSidebar}
         job={viewingJob}
         onJobUpdated={onPlannerJobUpdated}
-        deferAssigneeToParent
+        deferAssigneeToParent={roundStopId == null}
+        onRemoveFromRound={roundStopId != null ? () => { void removeOpenRoundStop() } : undefined}
         onAssigneeChange={(jobId, newUserId) => {
           planner.setPendingAssignee(jobId, newUserId)
           setViewingJob((prev: any) => (prev?.id === jobId ? { ...prev, assigned_user_id: newUserId } : prev))
         }}
-        visitSiblings={visitSiblingsFor(viewingJob, planner.jobsForDay as any)}
+        visitSiblings={roundStopId != null ? undefined : visitSiblingsFor(viewingJob, planner.jobsForDay as any)}
         onOpenSibling={(sib) => setViewingJob(sib)}
       />
+
+      {orphanStop != null && viewingJob == null && (
+        <div className="fixed inset-0 z-40 flex justify-end">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/40"
+            aria-label="Close"
+            onClick={closeJobSidebar}
+          />
+          <div className="relative flex h-full w-full max-w-md flex-col bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <h2 className="text-sm font-semibold text-gray-900">Stop</h2>
+              <button
+                type="button"
+                onClick={closeJobSidebar}
+                className="rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 px-4 py-4">
+              <p className="text-base font-semibold text-gray-900">{orphanStop.label}</p>
+              {orphanStop.address ? (
+                <p className="mt-1 text-sm text-gray-500">{orphanStop.address}</p>
+              ) : null}
+            </div>
+            <div className="border-t border-gray-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!confirm('Remove this stop from the round?')) return
+                  void removeOpenRoundStop()
+                }}
+                className="w-full rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Remove from round
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <CreateJob
         isOpen={createJobOpen}

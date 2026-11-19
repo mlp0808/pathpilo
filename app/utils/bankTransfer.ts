@@ -12,7 +12,9 @@ export type BankTransferConfig = {
 /**
  * How the company's clients pay by bank transfer:
  * gb = sort code + account no., us = routing + account no.,
- * dk = reg. no. + account no. or IBAN, iban = IBAN.
+ * dk = reg. no. + account no. or IBAN, iban = IBAN,
+ * local = bank/branch code + account no. in whatever format the country uses
+ * (AU BSB, NZ bank-branch, CA transit) — free text, no digit rules.
  */
 export function bankSchemeFor(countryCode?: string | null): BankScheme {
   return isSupportedCountry(countryCode) ? getCountryRule(countryCode).bank : 'iban'
@@ -20,6 +22,23 @@ export function bankSchemeFor(countryCode?: string | null): BankScheme {
 
 export function usesUkBankFields(countryCode?: string | null): boolean {
   return bankSchemeFor(countryCode) === 'gb'
+}
+
+/** What the `local` scheme calls its bank/branch code in each country. */
+export function localBankCodeLabels(countryCode?: string | null): {
+  label: string
+  placeholder: string
+} {
+  switch (String(countryCode || '').trim().toUpperCase()) {
+    case 'AU':
+      return { label: 'BSB', placeholder: '062-000' }
+    case 'NZ':
+      return { label: 'Bank / branch', placeholder: '12-3456' }
+    case 'CA':
+      return { label: 'Transit & institution no.', placeholder: '12345-003' }
+    default:
+      return { label: 'Bank code', placeholder: '' }
+  }
 }
 
 function normalizeDigits(value: string): string {
@@ -87,6 +106,9 @@ export function validateBankTransferForEnable(
       if (!regNo && !accountNo) return 'Add a reg. no. and account number, or an IBAN, before enabling.'
       if (!isValidDkRegNumber(regNo)) return 'Reg. no. must be 4 digits.'
       if (!isValidDkAccountNumber(accountNo)) return 'Account number must be 6–10 digits.'
+      return null
+    case 'local':
+      if (!accountNo) return 'Account number is required before enabling.'
       return null
     default:
       if (!iban) return 'IBAN is required before enabling.'

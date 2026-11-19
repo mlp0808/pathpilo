@@ -2,6 +2,8 @@
  * Twilio SMS delivery. Expects E.164 numbers (e.g. +4550580896 for Denmark).
  */
 
+const { outboundBlockReason } = require('./demoGuard');
+
 let twilioClient = null;
 
 function isTwilioConfigured() {
@@ -41,6 +43,10 @@ function normalizePhoneToE164(raw, defaultCountryCode = 'DK') {
   if (cc === 'SE' && /^\d{6,10}$/.test(s)) return `+46${s.replace(/^0+/, '')}`;
   if (cc === 'NO' && /^\d{8}$/.test(s)) return `+47${s}`;
   if (cc === 'GB' && /^0?\d{10,11}$/.test(s)) return `+44${s.replace(/^0+/, '')}`;
+  // Countries that write national numbers with a leading trunk 0.
+  if (cc === 'IE' && /^0?\d{8,9}$/.test(s)) return `+353${s.replace(/^0+/, '')}`;
+  if (cc === 'AU' && /^0?\d{9}$/.test(s)) return `+61${s.replace(/^0+/, '')}`;
+  if (cc === 'NZ' && /^0?\d{8,9}$/.test(s)) return `+64${s.replace(/^0+/, '')}`;
 
   return null;
 }
@@ -51,7 +57,13 @@ function estimateSmsSegments(body) {
   return len <= 160 ? 1 : Math.ceil(len / 153);
 }
 
-async function sendSms({ to, body }) {
+async function sendSms({ to, body, companyId }) {
+  const blockedBecause = await outboundBlockReason({ companyId });
+  if (blockedBecause) {
+    console.log(`🛑 [sms] Not sent (${blockedBecause})`);
+    return { sid: 'demo-blocked', to: String(to || ''), segments: 0, blocked: true };
+  }
+
   const normalized = normalizePhoneToE164(to);
   if (!normalized) {
     throw new Error(`Invalid phone number: ${to}`);

@@ -984,7 +984,7 @@ async function sendSmsForJob(pool, row, automationKey, messageTemplate) {
   const body = applyTemplate(messageTemplate, data).trim();
   if (!body) throw new Error('SMS body is empty');
 
-  const result = await sendSms({ to: row.client_phone, body });
+  const result = await sendSms({ to: row.client_phone, body, companyId: row.company_id });
 
   const ins = await pool.query(
     `INSERT INTO automated_email_sends (company_id, job_id, automation_key)
@@ -1042,6 +1042,7 @@ async function runAutomatedSmsTick(pool) {
        AND aes.automation_key = sas.automation_key
      WHERE sas.send_at <= NOW()
        AND j.status <> 'cancelled'
+       AND co.is_demo IS NOT TRUE
        AND sas.automation_key LIKE 'sms_%'
        AND c.phone IS NOT NULL
        AND TRIM(c.phone) <> ''
@@ -1129,6 +1130,7 @@ async function runAutomatedEmailTick(pool) {
          AND aes.automation_key = sas.automation_key
        WHERE sas.send_at <= NOW()
          AND j.status <> 'cancelled'
+         AND co.is_demo IS NOT TRUE
          AND sas.automation_key LIKE 'email_%'
          AND c.email IS NOT NULL
          AND c.email <> ''

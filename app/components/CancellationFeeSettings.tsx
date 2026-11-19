@@ -5,7 +5,7 @@ import { apiUrl } from '../utils/api'
 import { formatMoney } from '../config/countryRules'
 import { useCompanyCountryCode } from '../hooks/useCompanyCountryCode'
 import { useAppI18n } from './I18nProvider'
-import { requestMissionsRefresh } from '../config/missions'
+import { requestGuidesRefresh } from '../config/guideEvents'
 
 type FeeSettings = {
   enabled: boolean
@@ -82,7 +82,7 @@ export default function CancellationFeeSettings() {
       setDraftTitle(fee.title || 'Cancellation fee')
       setDraftPrice(String(fee.price ?? 0))
       setDirty(false)
-      requestMissionsRefresh()
+      requestGuidesRefresh()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to save')
       // Revert toggle if the enable flip failed.

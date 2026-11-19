@@ -47,6 +47,7 @@ type ApiStop = {
   id: number
   position: number
   client_id: number | null
+  job_id?: number | null
   label: string | null
   address: string | null
   zip_code: string | null
@@ -123,6 +124,9 @@ function stopToJob(stop: ApiStop): RouteJob {
     address: [stop.address, stop.zip_code, stop.city].filter(Boolean).join(', '),
     estimated_duration_minutes: Number(stop.estimated_duration_minutes || 30) || 30,
     has_own_coords: lat != null && lng != null,
+    client_id: stop.client_id != null && Number.isFinite(Number(stop.client_id))
+      ? Number(stop.client_id)
+      : null,
   }
 }
 
@@ -223,6 +227,7 @@ export default function SandboxPlannerPanel({
   users = [],
   onReorder,
   onAddStop,
+  onOpenStop,
   onSaved,
   onRoutesChange,
 }: {
@@ -235,6 +240,8 @@ export default function SandboxPlannerPanel({
   users?: Array<{ id: number; first_name: string; last_name: string }>
   onReorder: (stopIds: number[]) => Promise<void>
   onAddStop?: () => void
+  /** Open the job sidebar for a stop (so a mis-added stop can be removed). */
+  onOpenStop?: (stopId: number) => void
   onSaved?: (round: ApiRound) => void
   /** Push live routes (incl. directions geometry) up to the map. */
   onRoutesChange?: (routes: UserRoute[]) => void
@@ -968,7 +975,12 @@ export default function SandboxPlannerPanel({
             onSelectUser={(userId) => handlePlacementUser(userId)}
             onClearUser={leave}
             onReorder={handleReorder}
-            onJobOpen={() => {}}
+            onJobOpen={(id) => {
+              if (drawMode) return
+              const match = String(id).match(/^stop:(\d+)$/)
+              if (!match) return
+              onOpenStop?.(Number(match[1]))
+            }}
             onOptimize={() => void optimize()}
             optimizing={optimizing}
             optimizeNotice={optimizeNotice}
@@ -1151,6 +1163,16 @@ export async function placeRound(
     round: data.round as ApiRound,
     placed: Array.isArray(data.placed) ? data.placed : [],
   }
+}
+
+export async function removeStopFromRound(roundId: number, stopId: number): Promise<ApiRound> {
+  const res = await fetch(apiUrl(`/rounds/${roundId}/stops/${stopId}`), {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'Could not remove stop')
+  return data.round as ApiRound
 }
 
 export async function addStopToRound(roundId: number, stop: RoundStopPayload): Promise<ApiRound> {

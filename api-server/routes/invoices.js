@@ -34,7 +34,7 @@ const {
   formatMoneyForCountry,
   vatNumberLabelForCountry,
 } = require('../utils/countryRules');
-const { bankSchemeFor } = require('../utils/bankTransfer');
+const { bankSchemeFor, localBankCodeLabel } = require('../utils/bankTransfer');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -704,6 +704,21 @@ function buildInvoicePdf(invoice, bankRow = null) {
             bankRows.push({
               label: tr('invoice.iban', 'IBAN'),
               value: formatIban(bank.iban),
+              mono: true,
+            });
+          }
+        } else if (bankScheme === 'local') {
+          if (bank.registrationNumber) {
+            bankRows.push({
+              label: localBankCodeLabel(invoice.company_country_code),
+              value: bank.registrationNumber,
+              mono: true,
+            });
+          }
+          if (bank.accountNumber) {
+            bankRows.push({
+              label: tr('invoice.accountNo', 'Account no.'),
+              value: bank.accountNumber,
               mono: true,
             });
           }

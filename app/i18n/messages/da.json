@@ -1028,6 +1028,7 @@
   "app.jobsPage.viewWeek": "Uge",
   "app.jobsPage.viewMonth": "Måned",
   "app.jobsPage.viewYear": "År",
+  "app.jobsPage.whatsAhead": "Hvad er planlagt",
   "app.jobsPage.cancelled": "Annulleret",
   "app.jobsPage.totalHours": "Timer i alt:",
   "app.jobsPage.driveMins": "({{mins}} min kørsel)",
@@ -1993,5 +1994,11 @@
   "app.pipeline.resendTitle": "Send tilbud igen",
   "app.pipeline.resendBody": "Send tilbudslinket igen. Du kan bruge en anden e-mail, hvis du vil.",
   "app.pipeline.description": "Beskrivelse",
-  "app.pipeline.suggestedDays": "Foreslåede dage"
+  "app.pipeline.suggestedDays": "Foreslåede dage",
+  "app.demo.bannerTitle": "Dette er en demo.",
+  "app.demo.bannerBody": "Prøv alt — e-mails og SMS bliver aldrig sendt.",
+  "app.demo.bannerExpires": "Slettes {day}.",
+  "app.demo.bannerCta": "Kom gratis i gang",
+  "settings.business.logo.demoLocked": "Demoer bruger PathPilo-logoet. Upload dit eget, når du opretter en rigtig konto.",
+  "app.demo.settingsHidden": "Indstillinger er låst i demoen — kig i stedet på jobs, runder og fakturaer."
 }

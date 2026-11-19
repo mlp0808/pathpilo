@@ -41,7 +41,10 @@ function displayLocaleForCountry(countryCode) {
 function documentDateLocale(countryCode) {
   const country = resolveCountry(countryCode);
   if (country.invoiceLocale === 'da') return 'da-DK';
-  return String(countryCode || '').toUpperCase() === 'US' ? 'en-US' : 'en-GB';
+  const code = String(countryCode || '').toUpperCase();
+  if (code === 'US') return 'en-US';
+  if (code === 'CA') return 'en-CA';
+  return 'en-GB';
 }
 
 function timezoneForCountry(countryCode) {

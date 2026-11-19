@@ -1,44 +1,64 @@
 'use client'
 
-import { CheckCircleIcon } from '@heroicons/react/24/solid'
-import { SUPPORTED_COUNTRIES } from '@/app/config/countryRules'
+import { useMemo } from 'react'
+import SearchableSelect, { type SearchableGroup } from '@/app/components/ui/SearchableSelect'
+import {
+  SUPPORTED_COUNTRIES,
+  countryMatchesQuery,
+  countryRules,
+  type CountryRule,
+} from '@/app/config/countryRules'
 
-/** Business-country picker for the company onboarding step. */
+/** Business-country picker: searchable, with the detected country offered first. */
 export default function CountrySelect({
   value,
   onChange,
   invalid = false,
+  suggestedCountryCode = null,
 }: {
   value: string
   onChange: (countryCode: string) => void
   invalid?: boolean
+  /** Guessed from the visitor's location; pinned above the full list. */
+  suggestedCountryCode?: string | null
 }) {
+  const groups = useMemo((): SearchableGroup[] => {
+    const suggested = suggestedCountryCode ? countryRules[suggestedCountryCode.toUpperCase()] : null
+    const rest = SUPPORTED_COUNTRIES.filter((c) => c.countryCode !== suggested?.countryCode)
+    const out: SearchableGroup[] = []
+    if (suggested) {
+      out.push({ label: 'Suggested', options: [toOption(suggested)] })
+    }
+    out.push({
+      label: suggested ? 'All countries' : undefined,
+      options: rest.map(toOption),
+    })
+    return out
+  }, [suggestedCountryCode])
+
   return (
-    <div role="radiogroup" className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-      {SUPPORTED_COUNTRIES.map((country) => {
-        const selected = country.countryCode === value
-        return (
-          <button
-            key={country.countryCode}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            onClick={() => onChange(country.countryCode)}
-            className={[
-              'relative flex items-center gap-2.5 rounded-xl border bg-white px-3.5 py-3 text-left text-sm transition-all',
-              selected
-                ? 'border-accent-500 ring-2 ring-accent-500/15 font-medium text-gray-900'
-                : invalid
-                  ? 'border-red-300 text-gray-700 hover:border-red-400'
-                  : 'border-gray-200/90 text-gray-700 hover:border-gray-300',
-            ].join(' ')}
-          >
-            <span className="text-lg leading-none" aria-hidden>{country.flag}</span>
-            <span className="truncate">{country.countryName}</span>
-            {selected && <CheckCircleIcon className="ml-auto h-4 w-4 flex-none text-accent-500" />}
-          </button>
-        )
-      })}
-    </div>
+    <SearchableSelect
+      value={value}
+      groups={groups}
+      onChange={onChange}
+      invalid={invalid}
+      ariaLabel="Business country"
+      placeholder="Choose your country"
+      searchPlaceholder="Search countries…"
+      emptyLabel="No country matches that search"
+      matches={(option, query) => {
+        const rule = countryRules[option.value]
+        return rule ? countryMatchesQuery(rule, query) : true
+      }}
+    />
   )
+}
+
+function toOption(rule: CountryRule) {
+  return {
+    value: rule.countryCode,
+    label: rule.countryName,
+    prefix: rule.flag,
+    keywords: [rule.countryCode, ...rule.aliases],
+  }
 }

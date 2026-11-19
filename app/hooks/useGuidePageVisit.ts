@@ -3,10 +3,10 @@
 import { useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import { apiUrl } from '@/app/utils/api'
-import { PATH_TO_VISIT, requestMissionsRefresh } from '@/app/config/missions'
+import { PATH_TO_VISIT, requestGuidesRefresh } from '@/app/config/guideEvents'
 
-/** Records that this company has opened a mission-related page. */
-export default function useMissionPageVisit() {
+/** Records that this company has opened a page a guide step can wait on. */
+export default function useGuidePageVisit() {
   const pathname = usePathname()
   const lastSent = useRef<string>('')
 
@@ -29,7 +29,7 @@ export default function useMissionPageVisit() {
       body: JSON.stringify({ page }),
     })
       .then((res) => {
-        if (res.ok) requestMissionsRefresh()
+        if (res.ok) requestGuidesRefresh()
       })
       .catch(() => {
         lastSent.current = ''

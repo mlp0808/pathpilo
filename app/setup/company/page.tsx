@@ -13,6 +13,7 @@ import SetupWizardLayout, {
 import IndustrySelect from '@/app/components/setup/IndustrySelect'
 import CountrySelect from '@/app/components/setup/CountrySelect'
 import { advanceOnboardingProgress, patchSessionOnboardingStep } from '../../utils/onboardingClient'
+import { detectCountryCode } from '../../utils/detectCountry'
 
 const EMPTY_ADDRESS = { address: '', city: '', zipCode: '', state: '' }
 
@@ -27,6 +28,8 @@ export default function CompanySetupPage() {
   })
   /** Empty until the owner picks one; the address fields depend on it. */
   const [countryCode, setCountryCode] = useState('')
+  /** Guessed from the visitor's location — prefilled, pinned to the top of the picker. */
+  const [suggestedCountry, setSuggestedCountry] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [showErrors, setShowErrors] = useState(false)
@@ -80,6 +83,22 @@ export default function CompanySetupPage() {
     loadCompany()
     return () => ac.abort()
   }, [user])
+
+  // Preselect where we think they are. Never overrides a country the owner (or
+  // a previous visit to this step) already set.
+  useEffect(() => {
+    const ac = new AbortController()
+    detectCountryCode(ac.signal)
+      .then((detected) => {
+        if (!detected || ac.signal.aborted) return
+        setSuggestedCountry(detected)
+        setCountryCode((prev) => prev || detected)
+      })
+      .catch(() => {
+        /* the picker just starts empty */
+      })
+    return () => ac.abort()
+  }, [])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     markFormTouched()
@@ -250,6 +269,7 @@ export default function CompanySetupPage() {
           <CountrySelect
             value={countryCode}
             invalid={showErrors && countryMissing}
+            suggestedCountryCode={suggestedCountry}
             onChange={handleCountryChange}
           />
           {showErrors && countryMissing ? (

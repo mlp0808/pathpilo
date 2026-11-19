@@ -6,6 +6,7 @@
 
 const jwt = require('jsonwebtoken');
 const { trackEvent, touchSession, isDuplicate, trackingEnabled } = require('../utils/activityEvents');
+const { isDemoRequest } = require('../utils/demoGuard');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -15,6 +16,8 @@ const EXCLUDED = [
   /^\/api\/auth\//,
   /^\/api\/admin(\/|$)/,
   /^\/api\/events(\/|$)/,
+  /^\/api\/guides(\/|$)/,
+  /\/webhook$/,
   /^\/api\/notifications\//,
   /^\/api\/public\//,
   /^\/api\/stripe\/webhook/,
@@ -244,7 +247,7 @@ function sniffEntity(responseBody) {
 }
 
 function activityTracker(req, res, next) {
-  if (!WRITE_METHODS.has(req.method) || !trackingEnabled()) return next();
+  if (!WRITE_METHODS.has(req.method) || !trackingEnabled() || isDemoRequest()) return next();
   const apiPath = req.path;
   if (!apiPath.startsWith('/api/') || EXCLUDED.some((rx) => rx.test(apiPath))) return next();
 
@@ -295,4 +298,4 @@ function activityTracker(req, res, next) {
   next();
 }
 
-module.exports = { activityTracker, describe, decodeActor };
+module.exports = { activityTracker, describe, decodeActor, EXCLUDED, WRITE_METHODS };

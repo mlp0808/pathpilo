@@ -1566,8 +1566,8 @@ async function saveDailyRoute(route: UserRoute, date: string, name?: string | nu
       console.error('[planner] daily-routes save failed:', res.status, await res.text())
     } else {
       try {
-        const { requestMissionsRefresh } = await import('@/app/config/missions')
-        requestMissionsRefresh()
+        const { requestGuidesRefresh } = await import('@/app/config/guideEvents')
+        requestGuidesRefresh()
       } catch { /* ignore */ }
     }
   } catch (err) {

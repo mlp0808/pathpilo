@@ -1028,6 +1028,7 @@
   "app.jobsPage.viewWeek": "Week",
   "app.jobsPage.viewMonth": "Month",
   "app.jobsPage.viewYear": "Year",
+  "app.jobsPage.whatsAhead": "What's ahead",
   "app.jobsPage.cancelled": "Cancelled",
   "app.jobsPage.totalHours": "Total hour:",
   "app.jobsPage.driveMins": "({{mins}}m drive)",
@@ -1993,5 +1994,11 @@
   "app.pipeline.resendTitle": "Resend offer",
   "app.pipeline.resendBody": "Send the offer link again. You can use a different email if you need to.",
   "app.pipeline.description": "Description",
-  "app.pipeline.suggestedDays": "Suggested days"
+  "app.pipeline.suggestedDays": "Suggested days",
+  "app.demo.bannerTitle": "This is a demo workspace.",
+  "app.demo.bannerBody": "Play with anything — emails and texts are never sent.",
+  "app.demo.bannerExpires": "Deleted on {day}.",
+  "app.demo.bannerCta": "Start for free",
+  "settings.business.logo.demoLocked": "Demo workspaces use the PathPilo logo. Upload your own after you create a real account.",
+  "app.demo.settingsHidden": "Settings stay locked in the demo — look around the jobs, rounds and invoices instead."
 }

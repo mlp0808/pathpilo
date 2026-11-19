@@ -222,7 +222,6 @@ function LoginForm() {
     )
   }
 
-  // Always show the public demo credentials (seeded via `node public-demo-seed.js`).
   const showDemo = true
 
   return (
@@ -451,19 +450,21 @@ function LoginForm() {
                 Free trial · No credit card · Cancel anytime
               </p>
 
-              {showDemo && (
-                <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Try the demo</p>
-                  <div className="space-y-1 text-xs text-gray-400">
-                    <p>
-                      <span className="font-medium text-gray-300">Email:</span> demo@pathpilo.com
-                    </p>
-                    <p>
-                      <span className="font-medium text-gray-300">Password:</span> demo1234
-                    </p>
-                    <p className="pt-1 text-gray-500">One-person service company with a full 2026 schedule.</p>
-                  </div>
-                </div>
+              {showDemo && !inviteToken && (
+                <Link
+                  href="/demo"
+                  className="group mt-6 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 transition-colors hover:border-white/20 hover:bg-white/10"
+                >
+                  <span>
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-gray-400">Try the demo</span>
+                    <span className="mt-1 block text-xs text-gray-500">
+                      A year of real-looking work from a solo window cleaner. No sign-up.
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold text-white transition-transform group-hover:translate-x-0.5">
+                    →
+                  </span>
+                </Link>
               )}
             </>
           )}

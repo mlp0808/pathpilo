@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { resolveAssetUrl } from '@/app/utils/api'
-import { bankSchemeFor } from '@/app/utils/bankTransfer'
+import { bankSchemeFor, localBankCodeLabels } from '@/app/utils/bankTransfer'
 import Link from 'next/link'
 import {
   CheckCircleIcon,
@@ -508,6 +508,21 @@ export function DigitalInvoiceView({
                           detailRows.push({
                             label: tr('invoice.iban', 'IBAN'),
                             value: m.bank.iban.replace(/(.{4})/g, '$1 ').trim(),
+                            mono: true,
+                          })
+                        }
+                      } else if (bankScheme === 'local') {
+                        if (m.bank.registrationNumber) {
+                          detailRows.push({
+                            label: localBankCodeLabels(inv.company.countryCode).label,
+                            value: m.bank.registrationNumber,
+                            mono: true,
+                          })
+                        }
+                        if (m.bank.accountNumber) {
+                          detailRows.push({
+                            label: tr('invoice.accountNo', 'Account no.'),
+                            value: m.bank.accountNumber,
                             mono: true,
                           })
                         }

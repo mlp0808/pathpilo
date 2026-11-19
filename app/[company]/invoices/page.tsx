@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import AppLayout from '@/app/components/AppLayout'
-import MissionsPanel from '@/app/components/missions/MissionsPanel'
 import { useAppI18n } from '@/app/components/I18nProvider'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoneyExact, getCountryRule } from '@/app/config/countryRules'
@@ -331,9 +330,6 @@ export default function InvoicesListPage() {
   return (
     <AppLayout>
       <div>
-        {companySlug && (
-          <MissionsPanel companySlug={companySlug} className="mb-3 sm:mb-4" />
-        )}
         <div className="flex items-center justify-between gap-3 mb-5 sm:mb-6">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-bold text-primary-500 truncate">{t('app.invoicesList.title', 'Invoices')}</h1>

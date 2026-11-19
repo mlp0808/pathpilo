@@ -41,6 +41,9 @@ app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+const { demoRequestContext, ensureDemoSchema, outboundBlockReason } = require('./utils/demoGuard');
+app.use(demoRequestContext);
+
 const { multiUserWorkspaceGate } = require('./middleware/multiUserWorkspaceGate');
 const { ensureSchedulingSchema } = require('./services/routePlanner/ensureSchedulingSchema');
 app.use(multiUserWorkspaceGate);
@@ -94,6 +97,9 @@ const emailTransporter = (() => {
 // Unified email sending function
 async function sendEmail(options) {
   const { to, from, subject, text, html, attachments } = options;
+  if (await outboundBlockReason({ companyId: options.companyId, emails: [to] })) {
+    return { blocked: true, id: 'demo-blocked' };
+  }
 
   try {
     if (emailTransporter.constructor.name === 'Resend') {
@@ -216,6 +222,7 @@ app.use('/api/public/invoices', publicInvoiceRoutes);
 // Admin routes must be mounted BEFORE /api/admin/users so that
 // GET /api/admin/users hits the admin list endpoint, not the company-users route.
 app.use('/api/admin/insights', require('./routes/admin-insights'));
+app.use('/api/admin/guides', require('./routes/admin-guides'));
 app.use('/api/admin', adminRoutes);
 app.use('/api/events', require('./routes/events'));
 app.use('/api/users', companyUsersRoutes); // Company users
@@ -230,6 +237,9 @@ app.use('/api/integrations', integrationRoutes);
 app.use('/api/work-hours', workHoursRoutes);
 app.use('/api/email-templates', emailTemplateRoutes);
 app.use('/api/video-guides', videoGuideRoutes);
+app.use('/api/guides', require('./routes/guides'));
+app.use('/api/insights', require('./routes/insights'));
+app.use('/api/demo', require('./routes/demo'));
 app.use('/api/daily-routes', dailyRoutesRoutes);
 app.use('/api/rounds', roundsRoutes);
 app.use('/api/round-templates', roundTemplateRoutes);
@@ -333,6 +343,13 @@ process.on('SIGINT', () => {
     console.error('[secureNotes] FATAL (encrypt/decrypt will fail):', err.message || err);
   }
 
+  // The email/SMS ticks filter on companies.is_demo, so it must exist first.
+  try {
+    await ensureDemoSchema(pool);
+  } catch (err) {
+    console.error('[demoSchema] migration failed:', err.message || err);
+  }
+
   app.listen(port, () => {
     console.log(`🚀 PathPilo API Server running on port ${port}`);
     console.log(`📊 Health check: http://localhost:${port}/api/health`);
@@ -387,6 +404,14 @@ process.on('SIGINT', () => {
     ensureCompanyOnboardingSchema(pool).catch((e) =>
       console.warn('[companyOnboardingSchema] migration failed:', e.message || e)
     );
+
+    // Admin-managed in-app guides + per-user progress. Seeds the starter
+    // guides on a database that has none.
+    require('./services/guidesSchema').ensureGuidesSchema(pool).catch((e) =>
+      console.warn('[guidesSchema] migration failed:', e.message || e)
+    );
+
+    require('./services/demo/demoCleanup').startDemoCleanup();
   });
 })();
 

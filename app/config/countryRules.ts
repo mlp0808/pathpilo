@@ -1,12 +1,14 @@
 import countryData from '@/shared/countries.json'
 
-export type CurrencyCode = 'DKK' | 'SEK' | 'NOK' | 'EUR' | 'GBP' | 'USD'
+export type CurrencyCode =
+  | 'DKK' | 'SEK' | 'NOK' | 'EUR' | 'GBP' | 'USD'
+  | 'CAD' | 'AUD' | 'NZD' | 'CHF' | 'ISK'
 
 /** Postal fields shown after the street line, in the order the country writes them. */
 export type LocalityField = 'zip' | 'city' | 'state'
 
-/** How bank details are collected for bank-transfer payments. */
-export type BankScheme = 'iban' | 'gb' | 'us' | 'dk'
+/** How bank details are collected for bank-transfer payments. `local` = free-text details. */
+export type BankScheme = 'iban' | 'gb' | 'us' | 'dk' | 'local'
 
 export interface CountryAddressRule {
   order: LocalityField[]
@@ -27,6 +29,8 @@ export interface CountryAddressRule {
 export interface CountryRule {
   countryCode: string
   countryName: string
+  /** Extra search terms for the country picker (local names, "UK", "Holland"). */
+  aliases: string[]
   flag: string
   postalCodeLabel: string
   stateLabel: string
@@ -60,6 +64,9 @@ function toRule(code: string, raw: RawCountry): CountryRule {
   return {
     countryCode: code,
     countryName: raw.name,
+    aliases: Array.isArray((raw as { aliases?: string[] }).aliases)
+      ? (raw as { aliases?: string[] }).aliases as string[]
+      : [],
     flag: raw.flag,
     postalCodeLabel: address.postalLabel,
     stateLabel: address.stateLabel || 'State/Region',
@@ -90,7 +97,29 @@ export const countryRules: Record<string, CountryRule> = Object.fromEntries(
 )
 
 /** Countries a company can operate in, in the order the picker shows them. */
-export const SUPPORTED_COUNTRIES: CountryRule[] = countryData.pickerOrder.map((code) => countryRules[code])
+export const SUPPORTED_COUNTRIES: CountryRule[] = countryData.pickerOrder
+  .map((code) => countryRules[code])
+  .filter(Boolean)
+
+/**
+ * True when the typed query matches this country by name, ISO code or a local
+ * alias. Accent-insensitive so "espana" finds España.
+ */
+export function countryMatchesQuery(rule: CountryRule, query: string): boolean {
+  const q = normalizeForSearch(query)
+  if (!q) return true
+  if (normalizeForSearch(rule.countryCode).startsWith(q)) return true
+  if (normalizeForSearch(rule.countryName).includes(q)) return true
+  return rule.aliases.some((alias) => normalizeForSearch(alias).includes(q))
+}
+
+function normalizeForSearch(value: string): string {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
 
 export function isSupportedCountry(countryCode?: string | null): boolean {
   return Boolean(countryRules[String(countryCode || '').trim().toUpperCase()])

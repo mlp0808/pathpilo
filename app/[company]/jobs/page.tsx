@@ -6,8 +6,7 @@ import { useUser } from '@/app/hooks/useUser'
 import { refreshNotifications } from '@/app/hooks/useNotifications'
 import { OffersOutPill, offersOutFor, useOffersOutByDate } from '@/app/components/pipeline/OffersOut'
 import AppLayout from '@/app/components/AppLayout'
-import MissionsPanel from '@/app/components/missions/MissionsPanel'
-import { requestMissionsRefresh } from '@/app/config/missions'
+import { requestGuidesRefresh } from '@/app/config/guideEvents'
 import CreateJob from '@/app/components/CreateJob'
 import CreateSubscription from '@/app/components/CreateSubscription'
 import JobViewSlideout from '@/app/components/JobViewSlideout'
@@ -34,7 +33,8 @@ import { useCompanyCountryCode } from '@/app/hooks/useCompanyCountryCode'
 import { getEmailTemplate } from '@/app/utils/emailTemplates'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { useAppI18n } from '@/app/components/I18nProvider'
-import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon, ArchiveBoxArrowDownIcon, UserIcon } from '@heroicons/react/24/outline'
+import Link from 'next/link'
+import { CheckIcon, PlusIcon, UserCircleIcon, DocumentTextIcon, ClockIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, EllipsisHorizontalIcon, ArchiveBoxArrowDownIcon, UserIcon, ArrowTrendingUpIcon } from '@heroicons/react/24/outline'
 import type { UserRoute, RouteJob, IsolatedRouteSeg } from '@/app/components/RouteMap'
 import {
   buildDayJobsFingerprint,
@@ -2370,7 +2370,7 @@ function JobsPageContent() {
 
       setJobs(applyPatch)
       setAllJobs(applyPatch)
-      requestMissionsRefresh()
+      requestGuidesRefresh()
     } catch (error) {
       console.error('Failed to update job status from calendar:', error)
     }
@@ -3076,7 +3076,7 @@ function JobsPageContent() {
         if (!saveRes.ok) {
           console.error('[Save & Apply] daily-routes save failed:', saveRes.status, await saveRes.text())
         } else {
-          requestMissionsRefresh()
+          requestGuidesRefresh()
           const body = await saveRes.json().catch(() => null)
           console.log('[Save & Apply] saved to DB', { round_id: body?.round_id })
           if (totalDriveMins != null) {
@@ -3471,22 +3471,6 @@ function JobsPageContent() {
     return (
         <AppLayout>
             <div className="space-y-4 overflow-x-hidden max-w-full flex-1 flex flex-col min-h-0">
-                {viewMode !== 'day' && companySlug && (
-                  <MissionsPanel
-                    companySlug={companySlug}
-                    onLaunch={(kind) => {
-                      if (kind === 'add_job') {
-                        openCreateJobBlank()
-                        return true
-                      }
-                      if (kind === 'add_subscription') {
-                        setIsSubscriptionModalOpen(true)
-                        return true
-                      }
-                      return false
-                    }}
-                  />
-                )}
                 {apiError && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
                     <div className="text-sm text-red-800 font-medium">{t('app.jobsPage.errorTitle')}</div>
@@ -3605,6 +3589,15 @@ function JobsPageContent() {
                             <CalendarDaysIcon className="w-4 h-4" />
                             {t('app.weekPlanner.title', 'Plan week')}
                           </button>
+                        )}
+                        {companySlug && (
+                          <Link
+                            href={`/${companySlug}/insights/jobs?tab=ahead`}
+                            className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50 flex-shrink-0"
+                          >
+                            <ArrowTrendingUpIcon className="w-4 h-4" />
+                            {t('app.jobsPage.whatsAhead', "What's ahead")}
+                          </Link>
                         )}
                     </div>
                 </div>}
@@ -4901,15 +4894,20 @@ function JobsPageContent() {
                                                               <>
                                                                 {plannedVisits.length > 0 && (
                                                                   <div className="rounded-2xl border-2 border-accent-200/80 bg-accent-50/40 overflow-hidden mb-2">
-                                                                    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-accent-100 bg-white/70">
-                                                                      <div className="min-w-0">
-                                                                        <p className="text-[12.5px] font-semibold text-gray-900 truncate">
+                                                                    <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-b border-accent-100 bg-white/70">
+                                                                      <button
+                                                                        type="button"
+                                                                        onClick={() => openMapPlanner(dateString, primaryPlannedMeta?.user_id)}
+                                                                        className="min-w-0 flex-1 flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-accent-50/80 transition-colors"
+                                                                      >
+                                                                        <p className="min-w-0 flex-1 text-[12.5px] font-semibold text-gray-900 truncate">
                                                                           {primaryPlannedMeta?.name?.trim()
                                                                             || t('app.jobsPage.plannedRound', 'Planned route')}
                                                                           {' · '}
                                                                           {t('app.rounds.stopCount', '{{n}} stops').replace('{{n}}', String(plannedVisits.length))}
                                                                         </p>
-                                                                      </div>
+                                                                        <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" aria-hidden />
+                                                                      </button>
                                                                       {primaryPlannedMeta && primaryPlannedMeta.id > 0 && (
                                                                         <button
                                                                           type="button"
@@ -5029,7 +5027,7 @@ function JobsPageContent() {
                       pendingFocusJobRef.current = Number(info.jobId)
                     }
                     fetchJobsForWeek()
-                    requestMissionsRefresh()
+                    requestGuidesRefresh()
                 }}
                 initialDate={createJobPrefillDate || undefined}
                 initialAssignedUserId={createJobPrefillUserId}
@@ -5052,7 +5050,7 @@ function JobsPageContent() {
                     setCreateJobPrefillDate(null)
                     setCreateJobPrefillUserId(null)
                     fetchJobsForWeek()
-                    requestMissionsRefresh()
+                    requestGuidesRefresh()
                 }}
             />
 

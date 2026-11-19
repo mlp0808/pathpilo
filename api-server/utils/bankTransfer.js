@@ -3,7 +3,9 @@ const { bankSchemeForCountry, isSupportedCountry } = require('./countryRules');
 /**
  * How the company's clients pay by bank transfer:
  * gb = sort code + account no., us = routing + account no.,
- * dk = reg. no. + account no. or IBAN, iban = IBAN.
+ * dk = reg. no. + account no. or IBAN, iban = IBAN,
+ * local = bank/branch code + account no. in the country's own format (AU BSB,
+ * NZ bank-branch, CA transit) — free text, no digit rules.
  * `registrationNumber` holds the sort code / routing number / reg. no.
  */
 function bankSchemeFor(countryCode) {
@@ -12,6 +14,16 @@ function bankSchemeFor(countryCode) {
 
 function usesUkBankFields(countryCode) {
   return bankSchemeFor(countryCode) === 'gb';
+}
+
+/** What the `local` scheme calls its bank/branch code in each country. */
+function localBankCodeLabel(countryCode) {
+  switch (String(countryCode || '').trim().toUpperCase()) {
+    case 'AU': return 'BSB';
+    case 'NZ': return 'Bank / branch';
+    case 'CA': return 'Transit & institution no.';
+    default: return 'Bank code';
+  }
 }
 
 function normalizeDigits(value) {
@@ -63,6 +75,9 @@ function validateBankTransferConfig(config, enabled, countryCode) {
       if (!isValidDkRegNumber(regNo)) return 'Reg. no. must be 4 digits.';
       if (!isValidDkAccountNumber(accountNo)) return 'Account number must be 6–10 digits.';
       return null;
+    case 'local':
+      if (!accountNo) return 'Account number is required before enabling.';
+      return null;
     default:
       if (!iban) return 'IBAN is required before enabling.';
       return null;
@@ -72,6 +87,7 @@ function validateBankTransferConfig(config, enabled, countryCode) {
 module.exports = {
   bankSchemeFor,
   usesUkBankFields,
+  localBankCodeLabel,
   normalizeBankTransferConfig,
   validateBankTransferConfig,
 };

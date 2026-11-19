@@ -56,12 +56,19 @@ export default function AppBreadcrumbs() {
 
   const homeHref = slug ? `/${slug}/dashboard` : '/dashboard'
 
+  // On stats pages "jobs" is the work itself, not the schedule screen.
+  const inInsights = rest[0] === 'insights'
+
   const crumbs = rest.map((segment, idx) => {
     const isNumeric = /^\d+$/.test(segment)
     const href = `${slug ? `/${slug}` : ''}/${rest.slice(0, idx + 1).join('/')}`
     return {
       key: `${segment}-${idx}`,
-      label: isNumeric ? `#${segment}` : labels[segment] || humanize(segment),
+      label: isNumeric
+        ? `#${segment}`
+        : inInsights && segment === 'jobs'
+          ? 'Jobs'
+          : labels[segment] || humanize(segment),
       href,
       // Detail ids are never linkable on their own.
       linkable: !isNumeric,

@@ -7,6 +7,7 @@ import { useCompanyCountryCode } from '../../hooks/useCompanyCountryCode'
 import {
   isBankTransferConfigComplete,
   bankSchemeFor,
+  localBankCodeLabels,
   validateBankTransferForEnable,
   type BankTransferConfig,
 } from '../../utils/bankTransfer'
@@ -794,10 +795,15 @@ function PaymentOptionRow({
                           'settings.invoices.payment.dkHelp',
                           'Danish clients pay with reg. no. and account number. Add an IBAN too if you have clients abroad.',
                         )
-                      : t(
-                          'settings.invoices.payment.euHelp',
-                          'Clients will see these details on your invoices when they pay by bank transfer.',
-                        )}
+                      : bankScheme === 'local'
+                        ? t(
+                            'settings.invoices.payment.localHelp',
+                            'Enter your bank details exactly as your clients need to type them. They are printed on your invoices.',
+                          )
+                        : t(
+                            'settings.invoices.payment.euHelp',
+                            'Clients will see these details on your invoices when they pay by bank transfer.',
+                          )}
               </SettingsHint>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field
@@ -842,6 +848,21 @@ function PaymentOptionRow({
                       placeholder="DK50 0040 0440 1162 43"
                       value={String(draft.config.iban || '')}
                       onChange={(v) => onDraftChange({ config: { iban: v } })}
+                    />
+                  </>
+                ) : bankScheme === 'local' ? (
+                  <>
+                    <Field
+                      label={localBankCodeLabels(countryCode).label}
+                      placeholder={localBankCodeLabels(countryCode).placeholder}
+                      value={String(draft.config.registrationNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { registrationNumber: v } })}
+                    />
+                    <Field
+                      label={t('settings.invoices.payment.accountNumber', 'Account number')}
+                      required
+                      value={String(draft.config.accountNumber || '')}
+                      onChange={(v) => onDraftChange({ config: { accountNumber: v } })}
                     />
                   </>
                 ) : bankScheme === 'gb' ? (

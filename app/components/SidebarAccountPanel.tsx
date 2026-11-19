@@ -16,6 +16,7 @@ import {
   buildSettingsNavSections,
   isSettingsNavItemActive,
 } from '../config/settingsNav'
+import { isDemoWorkspace, leaveDemoForSignup } from '../utils/demoSession'
 
 interface SmsUsageSummary {
   hasPlan: boolean
@@ -70,7 +71,8 @@ export default function SidebarAccountPanel({
   const panelRef = useRef<HTMLDivElement>(null)
   const [panelPos, setPanelPos] = useState({ top: 0, left: 0 })
 
-  const sections = buildSettingsNavSections(t, companySlug)
+  const demoLocked = isDemoWorkspace()
+  const sections = demoLocked ? [] : buildSettingsNavSections(t, companySlug)
 
   const fetchSms = useCallback(async () => {
     const token = localStorage.getItem('token')
@@ -93,9 +95,9 @@ export default function SidebarAccountPanel({
   }, [])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || demoLocked) return
     void fetchSms()
-  }, [open, fetchSms])
+  }, [open, demoLocked, fetchSms])
 
   const updatePanelPosition = useCallback(() => {
     if (!open || placement === 'drawer' || !triggerRef.current) return
@@ -199,79 +201,102 @@ export default function SidebarAccountPanel({
         <p className="mt-0.5 text-sm font-semibold text-gray-900 truncate">{userName}</p>
       </div>
 
-      <div className="shrink-0 px-4 py-2 border-b border-gray-100">
-        {smsLoading ? (
-          <p className="text-[11px] text-gray-400">{t('app.sidebar.smsLoading', 'Loading…')}</p>
-        ) : sms?.hasPlan ? (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500">
-              <span className="flex items-center gap-1 min-w-0 truncate">
-                <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 text-accent-500 flex-shrink-0" />
-                <span className="truncate">
-                  {sms.used.toLocaleString()} / {sms.included.toLocaleString()}
-                </span>
-              </span>
-              <span className="flex-shrink-0 text-gray-400">
-                {sms.remaining.toLocaleString()} {t('app.sidebar.smsLeft', 'left')}
-              </span>
-            </div>
-            <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  smsPct > 100 ? 'bg-red-500' : smsPct > 80 ? 'bg-amber-500' : 'bg-accent-500'
-                }`}
-                style={{ width: `${Math.min(100, smsPct)}%` }}
-              />
-            </div>
-          </div>
-        ) : (
-          <p className="text-[11px] text-gray-400 flex items-center gap-1.5">
-            <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 text-gray-300 flex-shrink-0" />
-            <span>{t('app.sidebar.smsNoneShort', 'No SMS plan')}</span>
+      {demoLocked ? (
+        <div className="px-4 py-3 space-y-3">
+          <p className="text-xs leading-relaxed text-gray-500">
+            {t(
+              'app.demo.settingsHidden',
+              'Settings stay locked in the demo — look around the jobs, rounds and invoices instead.',
+            )}
           </p>
-        )}
-      </div>
-
-      <nav className="px-2 py-2 pb-2.5">
-        {sections.map((section, sectionIdx) => (
-          <div key={section.label || `section-${sectionIdx}`} className={sectionIdx === 0 ? '' : 'mt-3'}>
-            {section.label ? (
-              <p className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
-                {section.label}
-              </p>
-            ) : null}
-            <div className="space-y-0.5">
-              {section.items.map((item) => {
-                const Icon = item.icon
-                const isActive = isSettingsNavItemActive(pathname, item)
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => {
-                      setOpen(false)
-                      onNavigate?.()
-                    }}
-                    className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                      isActive
-                        ? 'bg-gray-100 text-gray-900 font-semibold'
-                        : 'text-gray-600 font-medium hover:bg-gray-50 hover:text-gray-900'
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false)
+              leaveDemoForSignup()
+            }}
+            className="w-full rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-600"
+          >
+            {t('app.demo.bannerCta', 'Start for free')}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="shrink-0 px-4 py-2 border-b border-gray-100">
+            {smsLoading ? (
+              <p className="text-[11px] text-gray-400">{t('app.sidebar.smsLoading', 'Loading…')}</p>
+            ) : sms?.hasPlan ? (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500">
+                  <span className="flex items-center gap-1 min-w-0 truncate">
+                    <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 text-accent-500 flex-shrink-0" />
+                    <span className="truncate">
+                      {sms.used.toLocaleString()} / {sms.included.toLocaleString()}
+                    </span>
+                  </span>
+                  <span className="flex-shrink-0 text-gray-400">
+                    {sms.remaining.toLocaleString()} {t('app.sidebar.smsLeft', 'left')}
+                  </span>
+                </div>
+                <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      smsPct > 100 ? 'bg-red-500' : smsPct > 80 ? 'bg-amber-500' : 'bg-accent-500'
                     }`}
-                  >
-                    <Icon
-                      className={`h-4 w-4 flex-shrink-0 ${
-                        isActive ? 'text-gray-900' : 'text-gray-400'
-                      }`}
-                      aria-hidden
-                    />
-                    <span className="truncate">{item.name}</span>
-                  </Link>
-                )
-              })}
-            </div>
+                    style={{ width: `${Math.min(100, smsPct)}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-400 flex items-center gap-1.5">
+                <ChatBubbleLeftRightIcon className="h-3.5 w-3.5 text-gray-300 flex-shrink-0" />
+                <span>{t('app.sidebar.smsNoneShort', 'No SMS plan')}</span>
+              </p>
+            )}
           </div>
-        ))}
-      </nav>
+
+          <nav className="px-2 py-2 pb-2.5">
+            {sections.map((section, sectionIdx) => (
+              <div key={section.label || `section-${sectionIdx}`} className={sectionIdx === 0 ? '' : 'mt-3'}>
+                {section.label ? (
+                  <p className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-400">
+                    {section.label}
+                  </p>
+                ) : null}
+                <div className="space-y-0.5">
+                  {section.items.map((item) => {
+                    const Icon = item.icon
+                    const isActive = isSettingsNavItemActive(pathname, item)
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => {
+                          setOpen(false)
+                          onNavigate?.()
+                        }}
+                        className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                          isActive
+                            ? 'bg-gray-100 text-gray-900 font-semibold'
+                            : 'text-gray-600 font-medium hover:bg-gray-50 hover:text-gray-900'
+                        }`}
+                      >
+                        <Icon
+                          className={`h-4 w-4 flex-shrink-0 ${
+                            isActive ? 'text-gray-900' : 'text-gray-400'
+                          }`}
+                          aria-hidden
+                        />
+                        <span className="truncate">{item.name}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+        </>
+      )}
     </div>
   )
 
@@ -327,10 +352,12 @@ export default function SidebarAccountPanel({
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-accent-500 truncate">{companyName}</p>
           <p className="text-sm font-semibold text-white truncate">{userName}</p>
-          <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-            <Cog6ToothIcon className="h-3 w-3 flex-shrink-0 text-gray-500" aria-hidden />
-            <span>{t('app.sidebar.settings', 'Settings')}</span>
-          </p>
+          {!demoLocked ? (
+            <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+              <Cog6ToothIcon className="h-3 w-3 flex-shrink-0 text-gray-500" aria-hidden />
+              <span>{t('app.sidebar.settings', 'Settings')}</span>
+            </p>
+          ) : null}
         </div>
         <ChevronRightIcon
           className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${

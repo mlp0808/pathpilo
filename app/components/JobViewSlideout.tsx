@@ -16,7 +16,7 @@ import TimePicker from './TimePicker'
 import AddressAutocomplete from './AddressAutocomplete'
 import { getEmailTemplate } from '../utils/emailTemplates'
 import { useAppI18n } from './I18nProvider'
-import { requestMissionsRefresh } from '@/app/config/missions'
+import { requestGuidesRefresh } from '@/app/config/guideEvents'
 import {
   estimateArrivalForJob,
   parsePgIdArray,
@@ -335,6 +335,8 @@ interface JobViewSlideoutProps {
   visitSiblings?: any[]
   /** Open one of the merged sibling jobs instead. */
   onOpenSibling?: (job: any) => void
+  /** Round planner: take this stop off the round without deleting the job. */
+  onRemoveFromRound?: () => void
 }
 
 function visitJobSourceLabel(src: any, t: (key: string, fallback?: string) => string): string {
@@ -667,7 +669,7 @@ ${userName}`
   )
 }
 
-export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange, visitSiblings, onOpenSibling }: JobViewSlideoutProps) {
+export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, deferAssigneeToParent, onAssigneeChange, visitSiblings, onOpenSibling, onRemoveFromRound }: JobViewSlideoutProps) {
   const { t } = useAppI18n()
   const router = useRouter()
   const params = useParams()
@@ -1071,6 +1073,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
         throw new Error(errorData.error || 'Failed to delete job')
       }
 
+      onRemoveFromRound?.()
       onJobUpdated?.()
       onClose()
     } catch (error) {
@@ -1470,7 +1473,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       if (onJobUpdated) {
         onJobUpdated()
       }
-      requestMissionsRefresh()
+      requestGuidesRefresh()
     } catch (error) {
       console.error('Failed to toggle job completion:', error)
       alert('Failed to update job completion status')
@@ -1509,7 +1512,7 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
       }
       fetchJobLogs(jobId)
       onJobUpdated?.()
-      requestMissionsRefresh()
+      requestGuidesRefresh()
     } catch (error) {
       console.error('Failed to complete job:', error)
       alert(error instanceof Error ? error.message : 'Failed to complete job')
@@ -2765,6 +2768,19 @@ export default function JobViewSlideout({ isOpen, onClose, job, onJobUpdated, de
               </button>
             </div>
           </div>
+          {onRemoveFromRound && (
+            <button
+              type="button"
+              onClick={() => {
+                const ok = confirm(t('app.jobView.removeFromRoundConfirm', 'Remove this stop from the round?'))
+                if (!ok) return
+                onRemoveFromRound()
+              }}
+              className="mt-3 w-full rounded-lg border border-white/30 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
+            >
+              {t('app.jobView.removeFromRound', 'Remove from round')}
+            </button>
+          )}
 
           {/* Lock banner when job is on an invoice */}
           {isLocked && (

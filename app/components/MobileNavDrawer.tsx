@@ -20,7 +20,9 @@ import {
   QuestionMarkCircleIcon,
   MapPinIcon,
   ArrowPathRoundedSquareIcon,
+  CubeIcon,
 } from '@heroicons/react/24/outline'
+import { openGuidesPanel } from '../config/guideEvents'
 import { apiUrl } from '../utils/api'
 import { clearClientLocaleStorage } from '../i18n'
 import { useAppI18n } from './I18nProvider'
@@ -35,6 +37,7 @@ import {
   buildSettingsNavSections,
   isSettingsNavItemActive,
 } from '../config/settingsNav'
+import { isDemoWorkspace } from '../utils/demoSession'
 
 type MobileNavTab = 'menu' | 'settings'
 
@@ -100,8 +103,9 @@ export default function MobileNavDrawer({
     companySlugFromPath ||
     ''
 
-  const settingsSections = buildSettingsNavSections(t, companySlug)
-  const showCompanySwitcher = user.companies && user.companies.length > 1
+  const demoLocked = isDemoWorkspace(user as unknown as Record<string, unknown>)
+  const settingsSections = demoLocked ? [] : buildSettingsNavSections(t, companySlug)
+  const showCompanySwitcher = !demoLocked && user.companies && user.companies.length > 1
   const displayName = `${user.firstName} ${user.lastName}`.trim()
   const displayCompany = activeCompany?.name || user.companies?.[0]?.name || ''
 
@@ -122,7 +126,7 @@ export default function MobileNavDrawer({
   const navigation: NavItem[] = [
     { name: t('app.nav.dashboard', 'Dashboard'), href: companySlug ? `/${companySlug}/dashboard` : '/dashboard', icon: HomeIcon },
     { name: t('app.nav.jobs', 'Schedule'), href: jobsBase, icon: ClipboardDocumentListIcon },
-    { name: t('app.nav.map', 'Map'), href: companySlug ? `/${companySlug}/map` : '/map', icon: MapPinIcon, beta: true },
+    { name: t('app.nav.map', 'Map'), href: companySlug ? `/${companySlug}/map` : '/map', icon: MapPinIcon },
     {
       name: t('app.nav.recurring', 'Recurring'),
       href: recurringBase,
@@ -142,7 +146,7 @@ export default function MobileNavDrawer({
       match: [`${companyBase}/leads`, `${companyBase}/offers`],
     },
     { name: t('app.nav.team', 'Team'), href: teamHref, icon: UsersIcon, proOnly: true },
-    { name: t('app.nav.items', 'Items'), href: companySlug ? `/${companySlug}/services` : '/services', icon: Cog6ToothIcon },
+    { name: t('app.nav.items', 'Items'), href: companySlug ? `/${companySlug}/services` : '/services', icon: CubeIcon },
   ]
   const showTeamProBadge = !planLoading && !hasProAccess
 
@@ -152,8 +156,8 @@ export default function MobileNavDrawer({
 
   useEffect(() => {
     if (!isOpen) return
-    setActiveTab(isSettingsPage ? 'settings' : 'menu')
-  }, [isOpen, isSettingsPage])
+    setActiveTab(!demoLocked && isSettingsPage ? 'settings' : 'menu')
+  }, [isOpen, isSettingsPage, demoLocked])
 
   useEffect(() => {
     if (!isOpen) return
@@ -290,14 +294,16 @@ export default function MobileNavDrawer({
           </button>
         </div>
 
-        <div className="shrink-0 flex border-b border-white/10 px-3">
-          <button type="button" className={tabClass('menu')} onClick={() => setActiveTab('menu')}>
-            {t('app.mobileNav.tabMenu', 'Menu')}
-          </button>
-          <button type="button" className={tabClass('settings')} onClick={() => setActiveTab('settings')}>
-            {t('app.mobileNav.tabSettings', 'Settings')}
-          </button>
-        </div>
+        {!demoLocked ? (
+          <div className="shrink-0 flex border-b border-white/10 px-3">
+            <button type="button" className={tabClass('menu')} onClick={() => setActiveTab('menu')}>
+              {t('app.mobileNav.tabMenu', 'Menu')}
+            </button>
+            <button type="button" className={tabClass('settings')} onClick={() => setActiveTab('settings')}>
+              {t('app.mobileNav.tabSettings', 'Settings')}
+            </button>
+          </div>
+        ) : null}
 
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {activeTab === 'menu' ? (
@@ -446,15 +452,17 @@ export default function MobileNavDrawer({
                 )}
 
                 <div className="px-4 py-3 border-t border-white/10 space-y-2">
-                  <a
-                    href="https://help.pathpilo.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose()
+                      openGuidesPanel()
+                    }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-gray-300 hover:text-white hover:bg-white/5 transition-colors rounded-lg text-sm font-medium"
                   >
                     <QuestionMarkCircleIcon className="w-4 h-4 text-accent-500 flex-shrink-0" />
                     <span>{t('app.sidebar.getHelp', 'Get help')}</span>
-                  </a>
+                  </button>
                   <button
                     type="button"
                     onClick={() => setIsVideoGuideOpen(true)}

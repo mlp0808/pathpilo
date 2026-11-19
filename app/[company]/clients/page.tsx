@@ -4,10 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import AppLayout from '../../components/AppLayout'
 import AddClientModal from '../../components/AddClientModal'
-import MissionsPanel from '../../components/missions/MissionsPanel'
 import { useAppI18n } from '../../components/I18nProvider'
 import { apiUrl } from '../../utils/api'
-import { requestMissionsRefresh } from '../../config/missions'
+import { requestGuidesRefresh } from '../../config/guideEvents'
 
 interface Client {
   id: number
@@ -97,7 +96,7 @@ export default function ClientsPage() {
   const handleClientAdded = () => {
     fetchClients()
     setIsAddModalOpen(false)
-    requestMissionsRefresh()
+    requestGuidesRefresh()
   }
 
   const goToClient = (id: number) => {
@@ -108,17 +107,6 @@ export default function ClientsPage() {
   return (
     <AppLayout>
       <div>
-        {companySlug && (
-          <MissionsPanel
-            companySlug={companySlug}
-            className="mb-3 sm:mb-4"
-            onLaunch={(kind) => {
-              if (kind !== 'add_client') return false
-              setIsAddModalOpen(true)
-              return true
-            }}
-          />
-        )}
         {/* Header. On mobile the button collapses to a compact "+ Add" pill
             so the title and total can use the full line width. */}
         <div className="flex items-center justify-between mb-5 sm:mb-6 gap-3">

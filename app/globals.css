@@ -163,6 +163,107 @@
   animation: backdropIn 0.22s var(--ease-out-soft) both;
 }
 
+/* Guide viewer: slides up as a sheet on phones, in from the right on desktop. */
+@keyframes guidePanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes guidePanelInRight {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-guide-panel {
+  animation: guidePanelIn 0.28s var(--ease-spring) both;
+}
+
+@media (min-width: 640px) {
+  .animate-guide-panel {
+    animation: guidePanelInRight 0.26s var(--ease-out-soft) both;
+  }
+}
+
+@keyframes guideBookIn {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-guide-book {
+  animation: guideBookIn 0.3s var(--ease-spring) both;
+}
+
+/* A step that was just completed swells once, so progress feels earned. */
+@keyframes guidePop {
+  0% { transform: scale(1); filter: brightness(1); }
+  40% { transform: scale(1.18, 1.6); filter: brightness(1.15); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+
+.animate-guide-pop {
+  animation: guidePop 0.7s var(--ease-spring) both;
+}
+
+/* Light sweeping across the step you are on. */
+@keyframes guideShine {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+.animate-guide-shine {
+  animation: guideShine 2.2s ease-in-out infinite;
+}
+
+@keyframes guideTrophy {
+  0% { transform: scale(0.6) rotate(-12deg); }
+  50% { transform: scale(1.2) rotate(8deg); }
+  75% { transform: scale(0.95) rotate(-4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+.animate-guide-trophy {
+  animation: guideTrophy 0.8s var(--ease-spring) both;
+}
+
+@keyframes guideFloat {
+  0% { opacity: 0; transform: translateY(4px) scale(0.8); }
+  20% { opacity: 1; transform: translateY(-6px) scale(1); }
+  100% { opacity: 0; transform: translateY(-18px) scale(1); }
+}
+
+.animate-guide-float {
+  animation: guideFloat 1.2s ease-out both;
+}
+
+/* The "Done" stamp lands on a finished task like a rubber stamp. */
+@keyframes guideStamp {
+  0% { opacity: 0; transform: rotate(-14deg) scale(1.8); }
+  60% { opacity: 1; transform: rotate(-9deg) scale(0.94); }
+  100% { opacity: 1; transform: rotate(-10deg) scale(1); }
+}
+
+.animate-guide-stamp {
+  animation: guideStamp 0.45s var(--ease-spring) both;
+}
+
 @keyframes mission-toast-in {
   from {
     opacity: 0;

@@ -17,12 +17,12 @@ import {
   type LogoUploadError,
 } from '../../utils/logoUpload'
 import {
-  SUPPORTED_COUNTRIES,
   getCountryRule,
   isSupportedCountry,
   stateName,
   type LocalityField,
 } from '../../config/countryRules'
+import CountrySelect from '../../components/setup/CountrySelect'
 import { rememberCompanyCountryCode } from '../../utils/companyCountry'
 import { getDefaultTimezoneForCountry, getTimezoneSelectOptions } from '../../config/companyTimezones'
 import {
@@ -39,6 +39,7 @@ import {
   SettingsScrollSaveBanner,
 } from '../../components/settings/SettingsUI'
 import RouteLocationsSettings from '../../components/settings/RouteLocationsSettings'
+import { isDemoWorkspace } from '../../utils/demoSession'
 
 const selectClass =
   'w-56 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-900 focus:border-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500'
@@ -262,8 +263,7 @@ export default function BusinessSettingsPage() {
     setFormData(prev => ({ ...prev, [name]: value }))
   }
 
-  const handleCountryCodeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const nextCode = e.target.value
+  const handleCountryCodeChange = (nextCode: string) => {
     const nextRule = getCountryRule(nextCode)
     setFormData(prev => ({
       ...prev,
@@ -280,8 +280,14 @@ export default function BusinessSettingsPage() {
   const logoInputRef = useRef<HTMLInputElement | null>(null)
   const [logoUploading, setLogoUploading] = useState(false)
   const [logoError, setLogoError] = useState<LogoUploadError | null>(null)
+  const [demoLocked, setDemoLocked] = useState(false)
+
+  useEffect(() => {
+    setDemoLocked(isDemoWorkspace())
+  }, [])
 
   const handleLogoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (demoLocked) return
     const file = e.target.files?.[0]
     if (!file) return
     setLogoError(null)
@@ -318,7 +324,7 @@ export default function BusinessSettingsPage() {
   }
 
   const handleLogoDelete = async () => {
-    if (!formData.logoUrl) return
+    if (demoLocked || !formData.logoUrl) return
     setLogoError(null)
     setLogoUploading(true)
     try {
@@ -496,16 +502,10 @@ export default function BusinessSettingsPage() {
           }
           control={
             isEditing ? (
-              <select name="countryCode" value={formData.countryCode} onChange={handleCountryCodeChange} className={selectClass}>
-                {!isSupportedCountry(formData.countryCode) && formData.countryCode && (
-                  <option value={formData.countryCode}>{formData.country || formData.countryCode}</option>
-                )}
-                {SUPPORTED_COUNTRIES.map((rule) => (
-                  <option key={rule.countryCode} value={rule.countryCode}>
-                    {rule.flag} {rule.countryName}
-                  </option>
-                ))}
-              </select>
+              <CountrySelect
+                value={isSupportedCountry(formData.countryCode) ? formData.countryCode : ''}
+                onChange={handleCountryCodeChange}
+              />
             ) : (
               <span className="text-sm text-gray-600">
                 {isSupportedCountry(formData.countryCode)
@@ -622,57 +622,68 @@ export default function BusinessSettingsPage() {
             </div>
           </div>
           <div className="flex-1 space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <SettingsButton
-                variant="primary"
-                onClick={() => logoInputRef.current?.click()}
-                disabled={logoUploading}
-              >
-                <PhotoIcon className="h-4 w-4" />
-                {logoUploading
-                  ? t('settings.business.logo.uploading', 'Uploading...')
-                  : formData.logoUrl
-                    ? t('settings.business.logo.replace', 'Replace logo')
-                    : t('settings.business.logo.upload', 'Upload logo')}
-              </SettingsButton>
-              {formData.logoUrl && (
-                <button
-                  type="button"
-                  onClick={handleLogoDelete}
-                  disabled={logoUploading}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                  {t('settings.business.logo.delete', 'Remove')}
-                </button>
-              )}
-              <input
-                ref={logoInputRef}
-                type="file"
-                accept={LOGO_ACCEPT_ATTR}
-                onChange={handleLogoSelect}
-                className="hidden"
-              />
-            </div>
-            {logoError && (
-              <div
-                className="rounded-lg border border-red-200 bg-red-50 px-4 py-3"
-                role="alert"
-              >
-                <p className="text-sm font-semibold text-red-900">{logoError.title}</p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
-                  {logoError.details.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              </div>
+            {demoLocked ? (
+              <SettingsHint>
+                {t(
+                  'settings.business.logo.demoLocked',
+                  'Demo workspaces use the PathPilo logo. Upload your own after you create a real account.',
+                )}
+              </SettingsHint>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <SettingsButton
+                    variant="primary"
+                    onClick={() => logoInputRef.current?.click()}
+                    disabled={logoUploading}
+                  >
+                    <PhotoIcon className="h-4 w-4" />
+                    {logoUploading
+                      ? t('settings.business.logo.uploading', 'Uploading...')
+                      : formData.logoUrl
+                        ? t('settings.business.logo.replace', 'Replace logo')
+                        : t('settings.business.logo.upload', 'Upload logo')}
+                  </SettingsButton>
+                  {formData.logoUrl && (
+                    <button
+                      type="button"
+                      onClick={handleLogoDelete}
+                      disabled={logoUploading}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                      {t('settings.business.logo.delete', 'Remove')}
+                    </button>
+                  )}
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept={LOGO_ACCEPT_ATTR}
+                    onChange={handleLogoSelect}
+                    className="hidden"
+                  />
+                </div>
+                {logoError && (
+                  <div
+                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-3"
+                    role="alert"
+                  >
+                    <p className="text-sm font-semibold text-red-900">{logoError.title}</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
+                      {logoError.details.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <SettingsHint>
+                  {t(
+                    'settings.business.logo.formatsHint',
+                    'PNG, JPG, or WEBP — max 4 MB. Wide rectangular logos (around 400 × 100 px) work best on invoices.',
+                  )}
+                </SettingsHint>
+              </>
             )}
-            <SettingsHint>
-              {t(
-                'settings.business.logo.formatsHint',
-                'PNG, JPG, or WEBP — max 4 MB. Wide rectangular logos (around 400 × 100 px) work best on invoices.',
-              )}
-            </SettingsHint>
           </div>
         </div>
       </SettingsSection>
