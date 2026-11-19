@@ -103,6 +103,27 @@ router.get('/nearest-clients', async (req, res) => {
   }
 });
 
+// GET /api/map/day-route?date=&user_id=
+// Stops for one employee on one day (real + projected) — same snapshot engine as
+// client/employee explore, so previewing a day always includes every co-stop even
+// when that day has not been saved as a planned daily_routes package yet.
+router.get('/day-route', async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) return res.status(companyAccess.status).json({ error: companyAccess.error });
+
+    const date = parseDate(req.query.date, todayStr());
+    const userId = parseInt(String(req.query.user_id), 10);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: 'Invalid user id' });
+
+    const stops = await mapTool.dayRouteStops(companyAccess.companyId, userId, date);
+    res.json({ date, user_id: userId, stops });
+  } catch (error) {
+    console.error('Error in day-route:', error);
+    res.status(500).json({ error: 'Failed to fetch day route' });
+  }
+});
+
 // GET /api/map/client/:id/routes
 router.get('/client/:id/routes', async (req, res) => {
   try {

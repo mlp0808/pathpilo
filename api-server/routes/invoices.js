@@ -2,6 +2,8 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
+const archiver = require('archiver');
+const { PDFDocument: PdfLibDocument } = require('pdf-lib');
 const { pool } = require('../utils/database');
 const { sendEmail } = require('../utils/email');
 const { buildInvoiceCustomerEmailPayload, getWebAppBaseUrl } = require('../utils/invoiceEmail');
@@ -17,6 +19,7 @@ const {
   cancelScheduledInvoiceReminder,
   getPendingInvoiceReminder,
   sendInvoiceReminderManually,
+  ensureInvoiceReminderSchema,
 } = require('../utils/invoiceReminderAutomation');
 const {
   computeNextSequenceNumber,
@@ -87,6 +90,7 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.status(companyAccess.status).json({ error: companyAccess.error });
     }
     const companyId = companyAccess.companyId;
+    await ensureInvoiceReminderSchema(pool);
 
     const { dateFrom, dateTo, status: statusParam, clientId: clientIdParam } = req.query;
 
@@ -114,8 +118,22 @@ router.get('/', authenticateToken, async (req, res) => {
         ),
       ];
       if (statuses.length > 0) {
-        values.push(statuses);
-        conditions.push(`i.status = ANY($${values.length}::text[])`);
+        const wantsOverdue = statuses.includes('overdue');
+        const otherStatuses = statuses.filter((s) => s !== 'overdue');
+        const parts = [];
+        if (otherStatuses.length > 0) {
+          values.push(otherStatuses);
+          parts.push(`i.status = ANY($${values.length}::text[])`);
+        }
+        if (wantsOverdue) {
+          // Treat past-due "sent" invoices as overdue for filtering (matches list badges).
+          parts.push(
+            `(i.status = 'overdue' OR (i.status = 'sent' AND i.due_date IS NOT NULL AND i.due_date::date < (NOW() AT TIME ZONE 'UTC')::date))`,
+          );
+        }
+        if (parts.length > 0) {
+          conditions.push(`(${parts.join(' OR ')})`);
+        }
       }
     }
 
@@ -144,6 +162,7 @@ router.get('/', authenticateToken, async (req, res) => {
           i.currency,
           i.status,
           i.created_at,
+          i.last_manual_reminder_at,
           c.name as client_name,
           c.last_name as client_last_name
         FROM invoices i
@@ -168,6 +187,7 @@ router.get('/', authenticateToken, async (req, res) => {
             i.currency,
             i.status,
             i.created_at,
+            NULL::timestamptz as last_manual_reminder_at,
             c.name as client_name,
             c.last_name as client_last_name
           FROM invoices i
@@ -183,11 +203,21 @@ router.get('/', authenticateToken, async (req, res) => {
     }
 
     const nextPreview = await computeNextSequenceNumber(pool, companyAccess.companyId);
-    const invoices = result.rows.map((row) => ({
-      ...row,
-      client_name: [row.client_name, row.client_last_name].filter(Boolean).join(' ').trim() || '—',
-      invoice_number_display: resolveInvoiceNumberDisplay(row, nextPreview),
-    }));
+    const todayYmd = new Date().toISOString().slice(0, 10);
+    const invoices = result.rows.map((row) => {
+      const due = row.due_date ? String(row.due_date).slice(0, 10) : null;
+      const pastDue =
+        due != null &&
+        due < todayYmd &&
+        (row.status === 'sent' || row.status === 'overdue');
+      return {
+        ...row,
+        client_name: [row.client_name, row.client_last_name].filter(Boolean).join(' ').trim() || '—',
+        invoice_number_display: resolveInvoiceNumberDisplay(row, nextPreview),
+        display_status: pastDue ? 'overdue' : row.status,
+        is_past_due: pastDue,
+      };
+    });
 
     res.json({ invoices });
   } catch (error) {
@@ -805,6 +835,100 @@ function buildInvoicePdf(invoice, bankRow = null) {
   });
 }
 
+async function loadBankTransferRow(companyId) {
+  const integ = await pool.query(
+    `SELECT provider, enabled, config FROM company_integrations
+     WHERE company_id = $1 AND provider = 'bank_transfer'`,
+    [companyId],
+  );
+  return integ.rows[0] || null;
+}
+
+function sanitizePdfFilenamePart(value) {
+  return String(value || 'invoice')
+    .replace(/[^\w.\-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'invoice';
+}
+
+// POST /api/invoices/bulk-pdf — export many invoices as one multi-page PDF or a ZIP of PDFs
+router.post('/bulk-pdf', authenticateToken, async (req, res) => {
+  try {
+    const companyAccess = getActiveCompanyId(req);
+    if (companyAccess.error) {
+      return res.status(companyAccess.status).json({ error: companyAccess.error });
+    }
+    const companyId = companyAccess.companyId;
+    const format = String(req.body?.format || 'merged').toLowerCase() === 'zip' ? 'zip' : 'merged';
+    const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = [
+      ...new Set(
+        rawIds
+          .map((id) => parseInt(id, 10))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ].slice(0, 100);
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'Select at least one invoice' });
+    }
+
+    const bankRow = await loadBankTransferRow(companyId);
+    const files = [];
+    for (const invoiceId of ids) {
+      const invoice = await getInvoiceWithItems(invoiceId, companyId);
+      if (!invoice) continue;
+      const pdfBuffer = await buildInvoicePdf(invoice, bankRow);
+      const label = sanitizePdfFilenamePart(
+        invoice.invoice_number_display || invoice.invoice_number || invoiceId,
+      );
+      files.push({ name: `invoice-${label}.pdf`, buffer: pdfBuffer });
+    }
+    if (files.length === 0) {
+      return res.status(404).json({ error: 'No matching invoices found' });
+    }
+
+    if (format === 'zip') {
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="invoices-${files.length}.zip"`,
+      );
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      archive.on('error', (err) => {
+        console.error('bulk-pdf zip error:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to build ZIP' });
+        else res.end();
+      });
+      archive.pipe(res);
+      for (const file of files) {
+        archive.append(file.buffer, { name: file.name });
+      }
+      await archive.finalize();
+      return;
+    }
+
+    const merged = await PdfLibDocument.create();
+    for (const file of files) {
+      const src = await PdfLibDocument.load(file.buffer);
+      const pages = await merged.copyPages(src, src.getPageIndices());
+      for (const page of pages) merged.addPage(page);
+    }
+    const mergedBytes = await merged.save();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="invoices-${files.length}.pdf"`,
+    );
+    res.send(Buffer.from(mergedBytes));
+  } catch (error) {
+    console.error('Error generating bulk invoice PDF:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to generate bulk PDF', details: error.message });
+    }
+  }
+});
+
 // GET /api/invoices/:invoiceId/pdf - Download invoice as PDF
 router.get('/:invoiceId/pdf', authenticateToken, async (req, res) => {
   try {
@@ -817,12 +941,7 @@ router.get('/:invoiceId/pdf', authenticateToken, async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
-    const integ = await pool.query(
-      `SELECT provider, enabled, config FROM company_integrations
-       WHERE company_id = $1 AND provider = 'bank_transfer'`,
-      [companyAccess.companyId],
-    );
-    const bankRow = integ.rows[0] || null;
+    const bankRow = await loadBankTransferRow(companyAccess.companyId);
     const pdfBuffer = await buildInvoicePdf(invoice, bankRow);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(

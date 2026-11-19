@@ -267,6 +267,22 @@ export interface PreviewRouteSelection {
   userId: number
 }
 
+type DayRouteStop = {
+  id: number | string
+  date: string
+  userId: number | null
+  clientId: number | null
+  lat: number | null
+  lng: number | null
+  label: string
+  address: string
+  timeFrom?: string | null
+  timeTo?: string | null
+  durationMinutes?: number
+  isProjected?: boolean
+  status?: string
+}
+
 export function usePreviewRoutes(selections: PreviewRouteSelection[], users: RouteUserLike[]) {
   const [routesByKey, setRoutesByKey] = useState<Record<string, UserRoute>>({})
   const [reloadTick, setReloadTick] = useState(0)
@@ -293,47 +309,86 @@ export function usePreviewRoutes(selections: PreviewRouteSelection[], users: Rou
     const sortedKeys = selsSnapshot.map(s => `${s.date}:${s.userId}`).sort()
 
     ;(async () => {
-      const byDate = new Map<string, typeof selsSnapshot>()
-      selsSnapshot.forEach(s => {
-        if (!byDate.has(s.date)) byDate.set(s.date, [])
-        byDate.get(s.date)!.push(s)
-      })
-
       const nextByKey: Record<string, UserRoute> = {}
-      for (const [date, sels] of Array.from(byDate.entries())) {
-        let jobs: any[] = []
-        try {
-          const data = await cachedFetch<{ jobs: any[] }>(`jobs:v2:${date}`, `/jobs?start_date=${date}&end_date=${date}`, 30_000)
-          jobs = data.jobs || []
-        } catch { jobs = [] }
-        if (requestSeq.current !== seq) return
 
-        for (const sel of sels) {
+      await Promise.all(
+        selsSnapshot.map(async (sel) => {
           const key = `${sel.date}:${sel.userId}`
-          const userJobs = jobs.filter(j => {
-            if (Number(j.assigned_user_id) !== sel.userId) return false
-            const status = String(j.status || '')
-            return status !== 'cancelled' && status !== 'deleted'
-          })
-          const [built] = buildDayRoutesFromJobs(userJobs, users)
-          const activeStops = (built?.jobs || []).filter(j => !j.is_cancelled && !j.is_home)
-          if (!built || activeStops.length === 0) continue
+          let stops: DayRouteStop[] = []
+          try {
+            const data = await cachedFetch<{ stops: DayRouteStop[] }>(
+              `dayroute:v1:${sel.date}:${sel.userId}`,
+              `/map/day-route?date=${sel.date}&user_id=${sel.userId}`,
+              20_000,
+            )
+            stops = data.stops || []
+          } catch {
+            // Fallback to jobs list if the dedicated preview endpoint fails.
+            try {
+              const data = await cachedFetch<{ jobs: any[] }>(
+                `jobs:v2:${sel.date}`,
+                `/jobs?start_date=${sel.date}&end_date=${sel.date}`,
+                30_000,
+              )
+              const userJobs = (data.jobs || []).filter((j: any) => {
+                if (Number(j.assigned_user_id) !== sel.userId) return false
+                const status = String(j.status || '')
+                return status !== 'cancelled' && status !== 'deleted'
+              })
+              const [built] = buildDayRoutesFromJobs(userJobs, users)
+              if (built) {
+                const withHome = await enhanceRouteWithHome({ ...built, userId: sel.userId })
+                if (requestSeq.current !== seq) return
+                const colorIdx = Math.max(0, sortedKeys.indexOf(key))
+                nextByKey[key] = {
+                  ...withHome,
+                  // Positive synthetic id — negative ids are reserved for backdrop overlays
+                  // in RouteMap and must not be used for focusable preview routes.
+                  userId: 900000 + colorIdx,
+                  color: withHome.color || colorForUserId(sel.userId),
+                }
+              }
+            } catch { /* ignore */ }
+            return
+          }
+          if (requestSeq.current !== seq) return
+          if (stops.length === 0) return
 
-          // Home must be resolved against the real employee id before we remap
-          // to a synthetic preview userId (used so multiple dates can show at once).
+          const user = users.find(u => u.id === sel.userId)
+          const built: UserRoute = {
+            userId: sel.userId,
+            userName: user ? `${user.first_name} ${user.last_name}` : `User ${sel.userId}`,
+            color: colorForUserId(sel.userId),
+            jobs: stops.map((s) => ({
+              id: s.id,
+              lat: s.lat,
+              lng: s.lng,
+              label: s.label || 'Stop',
+              address: s.address || '',
+              time: s.timeFrom
+                ? s.timeTo
+                  ? `${String(s.timeFrom).slice(0, 5)} – ${String(s.timeTo).slice(0, 5)}`
+                  : String(s.timeFrom).slice(0, 5)
+                : undefined,
+              is_projected: !!s.isProjected,
+              is_cancelled: s.status === 'cancelled',
+              has_own_coords: s.lat != null && s.lng != null,
+              estimated_duration_minutes: Number(s.durationMinutes) || 0,
+              client_id: s.clientId,
+            })),
+          }
+
           const withHome = await enhanceRouteWithHome(built)
           if (requestSeq.current !== seq) return
 
           const colorIdx = Math.max(0, sortedKeys.indexOf(key))
           nextByKey[key] = {
             ...withHome,
-            // Synthetic id so multiple preview dates for different employees don't collide.
-            userId: -(100 + colorIdx),
-            // Keep the employee's own color (from buildDayRoutesFromJobs / colorForUserId).
+            userId: 900000 + colorIdx,
             color: withHome.color || colorForUserId(sel.userId),
           }
-        }
-      }
+        }),
+      )
       if (requestSeq.current !== seq) return
 
       // Await directions so road geometry is ready when possible; RouteMap still

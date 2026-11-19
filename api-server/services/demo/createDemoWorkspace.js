@@ -29,7 +29,6 @@ const TZ = 'Europe/London';
 const DEMO_TTL_DAYS = 3;
 const HISTORY_DAYS = 400;
 const FUTURE_DAYS = 364;
-const GEOMETRY_WINDOW = [-7, 28];
 const WORK_START = 8 * 60 + 30;
 /** Work + driving on a round day; leaves room before the 16:00–16:30 finish. */
 const DAY_BUDGET_MINUTES = 420;
@@ -178,8 +177,47 @@ const LEADS = [
  * Create a demo workspace. `onProgress(percent, label)` is called as it goes.
  * Returns { userId, companyId, slug, email, expiresAt }.
  */
+/** Columns the demo seeder needs on daily_routes — production may predate them. */
+async function ensureDemoDailyRoutesColumns(db) {
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS leg_minutes REAL[]`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS total_job_minutes INTEGER`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS route_geometry TEXT`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS name TEXT`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS status VARCHAR(12) DEFAULT 'draft'`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS round_template_id INTEGER`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS is_occurrence_override BOOLEAN DEFAULT FALSE`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS round_id INTEGER`);
+  await db.query(`ALTER TABLE daily_routes ADD COLUMN IF NOT EXISTS round_job_ids INTEGER[]`);
+  // Early installs used INTEGER; floats from drive times need a wider type.
+  await db.query(`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'daily_routes'
+          AND column_name = 'total_minutes'
+          AND data_type = 'integer'
+      ) THEN
+        ALTER TABLE daily_routes ALTER COLUMN total_minutes TYPE REAL USING total_minutes::real;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'daily_routes'
+          AND column_name = 'total_km'
+          AND data_type = 'numeric'
+      ) THEN
+        ALTER TABLE daily_routes ALTER COLUMN total_km TYPE REAL USING total_km::real;
+      END IF;
+    END $$
+  `).catch(() => {});
+}
+
 async function createDemoWorkspace({ onProgress = () => {} } = {}) {
   await ensureDemoSchema();
+  // Must run outside the seed transaction — ALTER TABLE + big INSERTs don't mix well
+  // when production is missing newer planned-package columns.
+  await ensureDemoDailyRoutesColumns(pool);
   const progress = (pct, label) => {
     try { onProgress(pct, label); } catch { /* ignore */ }
   };
@@ -829,16 +867,24 @@ async function createDemoWorkspace({ onProgress = () => {} } = {}) {
 
     // ── Planned round days (daily_routes packages) ────────────────────────
     const routeRows = [];
+    const seenRouteDays = new Set();
     for (const [key, list] of byDay) {
       if (!key.startsWith('r|')) continue;
       const ri = Number(key.split('|')[1]);
       const date = key.split('|')[2];
-      const live = list.filter((v) => v.status !== 'cancelled');
+      const live = list.filter((v) => v.status !== 'cancelled' && v.jobId != null);
       if (!live.length) continue;
+      const dayKey = `${userId}|${date}`;
+      if (seenRouteDays.has(dayKey)) continue;
+      seenRouteDays.add(dayKey);
       const round = dataset.rounds[ri];
       const complete = live.length === round.stops.length;
-      const legs = live.map((v) => v.leg);
-      const back = list.returnLeg;
+      const legs = live.map((v) => {
+        const n = Number(v.leg);
+        return Number.isFinite(n) ? n : driveMinutes(depot, v.person.stop);
+      });
+      const backRaw = Number(list.returnLeg);
+      const back = Number.isFinite(backRaw) ? backRaw : driveMinutes(live[live.length - 1].person.stop, depot);
       let distance = 0;
       let prev = depot;
       for (const v of live) {
@@ -846,8 +892,8 @@ async function createDemoWorkspace({ onProgress = () => {} } = {}) {
         prev = v.person.stop;
       }
       distance += roadKm(prev, depot);
-      const inWindow = diffDays(date, T) >= GEOMETRY_WINDOW[0] && diffDays(date, T) <= GEOMETRY_WINDOW[1];
       const ids = live.map((v) => v.jobId);
+      const driveTotal = legs.reduce((s, m) => s + m, 0) + back;
       routeRows.push({
         company_id: companyId,
         user_id: userId,
@@ -855,24 +901,32 @@ async function createDemoWorkspace({ onProgress = () => {} } = {}) {
         job_ids: ids,
         round_job_ids: ids,
         leg_minutes: legs,
-        total_km: complete && round.route?.km ? round.route.km : Math.round(distance * 10) / 10,
-        total_minutes: Math.round((legs.reduce((s, m) => s + m, 0) + back) * 10) / 10,
+        total_km: complete && round.route?.km ? Number(round.route.km) : Math.round(distance * 10) / 10,
+        total_minutes: Math.round(driveTotal * 10) / 10,
         total_job_minutes: live.reduce((s, v) => s + v.lines.reduce((x, l) => x + l.custom_duration_minutes, 0), 0),
-        route_geometry: inWindow && round.route?.geometry ? JSON.stringify(round.route.geometry) : null,
+        // Skip bulky GeoJSON in the seed transaction — large multi-row inserts
+        // with geometry have been failing the live demo at this step. The map
+        // fills road geometry on demand via Directions.
+        route_geometry: null,
         name: round.name,
         status: 'planned',
         round_id: roundIds[ri],
         updated_at: stamp(addDays(date, -1), 19 * 60),
       });
     }
-    await insertRows(
-      db,
-      'daily_routes',
-      ['company_id', 'user_id', 'scheduled_date', 'job_ids', 'round_job_ids', 'leg_minutes', 'total_km', 'total_minutes',
-        'total_job_minutes', 'route_geometry', 'name', 'status', 'round_id', 'updated_at'],
-      routeRows,
-      { casts: { job_ids: 'int[]', round_job_ids: 'int[]', leg_minutes: 'real[]' } }
-    );
+    // Smaller chunks than the generic bulk helper — thousands of int[] params
+    // in one statement have tripped production timeouts.
+    const ROUTE_CHUNK = 40;
+    for (let i = 0; i < routeRows.length; i += ROUTE_CHUNK) {
+      await insertRows(
+        db,
+        'daily_routes',
+        ['company_id', 'user_id', 'scheduled_date', 'job_ids', 'round_job_ids', 'leg_minutes', 'total_km', 'total_minutes',
+          'total_job_minutes', 'route_geometry', 'name', 'status', 'round_id', 'updated_at'],
+        routeRows.slice(i, i + ROUTE_CHUNK),
+        { casts: { job_ids: 'int[]', round_job_ids: 'int[]', leg_minutes: 'real[]' } }
+      );
+    }
 
     progress(88, 'Catching up on new enquiries');
 

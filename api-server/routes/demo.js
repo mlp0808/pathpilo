@@ -148,8 +148,11 @@ router.post('/start', async (req, res) => {
         job.progress = 100;
         job.done = true;
       } catch (e) {
-        console.error('[demo] create failed:', e);
+        console.error('[demo] create failed:', e?.code || '', e?.message || e);
         job.error = 'Something went wrong while setting up the demo. Please try again.';
+        // Safe diagnostics for support (no secrets) — shown in status JSON / logs.
+        job.errorCode = e?.code || 'DEMO_CREATE_FAILED';
+        job.errorDetail = String(e?.message || e).slice(0, 240);
       }
     });
     pump();
@@ -169,6 +172,8 @@ router.get('/status/:jobId', (req, res) => {
     step: job.step,
     done: job.done,
     error: job.error,
+    ...(job.errorCode ? { errorCode: job.errorCode } : {}),
+    ...(job.errorDetail ? { errorDetail: job.errorDetail } : {}),
     ...(job.done ? job.result : {}),
   });
 });

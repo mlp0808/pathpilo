@@ -484,6 +484,121 @@ async function clientRoutes(companyId, clientId, from, to) {
   return rows
 }
 
+/**
+ * All stops for one employee on one calendar day (real jobs + projected
+ * subscriptions). Used by map preview so clicking a client/employee day lights
+ * every co-stop and draws connectors even before a daily_routes package exists.
+ */
+async function dayRouteStops(companyId, userId, date) {
+  const day = String(date || '').slice(0, 10);
+  const uid = Number(userId);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(uid)) return [];
+
+  const stops = await getStopsSnapshot(companyId, day, day);
+  const forUser = stops.filter((s) => s.userId === uid && s.date === day);
+
+  // Also pull round co-stops that share a library round with any stop today,
+  // even if those siblings are assigned to the same user on a projected day
+  // that the subscription math already included — this catches round_stops
+  // rows that are not yet mirrored as recurring_jobs projections.
+  const roundIds = new Set();
+  try {
+    const subIds = forUser
+      .map((s) => {
+        const m = String(s.id || '').match(/^subscription-(\d+)-/);
+        return m ? Number(m[1]) : s.subscriptionId != null ? Number(s.subscriptionId) : null;
+      })
+      .filter((id) => Number.isFinite(id));
+    if (subIds.length > 0) {
+      const rRes = await pool.query(
+        `SELECT DISTINCT round_id FROM recurring_jobs
+         WHERE company_id = $1 AND id = ANY($2::int[]) AND round_id IS NOT NULL`,
+        [companyId, subIds],
+      );
+      for (const row of rRes.rows) {
+        if (row.round_id != null) roundIds.add(Number(row.round_id));
+      }
+    }
+    const clientIds = forUser.map((s) => s.clientId).filter((id) => Number.isFinite(id));
+    if (clientIds.length > 0) {
+      const rRes2 = await pool.query(
+        `SELECT DISTINCT rs.round_id
+         FROM round_stops rs
+         JOIN rounds r ON r.id = rs.round_id
+         WHERE r.company_id = $1 AND rs.client_id = ANY($2::int[])`,
+        [companyId, clientIds],
+      );
+      for (const row of rRes2.rows) {
+        if (row.round_id != null) roundIds.add(Number(row.round_id));
+      }
+    }
+  } catch {
+    /* rounds tables may be absent */
+  }
+
+  if (roundIds.size > 0) {
+    try {
+      const rs = await pool.query(
+        `SELECT
+           rs.round_id,
+           rs.position,
+           rs.client_id,
+           rs.recurring_job_id,
+           rs.label,
+           COALESCE(rs.lat, c.lat) AS lat,
+           COALESCE(rs.lng, c.lng) AS lng,
+           COALESCE(rs.address, c.address) AS address,
+           COALESCE(rs.zip_code, c.zip_code) AS zip_code,
+           COALESCE(rs.city, c.city) AS city,
+           c.name AS client_name,
+           c.last_name AS client_last_name,
+           COALESCE(rs.estimated_duration_minutes, 0) AS duration_minutes
+         FROM round_stops rs
+         LEFT JOIN clients c ON c.id = rs.client_id
+         WHERE rs.round_id = ANY($1::int[])
+         ORDER BY rs.round_id, rs.position ASC NULLS LAST`,
+        [[...roundIds]],
+      );
+      const haveClient = new Set(forUser.map((s) => s.clientId).filter((id) => Number.isFinite(id)));
+      for (const row of rs.rows) {
+        const cid = row.client_id != null ? Number(row.client_id) : null;
+        if (cid != null && haveClient.has(cid)) continue;
+        const lat = num(row.lat);
+        const lng = num(row.lng);
+        if (lat == null || lng == null) continue;
+        if (cid != null) haveClient.add(cid);
+        forUser.push({
+          id: `round-stop-${row.round_id}-${cid || row.position || forUser.length}`,
+          date: day,
+          userId: uid,
+          clientId: cid,
+          lat,
+          lng,
+          label: row.client_name
+            ? `${row.client_name}${row.client_last_name ? ' ' + row.client_last_name : ''}`
+            : (row.label || 'Stop'),
+          address: [row.address, row.zip_code, row.city].filter(Boolean).join(', '),
+          timeFrom: null,
+          timeTo: null,
+          durationMinutes: Number(row.duration_minutes) || 0,
+          isProjected: true,
+          status: 'scheduled',
+        });
+      }
+    } catch {
+      /* ignore round expansion failures */
+    }
+  }
+
+  forUser.sort((a, b) => {
+    const at = a.timeFrom ? String(a.timeFrom) : '';
+    const bt = b.timeFrom ? String(b.timeFrom) : '';
+    if (at !== bt) return at < bt ? -1 : 1;
+    return String(a.label || '').localeCompare(String(b.label || ''));
+  });
+  return forUser;
+}
+
 /** Per-day summaries for one employee in [from,to]. */
 async function employeeDays(companyId, userId, from, to) {
   const [stops, savedTotals] = await Promise.all([
@@ -520,6 +635,7 @@ module.exports = {
   nearestRoutes,
   nearestClients,
   clientRoutes,
+  dayRouteStops,
   employeeDays,
   invalidateCompany,
   // exported for tests

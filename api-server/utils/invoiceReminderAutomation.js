@@ -430,18 +430,27 @@ async function sendInvoiceReminderManually(pool, companyId, invoiceId) {
     fromName: invoice.company_name || undefined,
   });
 
+  // A manual nudge means the invoice is past due in practice — flip sent → overdue
+  // so the list/detail badge turns red immediately.
   const upd = await pool.query(
     `UPDATE invoices
-     SET last_manual_reminder_at = NOW()
+     SET last_manual_reminder_at = NOW(),
+         status = CASE
+           WHEN status = 'sent'
+             AND due_date IS NOT NULL
+             AND due_date::date < (NOW() AT TIME ZONE 'UTC')::date
+           THEN 'overdue'
+           ELSE status
+         END
      WHERE id = $1 AND company_id = $2
-     RETURNING last_manual_reminder_at`,
+     RETURNING last_manual_reminder_at, status`,
     [invoiceId, companyId]
   );
   const sentAt = upd.rows[0]?.last_manual_reminder_at
     ? new Date(upd.rows[0].last_manual_reminder_at).toISOString()
     : new Date().toISOString();
 
-  return { sentAt, sentTo };
+  return { sentAt, sentTo, status: upd.rows[0]?.status || inv.status };
 }
 
 /**

@@ -8,7 +8,12 @@ import { useAppI18n } from '@/app/components/I18nProvider'
 import { apiUrl } from '@/app/utils/api'
 import { formatMoneyExact, getCountryRule } from '@/app/config/countryRules'
 import { getStoredCompanyCountryCode } from '@/app/utils/companyCountry'
-import { ChevronDownIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline'
+import {
+  ArrowDownTrayIcon,
+  ChevronDownIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+} from '@heroicons/react/24/outline'
 
 type DatePresetId =
   | 'all'
@@ -111,9 +116,31 @@ function statusLabel(t: (k: string, f: string) => string, status: string): strin
 
 function invoiceStatusBadgeClass(status: string): string {
   const s = status || 'draft'
+  if (s === 'overdue') return 'bg-red-100 text-red-800 ring-1 ring-inset ring-red-200'
   if (s === 'sent') return 'bg-amber-100 text-amber-900'
-  if (s === 'paid') return 'bg-emerald-100 text-emerald-800'
+  if (s === 'paid' || s === 'overpaid') return 'bg-emerald-100 text-emerald-800'
+  if (s === 'cancelled' || s === 'credited') return 'bg-gray-100 text-gray-600'
   return 'bg-gray-100 text-gray-800'
+}
+
+function remindedBadgeLabel(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return null
+  const days = Math.max(0, Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000)))
+  if (days === 0) return 'Reminded today'
+  if (days === 1) return 'Reminded 1 day ago'
+  return `Reminded ${days} days ago`
+}
+
+function effectiveInvoiceStatus(inv: {
+  status?: string | null
+  display_status?: string | null
+  is_past_due?: boolean
+}): string {
+  if (inv.display_status) return inv.display_status
+  if (inv.is_past_due) return 'overdue'
+  return inv.status || 'draft'
 }
 
 interface InvoiceRow {
@@ -127,6 +154,9 @@ interface InvoiceRow {
   total: string | number
   currency: string
   status: string
+  display_status?: string
+  is_past_due?: boolean
+  last_manual_reminder_at?: string | null
   created_at: string
   client_name: string
 }
@@ -167,6 +197,10 @@ export default function InvoicesListPage() {
   const [filtersReady, setFiltersReady] = useState(false)
   const skipUrlWrite = useRef(true)
   const firstSearchHydration = useRef(true)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [bulkExporting, setBulkExporting] = useState<'merged' | 'zip' | null>(null)
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false)
+  const bulkMenuRef = useRef<HTMLDivElement>(null)
 
   const presetOptions: { id: DatePresetId; labelKey: string; fallback: string }[] = useMemo(
     () => [
@@ -214,6 +248,9 @@ export default function InvoicesListPage() {
         setClientDropdownOpen(false)
         setClientSearch('')
       }
+      if (bulkMenuRef.current && !bulkMenuRef.current.contains(e.target as Node)) {
+        setBulkMenuOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -252,12 +289,15 @@ export default function InvoicesListPage() {
       if (!response.ok) {
         setError(data.error || t('app.invoicesList.errFetch', 'Failed to load invoices'))
         setInvoices([])
+        setSelectedIds(new Set())
         return
       }
       setInvoices(data.invoices || [])
+      setSelectedIds(new Set())
     } catch {
       setError(t('app.invoicesList.errNetwork', 'Network error'))
       setInvoices([])
+      setSelectedIds(new Set())
     } finally {
       setLoading(false)
     }
@@ -326,6 +366,72 @@ export default function InvoicesListPage() {
 
   const hasActiveFilters =
     Boolean(dateFrom || dateTo) || selectedStatuses.size > 0 || clientId != null
+
+  const allVisibleSelected =
+    invoices.length > 0 && invoices.every((inv) => selectedIds.has(inv.id))
+  const someSelected = selectedIds.size > 0
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set())
+      return
+    }
+    setSelectedIds(new Set(invoices.map((inv) => inv.id)))
+  }
+
+  const toggleSelectOne = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const runBulkExport = async (format: 'merged' | 'zip') => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    const token = localStorage.getItem('token')
+    if (!token) return
+    setBulkExporting(format)
+    setBulkMenuOpen(false)
+    try {
+      const res = await fetch(apiUrl('/invoices/bulk-pdf'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ids, format }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(data.error || t('app.invoicesList.bulkExportFailed', 'Failed to export PDFs'))
+        return
+      }
+      const blob = await res.blob()
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadBlob(
+        blob,
+        format === 'zip' ? `invoices-${stamp}.zip` : `invoices-${stamp}.pdf`,
+      )
+    } catch {
+      alert(t('app.invoicesList.bulkExportFailed', 'Failed to export PDFs'))
+    } finally {
+      setBulkExporting(null)
+    }
+  }
 
   return (
     <AppLayout>
@@ -487,6 +593,58 @@ export default function InvoicesListPage() {
           </div>
         )}
 
+        {someSelected && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-primary-200 bg-white px-4 py-3 shadow-sm">
+            <p className="text-sm font-medium text-gray-800">
+              {selectedIds.size === 1
+                ? t('app.invoicesList.selectedOne', '1 invoice selected')
+                : t('app.invoicesList.selectedMany', '{n} invoices selected').replace(
+                    '{n}',
+                    String(selectedIds.size),
+                  )}
+            </p>
+            <div className="relative" ref={bulkMenuRef}>
+              <button
+                type="button"
+                disabled={bulkExporting != null}
+                onClick={() => setBulkMenuOpen((o) => !o)}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary-500 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-60"
+              >
+                <ArrowDownTrayIcon className="h-4 w-4" />
+                {bulkExporting
+                  ? t('app.invoicesList.exporting', 'Exporting…')
+                  : t('app.invoicesList.bulkExportPdf', 'Export PDF')}
+                <ChevronDownIcon className="h-3.5 w-3.5" />
+              </button>
+              {bulkMenuOpen && (
+                <div className="absolute left-0 z-20 mt-1 w-64 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => runBulkExport('merged')}
+                    className="block w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-50"
+                  >
+                    {t('app.invoicesList.exportMerged', 'One PDF (each invoice a page)')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runBulkExport('zip')}
+                    className="block w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-50"
+                  >
+                    {t('app.invoicesList.exportZip', 'ZIP of separate PDF files')}
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-sm font-medium text-gray-500 hover:text-gray-800"
+            >
+              {t('app.invoicesList.clearSelection', 'Clear')}
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-400 border-t-transparent" />
@@ -539,6 +697,19 @@ export default function InvoicesListPage() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50/80 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      <th className="w-10 px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someSelected && !allVisibleSelected
+                          }}
+                          onChange={toggleSelectAll}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          aria-label={t('app.invoicesList.selectAll', 'Select all')}
+                        />
+                      </th>
                       <th className="px-4 py-3">{t('app.invoicesList.col.number', 'Number')}</th>
                       <th className="px-4 py-3">{t('app.invoicesList.col.title', 'Title')}</th>
                       <th className="px-4 py-3">{t('app.invoicesList.col.client', 'Client')}</th>
@@ -561,8 +732,23 @@ export default function InvoicesListPage() {
                             router.push(invoiceOpenHref(inv))
                           }
                         }}
-                        className="cursor-pointer border-b border-gray-100 hover:bg-gray-50/80"
+                        className={`cursor-pointer border-b border-gray-100 hover:bg-gray-50/80 ${
+                          selectedIds.has(inv.id) ? 'bg-accent-50/40' : ''
+                        }`}
                       >
+                        <td
+                          className="px-3 py-3"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(inv.id)}
+                            onChange={() => toggleSelectOne(inv.id)}
+                            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            aria-label={t('app.invoicesList.selectInvoice', 'Select invoice')}
+                          />
+                        </td>
                         <td className="px-4 py-3 font-medium text-primary-600">
                           {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
                         </td>
@@ -571,11 +757,27 @@ export default function InvoicesListPage() {
                         <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.issue_date)}</td>
                         <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{formatDate(inv.due_date || undefined)}</td>
                         <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
-                          >
-                            {statusLabel(t, inv.status || 'draft')}
-                          </span>
+                          {(() => {
+                            const displayStatus = effectiveInvoiceStatus(inv)
+                            const reminded =
+                              displayStatus === 'overdue'
+                                ? remindedBadgeLabel(inv.last_manual_reminder_at)
+                                : null
+                            return (
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                <span
+                                  className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-medium ${invoiceStatusBadgeClass(displayStatus)}`}
+                                >
+                                  {statusLabel(t, displayStatus)}
+                                </span>
+                                {reminded && (
+                                  <span className="inline-flex px-2 py-0.5 rounded-lg text-xs font-medium bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-200">
+                                    {reminded}
+                                  </span>
+                                )}
+                              </span>
+                            )
+                          })()}
                         </td>
                         <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
                           {formatMoney(inv.total, inv.currency)}
@@ -592,10 +794,23 @@ export default function InvoicesListPage() {
                 pill aligns right, secondary info wraps below. */}
             <ul className="md:hidden bg-white border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100">
               {invoices.map((inv) => (
-                <li key={inv.id} className="tap-press">
+                <li key={inv.id} className={`tap-press ${selectedIds.has(inv.id) ? 'bg-accent-50/40' : ''}`}>
+                  <div className="flex items-stretch">
+                    <label
+                      className="flex items-center px-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(inv.id)}
+                        onChange={() => toggleSelectOne(inv.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        aria-label={t('app.invoicesList.selectInvoice', 'Select invoice')}
+                      />
+                    </label>
                   <Link
                     href={invoiceOpenHref(inv)}
-                    className="block px-4 py-3 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                    className="block min-w-0 flex-1 px-1 py-3 pr-4 hover:bg-gray-50 active:bg-gray-100 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
@@ -603,11 +818,27 @@ export default function InvoicesListPage() {
                           <span className="font-semibold text-sm text-primary-600">
                             {inv.invoice_number_display || inv.invoice_number || `#${inv.id}`}
                           </span>
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-lg text-[10px] font-medium ${invoiceStatusBadgeClass(inv.status || 'draft')}`}
-                          >
-                            {statusLabel(t, inv.status || 'draft')}
-                          </span>
+                          {(() => {
+                            const displayStatus = effectiveInvoiceStatus(inv)
+                            const reminded =
+                              displayStatus === 'overdue'
+                                ? remindedBadgeLabel(inv.last_manual_reminder_at)
+                                : null
+                            return (
+                              <>
+                                <span
+                                  className={`inline-flex px-2 py-0.5 rounded-lg text-[10px] font-medium ${invoiceStatusBadgeClass(displayStatus)}`}
+                                >
+                                  {statusLabel(t, displayStatus)}
+                                </span>
+                                {reminded && (
+                                  <span className="inline-flex px-2 py-0.5 rounded-lg text-[10px] font-medium bg-amber-100 text-amber-900 ring-1 ring-inset ring-amber-200">
+                                    {reminded}
+                                  </span>
+                                )}
+                              </>
+                            )
+                          })()}
                         </div>
                         <p className="text-xs text-gray-700 mt-1 truncate">{inv.title || '—'}</p>
                         <p className="text-xs text-gray-500 truncate">{inv.client_name}</p>
@@ -622,6 +853,7 @@ export default function InvoicesListPage() {
                       </div>
                     </div>
                   </Link>
+                  </div>
                 </li>
               ))}
             </ul>

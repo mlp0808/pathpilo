@@ -1436,7 +1436,11 @@ function MapMultitoolInner() {
       ? (routes.find(r => r.jobs.some(j => String(j.id).startsWith('stop:')))?.userId
           ?? routes[0]?.userId
           ?? -9000)
-      : null
+      // Client/employee explore preview: focus the preview route so the camera
+      // fits its stops (not the whole company backdrop) and co-stops stay lit.
+      : previewRoutes.length > 0
+        ? previewRoutes[0].userId
+        : null
 
   const overlayRouteMeta = useMemo(() => {
     // Planner day/route/round, OR a client/location route preview — so an open

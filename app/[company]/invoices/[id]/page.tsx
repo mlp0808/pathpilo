@@ -43,6 +43,13 @@ function timelineIndex(status: string | undefined): number {
   return i >= 0 ? i : 0
 }
 
+function daysSinceIso(iso: string | null | undefined): number | null {
+  if (!iso) return null
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return null
+  return Math.max(0, Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000)))
+}
+
 /** Same placeholders as server (Settings → Messages → First invoice email). */
 function applySendInvoicePlaceholders(
   template: string,
@@ -250,11 +257,15 @@ export default function InvoicePage() {
             ? tr('invoice.detail.notificationSentTo', 'Notification sent to {email}.').replace('{email}', String(data.sentTo))
             : tr('invoice.detail.notificationSent', 'Notification sent.'),
         })
-        if (data.sentAt) {
-          setInvoice((prev: any) =>
-            prev ? { ...prev, last_manual_reminder_at: data.sentAt } : prev,
-          )
-        }
+        setInvoice((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                last_manual_reminder_at: data.sentAt || prev.last_manual_reminder_at,
+                ...(data.status ? { status: data.status } : {}),
+              }
+            : prev,
+        )
       } else {
         setManualReminderMessage({
           tone: 'error',
@@ -545,9 +556,18 @@ export default function InvoicePage() {
 
   const notificationsHref = company ? `/${company}/settings/notifications` : '/settings/notifications'
 
-  const currentStatus = invoice.status || 'draft'
-  const currentIndex = timelineIndex(currentStatus)
+  const rawStatus = invoice.status || 'draft'
   const dueDate = invoice.due_date
+  const dueYmd = dueDate ? String(dueDate).slice(0, 10) : null
+  const todayYmd = new Date().toISOString().slice(0, 10)
+  const isPastDue =
+    dueYmd != null &&
+    dueYmd < todayYmd &&
+    (rawStatus === 'sent' || rawStatus === 'overdue')
+  // Past-due "sent" invoices should sit on the Overdue step visually.
+  const currentStatus = isPastDue && rawStatus === 'sent' ? 'overdue' : rawStatus
+  const currentIndex = timelineIndex(currentStatus)
+  const isOverdueStep = currentStatus === 'overdue' || isPastDue
   const daysUntilOverdue = dueDate
     ? Math.ceil((new Date(dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
     : null
@@ -565,6 +585,18 @@ export default function InvoicePage() {
               daysUntilOverdue === -1 ? 'invoice.detail.daysOverdueOne' : 'invoice.detail.daysOverdueMany',
               daysUntilOverdue === -1 ? '{n} day overdue' : '{n} days overdue',
             ).replace('{n}', String(Math.abs(daysUntilOverdue)))
+  const remindedDays = daysSinceIso(invoice.last_manual_reminder_at)
+  const remindedLabel =
+    remindedDays == null
+      ? null
+      : remindedDays === 0
+        ? tr('invoice.detail.remindedToday', 'Reminded today')
+        : remindedDays === 1
+          ? tr('invoice.detail.remindedOneDayAgo', 'Reminded 1 day ago')
+          : tr('invoice.detail.remindedDaysAgo', 'Reminded {n} days ago').replace(
+              '{n}',
+              String(remindedDays),
+            )
 
   const showPaymentReceived =
     (invoice.status === 'sent' || invoice.status === 'overdue') && balance > 0
@@ -584,101 +616,144 @@ export default function InvoicePage() {
           </Link>
         </div>
 
-        {/* Status timeline — full width above invoice + sidebar */}
-        <div className="mb-8 w-full">
-          <nav className="flex w-full items-start gap-0" aria-label={tr('invoice.detail.ariaStatus', 'Invoice status')}>
-            {TIMELINE_ORDER.map((value, index) => {
-              const isOverpaid = currentStatus === 'overpaid'
-              const statusRow = INVOICE_STATUSES.find((s) => s.value === value)
-              const displayLabel = value === 'paid' && isOverpaid
-                ? tr('invoice.detail.statusOverpaid', 'Overpaid')
-                : (statusRow ? tr(statusRow.labelKey, statusRow.fallback) : value)
-              const isActive = currentIndex === index || (value === 'paid' && isOverpaid)
-              const isPast = currentIndex > index && !(value === 'paid' && isOverpaid)
-              const showSentDate = value === 'sent' && (isPast || isActive) && invoice.sent_at
-              const showOverdueDate = value === 'overdue' && dueDate
-              const isLast = index === TIMELINE_ORDER.length - 1
-              const segmentIndex = index
-              const showHalfwayDot = segmentIndex === 1 && currentIndex === 1 && currentStatus === 'sent'
-              const paidIsBlue = value === 'paid' && isOverpaid
-
-              return (
-                <React.Fragment key={value}>
-                  <div className="flex flex-shrink-0 flex-col items-center">
-                    <span
-                      className={`inline-flex items-center rounded-full border-2 bg-white px-5 py-2.5 text-sm font-semibold shadow-sm transition-colors ${
-                        paidIsBlue
-                          ? 'border-blue-500 text-blue-700'
-                          : isActive
-                          ? 'border-accent-500 text-accent-700'
-                          : isPast
-                          ? 'border-accent-500 text-gray-700'
-                          : 'border-gray-200 text-gray-400'
-                      }`}
-                    >
-                      {displayLabel}
-                    </span>
-                    {showSentDate && (
-                      <span className="mt-1.5 text-xs font-medium text-gray-500">
-                        {formatDate(invoice.sent_at)}
-                      </span>
-                    )}
-                    {showOverdueDate && (
-                      <span className="mt-1.5 text-xs font-medium text-gray-500">
-                        {formatDate(dueDate)}
-                      </span>
-                    )}
-                  </div>
-                  {!isLast && (
-                    <div
-                      className={`relative flex min-w-0 flex-1 items-center px-1 pt-5 ${showHalfwayDot ? 'pb-8' : ''}`}
-                    >
-                      <div className="h-0.5 w-full flex-1 rounded-full bg-gray-200" aria-hidden />
-                      {segmentIndex === 0 && (
-                        <div
-                          className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
-                          style={{ width: currentIndex >= 1 ? '100%' : '0%' }}
-                        />
-                      )}
-                      {segmentIndex === 1 && (
-                        <>
-                          <div
-                            className="absolute left-0 top-5 h-0.5 rounded-full bg-accent-400"
-                            style={{
-                              width: currentIndex >= 2 ? '100%' : currentIndex === 1 ? '50%' : '0%',
-                            }}
-                          />
-                          {showHalfwayDot && (
-                            <div className="absolute left-1/2 top-5 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
-                              <span className="h-3 w-3 rounded-full border-2 border-accent-500 bg-white shadow-sm" />
-                              {overdueLabel && (
-                                <span className="mt-3 whitespace-nowrap text-xs font-medium text-gray-600">
-                                  {overdueLabel}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-                      {segmentIndex === 2 && (
-                        <div
-                          className="absolute left-0 top-5 h-0.5 rounded-l-full bg-accent-400"
-                          style={{ width: currentIndex >= 3 ? '100%' : '0%' }}
-                        />
-                      )}
-                    </div>
-                  )}
-                </React.Fragment>
-              )
-            })}
-          </nav>
-        </div>
-
-        <div className="flex gap-8">
-          {/* Invoice document */}
+        <div className="flex flex-col gap-8 lg:flex-row">
+          {/* Invoice document + status timeline (same width as the document) */}
           <div className="min-w-0 flex-1">
+            <div className="mb-6 w-full">
+              <nav
+                className="flex w-full items-start gap-0"
+                aria-label={tr('invoice.detail.ariaStatus', 'Invoice status')}
+              >
+                {TIMELINE_ORDER.map((value, index) => {
+                  const isOverpaid = currentStatus === 'overpaid'
+                  const statusRow = INVOICE_STATUSES.find((s) => s.value === value)
+                  const displayLabel =
+                    value === 'paid' && isOverpaid
+                      ? tr('invoice.detail.statusOverpaid', 'Overpaid')
+                      : statusRow
+                        ? tr(statusRow.labelKey, statusRow.fallback)
+                        : value
+                  const isActive = currentIndex === index || (value === 'paid' && isOverpaid)
+                  const isPast = currentIndex > index && !(value === 'paid' && isOverpaid)
+                  const showSentDate = value === 'sent' && (isPast || isActive) && invoice.sent_at
+                  const showOverdueDate = value === 'overdue' && dueDate
+                  const isLast = index === TIMELINE_ORDER.length - 1
+                  const segmentIndex = index
+                  const showHalfwayDot =
+                    segmentIndex === 1 && currentIndex === 1 && !isOverdueStep
+                  const showOverduePulse = value === 'overdue' && isActive && isOverdueStep
+                  const paidIsBlue = value === 'paid' && isOverpaid
+                  const nodeTone =
+                    paidIsBlue
+                      ? 'border-blue-500 text-blue-700 bg-blue-50'
+                      : value === 'overdue' && (isActive || isPast) && isOverdueStep
+                        ? 'border-red-500 text-red-700 bg-red-50'
+                        : isActive
+                          ? 'border-accent-500 text-accent-700 bg-accent-50'
+                          : isPast
+                            ? 'border-accent-500 text-gray-700 bg-white'
+                            : 'border-gray-200 text-gray-400 bg-white/80'
+                  const trackFill =
+                    value === 'overdue' || (segmentIndex === 1 && isOverdueStep)
+                      ? 'bg-red-400'
+                      : 'bg-accent-400'
+
+                  return (
+                    <React.Fragment key={value}>
+                      <div className="flex flex-shrink-0 flex-col items-center">
+                        <span
+                          className={`relative inline-flex items-center rounded-full border-2 px-4 py-2 text-sm font-semibold shadow-sm transition-colors ${nodeTone}`}
+                        >
+                          {showOverduePulse && (
+                            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+                          )}
+                          {displayLabel}
+                        </span>
+                        {showSentDate && (
+                          <span className="mt-1.5 text-xs font-medium text-gray-500">
+                            {formatDate(invoice.sent_at)}
+                          </span>
+                        )}
+                        {showOverdueDate && (
+                          <span
+                            className={`mt-1.5 text-xs font-medium ${
+                              isOverdueStep ? 'text-red-600' : 'text-gray-500'
+                            }`}
+                          >
+                            {formatDate(dueDate)}
+                          </span>
+                        )}
+                        {value === 'overdue' && isOverdueStep && overdueLabel && (
+                          <span className="mt-1 whitespace-nowrap rounded-md bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700">
+                            {overdueLabel}
+                          </span>
+                        )}
+                        {value === 'overdue' && remindedLabel && (
+                          <span className="mt-1 whitespace-nowrap rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                            {remindedLabel}
+                          </span>
+                        )}
+                      </div>
+                      {!isLast && (
+                        <div
+                          className={`relative flex min-w-0 flex-1 items-center px-1 pt-[1.15rem] ${
+                            showHalfwayDot ? 'pb-8' : ''
+                          }`}
+                        >
+                          <div className="h-1 w-full flex-1 rounded-full bg-gray-200/90" aria-hidden />
+                          {segmentIndex === 0 && (
+                            <div
+                              className={`absolute left-0 top-[1.15rem] h-1 rounded-full ${trackFill}`}
+                              style={{ width: currentIndex >= 1 ? '100%' : '0%' }}
+                            />
+                          )}
+                          {segmentIndex === 1 && (
+                            <>
+                              <div
+                                className={`absolute left-0 top-[1.15rem] h-1 rounded-full ${
+                                  isOverdueStep || currentIndex >= 2 ? 'bg-red-400' : 'bg-accent-400'
+                                }`}
+                                style={{
+                                  width:
+                                    currentIndex >= 2
+                                      ? '100%'
+                                      : currentIndex === 1
+                                        ? isOverdueStep
+                                          ? '100%'
+                                          : '50%'
+                                        : '0%',
+                                }}
+                              />
+                              {showHalfwayDot && (
+                                <div className="absolute left-1/2 top-[1.15rem] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+                                  <span className="h-3 w-3 rounded-full border-2 border-accent-500 bg-white shadow-sm" />
+                                  {overdueLabel && (
+                                    <span className="mt-3 whitespace-nowrap text-xs font-medium text-gray-600">
+                                      {overdueLabel}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {segmentIndex === 2 && (
+                            <div
+                              className={`absolute left-0 top-[1.15rem] h-1 rounded-full ${
+                                currentIndex >= 3 ? 'bg-accent-400' : 'bg-accent-400'
+                              }`}
+                              style={{ width: currentIndex >= 3 ? '100%' : '0%' }}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
+              </nav>
+            </div>
+
             {eInvoice ? (
-              <div className="overflow-hidden rounded-xl border border-gray-200/80 shadow-sm ring-1 ring-black/5">
+              <div className="overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-sm">
                 <DigitalInvoiceView
                   data={eInvoice}
                   variant="admin"

@@ -11,6 +11,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "archiver": "^8.0.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -21,6 +22,7 @@
     "luxon": "^3.7.2",
     "multer": "^2.1.1",
     "nodemailer": "^6.9.7",
+    "pdf-lib": "^1.17.1",
     "pdfkit": "^0.13.0",
     "pg": "^8.11.0",
     "resend": "^2.0.0",

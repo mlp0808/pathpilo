@@ -259,8 +259,16 @@ export function DigitalInvoiceView({
         : null
 
   return (
-    <div className={`bg-slate-50 ${variant === 'admin' ? 'min-h-0' : 'min-h-screen'}`}>
-      <div className="relative mx-auto max-w-lg px-4 pb-12 pt-2 sm:max-w-2xl sm:px-6 sm:pt-4 lg:max-w-3xl">
+    <div
+      className={`${
+        variant === 'admin' ? 'min-h-0 bg-white' : 'min-h-screen bg-slate-50'
+      }`}
+    >
+      <div
+        className={`relative mx-auto max-w-lg px-4 pb-12 pt-2 sm:max-w-2xl sm:px-6 sm:pt-4 lg:max-w-3xl ${
+          variant === 'admin' ? 'px-0 sm:px-0 max-w-none sm:max-w-none lg:max-w-none' : ''
+        }`}
+      >
         {variant === 'preview' && (
           <div className="mb-6 rounded-xl border border-amber-200/80 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 shadow-sm">
             <p className="font-semibold">{tr('invoice.previewBanner', 'Preview')}</p>
