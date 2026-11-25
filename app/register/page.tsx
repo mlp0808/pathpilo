@@ -105,10 +105,6 @@ function RegisterForm() {
 
   // Invitation prefill
   const [invitationEmail, setInvitationEmail] = useState<string | null>(null)
-  const [resumed, setResumed]                 = useState(false)
-  // Soft hint when a previous attempt on this browser finished for an email.
-  // Never bounce /register → /login; that locked people out of creating a new account.
-  const [existingAccountHint, setExistingAccountHint] = useState<string | null>(null)
 
   useEffect(() => {
     if (!inviteToken) return
@@ -127,38 +123,11 @@ function RegisterForm() {
       .catch(console.error)
   }, [inviteToken, router])
 
-  // Same browser came back to an unfinished signup: pick up where they left off.
-  useEffect(() => {
-    if (sessionMode !== 'form' || inviteToken) return
-    let existingId: string | null = null
-    try { existingId = localStorage.getItem(SIGNUP_SESSION_STORAGE_KEY) } catch { /* private mode */ }
-    if (!existingId) return
-    let cancelled = false
-    fetch(apiUrl(`/auth/register/signup-progress/${encodeURIComponent(existingId)}`))
-      .then(r => r.json())
-      .then((data: { draft?: { email: string; firstName: string; lastName: string; step: string; hasAccount: boolean } | null }) => {
-        const draft = data?.draft
-        if (cancelled || !draft?.email) return
-        if (draft.hasAccount) {
-          // Account already exists for that draft — clear the stale funnel id so
-          // /register stays usable for a different email on this browser.
-          try { localStorage.removeItem(SIGNUP_SESSION_STORAGE_KEY) } catch { /* no-op */ }
-          setExistingAccountHint(draft.email)
-          return
-        }
-        setEmail(draft.email)
-        setFormData(prev => ({ ...prev, firstName: draft.firstName || prev.firstName, lastName: draft.lastName || prev.lastName }))
-        setDetailsOpen(true)
-        setStage('form')
-        setResumed(true)
-      })
-      .catch(() => { /* fresh form is fine */ })
-    return () => { cancelled = true }
-  }, [sessionMode, inviteToken])
-
-  // Hotjar event on form view
+  // Each visit starts blank. Do not restore a previous email from this browser —
+  // that felt like the app knew something about you when you were logged out.
   useEffect(() => {
     if (sessionMode !== 'form') return
+    try { localStorage.removeItem(SIGNUP_SESSION_STORAGE_KEY) } catch { /* no-op */ }
     getSignupSessionId()
     window.hj?.('event', 'signup_form_view')
   }, [sessionMode])
@@ -457,16 +426,12 @@ function RegisterForm() {
           <h1 className="text-2xl font-bold text-white tracking-tight transition-all duration-300">
             {!detailsOpen
               ? (inviteToken ? 'Accept your invitation' : 'Create your account')
-              : resumed
-                ? `Welcome back${formData.firstName ? `, ${formData.firstName}` : ''}`
-                : `Welcome, ${formData.firstName || 'there'}`}
+              : `Welcome, ${formData.firstName || 'there'}`}
           </h1>
           <p className="mt-1.5 text-sm text-gray-300 transition-all duration-300">
             {!detailsOpen
               ? 'Free to get started. No credit card required.'
-              : resumed
-                ? 'Pick up where you left off.'
-                : 'Just a few more details and you\'re in.'}
+              : 'Just a few more details and you\'re in.'}
           </p>
         </div>
 
@@ -477,31 +442,6 @@ function RegisterForm() {
           {/* General form errors */}
           {formError && (
             <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{formError}</div>
-          )}
-
-          {/* Stale signup from this browser already became an account */}
-          {existingAccountHint && !detailsOpen && (
-            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-              <p className="font-medium">
-                An account already exists for{' '}
-                <span className="font-semibold">{existingAccountHint}</span>.
-              </p>
-              <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Link
-                  href={`/login?email=${encodeURIComponent(existingAccountHint)}&lang=${requestedLang}`}
-                  className="font-semibold text-accent-700 hover:text-accent-800 underline"
-                >
-                  Sign in →
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setExistingAccountHint(null)}
-                  className="font-medium text-amber-900/70 hover:text-amber-950"
-                >
-                  Use a different email
-                </button>
-              </p>
-            </div>
           )}
 
           {/* ── Step 1: Email field (always visible) ── */}
@@ -524,11 +464,7 @@ function RegisterForm() {
                 <div className={`relative transition-opacity duration-300 ${detailsOpen ? 'opacity-80' : ''}`}>
                   <input
                     type="email" value={email}
-                    onChange={e => {
-                      setEmail(e.target.value)
-                      if (emailError) setEmailError('')
-                      if (existingAccountHint) setExistingAccountHint(null)
-                    }}
+                    onChange={e => { setEmail(e.target.value); if (emailError) setEmailError('') }}
                     readOnly={detailsOpen || isInvite}
                     className={`input-field ${detailsOpen ? 'bg-gray-50 text-gray-600 cursor-default pr-16' : ''} ${isInvite ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                     placeholder="your@email.com" required autoFocus={!detailsOpen}
